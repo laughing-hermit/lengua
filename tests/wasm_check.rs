@@ -289,6 +289,30 @@ async fn lengua_s_entry_goes_when_the_idea_changes() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// lengua's entry goes wherever check stops, on either path: from an idea made a native one, and
+/// from an Attested Computation that has a problem.
+#[tokio::test]
+async fn lengua_s_entry_goes_wherever_check_stops() {
+    let session = Session::start(Protocol::Discover).await;
+    let program = add(&session).await;
+    for (from, to) in [
+        ("type: Attested Computation", "type: lengua/program-idea"),
+        ("description: Adds", "summary: Adds"),
+    ] {
+        program.write("idea.md", IDEA);
+        let done = session.settle(&program).await;
+        assert_eq!(done["state"], "done", "{to}: {done}");
+        let idea = program.read("idea.md").expect("idea.md");
+        assert_eq!(trust::lengua_entries(&idea).len(), 1, "{to}: {idea}");
+        program.write("idea.md", &changed(&idea, from, to));
+        let stopped = session.check(&program).await;
+        assert_ne!(stopped["state"], "done", "{to}: {stopped}");
+        let idea = program.read("idea.md").expect("idea.md");
+        assert!(trust::lengua_entries(&idea).is_empty(), "{to}: {idea}");
+    }
+    session.service.cancel().await.expect("close the session");
+}
+
 /// A folder's code file is the one its idea's type asks for: both, or main.s for an Attested
 /// Computation, is a problem that says what to do.
 #[tokio::test]
@@ -302,11 +326,20 @@ async fn an_attested_computation_s_code_is_main_wat_alone() {
         any_line(&report["problems"], "holds both main.s and main.wat"),
         "{report}"
     );
+    assert!(
+        text(&report["next_step"]).starts_with("Next: delete "),
+        "{report}"
+    );
     std::fs::remove_file(program.file("main.wat")).expect("remove main.wat");
     let report = session.check(&program).await;
     assert_eq!(report["state"], "code_problems", "{report}");
     assert!(
         any_line(&report["problems"], "compile idea.md into main.wat"),
+        "{report}"
+    );
+    // There's no main.wat to keep: the next step compiles it first.
+    assert!(
+        text(&report["next_step"]).contains("main.wat with the compile skill, delete "),
         "{report}"
     );
     session.service.cancel().await.expect("close the session");
@@ -367,6 +400,9 @@ async fn a_failing_test_is_reported_as_native_ones_are() {
         ),
         "{failed}"
     );
+    // Code whose tests fail gets no entry of lengua's in `verified`.
+    let idea = program.read("idea.md").expect("idea.md");
+    assert!(trust::lengua_entries(&idea).is_empty(), "{idea}");
     assert!(text(&failed["next_step"]).contains("main.wat"), "{failed}");
     // An assertion that fails when the first number is past 1.
     let asserted = changed(
