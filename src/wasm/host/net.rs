@@ -608,8 +608,8 @@ mod tests {
                 listener
                     .set_nonblocking(true)
                     .expect("a listener that never waits");
-                let listener = tokio::net::TcpListener::from_std(listener)
-                    .expect("a listener in the runtime");
+                let listener =
+                    tokio::net::TcpListener::from_std(listener).expect("a listener in the runtime");
                 let (stream, _) = listener.accept().await.expect("the client");
                 let mut stream = acceptor.accept(stream).await.expect("TLS");
                 // Long past a slice, while the client's writes fill the sockets.
