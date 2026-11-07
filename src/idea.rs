@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use crate::trust::Block;
 
-/// The OKF `type` that every lengua idea declares.
+/// The OKF `type` of an idea that lengua compiles to main.s.
 pub const IDEA_TYPE: &str = "lengua/program-idea";
 
 /// The `type` lengua's ideas declared when the file was called `spec.md`: still read, so a renamed
@@ -901,8 +901,11 @@ pub fn parse(text: &str) -> Result<Idea, Vec<Problem>> {
     let Some(end) = frontmatter_end(&lines) else {
         parser.problem(
             Some(1),
-            "idea.md must start with YAML frontmatter: a line with ---, then \
-             `type: lengua/program-idea` and `title: <name>`, then a line with ---",
+            format!(
+                "idea.md must start with YAML frontmatter: a line with ---, then `type: \
+                 {ATTESTED_TYPE}` (or `type: {IDEA_TYPE}` for an idea compiled to main.s), \
+                 `title: <name>` and `description: <one sentence>`, then a line with ---"
+            ),
         );
         return Err(parser.into_problems());
     };
@@ -1125,6 +1128,9 @@ struct Parser {
     /// Each parameter's source that reads, with the parameter as a problem names it and its line,
     /// whether or not the rest of the parameter reads.
     sources: Vec<(String, Source, usize)>,
+    /// Each parameter's name that reads, with the line it's on, whether or not the rest of the
+    /// parameter reads.
+    names: Vec<(String, usize)>,
 }
 
 impl Default for Parser {
@@ -1148,6 +1154,7 @@ impl Default for Parser {
             prose: crate::ste::Prose::default(),
             attested: None,
             sources: Vec::new(),
+            names: Vec::new(),
         }
     }
 }
@@ -1569,7 +1576,7 @@ impl Parser {
         for (index, item) in items.iter().enumerate() {
             let span = spans.get(index).copied();
             let line = span.map_or(at, |(start, _)| start + 1);
-            if let Some(parameter) = self.parameter(keys, item, (line, span), &parameters) {
+            if let Some(parameter) = self.parameter(keys, item, (line, span)) {
                 parameters.push(parameter);
             }
         }
@@ -1577,14 +1584,12 @@ impl Parser {
         parameters
     }
 
-    /// One parameter, on the line `line` and the lines `span` when it has lines of its own;
-    /// `seen` the parameters before it.
+    /// One parameter, on the line `line` and the lines `span` when it has lines of its own.
     fn parameter(
         &mut self,
         keys: &Keys,
         item: &Value,
         (line, span): (usize, Option<(usize, usize)>),
-        seen: &[Parameter],
     ) -> Option<Parameter> {
         let Some(map) = item.as_object() else {
             self.problem(
@@ -1596,7 +1601,7 @@ impl Parser {
             );
             return None;
         };
-        let name = self.parameter_name(map.get("name"), keys.within(span, "name", line), seen);
+        let name = self.parameter_name(map.get("name"), keys.within(span, "name", line));
         let called = name.as_deref().map_or_else(
             || "a parameter".to_owned(),
             |name| format!("the parameter `{name}`"),
@@ -1621,13 +1626,8 @@ impl Parser {
     }
 
     /// A parameter's `name`, on the line `line`: a lowercase letter, then lowercase letters,
-    /// digits and `_`, which no parameter in `seen` has.
-    fn parameter_name(
-        &mut self,
-        value: Option<&Value>,
-        line: usize,
-        seen: &[Parameter],
-    ) -> Option<String> {
+    /// digits and `_`, which no parameter before it has, whatever else is wrong with that one.
+    fn parameter_name(&mut self, value: Option<&Value>, line: usize) -> Option<String> {
         let Some(value) = value.filter(|value| !value.is_null()) else {
             self.problem(
                 Some(line),
@@ -1651,17 +1651,18 @@ impl Parser {
             );
             return None;
         }
-        if let Some(first) = seen.iter().find(|parameter| parameter.name == name) {
+        let repeated = self.names.iter().find(|(known, _)| *known == name);
+        if let Some(&(_, first)) = repeated {
             self.problem(
                 Some(line),
                 format!(
-                    "the parameter `{name}` is named twice (also on line {}); give each parameter \
-                     its own name",
-                    first.line
+                    "the parameter `{name}` is named twice (also on line {first}); give each \
+                     parameter its own name"
                 ),
             );
             return None;
         }
+        self.names.push((name.clone(), line));
         Some(name)
     }
 
@@ -1709,12 +1710,18 @@ impl Parser {
             None | Some(Value::Null) => Some(true),
             Some(Value::Bool(required)) => Some(*required),
             Some(other) => {
+                // A boolean in quotes is text, so the problem shows the quotes to take away.
+                let quoted = matches!(other.as_str(), Some("true" | "false"));
+                let (written, how) = if quoted {
+                    (other.to_string(), " without quotes")
+                } else {
+                    (shown(other), "")
+                };
                 self.problem(
                     Some(line),
                     format!(
-                        "{called} says `required: {}`; write `required: true` or `required: \
-                         false`, or leave it out, which means true",
-                        shown(other)
+                        "{called} says `required: {written}`; write `required: true` or \
+                         `required: false`{how}, or leave it out, which means true"
                     ),
                 );
                 None
@@ -3981,6 +3988,19 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         assert_eq!(parse(ADD).expect("valid idea").attested, None);
     }
 
+    /// `parameters` may be left out: a computation that reads none has none.
+    #[test]
+    fn an_attested_computation_may_have_no_parameters() {
+        let none = attested(&format!("parameters:\n  - {A}\n  - {B}\n"), "");
+        let idea = parse(&none).unwrap_or_else(|problems| panic!("{problems:#?}"));
+        let computation = idea.attested.expect("an Attested Computation");
+        assert!(computation.parameters.is_empty());
+        assert_eq!(
+            computation.receipt,
+            [Receipt::Stdout, Receipt::Stderr, Receipt::Exit]
+        );
+    }
+
     /// Each key an Attested Computation must have: missing, on the frontmatter's first line, or
     /// wrong, on its own line, each with what to write.
     #[test]
@@ -4134,12 +4154,27 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
                  its own name"
             ]
         );
+        let float = format!(
+            "line 8: the parameter `a` says `type: float`; lengua's types are integer, decimal, \
+             text and bytes: write one of {types}"
+        );
         assert_eq!(
             one(&A.replace("type: integer", "type: float")),
-            [format!(
-                "line 8: the parameter `a` says `type: float`; lengua's types are integer, \
-                 decimal, text and bytes: write one of {types}"
-            )]
+            [float.as_str()]
+        );
+        // A name is its own whatever else is wrong with the parameter that has it first.
+        let both = with_parameters(
+            &A.replace("type: integer", "type: float"),
+            &B.replace("name: b", "name: a"),
+            nothing,
+        );
+        assert_eq!(
+            problems(&both),
+            [
+                float.as_str(),
+                "line 9: the parameter `a` is named twice (also on line 8); give each parameter \
+                 its own name"
+            ]
         );
         assert_eq!(
             one(&A.replace("type: integer, ", "")),
@@ -4155,6 +4190,14 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
                 )]
             );
         }
+        // A boolean in quotes is text, and the problem shows the quotes.
+        assert_eq!(
+            one(&A.replace("required: true", "required: \"true\"")),
+            [
+                "line 8: the parameter `a` says `required: \"true\"`; write `required: true` or \
+                 `required: false` without quotes, or leave it out, which means true"
+            ]
+        );
         let optional = parse(&with_parameters(
             &A.replace("required: true", "required: false"),
             &B.replace("required: true, ", ""),
@@ -4321,7 +4364,10 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
             .collect();
         assert_eq!(lines, [8, 11]);
         // Not a list, or an entry that isn't a mapping.
-        let listed = attested(&format!("parameters:\n  - {A}\n  - {B}\n"), "parameters: a\n");
+        let listed = attested(
+            &format!("parameters:\n  - {A}\n  - {B}\n"),
+            "parameters: a\n",
+        );
         assert_eq!(
             problems(&listed),
             [format!(
