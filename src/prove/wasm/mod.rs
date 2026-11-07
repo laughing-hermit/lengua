@@ -108,6 +108,9 @@ pub struct Wasm {
     hook: Option<Rc<Hook>>,
     /// How many times it has reached that head.
     arrivals: u32,
+    /// Whether it has called lengua's `$fill`, through which it reads: an induction's head must
+    /// be its first read.
+    filled: bool,
     /// What it held the first time, beyond what the world keeps of it.
     head: Option<Box<induction::Snapshot>>,
     /// What one buffer-full changed, by the second time, for a run that reads two from the head.
@@ -242,6 +245,7 @@ pub fn begin(
         written: 0,
         hook: None,
         arrivals: 0,
+        filled: false,
         head: None,
         changed: None,
         zero: pool.bv(32, 0),
