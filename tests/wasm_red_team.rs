@@ -351,6 +351,23 @@ const ATTEMPTS: &[Attempt] = &[
         refusal: Refusal::Rule(Rule::Indirection, "reaches byte 4294967295 of $args"),
     },
     Attempt {
+        name: "an address kept in a global that changes, which starts as a plain number",
+        edits: &[
+            (
+                "  (global $NINE i32 (i32.const 9))\n",
+                "  (global $NINE i32 (i32.const 9))\n  (global $cursor (mut i32) (i32.const 0))  \
+                 ;; shared: where the next byte goes\n",
+            ),
+            (
+                "    (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get \
+                 $NEWLINE))\n",
+                "    (i32.store8 (global.get $cursor) (global.get $NEWLINE))\n",
+            ),
+        ],
+        module: None,
+        refusal: Refusal::Rule(Rule::Owners, "on some path is a plain number"),
+    },
+    Attempt {
         name: "lengua's addresses below 1024, through a plain number",
         edits: &[(
             "    (local.set $magnitude (local.get $value))\n",
