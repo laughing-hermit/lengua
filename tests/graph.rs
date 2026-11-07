@@ -12,6 +12,7 @@ use lengua::data_dir::DataDir;
 use lengua::graph::{self, Bounds, Day, Event, Finding, Graph, Severity, Stale, Stop, Written};
 use lengua::hash::Sha256Hex;
 use lengua::lock::{self, CodeStamp, Key, Lock};
+use lengua::trust::{self, Verified};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -356,6 +357,13 @@ fn a_stale_program_is_reported() {
     };
     lock::write(&add, &recorded, &key).expect("write the lock");
     let stale = |graph: &Graph| graph.nodes[0].stale;
+    assert_eq!(stale(&bundle.graph(&add)), None);
+    // lengua's entry in `verified` is no change to the idea.
+    let idea_hash = Sha256Hex::of(ADD_IDEA.as_bytes());
+    let entry = Verified::new("2026-11-06T23:00:00Z", idea_hash, Sha256Hex::of(&code));
+    let verified = trust::with_lengua_verified(ADD_IDEA, &entry);
+    assert_ne!(verified, ADD_IDEA);
+    std::fs::write(add.join("idea.md"), &verified).expect("write lengua's entry");
     assert_eq!(stale(&bundle.graph(&add)), None);
     std::fs::write(add.join("main.s"), ".intel_syntax noprefix\n_start:\n").expect("edit main.s");
     assert_eq!(stale(&bundle.graph(&add)), Some(Stale::Code));

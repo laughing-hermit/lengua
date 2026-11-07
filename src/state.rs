@@ -397,6 +397,15 @@ mod tests {
         assert_eq!(snapshot.idea, Some(digest("idea")));
         assert_eq!(snapshot.code, None);
         assert_eq!(snapshot.lock, LockStatus::Missing);
+        // lengua's hash of idea.md leaves out its trust record.
+        let idea = "---\ntitle: add\n---\n# Purpose\n";
+        let at = "2026-11-06T23:00:00Z";
+        let entry = crate::trust::Verified::new(at, digest("idea"), digest("code"));
+        let verified = crate::trust::with_lengua_verified(idea, &entry);
+        assert_ne!(verified, idea);
+        std::fs::write(program.file(IDEA_FILE), &verified).expect("write idea.md");
+        let recorded = Snapshot::read(&program, None).expect("read the folder");
+        assert_eq!(recorded.idea, Some(digest(idea)));
         let missing =
             ProgramFolder::new(&absolute("nonexistent/lengua/program")).expect("absolute path");
         assert_eq!(
