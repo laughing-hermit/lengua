@@ -293,7 +293,8 @@ pub struct Module {
     pub(super) globals: Vec<(u32, u128)>,
     /// The memory's pages when the program starts.
     pub(super) pages: u64,
-    /// The most pages the memory may grow to: its declared maximum, or its size without one.
+    /// The most pages the memory may grow to, as the engine holds it: its declared maximum, or
+    /// without one, its size if it's exported as `memory`, and else the most a 32-bit memory has.
     pub(super) most_pages: u64,
     /// Each data segment's bytes, by index.
     pub(super) data: Vec<Vec<u8>>,
@@ -795,7 +796,11 @@ impl Module {
 
         let entry = entry.ok_or("the module exports no `_start`")?;
         let (pages, maximum) = memory.unwrap_or((0, Some(0)));
-        let most_pages = maximum.unwrap_or(pages).min(MOST_PAGES);
+        // The engine holds a memory exported as `memory` to its maximum, or to its size without
+        // one, and a memory the module keeps to itself to its maximum, or to the most a 32-bit
+        // memory has (`crate::wasm::host::limits::memory_limit`).
+        let unbounded = if exports_memory { pages } else { MOST_PAGES };
+        let most_pages = maximum.unwrap_or(unbounded).min(MOST_PAGES);
         let memory_bytes = pages.saturating_mul(PAGE);
 
         // The data segments: the active ones written into memory's first bytes, in order.
