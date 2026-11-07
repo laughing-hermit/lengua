@@ -597,15 +597,34 @@ fn a_write_past_a_files_limit_is_cut_short_and_the_next_fails() {
     let (folder, dir) = folder_of(&[]);
     let mut limited = world(files());
     limited.limits.max_file = Some(4);
+    // "hello" twice to a file of at most 4 bytes: the first write is cut to the limit, with no
+    // error, so the program goes on and writes again; at the limit, that write fails.
+    let text = module(
+        &[OPEN, WRITE, EXIT],
+        r#"(data (i32.const 100) "out.txt")
+  (data (i32.const 200) "hello")
+  (func (export "_start")
+    (local $errno i32)
+    (local.set $errno (call $open (i32.const 3) (i32.const 0) (i32.const 100) (i32.const 7)
+      (i32.const 9) (i64.const 64) (i64.const 0) (i32.const 0) (i32.const 0)))
+    (if (local.get $errno) (then (call $exit (local.get $errno))))
+    (i32.store (i32.const 8) (i32.const 200))
+    (i32.store (i32.const 12) (i32.const 5))
+    (local.set $errno (call $fd_write (i32.load (i32.const 0)) (i32.const 8) (i32.const 1)
+      (i32.const 16)))
+    (if (local.get $errno) (then (call $exit (local.get $errno))))
+    (if (i32.ne (i32.load (i32.const 16)) (i32.const 4)) (then (call $exit (i32.const 1))))
+    (call $exit (call $fd_write (i32.load (i32.const 0)) (i32.const 8) (i32.const 1)
+      (i32.const 16))))"#,
+    );
     let executed = run(
-        &opening("out.txt", CREATE, wasi::rights::FD_WRITE, "hello"),
+        &text,
         World {
             folder: Some(dir),
             ..limited
         },
     );
-    // The write is cut to the limit; nothing failed yet, so the program goes on.
-    assert_eq!(exited(&executed), 0);
+    assert_eq!(exited(&executed), i32::from(errno::FBIG));
     assert_eq!(
         std::fs::read_to_string(folder.path().join("out.txt")).expect("the file"),
         "hell"

@@ -6,6 +6,7 @@
 //! refused; a listener on port 0; and a worker that ends with its server.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -332,9 +333,9 @@ async fn every_name_is_held_to_every_systems_rules() {
     );
 }
 
-/// A module that writes `bytes` bytes to each of `names`, in turn, and exits with the first
-/// error, 0 for none.
-fn writes(names: &[&str], bytes: usize) -> String {
+/// A module that writes `bytes` bytes to each of `names`, in turn, `times` times each, and exits
+/// with the first error, 0 for none.
+fn writes(names: &[&str], bytes: usize, times: usize) -> String {
     let mut body = String::new();
     for (index, name) in names.iter().enumerate() {
         let at = 100 + index * 32;
@@ -343,6 +344,10 @@ fn writes(names: &[&str], bytes: usize) -> String {
 "#
         ));
     }
+    let write = r#"(local.set $errno
+      (call $fd_write (i32.load (i32.const 0)) (i32.const 8) (i32.const 1) (i32.const 16)))
+    (if (local.get $errno) (then (call $exit (local.get $errno))))
+"#;
     let mut calls = String::new();
     for (index, name) in names.iter().enumerate() {
         let at = 100 + index * 32;
@@ -352,14 +357,9 @@ fn writes(names: &[&str], bytes: usize) -> String {
       (i32.const {length}) (i32.const 9) (i64.const 64) (i64.const 0) (i32.const 0)
       (i32.const 0)))
     (if (local.get $errno) (then (call $exit (local.get $errno))))
-    (local.set $errno (call $fd_write (i32.load (i32.const 0)) (i32.const 8) (i32.const 1)
-      (i32.const 16)))
-    (if (local.get $errno) (then (call $exit (local.get $errno))))
-    (local.set $errno (call $fd_write (i32.load (i32.const 0)) (i32.const 8) (i32.const 1)
-      (i32.const 16)))
-    (if (local.get $errno) (then (call $exit (local.get $errno))))
 "#
         ));
+        calls.push_str(&write.repeat(times));
     }
     module(
         &[OPEN, WRITE, EXIT],
@@ -377,18 +377,17 @@ fn writes(names: &[&str], bytes: usize) -> String {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_file_past_its_limit_is_cut_short_and_the_next_write_fails() {
-    // Two writes of 6 bytes to one file of at most 10: 6, then 4, then nothing more fits.
-    let text = writes(&["out.txt"], 6);
+    // Three writes of 6 bytes to one file of at most 10: 6, then 4, cut short with no error, and
+    // then nothing more fits, so the third fails with FBIG.
+    let text = writes(&["out.txt"], 6, 3);
     let limits = Limits {
         max_file_size: Some(10),
         ..Limits::default()
     };
     let ran = run(&text, Spec::new(&[], &[], files()), limits).await;
-    // Both writes went through, the second cut short: no error yet.
-    assert_eq!(exited(&ran), 0);
+    assert_eq!(exited(&ran), 22);
     let written = ran.files.expect("its files");
     assert_eq!(written.get("out.txt").map(Vec::len), Some(10));
-    // A third write of the same would be past the limit: the files' own test below shows FBIG.
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -396,7 +395,7 @@ async fn the_files_total_holds_across_files() {
     // Two files, each an entry of the total, and two writes of 6 each, against a total of two
     // entries and 14 bytes: 12 go to the first, 2 to the second, and its next write fails with
     // FBIG.
-    let text = writes(&["a.txt", "b.txt"], 6);
+    let text = writes(&["a.txt", "b.txt"], 6, 2);
     let spec = Spec {
         max_written: Some(2 * ENTRY + 14),
         ..Spec::new(&[], &[], files())
@@ -741,6 +740,60 @@ async fn a_connection_lengua_made_reaches_the_tests_server_and_a_refused_one_end
 
     // A place nobody answers: the connection comes ended, and a write to it is a broken pipe.
     let places = [Reach::Nowhere];
+    let spec = Spec {
+        connections: &places,
+        ..Spec::new(&[], &[], policy)
+    };
+    let refused = pool
+        .run(&client, spec, Limits::default())
+        .await
+        .expect("it runs");
+    assert_eq!(exited(&refused), 64);
+    assert!(refused.connections[0].problem.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connection_lengua_makes_to_a_place_reaches_it_or_ends_refused() {
+    let policy = Policy {
+        connections: 1,
+        ..Policy::default()
+    };
+    let pool = Pool::new(launcher(), None);
+    let client = program(CLIENT);
+    // A port of this computer that the test listens on: lengua connects to it as to any place,
+    // and the program's bytes go there and back.
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("a free port");
+    let port = listener.local_addr().expect("its address").port();
+    let served = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("lengua's connection");
+        let mut asked = [0_u8; 4];
+        stream.read_exact(&mut asked).await.expect("the request");
+        stream.write_all(b"pong").await.expect("the answer");
+        stream.shutdown().await.expect("the end");
+        asked
+    });
+    let places = [Reach::ThisComputer(port)];
+    let spec = Spec {
+        connections: &places,
+        ..Spec::new(&[], &[], policy)
+    };
+    let ran = pool
+        .run(&client, spec, Limits::default())
+        .await
+        .expect("it runs");
+    assert_eq!(exited(&ran), 0);
+    assert_eq!(ran.stdout, b"pong");
+    assert_eq!(ran.connections[0].problem, None);
+    assert_eq!(&served.await.expect("the test's server"), b"ping");
+
+    // A port nobody listens on any more: the connection is refused, so the program gets it
+    // already ended, a write to it is a broken pipe, and the run says why.
+    let closed = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a free port");
+    let port = closed.local_addr().expect("its address").port();
+    drop(closed);
+    let places = [Reach::ThisComputer(port)];
     let spec = Spec {
         connections: &places,
         ..Spec::new(&[], &[], policy)
