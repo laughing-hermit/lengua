@@ -440,6 +440,12 @@ harnesses load it as an Agent Plugins plugin, from \`plugin.json\` and \`mcp.jso
 is unsigned.
 EOF
 
+# Claude Code's own check of the plugin as the archive holds it, where claude is installed (CI's
+# runners have none; tests/manifests.rs holds the manifests to the Agent Plugins schemas).
+if command -v claude > /dev/null; then
+  claude plugin validate "$out" --strict
+fi
+
 mkdir -p "$root/dist"
 case "$target" in
   windows-*)
