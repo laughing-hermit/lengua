@@ -4720,7 +4720,8 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
             (
                 "- Uses: files",
                 "- Secret: a file `../key.txt`",
-                "`..` leaves the working folder",
+                "the secret file `../key.txt` is not a file in the working folder: `..` leaves \
+                 the working folder",
             ),
             (
                 "- Uses: the environment",
