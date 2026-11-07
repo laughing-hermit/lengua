@@ -673,3 +673,66 @@ async fn a_program_the_model_refuses_stays_tested_not_proven() {
     assert!(!lock.contains("[proofs]"), "{lock}");
     session.service.cancel().await.expect("close the session");
 }
+
+/// secret-equal's idea, whose `- Secret:` line names standard input.
+const SECRET_IDEA: &str = include_str!("fixtures-wasm/secret-equal/idea.md");
+
+/// Its code, which compares the two lines with no branch on their bytes.
+const SECRET_CODE: &str = include_str!("fixtures-wasm/secret-equal/main.wat");
+
+/// How secret-equal chooses its answer: a mask made from the differences, with no branch.
+const MASKED: &str = "          (local.set $mask\n            (i32.sub (i32.const 0) (i32.eqz \
+                      (call $differ (local.get $half)))))\n";
+
+/// The same answer chosen by a branch on the differences, which the secret rule refuses.
+const BRANCHED: &str = "          (local.set $mask (i32.const 0))\n          (if (i32.eqz (call \
+                        $differ (local.get $half)))\n            (then (local.set $mask \
+                        (global.get $ALL_ONES))))\n";
+
+/// secret-equal from the user's request to done: its idea names standard input as secret, its
+/// main.wat follows every rule, the secret rule's too, and passes its tests, and `run` answers
+/// `same` and `diff`. With a branch on the differences in place of its mask, the secret rule
+/// refuses main.wat on that line, with what to write instead.
+#[tokio::test]
+async fn secret_equal_goes_from_its_request_to_done_and_a_branch_on_a_secret_is_refused() {
+    let session = Session::start(Protocol::Discover).await;
+    let program = Program::new();
+    program.write("idea.md", SECRET_IDEA);
+    let report = session
+        .call_ok(
+            "check",
+            program.request("Make me a program that says whether two secret lines are the same"),
+        )
+        .await;
+    assert_eq!(report["state"], "write_code", "{report}");
+    program.write("main.wat", SECRET_CODE);
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert!(
+        text(&done["tests"][0]).starts_with("main.wat follows every rule and passed all "),
+        "{done}"
+    );
+    for (stdin, answer) in [("aba\naba\n", "same\n"), ("aba\nabb\n", "diff\n")] {
+        let mut arguments = program.arguments();
+        arguments["stdin"] = json!(stdin);
+        let ran = session.call_ok("run", arguments).await;
+        assert_eq!(ran["stdout"], answer, "{ran}");
+        assert_eq!(ran["exit_code"], 0, "{ran}");
+    }
+    let branched = changed(SECRET_CODE, MASKED, BRANCHED);
+    program.write("main.wat", &branched);
+    let report = session.check(&program).await;
+    assert_eq!(report["state"], "code_problems", "{report}");
+    let line = line_of(&branched, "(if (i32.eqz (call $differ");
+    assert!(
+        any_line(
+            &report["problems"],
+            &format!(
+                "secrets main.wat:{line}: the condition of this `if` is computed from a secret"
+            )
+        ),
+        "{report}"
+    );
+    assert!(any_line(&report["problems"], "with a mask"), "{report}");
+    session.service.cancel().await.expect("close the session");
+}
