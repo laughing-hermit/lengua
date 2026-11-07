@@ -2,9 +2,15 @@
 //! cvc5 is installed too, every condition z3 finds impossible must be impossible for cvc5 as
 //! well, so one solver's bug can't make a false proof. Terms are defined once, and each question
 //! is asked inside its own `push`/`pop`, so the definitions stay and the assertions go.
+//!
+//! Each solver is found as [`find`] finds it: in the `solvers` folder beside the folder that
+//! holds lengua-mcp, where a release archive keeps the versions lengua pins, and else on PATH.
+//! `lengua-mcp doctor` says where it found each, with the same function.
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::io::{self, BufRead as _, BufReader, Write as _};
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -34,6 +40,9 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// Both solvers, z3 first.
+    pub const ALL: [Self; 2] = [Self::Z3, Self::Cvc5];
+
     /// The solver's program name.
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -42,6 +51,118 @@ impl Kind {
             Self::Cvc5 => "cvc5",
         }
     }
+
+    /// The version lengua is tested with: the one scripts/ci/tools.tsv pins for every runner,
+    /// and a release archive ships.
+    #[must_use]
+    pub const fn pinned(self) -> &'static str {
+        match self {
+            Self::Z3 => "4.16.0",
+            Self::Cvc5 => "1.3.4",
+        }
+    }
+
+    /// The solver's file: its name, with `.exe` on Windows.
+    fn file(self) -> String {
+        format!("{}{}", self.name(), std::env::consts::EXE_SUFFIX)
+    }
+}
+
+/// The folder, beside the one that holds lengua-mcp, where a release archive keeps the solvers:
+/// `<plugin>/server/lengua-mcp` and `<plugin>/solvers/z3`.
+pub const SOLVERS_FOLDER: &str = "solvers";
+
+/// Where [`find`] found a solver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Found {
+    /// In [`solvers_folder`], beside the server, as a release archive keeps it.
+    Beside(PathBuf),
+    /// In a folder on PATH.
+    OnPath(PathBuf),
+}
+
+impl Found {
+    /// The solver's program.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Beside(path) | Self::OnPath(path) => path,
+        }
+    }
+}
+
+/// The folder where a release archive keeps the solvers, [`SOLVERS_FOLDER`] beside the folder
+/// that holds this lengua-mcp, found through a link to lengua-mcp on Unix; `None` when this
+/// process can't tell its own file.
+#[must_use]
+pub fn solvers_folder() -> Option<PathBuf> {
+    let program = std::env::current_exe().ok()?;
+    #[cfg(unix)]
+    let program = std::fs::canonicalize(&program).unwrap_or(program);
+    Some(program.parent()?.parent()?.join(SOLVERS_FOLDER))
+}
+
+/// Finds `kind`'s program: in [`solvers_folder`] first, then in PATH's folders. The prover starts
+/// the one it finds, and `lengua-mcp doctor` says which that is.
+#[must_use]
+pub fn find(kind: Kind) -> Option<Found> {
+    find_in(
+        solvers_folder().as_deref(),
+        std::env::var_os("PATH").as_deref(),
+        kind,
+    )
+}
+
+/// [`find`], with `beside` the solvers folder beside the server and `path` PATH's value. A file
+/// in the solvers folder counts whatever its permissions, so that one that can't run says so
+/// rather than leaving the prover to another; on PATH, as a shell looks, only a program that
+/// can run counts, and only an absolute folder.
+fn find_in(beside: Option<&Path>, path: Option<&OsStr>, kind: Kind) -> Option<Found> {
+    let file = kind.file();
+    if let Some(found) = beside
+        .map(|folder| folder.join(&file))
+        .filter(|candidate| candidate.is_file())
+    {
+        return Some(Found::Beside(found));
+    }
+    std::env::split_paths(path?)
+        .filter(|folder| folder.is_absolute())
+        .map(|folder| folder.join(&file))
+        .find(|candidate| runnable(candidate))
+        .map(Found::OnPath)
+}
+
+/// Whether `path` is a file the system can run: one with an execute permission, on Unix.
+#[cfg(unix)]
+fn runnable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    path.metadata()
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+/// Whether `path` is a file the system can run: any file, on Windows, where `.exe` says it.
+#[cfg(not(unix))]
+fn runnable(path: &Path) -> bool {
+    path.is_file()
+}
+
+/// The program the prover starts for `kind`: the one [`find`] finds, or else its bare name, which
+/// the system looks for itself and, finding none, makes the solver "not installed".
+fn program(kind: Kind) -> OsString {
+    find(kind).map_or_else(
+        || OsString::from(kind.name()),
+        |found| found.path().as_os_str().to_owned(),
+    )
+}
+
+/// The version a solver's `--version` prints: `4.16.0` from z3's `Z3 version 4.16.0 - 64 bit`,
+/// and `1.3.4` from cvc5's `This is cvc5 version 1.3.4 [git tag 1.3.4 branch HEAD]`.
+#[must_use]
+pub fn version_of(printed: &str) -> Option<&str> {
+    printed.lines().find_map(|line| {
+        let (_, rest) = line.split_once("version ")?;
+        rest.split_whitespace().next()
+    })
 }
 
 /// The z3 strategy: bit-blast straight into the SAT solver. z3 4.16's own simplifier gets some
@@ -95,7 +216,7 @@ impl Drop for Process {
 impl Process {
     /// Starts `program`, which speaks like `kind`, giving each question at most `timeout_ms`, for
     /// questions that may hold floats when `floats` says so.
-    fn start(kind: Kind, program: &str, timeout_ms: u64, floats: bool) -> io::Result<Self> {
+    fn start(kind: Kind, program: &OsStr, timeout_ms: u64, floats: bool) -> io::Result<Self> {
         let mut command = Command::new(program);
         match kind {
             Kind::Z3 => command.args(["-in", "-smt2", "-memory:4096"]),
@@ -391,22 +512,38 @@ const fn ones(width: u32) -> u128 {
 static SESSIONS: AtomicUsize = AtomicUsize::new(0);
 
 impl Solver {
-    /// Starts z3, and cvc5 to check it, giving each question at most `timeout_ms`. When only
-    /// one of them is installed, it answers alone.
+    /// Starts z3, and cvc5 to check it, each where [`find`] finds it, giving each question at
+    /// most `timeout_ms`. When only one of them is installed, it answers alone.
     ///
     /// # Errors
     ///
     /// Fails when neither solver can start.
     pub fn start(timeout_ms: u64) -> io::Result<Self> {
-        Self::with(&[(Kind::Z3, "z3"), (Kind::Cvc5, "cvc5")], timeout_ms, false)
+        let solvers = Kind::ALL.map(|kind| (kind, program(kind)));
+        Self::with_programs(&solvers, timeout_ms, false)
+    }
+
+    /// [`Self::with_programs`], each program given by its name or path as text.
+    #[cfg(test)]
+    fn with(solvers: &[(Kind, &str)], timeout_ms: u64, floats: bool) -> io::Result<Self> {
+        let solvers: Vec<(Kind, OsString)> = solvers
+            .iter()
+            .map(|&(kind, program)| (kind, OsString::from(program)))
+            .collect();
+        Self::with_programs(&solvers, timeout_ms, floats)
     }
 
     /// Starts the first of `solvers` that runs, to answer, and the next one that runs, to check
     /// it. Each is a kind of solver and the program to run for it.
-    fn with(solvers: &[(Kind, &str)], timeout_ms: u64, floats: bool) -> io::Result<Self> {
+    fn with_programs(
+        solvers: &[(Kind, OsString)],
+        timeout_ms: u64,
+        floats: bool,
+    ) -> io::Result<Self> {
         let mut running = Vec::new();
         let mut missing = Vec::new();
-        for &(kind, program) in solvers {
+        for (kind, program) in solvers {
+            let kind = *kind;
             if running.len() == 2 {
                 break;
             }
@@ -921,7 +1058,8 @@ impl Solver {
             // Floats go to cvc5, in a session of their own that reads them; that session
             // answers them itself.
             if self.floats.is_none() {
-                let mut floats = Self::with(&[(Kind::Cvc5, "cvc5")], self.timeout_ms, true)?;
+                let cvc5 = [(Kind::Cvc5, program(Kind::Cvc5))];
+                let mut floats = Self::with_programs(&cvc5, self.timeout_ms, true)?;
                 if let Some(deadline) = self.deadline {
                     floats.until(deadline);
                 }
@@ -1443,5 +1581,99 @@ mod tests {
             .err()
             .expect("no solver");
         assert_eq!(error.to_string(), "z3 isn't installed");
+    }
+
+    /// A file named for the solver, in `folder`, that the system can run.
+    fn a_program(folder: &Path, kind: Kind) -> PathBuf {
+        std::fs::create_dir_all(folder).expect("a folder");
+        let path = folder.join(kind.file());
+        std::fs::write(&path, "").expect("a program");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("runnable");
+        }
+        path
+    }
+
+    /// A solver in the solvers folder beside the server comes before one on PATH; without one
+    /// there, PATH's first that can run is taken, and a relative folder on PATH is passed over.
+    #[test]
+    fn a_solver_beside_the_server_comes_before_path() {
+        let root = tempfile::tempdir().expect("a folder");
+        let beside = root.path().join("plugin").join(SOLVERS_FOLDER);
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        let on_path = a_program(&second, Kind::Z3);
+        std::fs::create_dir_all(&first).expect("a folder");
+        let path = std::env::join_paths([Path::new("relative"), first.as_path(), second.as_path()])
+            .expect("a PATH");
+        let (beside, path) = (beside.as_path(), path.as_os_str());
+        assert_eq!(
+            find_in(Some(beside), Some(path), Kind::Z3),
+            Some(Found::OnPath(on_path.clone()))
+        );
+        let archived = a_program(beside, Kind::Z3);
+        assert_eq!(
+            find_in(Some(beside), Some(path), Kind::Z3),
+            Some(Found::Beside(archived))
+        );
+        assert_eq!(find_in(Some(beside), Some(path), Kind::Cvc5), None);
+        assert_eq!(find_in(None, None, Kind::Cvc5), None);
+        assert_eq!(
+            find_in(None, Some(path), Kind::Z3).as_ref().map(Found::path),
+            Some(on_path.as_path())
+        );
+    }
+
+    /// On PATH, as a shell looks, a file the system can't run is passed over.
+    #[cfg(unix)]
+    #[test]
+    fn a_solver_on_path_must_be_able_to_run() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir().expect("a folder");
+        let stale = a_program(&root.path().join("stale"), Kind::Cvc5);
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o644))
+            .expect("not runnable");
+        let fresh = a_program(&root.path().join("fresh"), Kind::Cvc5);
+        let path = std::env::join_paths([root.path().join("stale"), root.path().join("fresh")])
+            .expect("a PATH");
+        assert_eq!(
+            find_in(None, Some(path.as_os_str()), Kind::Cvc5),
+            Some(Found::OnPath(fresh))
+        );
+    }
+
+    /// The version each solver prints is read from its first line that names one.
+    #[test]
+    fn a_solver_s_version_is_read_from_what_it_prints() {
+        assert_eq!(version_of("Z3 version 4.16.0 - 64 bit\n"), Some("4.16.0"));
+        assert_eq!(
+            version_of(
+                "This is cvc5 version 1.3.4 [git tag 1.3.4 branch HEAD]\r\ncompiled with GCC \
+                 version 13.3.0\r\n"
+            ),
+            Some("1.3.4")
+        );
+        assert_eq!(version_of("lengua-mcp 0.1.0\n"), None);
+    }
+
+    /// The versions lengua pins are the ones every runner installs and a release archive ships,
+    /// as scripts/ci/tools.tsv names them for each of the five targets.
+    #[test]
+    fn the_pinned_solvers_are_the_ones_ci_installs() {
+        let tools = include_str!("../../scripts/ci/tools.tsv");
+        for kind in Kind::ALL {
+            let rows: Vec<&str> = tools
+                .lines()
+                .filter(|line| line.split('\t').next() == Some(kind.name()))
+                .collect();
+            assert_eq!(rows.len(), 5, "{} for five targets: {rows:?}", kind.name());
+            let release = format!("/{}-{}/", kind.name(), kind.pinned());
+            for row in rows {
+                assert!(row.contains(&release), "{row} isn't {release}");
+            }
+        }
     }
 }
