@@ -563,6 +563,31 @@ const ATTEMPTS: &[Attempt] = &[
         refusal: Refusal::Build("lengua keeps"),
     },
     Attempt {
+        name: "a name lengua keeps, given to a global",
+        edits: &[(
+            "  (global $NINE i32 (i32.const 9))\n",
+            "  (global $NINE i32 (i32.const 9))\n  (global $lengua.limit i32 (i32.const 1))\n",
+        )],
+        module: None,
+        refusal: Refusal::Rule(
+            Rule::Dialect,
+            "names a global $lengua.limit, but names that start with `$lengua.` are lengua's",
+        ),
+    },
+    Attempt {
+        name: "a reference, which the engine takes for other toolchains' tables",
+        edits: &[(
+            "    (local $n i64)\n    (block $write_failed",
+            "    (local $n i64)\n    (local $r funcref)\n    (drop (ref.is_null (local.get \
+             $r)))\n    (block $write_failed",
+        )],
+        module: None,
+        refusal: Refusal::Rule(
+            Rule::Dialect,
+            "uses a reference, which the dialect doesn't have",
+        ),
+    },
+    Attempt {
         name: "the exit status of a failed assertion",
         edits: &[(
             "(global $EXIT_USAGE i32 (i32.const 1))",
