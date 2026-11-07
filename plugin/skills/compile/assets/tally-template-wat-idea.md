@@ -61,7 +61,7 @@ code 2. The test of a write that fails gives it `1` to `64` letters.
 | `string(1048576, 1048576, "ab \n")` | 20 |
 
 ## B3: Exits with code 2 when it cannot write its output
-- Given standard input that contains `the cat`
+- Given standard input that contains `cat`
 - And standard output is closed
 - When the program runs
 - Then it exits with code `2`
