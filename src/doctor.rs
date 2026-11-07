@@ -163,10 +163,10 @@ fn probe() -> Result<(), String> {
     let mut store = wasmtime::Store::new(&engine, ());
     let instance = wasmtime::Instance::new(&mut store, &module, &[])
         .map_err(|error| format!("it starts no module: {error}"))?;
-    let probe = instance
+    let function = instance
         .get_typed_func::<(), i32>(&mut store, "probe")
         .map_err(|error| error.to_string())?;
-    let computed = probe
+    let computed = function
         .call(&mut store, ())
         .map_err(|error| format!("the module didn't run: {error}"))?;
     if computed == PROBED {
