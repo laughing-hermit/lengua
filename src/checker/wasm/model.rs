@@ -1043,6 +1043,22 @@ impl<'a> Module<'a> {
         }
     }
 
+    /// The types of the parameters a block of type `ty` takes.
+    #[must_use]
+    pub fn block_params(&self, ty: BlockType) -> Vec<ValType> {
+        match ty {
+            BlockType::Empty | BlockType::Type(_) => Vec::new(),
+            BlockType::FuncType(index) => match self
+                .sub_types
+                .get(to_usize(index))
+                .map(|sub| &sub.composite_type.inner)
+            {
+                Some(CompositeInnerType::Func(func)) => func.params().to_vec(),
+                _ => Vec::new(),
+            },
+        }
+    }
+
     /// How many values `operator` takes and gives inside `frames` (outermost first, the
     /// function's own first), or none when the checker can't say.
     #[must_use]

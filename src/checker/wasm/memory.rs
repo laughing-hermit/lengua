@@ -1470,12 +1470,14 @@ struct Frame {
     kind: FrameKind,
     /// The stack's height below its parameters.
     base: usize,
+    /// For a loop, how many parameters it takes: what a branch back to its start carries.
+    params: usize,
     /// How many results it gives.
     results: usize,
     /// The states of the branches that leave to its end, with the values they carry.
     exits: Vec<(State, Vec<Value>)>,
-    /// For a loop, the states of the branches back to its start.
-    backs: Vec<State>,
+    /// For a loop, the states of the branches back to its start, with the parameters they carry.
+    backs: Vec<(State, Vec<Value>)>,
 }
 
 impl Frame {
@@ -1484,6 +1486,7 @@ impl Frame {
         Self {
             kind,
             base,
+            params: 0,
             results,
             exits: Vec::new(),
             backs: Vec::new(),
@@ -1700,9 +1703,11 @@ impl Interpreter<'_, '_> {
         else {
             return;
         };
-        let results = self.frames[index].results;
+        let (params, results) = (self.frames[index].params, self.frames[index].results);
         if self.frames[index].kind == FrameKind::Loop {
-            self.frames[index].backs.push(state);
+            // A branch back to a loop's start carries its parameters.
+            let carried = self.top(params);
+            self.frames[index].backs.push((state, carried));
         } else {
             let carried = self.top(results);
             self.frames[index].exits.push((state, carried));
@@ -1809,8 +1814,19 @@ impl Interpreter<'_, '_> {
         stop + 1
     }
 
+    /// What the parameters of a block of type `ty` may hold when the checker can't say:
+    /// anything of their types.
+    fn anything_of(&self, ty: BlockType) -> Vec<Value> {
+        self.module
+            .block_params(ty)
+            .into_iter()
+            .map(|param| Self::anything(Some(param)))
+            .collect()
+    }
+
     /// Follows the `loop` at `at` until what holds at its start settles, and gives the index
-    /// after its end.
+    /// after its end. What holds at its start is what it's entered with, joined with what each
+    /// branch back to it brings: the locals, and the parameters the branch carries.
     fn looped(&mut self, at: usize, ty: BlockType, state: &mut State) -> usize {
         let Some(&end) = self.shape.ends.get(&at) else {
             return self.function.body.len();
@@ -1828,15 +1844,23 @@ impl Interpreter<'_, '_> {
                 slot.version = (at, *local);
             }
         }
+        // The parameters at its start, first as it's entered.
+        let mut carried = self.top(params);
         let mut forced = self.steps > BUDGET;
         if forced {
             self.havoc(&mut head, &written, at);
+            carried = self.anything_of(ty);
         }
         let mut iteration = 0;
         loop {
             iteration += 1;
             self.stack.clone_from(&entry_stack);
-            self.frames.push(Frame::new(FrameKind::Loop, base, results));
+            self.stack.truncate(base);
+            self.stack.extend(carried.iter().cloned().map(Slot::new));
+            self.frames.push(Frame {
+                params,
+                ..Frame::new(FrameKind::Loop, base, results)
+            });
             let mut body = head.clone();
             self.nesting += 1;
             let stop = self.run(at + 1, &mut body);
@@ -1847,8 +1871,14 @@ impl Interpreter<'_, '_> {
                 .map(|frame| frame.backs)
                 .unwrap_or_default();
             let mut next = head.clone();
-            for back in &backs {
+            let mut arriving = carried.clone();
+            for (back, values) in &backs {
                 next = next.joined(back, at);
+                arriving = arriving
+                    .iter()
+                    .zip(values)
+                    .map(|(mine, theirs)| join(mine, theirs))
+                    .collect();
             }
             for (index, local) in next.locals.iter_mut().enumerate() {
                 if let Some(was) = head.locals.get(index) {
@@ -1858,7 +1888,12 @@ impl Interpreter<'_, '_> {
                     }
                 }
             }
-            if next == head || forced {
+            let mut grown: Vec<Value> = carried
+                .iter()
+                .zip(&arriving)
+                .map(|(was, now)| widened(was, now))
+                .collect();
+            if (next == head && grown == carried) || forced {
                 let values = self.top(results);
                 self.stack.truncate(base);
                 self.stack.extend(values.into_iter().map(Slot::new));
@@ -1867,9 +1902,11 @@ impl Interpreter<'_, '_> {
             }
             if iteration >= MAX_ITERATIONS || self.steps > BUDGET {
                 self.havoc(&mut next, &written, at);
+                grown = self.anything_of(ty);
                 forced = true;
             }
             head = next;
+            carried = grown;
         }
     }
 
