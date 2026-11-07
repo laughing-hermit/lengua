@@ -292,7 +292,11 @@ pub fn world(
                 .port()
                 .map_err(|error| format!("lengua couldn't read its listener's port: {error}"))?;
             if let Some(events) = &events {
-                let _ = events.send(Event::Listening { id: job.id, port });
+                let _ = events.send(Event::Listening {
+                    id: job.id,
+                    port,
+                    connections: reached.clone(),
+                });
             }
             Some(listener)
         }
