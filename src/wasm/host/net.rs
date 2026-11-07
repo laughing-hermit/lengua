@@ -3,7 +3,10 @@
 //! behaves as `crate::connect` says on every system: what the other end sends is read, its end of
 //! sending is a read of 0, a connection lengua couldn't make or one that broke off is ended both
 //! ways (reads give 0, writes `PIPE`), and over TLS lengua does the TLS, in Rust, so the program
-//! reads and writes plain bytes. Every wait is bounded by the run's deadline and lengua's stop.
+//! reads and writes plain bytes. Every wait is bounded by the run's deadline and lengua's stop,
+//! and none is the system's own timeout on a socket, which on Windows can lose or repeat what the
+//! socket was sending or receiving when it runs out: a TCP stream never waits in the system, and
+//! lengua naps between looks at it.
 
 use std::collections::VecDeque;
 use std::io::{ErrorKind, Read as _, Write as _};
@@ -21,6 +24,24 @@ use crate::wasm::wasi::{errno, fdflags, sock};
 
 /// The most a socket reads ahead at once.
 const CHUNK: usize = 16 * 1024;
+
+/// The first nap a wait on a TCP stream takes between two looks at it. Each nap is twice the one
+/// before, up to [`LAST_NAP`], so an answer that comes soon is seen soon, and a long wait costs
+/// little.
+const FIRST_NAP: Duration = Duration::from_micros(50);
+
+/// The longest nap.
+const LAST_NAP: Duration = Duration::from_millis(1);
+
+/// The nap after `nap`.
+fn next_nap(nap: Duration) -> Duration {
+    nap.saturating_mul(2).min(LAST_NAP)
+}
+
+/// Whether a stream that never waits said it has nothing to give or take yet.
+fn nothing_yet(error: &std::io::Error) -> bool {
+    matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted)
+}
 
 /// The runtime that drives the connections lengua makes to places, TLS among them: one for the
 /// process, on the thread of whichever call drives it.
@@ -40,12 +61,26 @@ pub fn runtime() -> Option<&'static tokio::runtime::Runtime> {
 /// How lengua reaches one of a program's connections. It stays in the crate, as the streams
 /// lengua makes to places do ([`crate::connect`]).
 pub(crate) enum Link {
-    /// A TCP stream: one the program accepted, or one lengua made to a test's own server.
+    /// A TCP stream that never waits in the system, as [`Link::tcp`] makes it: one the program
+    /// accepted, or one lengua made to a test's own server.
     Tcp(TcpStream),
     /// A stream lengua made to a place, over TLS or not, which `runtime` drives.
     Place(Box<dyn Place>, &'static tokio::runtime::Runtime),
     /// A connection lengua couldn't make, or one that ended: reads give 0, writes `PIPE`.
     Ended,
+}
+
+impl Link {
+    /// A link over `stream`, which never waits in the system from now on: lengua does the
+    /// waiting.
+    ///
+    /// # Errors
+    ///
+    /// When the system can't make it so.
+    pub(crate) fn tcp(stream: TcpStream) -> std::io::Result<Self> {
+        stream.set_nonblocking(true)?;
+        Ok(Self::Tcp(stream))
+    }
 }
 
 /// One connection the program holds.
@@ -79,39 +114,22 @@ impl Socket {
     }
 
     /// Tries to receive into `chunk`, waiting at most `wait`, or not at all for `None`: how many
-    /// bytes arrived, 0 at the end, or `None` when nothing has yet.
+    /// bytes arrived, 0 at the end, or `None` when nothing has yet. A TCP stream is looked at
+    /// once, and the wait is a nap after it, when nothing was there.
     fn receive(&mut self, chunk: &mut [u8], wait: Option<Duration>) -> Option<usize> {
         match &mut self.link {
             Link::Ended => Some(0),
-            Link::Tcp(stream) => {
-                let received = match wait {
-                    Some(wait) => {
-                        let _ = stream.set_read_timeout(Some(wait));
-                        stream.read(chunk)
+            Link::Tcp(stream) => match stream.read(chunk) {
+                Ok(count) => Some(count),
+                Err(error) if nothing_yet(&error) => {
+                    if let Some(wait) = wait {
+                        std::thread::sleep(wait);
                     }
-                    None => {
-                        if stream.set_nonblocking(true).is_err() {
-                            return None;
-                        }
-                        let received = stream.read(chunk);
-                        let _ = stream.set_nonblocking(false);
-                        received
-                    }
-                };
-                match received {
-                    Ok(count) => Some(count),
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                        ) =>
-                    {
-                        None
-                    }
-                    // A connection the other end broke off ends, as lengua's relay ends it.
-                    Err(_) => Some(0),
+                    None
                 }
-            }
+                // A connection the other end broke off ends, as lengua's relay ends it.
+                Err(_) => Some(0),
+            },
             Link::Place(place, runtime) => {
                 let wait = wait.unwrap_or(Duration::ZERO);
                 let received =
@@ -165,9 +183,16 @@ impl Socket {
         if self.nonblocking && !self.readable() {
             return Err(Fail::Errno(errno::AGAIN));
         }
+        let mut nap = FIRST_NAP;
         while self.ahead.is_empty() && !self.ended {
-            let wait = limits.slice(SLICE)?;
+            let slice = limits.slice(SLICE)?;
+            // A TCP stream naps between looks; a place's runtime waits for what arrives.
+            let wait = match self.link {
+                Link::Tcp(_) => nap.min(slice),
+                Link::Place(..) | Link::Ended => slice,
+            };
             self.take_in(Some(wait));
+            nap = next_nap(nap);
         }
         let count = buffer.len().min(self.ahead.len());
         buffer[..count].copy_from_slice(&self.ahead[..count]);
@@ -179,7 +204,8 @@ impl Socket {
         Ok(count)
     }
 
-    /// Sends `bytes`, as many as go now.
+    /// Sends `bytes`, as many as go now. Over TLS, the bytes TLS takes are taken once, however
+    /// many slices it takes to send them on.
     ///
     /// # Errors
     ///
@@ -191,29 +217,35 @@ impl Socket {
         if bytes.is_empty() {
             return Ok(0);
         }
+        let mut nap = FIRST_NAP;
+        // How many of `bytes` a place's stream has taken: TLS takes them before the socket does,
+        // so a slice that runs out while it sends them on leaves them taken, and the next slice
+        // only sends them on. Written again, they would go twice.
+        let mut taken: Option<usize> = None;
         loop {
             let wait = limits.slice(SLICE)?;
             match &mut self.link {
                 Link::Ended => return Err(Fail::Errno(errno::PIPE)),
-                Link::Tcp(stream) => {
-                    let _ = stream.set_write_timeout(Some(wait));
-                    match stream.write(bytes) {
-                        Ok(0) => return Err(Fail::Errno(errno::PIPE)),
-                        Ok(count) => return Ok(count),
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                ErrorKind::WouldBlock
-                                    | ErrorKind::TimedOut
-                                    | ErrorKind::Interrupted
-                            ) => {}
-                        Err(_) => return Err(Fail::Errno(errno::PIPE)),
+                Link::Tcp(stream) => match stream.write(bytes) {
+                    Ok(0) => return Err(Fail::Errno(errno::PIPE)),
+                    Ok(count) => return Ok(count),
+                    Err(error) if nothing_yet(&error) => {
+                        std::thread::sleep(nap.min(wait));
+                        nap = next_nap(nap);
                     }
-                }
+                    Err(_) => return Err(Fail::Errno(errno::PIPE)),
+                },
                 Link::Place(place, runtime) => {
                     let sent = runtime.block_on(async {
                         tokio::time::timeout(wait, async {
-                            let count = place.write(bytes).await?;
+                            let count = match taken {
+                                Some(count) => count,
+                                None => {
+                                    let count = place.write(bytes).await?;
+                                    taken = Some(count);
+                                    count
+                                }
+                            };
                             place.flush().await?;
                             Ok::<usize, std::io::Error>(count)
                         })
@@ -222,6 +254,7 @@ impl Socket {
                     match sent {
                         Ok(Ok(0) | Err(_)) => return Err(Fail::Errno(errno::PIPE)),
                         Ok(Ok(count)) => return Ok(count),
+                        // The slice ran out: what was taken is sent on in the next.
                         Err(_) => {}
                     }
                 }
@@ -377,12 +410,9 @@ pub fn sock_accept(
     if waits {
         host.notes.wait(false);
     }
-    let stream = accepted?;
-    // Some systems hand on the listener's way of not waiting; lengua's sockets wait.
-    stream
-        .set_nonblocking(false)
-        .map_err(|_| Fail::Errno(errno::IO))?;
-    let mut socket = Socket::new(Link::Tcp(stream));
+    // Whatever way of waiting it got from the listener, it never waits in the system.
+    let link = Link::tcp(accepted?).map_err(|_| Fail::Errno(errno::IO))?;
+    let mut socket = Socket::new(link);
     socket.nonblocking = flags & fdflags::NONBLOCK != 0;
     let accepted = host
         .fds
@@ -509,7 +539,8 @@ mod tests {
         let port = listener.local_addr().expect("an address").port();
         let stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).expect("a connection");
         let (other, _) = listener.accept().expect("its other end");
-        (Socket::new(Link::Tcp(stream)), other)
+        let link = Link::tcp(stream).expect("a stream that never waits");
+        (Socket::new(link), other)
     }
 
     #[test]
@@ -539,6 +570,75 @@ mod tests {
             Err(Fail::Errno(errno::PIPE))
         ));
         assert!(matches!(ended.shutdown(9), Err(Fail::Errno(errno::INVAL))));
+    }
+
+    /// A write over TLS that waits on its socket longer than a slice sends its bytes once: TLS
+    /// takes them before the socket does, and a slice that runs out mustn't make the write give
+    /// them again. The test's server waits before it reads, so the writes fill the sockets
+    /// between them, and then counts what arrives.
+    #[test]
+    fn a_write_over_tls_that_waits_on_its_socket_sends_its_bytes_once() {
+        use tokio::io::AsyncReadExt as _;
+
+        let made = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()])
+            .expect("a certificate");
+        let certificate = made.cert.der().clone();
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(made.signing_key.serialize_der()),
+        );
+        let server = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("TLS versions")
+        .with_no_client_auth()
+        .with_single_cert(vec![certificate.clone()], key)
+        .expect("the server's certificate");
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(certificate).expect("a root");
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server));
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a free port");
+        let port = listener.local_addr().expect("an address").port();
+        let counted = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("the server's runtime");
+            runtime.block_on(async move {
+                listener
+                    .set_nonblocking(true)
+                    .expect("a listener that never waits");
+                let listener = tokio::net::TcpListener::from_std(listener)
+                    .expect("a listener in the runtime");
+                let (stream, _) = listener.accept().await.expect("the client");
+                let mut stream = acceptor.accept(stream).await.expect("TLS");
+                // Long past a slice, while the client's writes fill the sockets.
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let mut chunk = vec![0_u8; CHUNK];
+                let mut total = 0;
+                loop {
+                    match stream.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break total,
+                        Ok(count) => total += count,
+                    }
+                }
+            })
+        });
+        let runtime = runtime().expect("the connections' runtime");
+        let reach = crate::connect::Reach::Tls("localhost".to_owned(), port);
+        let trust = Arc::new(crate::connect::client_config(roots));
+        let connecting = crate::connect::make_with(&reach, trust);
+        let place = runtime.block_on(connecting).expect("a TLS connection");
+        let mut socket = Socket::new(Link::Place(place, runtime));
+        let limits = limits();
+        // More than the sockets between them hold.
+        let bytes = vec![7_u8; 64 << 20];
+        let mut sent = 0;
+        while sent < bytes.len() {
+            sent += socket.write(&bytes[sent..], &limits).expect("a write");
+        }
+        socket.close();
+        assert_eq!(counted.join().expect("the server"), bytes.len());
     }
 
     #[test]
