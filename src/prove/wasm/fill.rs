@@ -116,7 +116,13 @@ pub(super) fn whole(
         } else {
             let everything = world.stdin.len();
             let count = pool.extract(length, 31, 0);
-            take(state, pool, (start, buffer), &available, (everything, count));
+            take(
+                state,
+                pool,
+                (start, buffer),
+                &available,
+                (everything, count),
+            );
             return Ok(Some(Step::Next));
         }
     }

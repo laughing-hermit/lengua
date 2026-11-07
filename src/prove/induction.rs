@@ -43,8 +43,7 @@ use super::smt::Answer;
 use super::term::{Pool, Term};
 use super::world::Arrival;
 use super::{
-    Budget, Known, MAX_CHOICES, Program, Solvers, Witnessed, conjuncts, disjuncts, settled,
-    text_is,
+    Budget, Known, MAX_CHOICES, Program, Solvers, Witnessed, conjuncts, disjuncts, settled, text_is,
 };
 use crate::expr::{Expr, Function, Generator, Piece, Value};
 use crate::testfile::{ExitCode, Generated};
@@ -550,9 +549,7 @@ pub(super) fn step<P: Program>(
         }
         solvers.next();
         let mut pool = Pool::default();
-        let start = image
-            .begin(&mut pool, &[], &[], Vec::new())
-            .for_every_cut();
+        let start = image.begin(&mut pool, &[], &[], Vec::new()).for_every_cut();
         let start = P::hooked(start, Rc::new(hook.clone()))?;
         let runs = explore(image, start, &mut pool, &mut solvers, budget)?;
         paths += runs.len();

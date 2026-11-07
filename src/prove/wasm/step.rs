@@ -4,9 +4,7 @@
 
 use super::host::{self, Handle};
 use super::image::{Arity, Binary, Function, Module, NOWHERE, Op, Unary};
-use super::{
-    Frame, Label, Wasm, fill, float, function_label, induction, memory, must_not, vector,
-};
+use super::{Frame, Label, Wasm, fill, float, function_label, induction, memory, must_not, vector};
 use crate::prove::exec::{End, MAX_STEPS, State, Step, TOO_LONG, unsupported};
 use crate::prove::term::{Pool, Term};
 

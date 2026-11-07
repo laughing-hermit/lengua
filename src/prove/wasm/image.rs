@@ -539,7 +539,9 @@ fn reading(functions: &[Function], fill: Option<u32>, mutable: &[bool]) -> Readi
                 Op::Call(callee) => {
                     let raw = imports(*callee, "fd_read") && Some(number) != fill;
                     let fills = Some(*callee) == fill;
-                    let before = at.checked_sub(1).and_then(|before| function.ops.get(before));
+                    let before = at
+                        .checked_sub(1)
+                        .and_then(|before| function.ops.get(before));
                     if raw
                         || imports(*callee, "poll_oneoff")
                         || (fills && !stop_is_known(before, mutable))
