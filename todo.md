@@ -188,6 +188,22 @@ Each can be reversed.
   Each runner's first gate run fails wherever lengua is ahead, and its KNOWN_BEHIND-<target>.txt
   (in the run's artifacts) takes the place of that runner's line, naming only the rows where
   lengua isn't ahead.
+- **KNOWN_BEHIND only shrinks** (W12): the bench holds each change to the list in the history it
+  measures to the list before it, and fails where a change named a row the list before it didn't
+  (a runner, workload, version or measure new to the gate excepted), so a bench leg checks out
+  the whole history.
+- **Peak memory on Linux** (W12): Linux begins a process's count of its peak at what the process
+  it was started from held, so `measure` starts each program from lengua-spawn, a small process
+  beside lengua-mcp that forks it and counts it; without lengua-spawn, a peak no higher than
+  lengua-mcp's own is left out, undecided.
+- **Size against native builds** (W12): lengua's size on those rows is its module's and the
+  lengua-mcp executable's that runs it; against the other modules, the module's alone.
+- **The other versions' forms** (W12): C, C++ and Rust use their own libraries' sorts and plain
+  loops their compilers vectorize, with no SIMD by hand, where lengua's programs use SIMD128 by
+  hand; each workload's description in the report says so. Their programs carry no handicap the
+  others don't: C stores every byte, as C++ and Rust do; wc counts in byte counters in all three;
+  C++'s tally uses C's table; Rust writes large outputs straight to its descriptor, as C does.
+  The gate's test corrects for continuity by half of U's step between runs of tied values.
 - **Secrets**: an idea line `- Secret:` names data that must not reach a branch, a `select`, an
   address, a length, a loop's count, division or floating point (point 5), checked first in the
   WebAssembly and then in the machine code the engine makes, with the native lengua's decoders.
