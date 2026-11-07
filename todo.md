@@ -113,7 +113,13 @@ Each can be reversed.
   exceptions off (wide arithmetic and relaxed SIMD aren't finished standards). NaN results are
   made canonical, so every machine computes the same bits. Where Cranelift fails on a runner
   (Windows on ARM64 is the engine's third tier), its portable interpreter (Pulley) runs instead,
-  and the gap is published.
+  and the gap is published. The pinned version is Wasmtime 50.0.1. Reference types stay on in
+  the engine, as today's C, C++ and Rust compilers encode their modules with them (which the
+  comparison of point 4 runs); the dialect's rules refuse tables in `main.wat`.
+- **The host's answers** follow the compile skill's host.md: a name that would leave the working
+  folder gives `NOTCAPABLE`, a link on the way `ACCES`; closing a standard stream needs files or
+  the network in the idea. The terminal's two non-WASI imports (raw mode, window size) wait for
+  W9, which ports the terminal template or leaves it out.
 - **The text is parsed with `wast`**, keeping each instruction's line, and validated by
   `wasmparser` with the engine's own features. lengua's library (`$assert_fail`, `$fill`,
   `$write_all`) is merged into the module, so a program is one standard module. `main.wat` has no
