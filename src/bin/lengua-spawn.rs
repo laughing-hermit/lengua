@@ -40,10 +40,13 @@ fn main() -> ExitCode {
             return ExitCode::from(REFUSED);
         }
     };
-    let exit = spent.exit.map_or_else(|| "signal".to_owned(), |code| code.to_string());
-    let counts = [spent.user_ns, spent.system_ns, spent.wall_ns, spent.peak_bytes];
-    let counts: Vec<String> = counts.iter().map(u64::to_string).collect();
-    let line = format!("{exit} {}\n", counts.join(" "));
+    let exit = match spent.exit {
+        Some(code) => code.to_string(),
+        None => "signal".to_owned(),
+    };
+    let (user, system) = (spent.user_ns, spent.system_ns);
+    let (wall, peak) = (spent.wall_ns, spent.peak_bytes);
+    let line = format!("{exit} {user} {system} {wall} {peak}\n");
     match std::fs::write(&report, line) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

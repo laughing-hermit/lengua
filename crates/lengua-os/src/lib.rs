@@ -73,7 +73,8 @@ pub fn run_forked(words: &[std::ffi::CString]) -> Result<Forked, String> {
     };
     let status = std::fs::read_to_string("/proc/self/status")
         .map_err(|error| format!("/proc/self/status: {error}"))?;
-    let threads = status.lines().find_map(|line| line.strip_prefix("Threads:"));
+    let mut lines = status.lines();
+    let threads = lines.find_map(|line| line.strip_prefix("Threads:"));
     let threads = threads.map(str::trim).unwrap_or_default();
     if threads != "1" {
         return Err(format!(
@@ -115,7 +116,10 @@ pub fn run_forked(words: &[std::ffi::CString]) -> Result<Forked, String> {
         ForkResult::Parent { child } => child,
     };
     let exit = loop {
-        let caught = waited.wait().map_err(|error| format!("sigwait: {error}"))?;
+        let caught = match waited.wait() {
+            Ok(caught) => caught,
+            Err(error) => return Err(format!("sigwait: {error}")),
+        };
         if caught == Signal::SIGTERM {
             let _ = kill(child, Signal::SIGKILL);
         }

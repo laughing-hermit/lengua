@@ -1393,7 +1393,8 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
 
 /// The file `path` of the repository as commit `commit` had it, if it had it.
 fn at_commit(root: &Path, commit: &str, path: &str) -> Option<String> {
-    git(root, &["show", &format!("{commit}:{path}")])
+    let object = format!("{commit}:{path}");
+    git(root, &["show", object.as_str()])
 }
 
 /// Where `after`, KNOWN_BEHIND as a change left it, names a row that `before`, the list the
@@ -1401,7 +1402,8 @@ fn at_commit(root: &Path, commit: &str, path: &str) -> Option<String> {
 /// src/gate.rs then, quotes.
 fn grown_by(before: &str, after: &str, code: &str) -> Vec<String> {
     let existed = |name: &str| code.contains(&format!("\"{name}\""));
-    gate::grown(&KnownBehind::read(before), &KnownBehind::read(after), existed)
+    let (before, after) = (KnownBehind::read(before), KnownBehind::read(after));
+    gate::grown(&before, &after, existed)
 }
 
 /// Where KNOWN_BEHIND grew, which it may not: each change to the list on the first parents of
@@ -1414,7 +1416,13 @@ fn grown_in_history(root: &Path, now: &str) -> Vec<String> {
                        history, not a shallow clone";
         return vec![problem.to_owned()];
     }
-    let log = ["log", "--first-parent", "--format=%H", "--", "KNOWN_BEHIND"];
+    let log = [
+        "log",
+        "--first-parent",
+        "--format=%H",
+        "--",
+        "KNOWN_BEHIND",
+    ];
     let Some(changes) = git(root, &log) else {
         return vec!["git can't list the changes to KNOWN_BEHIND".to_owned()];
     };

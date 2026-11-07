@@ -490,12 +490,15 @@ impl Start {
         let Self::Spawned { spawner, report } = self else {
             return command;
         };
+        let envs = command
+            .get_envs()
+            .filter_map(|(name, value)| Some((name, value?)));
         let mut spawned = bare(spawner);
         spawned
             .arg(report.path())
             .arg(command.get_program())
             .args(command.get_args())
-            .envs(command.get_envs().filter_map(|(name, value)| Some((name, value?))));
+            .envs(envs);
         if let Some(folder) = command.get_current_dir() {
             spawned.current_dir(folder);
         }
@@ -775,8 +778,10 @@ fn the_childs_own(peak: u64) -> bool {
 /// /proc/self/status.
 fn own_peak() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    let line = status.lines().find_map(|line| line.strip_prefix("VmHWM:"))?;
-    let kib = line.trim().strip_suffix("kB")?.trim().parse::<u64>().ok()?;
+    let mut lines = status.lines();
+    let line = lines.find_map(|line| line.strip_prefix("VmHWM:"))?;
+    let kib = line.trim().strip_suffix("kB")?;
+    let kib = kib.trim().parse::<u64>().ok()?;
     Some(kib.saturating_mul(1024))
 }
 
@@ -1084,7 +1089,7 @@ mod tests {
         assert_eq!(spent.ran, Some((Some(3), Duration::from_nanos(30))));
         let ended = Spent::reported("signal 1 2 3 4").expect("a report");
         assert_eq!(ended.ran.map(|ran| ran.0), Some(None));
-        for text in ["", "3 1 2 3", "3 1 2 3 4 5", "three 1 2 3 4", "3 1 2 -3 4"] {
+        for text in ["", "3 1 2 3", "3 1 2 3 4 5", "x 1 2 3 4", "3 1 2 -3 4"] {
             assert_eq!(Spent::reported(text), None, "{text:?}");
         }
     }
