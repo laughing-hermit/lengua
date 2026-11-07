@@ -1,296 +1,261 @@
 ---
 name: compile
-description: Compiles a lengua program's idea.md into main.s, assembly for this computer's target, Linux on x86-64 or AArch64 (integer, vector and floating-point instructions) that passes every test in the idea, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly); an Attested Computation's idea it compiles into main.wat, WebAssembly text that runs the same on every computer. Use after check records the idea, when the lengua check tool says to write main.s or main.wat or reports problems in it, when someone shares an idea to build on this computer, or when the user asks for a faster program. Ends when check says done, with a short report to the user.
+description: Compiles a lengua program's idea.md, an Open Knowledge Format Attested Computation, into main.wat, WebAssembly text in lengua's dialect that the lengua check tool builds, holds to the lengua Power of 10 (NASA's rules adapted for WebAssembly, with memory rules like Rust's), tests, proves and runs the same way on every computer. An idea of type lengua/program-idea it compiles into main.s, assembly for Linux on x86-64 or ARM64, until lengua retires that path. Use after check records the idea, when check says to write main.wat or main.s or reports problems in it, when someone shares an idea to build here, or when the user asks for a faster program. Ends when check says done, with a short report to the user.
 license: Apache-2.0
-compatibility: Needs the lengua MCP server from the lengua plugin; main.s also needs Linux x86-64 or ARM64 with LLVM (llvm-mc and ld.lld).
+compatibility: Needs the lengua MCP server from the lengua plugin. Only main.s, for an idea of type lengua/program-idea, also needs Linux on x86-64 or ARM64 with LLVM (llvm-mc and ld.lld).
 ---
 
 # Compile a lengua idea
 
-> lengua is moving to WebAssembly: a program's code becomes `main.wat`, the same on every
-> computer, held to [the WebAssembly dialect](references/power-of-10-webassembly.md) and calling
-> only [lengua's host](references/host.md). For an idea of `type: Attested Computation`, `check`
-> takes `main.wat` and refuses `main.s`: write `<path>/main.wat` by those two references and
-> [Writing main.wat](references/wasm.md), in the shape of one of the WebAssembly templates, each a
-> checked program beside its idea: [the negate template](assets/main-template.wat),
-> [the streaming filter](assets/stream-template.wat),
-> [the vector template](assets/vector-template.wat),
-> [the event-loop server](assets/server-template.wat) and
-> [the word tally](assets/tally-template.wat). Then call `check` and follow it until it says
-> done, as below. The key reader has no WebAssembly form until lengua's host gives the
-> terminal's two imports, and the parallel template has none: a WebAssembly program has no
-> threads. For any other idea, compile `main.s` as below.
+`main.wat` is the program: WebAssembly text that you compile from `idea.md`, one module that runs
+the same way on every computer. You are the compiler, and lengua checks your translation instead
+of trusting it: `check` parses `main.wat`, merges lengua's library into it (`$assert_fail`,
+`$fill`, `$write_all`), validates the module with the engine's own features, holds it to
+[the WebAssembly dialect](references/power-of-10-webassembly.md), runs every test in the idea, and
+then proves each generated test in the background. Nothing runs before every rule passes. The
+program reaches the computer only through [lengua's host](references/host.md), WASI preview 1 as
+lengua implements it, and only through the calls its idea allows.
+[Writing main.wat](references/wasm.md) shows how to write code that meets the rules on the first
+check.
 
-`main.s` is the program: assembly for this computer's target, Linux on x86-64 or on AArch64,
-that you compile from `idea.md`; the first word of `check`'s `machine` line names the target,
-`linux-x86_64` or `linux-aarch64`. You are the compiler. You write `main`, and reach the system
-only by calling lengua's operations (`os_read`, `os_write`, `os_open`, …) and its library
-(`assert_fail`, `fill`, `parallel_for`), which are the same on every computer:
-[the edge](references/edge.md) lists them. lengua checks your translation: it assembles `main.s`
-with its own file after it (`_start` and what `main` calls), reads the machine code back,
-matches it to `main.s` line by line, checks the lengua Power of 10, then runs every test in the
-idea and proves what it can. Nothing runs before every rule passes. Once a check passes, lengua
-writes main.s's second line itself, naming the idea it was compiled from, this computer's target
-and the CPU features the code needs; never write that line yourself.
+The idea's frontmatter says which code it takes. `type: Attested Computation` takes `main.wat`, by
+the steps below. `type: lengua/program-idea`, an idea from before WebAssembly, takes `main.s`,
+assembly for this computer, by the last section. `check` refuses the other code file and says
+which to write.
 
 ## Steps
 
-1. Read `<path>/idea.md`: its behaviors, and the generated tests under them. The last `check`
-   reply's `machine` lists the CPU extensions main.s may use, such as BMI, POPCNT, LZCNT, ADX,
-   MOVBE, AVX2 or AVX-512. **Write for the baseline first**, the instructions every machine of
-   the target has: SSE2 with SSE3, SSSE3, SSE4.1, SSE4.2 and POPCNT on x86-64, and ARMv8.0-A with
-   NEON and floating point on AArch64, with nothing optional (no CRC, PMULL, AES, SHA or SVE).
-   Take an extension `machine` lists only in step 6, for speed. lengua's own programs are held
-   to the same rule: a program that needs an extension is a fast tier, named for it (`wc-sve`),
-   beside a baseline form from the very same idea, and the tier is the one to start from only
-   where `machine` lists its extension.
-2. Plan the functions before writing them: at most 60 instructions each (rule 4), so `main`
-   checks the arguments and calls the functions that do the work. When the idea builds on parts
-   (`- Builds on:`), each part must be done first: call `check` on its folder until it is. Then
-   take the functions you use from the part's main.s word for word, each with a
-   `# from: ../sort` line in the comment above its `.type`, with the data they use: `check` holds
-   each to the part's current code, and says which to copy again when the part changes. Never
-   rewrite what a part already does.
-3. Write `<path>/main.s` in the shape of [the template](assets/main-template.s): its first line
-   is `.intel_syntax noprefix` (on `linux-aarch64`, [the AArch64 template](assets/linux-aarch64/main-template.s),
-   whose first line is `.arch armv8-a`), `main` takes the argument count, the arguments and the
-   environment in its first three argument registers and ends with `call os_exit`, and
-   `assert_fail` is lengua's: call it with the assertion's number, never define it; the rest is
-   the program. The template is a complete, checked program that prints the negative
-   of a number ([its idea](assets/template-idea.md)); its `parse_i64`, `write_i64` and
-   `write_all` can be reused as they are. To read a whole input, a reply, or a request up to the
-   byte that ends it (such as a newline), call `fill`, which is lengua's: the proof then covers
-   every way the input can arrive, cut into any pieces. To stream input larger than a buffer,
-   call `fill` again for each buffer-full, with its stop byte -1, as
-   [the streaming filter](assets/stream-template.s) does
-   ([its idea](assets/stream-template-idea.md); on AArch64
-   [its NEON form](assets/linux-aarch64/stream-template.s)): where each buffer-full's
-   output is its bytes
-   mapped one by one (`upper`, `lower`, `tr`), or counts kept in registers and printed at the
-   end (`len`, `words`, `count` of a part such as `"\n"` or `"\r\n"`), the proof covers every
-   length by induction over the loop, whatever the program keeps of the last buffer-full (such
-   as whether it ended inside a word); a `count` of a part that can overlap itself, such as
-   `"aa"`, is covered too where a register of its own carries how much of the part the text ends
-   with from one buffer-full to the next (for `"aa"`, whether the last byte is an `a` that starts
-   no pair yet), kept as 0 or 1 with `setcc`, `and` and `xor`, without branches; otherwise it
-   goes on through longer input as far as its time reaches, where a read loop of your own is proven
-   only up to the 4096 bytes one pipe write holds. For a buffer as large as 64 KiB, the proof takes
-   the last buffer-full at every length at once, which needs each loop over a buffer-full to leave
-   only where its index reaches the bytes `fill` read, and to mask each step to the bytes left,
-   so the last partial step is the same code: on x86-64, `min(left, 16)` spread over a vector
-   with `pshufb`, then `pminub` and `pcmpeqb` against each lane's place plus one (an unsigned
-   compare: the proof doesn't follow a signed `pcmpgtb` one), as
-   [the fast wc](assets/fast/wc/main.s) does (`bzhi` of `min(left, 64)` into `k1` in
-   [its AVX-512 tier](assets/fast/wc-avx512/main.s)); on AArch64, `cmhi` of `min(left, 16)`,
-   spread over a vector with `dup`, against each lane's place, as
-   [its NEON form](assets/linux-aarch64/fast/wc/main.s) does. A separate routine for the last
-   partial vector, at a
-   place the length chooses, is proven only one final length at a time, which a large buffer's
-   proof doesn't finish. A server whose
-   idea serves several clients at once starts from
-   [the event-loop server](assets/server-template.s) ([its idea](assets/server-template-idea.md)):
-   `os_poll` over the listening socket and a fixed table of connections, a line buffer for each,
-   and answering each client as its request completes; its proof follows the clients' steps in
-   every order between polls; on AArch64 [its form](assets/linux-aarch64/server-template.s) is
-   the same program. A program for the terminal starts from
-   [the key reader](assets/terminal-template.s) ([its idea](assets/terminal-template-idea.md); on
-   AArch64 [its form](assets/linux-aarch64/terminal-template.s)):
-   keys one at a time with no echo, a wait for the next key, and the terminal set back at the
-   end; it has no WebAssembly form until lengua's host gives the terminal's two imports. A
-   program that counts or looks things up by key starts from
-   [the word tally](assets/tally-template.s) ([its idea](assets/tally-template-idea.md); on
-   AArch64 [its form](assets/linux-aarch64/tally-template.s)): a hash
-   table of a million slots by FNV-1a with linear probing, its entries in the order the keys first
-   appear, sorted by a merge sort to print, so printing walks the entries, never the slots. A
-   choice made for each input byte with `cmov` or `setcc`, not a branch, keeps the proof
-   to one path; a branch per byte doubles the paths with each byte, and the proof stops early.
-4. Write the code by [the rules](references/power-of-10.md), with
-   [the edge](references/edge.md) for the operations, the errors and the library, and
-   [the x86-64 reference](references/x86_64.md), or when the machine line names AArch64
-   [the AArch64 reference](references/aarch64.md), for the calling convention and the dialect's
-   form on the CPU. Write it correct first; speed comes in step 6.
-5. Call `check` with `path`. It checks the rules first and lists each violation as
-   `rule N (name) main.s:LINE: problem. Fix: …`. Then it runs every test: each behavior's example,
-   and the generated tests with fresh random inputs (boundary values first). A failure shows the
-   inputs, the seed, what was expected and what happened, and `assertion N failed at main.s:LINE`
-   when an assertion fires. When a test fails, decide from `idea.md` whether `main.s` or the test
-   is wrong: fix `main.s`, or fix the test in `idea.md` by the write-idea skill's rules, and call
-   `check` again. Keep going until every test passes; never stop to ask the user.
-6. **Make it fast.** lengua aims for programs faster than C, C++ and Rust built with every
-   optimization. When the program loops over its input (text, numbers, files, a stream), make one
-   pass for speed as soon as `check` says every test passes, then call `check` again: the tests
-   must stay green, and the `cycles` in `performance` of the tests with the largest inputs should
-   drop. Editing main.s starts its proof over, so make this pass before waiting for the proof.
-   - **A baseline form that runs on every computer of the target, and vectors as wide as the
-     CPU allows beside it:** a loop over bytes takes 16 at a time, never byte by byte: SSE2 on
-     x86-64 (with `popcnt`), which every x86-64 computer has, and NEON on AArch64, each step
-     masked to the bytes left with lanes compared against their places, so the last partial
-     vector is the same code. That is the program's baseline form, and it meets the idea on
-     every computer of its target. When `machine` lists a wider extension, a faster tier goes
-     beside the baseline, never in its place: 64 bytes at a time with AVX-512BW (32 with AVX2;
-     a `k1` mask with masked compares, or a masked load, `vmovdqu8 zmm0 {k1}{z}`), and SVE on
-     AArch64. Both forms meet the very same idea.md, so what a program does never depends on an
-     optional extension. `gcc -O3 -march=native` vectorizes too, so only the widest loop beats
-     it.
-   - **Break dependency chains:** when each step waits on the one before, as in a checksum or a
-     running sum, run two to four independent chains side by side and join them at the end.
-   - **Large pieces:** read through `fill` into a 64 KiB buffer, the most a pipe hands over at
-     a time, and write in large pieces, never a line or a byte per call: each operation is a call
-     and a system call.
+1. **Read the idea and the machine line.** In `<path>/idea.md`, the frontmatter's `parameters`
+   say where each input comes from: an argument, standard input, an environment variable or a
+   file. `# Purpose` gives every range and limit in backticks, which size the program's regions.
+   Each behavior under `# Behaviors` has its example and its generated tests. `# Constraints`
+   holds `- Uses:` and `- Network:`, which decide what main.wat may import
+   ([the host](references/host.md) lists which line allows which call), and `- Builds on:` for
+   parts. The `write_code` reply's `machine` line names this computer, the engine (Wasmtime,
+   compiling main.wat with Cranelift for this CPU), how wide this CPU's vectors go, and what
+   main.wat may use: WebAssembly 1.0 with sign-extension, saturating-float-to-int, multi-value,
+   bulk-memory and simd, and no tables or references. The same main.wat runs on every computer:
+   the machine line says how fast vector code will be here, never what the program does. A
+   WebAssembly program is one thread, so `check` refuses an Attested Computation with a
+   `- Threads:` line.
+2. **Pick the template that fits**, and keep its shape. Each is a complete program that passes
+   every rule and every test of its idea:
+
+   | Template | Its idea | Start from it for |
+   |---|---|---|
+   | [negate](assets/main-template.wat) | [idea](assets/main-template-idea.md) | Arguments: a number parsed and printed, an error for each bad input |
+   | [the streaming filter](assets/stream-template.wat) | [idea](assets/stream-template-wat-idea.md) | Standard input of any length, a 64 KiB buffer-full at a time, in constant memory |
+   | [the vector template](assets/vector-template.wat) | [idea](assets/vector-template-wat-idea.md) | A line found and changed 16 bytes at a time with SIMD128, then a scalar tail |
+   | [the event-loop server](assets/server-template.wat) | [idea](assets/server-template-wat-idea.md) | A server for several clients at once: `poll_oneoff`, `sock_accept`, `sock_recv`, `sock_send` |
+   | [the word tally](assets/tally-template.wat) | [idea](assets/tally-template-wat-idea.md) | Counts or lookups by key: a hash table, a merge sort and buffered output |
+
+   A program for the terminal has no WebAssembly form until lengua's host gives the terminal's
+   two imports, raw mode and the window's size, and a program that needs threads has none
+   either: tell the user so rather than promise one.
+3. **Plan the functions** before you write them: at most 180 operators each (rule 4), and at
+   least two assertions per function on average. `$main`, exported as `_start`, checks the inputs
+   and calls the functions that do the work; it never reaches its end: each path ends in
+   `$proc_exit` or `$assert_fail` followed by `unreachable`, and a server's one loop that takes
+   connections goes on forever. When the idea builds on parts (`- Builds on:`), call
+   `check` on each part's folder until it is done first. Then take the functions you use from the
+   part's `main.wat` word for word, each with a `;; from: ../sort` line above its `(func`: `check`
+   holds each to the part's current code, and says which to copy again when the part changes. A
+   part must be in WebAssembly too. Never rewrite what a part already does.
+4. **Write `<path>/main.wat` to the dialect**, in the template's layout: the imports, the memory,
+   the named constants, the regions, then the functions. [Writing main.wat](references/wasm.md)
+   gives each idiom with its snippet, [the dialect](references/power-of-10-webassembly.md) the
+   rules, and [the host](references/host.md) the calls, the descriptors and the error numbers.
+   What first checks most often find:
+   - an import the idea doesn't allow or the code never calls; each import has WASI's own type;
+   - a memory whose minimum isn't its maximum, or isn't exported as `memory`; no `memory.grow`;
+   - a bare number where a call, a comparison or a loop needs one: each is a named immutable
+     global, and an exit code goes from 0 to 255, never 134;
+   - a region below address 1024, or without `$x.size` (`$x.rosize` for read-only data); size
+     each from the idea's limits, with one byte past a limit to see input that is too long;
+   - a host call whose error number isn't tested at once, before anything it wrote is read, or a
+     count it gave that isn't bounded before its use;
+   - a loop without its counter: set it from a named constant right before the loop, write
+     `;; bound: N` on the loop's line, and end the loop by taking one from the counter and
+     branching back while it isn't zero;
+   - an index not checked, unsigned, against its region's size less the access's width, before
+     the access and inside the loop;
+   - an assertion number outside 1 to 899, or used twice;
+   - recursion, `return`, a table, a trapping float conversion (use `trunc_sat`), or a division
+     whose divisor no check keeps from zero.
+
+   Write it correct first; speed comes in step 7.
+5. **Call `check` with `path` and read its reply.** `state` says where the program stands, and
+   `next_step` says the one thing to do. Make one call at a time: each replies within about 40
+   seconds, and the tests and the proofs go on in the background.
+
+   | `state` | What it means, and what to do |
+   |---|---|
+   | `write_code` | The idea is recorded and there's no main.wat yet: write it. |
+   | `code_problems` | Every problem, each on its line: one the build finds as `main.wat line N: …`, text that doesn't parse or validate, and each broken rule as `rule N (name) main.wat:LINE: problem. Fix: …`; or a part's function that differs from the part's, or a second code file. Fix them all, then call `check` again. |
+   | `testing` | The tests are running: call `check` again; nothing needs to change. |
+   | `tests_failed` | Each failure gives the test, its inputs and the seed, what was expected and what happened, as `example B1 (idea.md line 20): stdout should be "5\n", but was "-1\n"`, with `assertion 9 failed at main.wat:LINE` when an assertion fires. Decide from `idea.md` whether main.wat or the test is wrong: fix main.wat, or fix the test by the write-idea skill's rules, and call `check` again. |
+   | `proving` | Every test passed, and the proofs are running: call `check` again. |
+   | `done` | Every rule holds and every test passed: the reply has `tests`, `proofs`, `memory`, `example`, `performance`, `shell`, and `changes` when the idea changed after the user's request. |
+
+   Boundary values run first on every check; the other generated inputs are new each time. Keep
+   going until every test passes: never stop to ask the user, and never weaken a test to make
+   code pass. A proof can also find inputs the tests didn't try: the state is then
+   `tests_failed`, with a line such as `generated B1: the proof found inputs the tests didn't try
+   where main.wat is wrong: with a = …`, and `run` refuses that build from then on, even after
+   lengua restarts. Fix main.wat for those inputs. Any other state is the idea's: follow
+   `next_step` with the write-idea skill. The reply's `graph` lines say how the program's bundle
+   stands: fix what `blocks` first.
+6. **Read the proofs and the memory line.** Once the tests pass, lengua proves each generated
+   test for every input it can, with each solver question confirmed by z3 and cvc5: for about 20
+   seconds before `check` says done, then on in the background for up to five minutes in all,
+   each proof recorded in lengua.lock as it ends. Each line of `proofs` is one generated test:
+   - `proven for every input in range (… input combinations, … paths through the WebAssembly)`:
+     every input its ranges allow. The rest of the line says whether two solvers confirmed each
+     step, the terms settled every one, or one solver answered alone, and then which to install.
+   - `proven: the tests tried every value …`: a range small enough that the tests ran it all.
+   - `proven for every input with text up to N of M bytes`: a text proven as far as the proof's
+     time reached, and tested beyond, as the line says. When it ends with
+     `check with prove_further to prove on from there`, a `check` with `prove_further: true`
+     proves on, for another stretch in the background. The WebAssembly prover proves a text one
+     length after another, so a stream is proven up to a length: proofs for every length, by
+     induction over a read loop, are main.s's for now.
+   - `tested, not proven: <why>`: the tests passed, and the proof couldn't settle it. lengua's
+     WebAssembly prover doesn't follow SIMD128 or float instructions yet, and names the first
+     one it met, as ``main.wat line 89: `I8x16Splat`, which the WebAssembly model doesn't follow
+     yet``. It doesn't follow a name the input chooses, a server's wait on `poll_oneoff` for its
+     connections, or a run longer than its step limit either. Tell the user why in one line.
+   - `proving, …` or `waiting for its turn`: still running. Don't wait for it, but call `check`
+     again before the user relies on the program: a proof that finds the program wrong shows
+     there, and `run` refuses that build from then on.
+   - `…, as lengua.lock records`: a proof of this very module, taken from the lock.
+
+   `memory` says what's known of memory safety. The rules (M1 to M8) hold every address they can
+   follow to its owner, for every input, and WebAssembly holds every access inside the program's
+   own memory. What the rules can't follow, such as an address loaded from memory or a division
+   no check guards, they leave to the proofs, each on its line of main.wat, and the line says what
+   the proofs settled of it on the runs they cover. The proofs follow no region, so whether such
+   an access stays inside its own region is tested, not proven. A proof that found main.wat
+   wrong comes first.
+
+   At done, `check` writes lengua's entry in idea.md's `verified` list: lengua and its version,
+   the time, and the hashes of the idea and the main.wat it checked. Never write or edit it. The
+   next `check` after an edit to either file takes it away until the program is done again, and a
+   proof that finds main.wat wrong takes it away at once.
+7. **Make it fast.** When the program loops over its input, make one pass for speed as soon as
+   every test passes, then call `check` again: the tests must stay green. Editing main.wat starts
+   its proofs over, so make this pass before waiting for them. `performance` gives each test in
+   a line: its runs and the WebAssembly operations each executed, the steadiest measure of work,
+   the same on every computer; then the median time on the clock of its largest input, run alone
+   five times. Starting a program costs time whatever it does, so compare the tests with the
+   largest inputs. What makes main.wat fast:
+   - **SIMD128 over bytes:** 16 bytes a step with `v128`, as
+     [the vector template](assets/vector-template.wat) does. Spread each constant over the lanes
+     once with `i8x16.splat`, test a range with one subtract and one unsigned compare, change the
+     lanes through masks, and find a byte with `i8x16.eq`, `i8x16.bitmask` and `i32.ctz`. Mask
+     the lanes past the input's end so the last step is the same code, or finish with a scalar
+     loop of at most 15 bytes. The engine compiles each vector instruction for this CPU's
+     vectors.
+   - **Large pieces:** read through `$fill` into a 64 KiB buffer, and write large pieces with
+     `$write_all`, never a line or a byte per call: each host call costs.
    - **Input of any length streams:** fill a buffer, process it, keep only what crosses into the
-     next buffer-full (such as whether the last byte ended a word), and repeat until `fill`
-     returns less than the buffer.
-   - **Threads** only when each gets at least a few hundred kilobytes of work (see below).
-   - **Many cases on one small number** (an operator's character, a state machine's state): one
-     checked jump table, not a chain of compares (references/power-of-10.md, rule 9).
+     next buffer-full (such as whether its last byte ended a word), and end at a count below the
+     buffer's size, as [the streaming filter](assets/stream-template.wat) does.
+   - **Break dependency chains:** where each step waits for the one before, as in a checksum or
+     a running sum, run two to four independent chains side by side and join them at the end.
+   - **Many cases on one small number:** one `br_table`, whose default leads to an assertion or
+     an error, not a chain of compares.
+   - **Memory the program touches** costs time too: work in place where the rules allow.
 
-   `assets/fast` holds checked programs to learn from and copy from, each with its idea (and a
-   faster tier beside the baseline where the CPU has more):
-   [wc](assets/fast/wc/main.s) counts lines and words 16 bytes a step with SSE2, the baseline
-   form that runs on every x86-64 computer, each step masked to the bytes left, and is proven
-   for every length, as are [its AVX-512 tier](assets/fast/wc-avx512/main.s) (64 bytes a step
-   with masks; on the runners it saved CPU time on some machines and never wall time through a
-   pipe, so start from `wc` and take the tier only when a measurement on this machine favors
-   it), [its NEON form](assets/linux-aarch64/fast/wc/main.s) for AArch64 and
-   [its SVE tier](assets/linux-aarch64/fast/wc-sve/main.s);
-   [crc32c-pclmul](assets/fast/crc32c-pclmul/main.s) runs three `crc32` chains side by side and
-   joins them with `pclmulqdq`, and [its AArch64 form](assets/linux-aarch64/fast/crc32c-crc/main.s)
-   one `crc32cx` chain beside `pmull` folds on the vector units; [histogram](assets/fast/histogram/main.s) spreads its counts over four tables,
-   and [its AArch64 form](assets/linux-aarch64/fast/histogram/main.s) over eight.
-   Their `digits` (write a number's decimal digits) can be copied as it is.
-
-   **A baseline form, and fast tiers beside it.** Every program has a form that runs on every
-   computer of its target, and where a CPU's optional instructions make it faster, a tier named
-   for the extension it needs, from the very same idea; pick a tier when `machine` lists the
-   extension, never as the only way to get the behavior. The baseline of x86-64 is SSE2 to SSE4.2
-   and POPCNT, of AArch64 ARMv8.0 with NEON: no SHA, AES, PCLMUL, CRC32 or PMULL instructions,
-   no AVX, no SVE. For the checksums and ciphers: [crc32c](assets/fast/crc32c/main.s) is one
-   `crc32` chain of SSE4.2, 8 bytes a step, proven for every text as far as the proof's time
-   reaches (each line of `proofs` says how far), and on AArch64
-   [its baseline](assets/linux-aarch64/fast/crc32c/main.s) is a table of 256 words a byte at a
-   time, which the tests check, and `proofs` says how far the prover reads it; SHA-256 and
-   AES-128 are plain integer code, rotates and adds, with a table of 256 words for AES (the
-   repository's `examples/sha256` and `examples/aes`, and their AArch64 twins in
-   `tests/fixtures/linux-aarch64`), and their tiers are
-   [sha256-ni](assets/fast/sha256-ni/main.s) and [aes-ni](assets/fast/aes-ni/main.s), on AArch64
-   [sha256-sha2](assets/linux-aarch64/fast/sha256-sha2/main.s) and
-   [aes-aes](assets/linux-aarch64/fast/aes-aes/main.s), each beside a `idea.md` that is its
-   baseline's, byte for byte. Their programs are tested, not proven: the prover doesn't model the
-   test functions `sha256` and `aes128`.
-7. Once every test passes, `check` proves the program in the background, and within about 20 seconds
-   it says `done`. Each line of `proofs` says what's proven, how far, or why not, and a proof still
-   running says how far it has got: the proofs go on for up to five minutes, lengua records each in
-   lengua.lock as it ends, and any later `check` shows them. Don't wait for them, but call `check`
-   again before the user relies on the program: a proof that finds it wrong shows there, and `run`
-   refuses that build from then on, even after lengua restarts. For each generated
-   test it can, it proves for every input rather than a sample that the program prints what the
-   formulas say: whole numbers, decimals, each value of a `choice(…)`, texts and text formulas such
-   as `upper` and `count`, checksums from `crc32` instructions, floats, and files. Compute floats
-   in the formula's order, operation for operation: the proof then follows them term for term, in
-   milliseconds, where another method, even a more accurate one, is at best tested, and can print
-   a different last digit than the formula. A text is
-   proven up to the length its idea gives it, shortest first, as far as the proof's five minutes
-   reach, and tested beyond: each line of `proofs` says how far ("up to 4889 of 1048576 bytes"),
-   and names any function the proof never ran, such as a fast path for longer inputs. Tell the
-   user that code isn't proven. A line that says to check with `prove_further` can go on: when
-   the user wants more of it proven, call `check` with `prove_further: true`, and each such
-   check proves on from where the last stopped, for another stretch in the background. Every run a proof covers is also held to
-   the memory rules: each access stays inside its own buffer, frame or argument, no return address
-   is written, and no stack is read before it's written. If the proof finds inputs where the
-   program is wrong, or breaks a memory rule, `check` reports them like a failing test, and `run`
-   won't run that build: fix `main.s` and call `check` again. "Tested, not proven" is fine: say
-   why in one line. Vector code proves too, from SSE2 to AVX-512 with masks, and so do programs on
-   several threads, and clients and servers on the network: what the test's peer sends arrives whole or cut, and in any pieces at
-   all where the program reads it with `fill`. Programs that read and print numbers with the
-   template's `parse_i64` and `write_i64` prove best.
-8. Tell the user, from the `done` reply, in a few short lines and plain words: where the program
-   is; what its idea promises, in two or three lines (its behaviors, its limits such as input
-   sizes and ranges, and what it may touch: files, ports); that it follows every rule and passed
-   all its test runs; which behaviors are proven for every input, and which up to a length, such
-   as "proven for every input up to 4889 of 1048576 bytes, tested beyond; I can prove on" (and,
-   if the proof says one solver
-   answered alone, which one to install for a second check), and which proofs are still running,
-   which checking again later shows; what `memory` says, in one line; what the idea's first
-   example did
-   (`example`); that they can ask you to run it on their own inputs or files with `run`, or to
-   change what it does; and the command that runs it from their own terminal, scripts and
-   services, `shell`, as it is, followed by the program's arguments. A server isn't running after
-   `check`: offer to start it with `run`, which returns its address. If the reply has `changes`, say in a line each what changed after their
-   request and why, and name every change that tests less; if it lists more than one request,
-   every one must be the user's own words. If the code handles a case the idea doesn't mention,
-   such as input longer than a buffer, say so in one line and offer to add it to the idea. When
+   Use only the deterministic instructions: no relaxed SIMD, and no fused multiply-add, which
+   core WebAssembly doesn't have. Vector and float code stays tested, not proven, until the
+   prover follows it: where the user wants a proof more than speed, keep the scalar form, and
+   tell them which they got.
+8. **Tell the user**, from the `done` reply, in a few short lines and plain words: where the
+   program is; what its idea promises, in two or three lines (its behaviors, its limits such as
+   input sizes and ranges, and what it may touch: files, ports); that it follows every rule and
+   passed all its test runs; which behaviors are proven for every input, which up to a length,
+   such as "proven for every input up to 4889 of 1048576 bytes, tested beyond; I can prove on",
+   which are tested, not proven, and why in a line, and which proofs are still running; what
+   `memory` says, in one line; what the idea's first example did (`example`); that they can ask
+   you to run it on their own inputs or files with `run`, or to change what it does; and the
+   command that runs it from their own terminal, scripts and services, `shell`, as it is,
+   followed by the program's arguments. A server isn't running after `check`: offer to start it
+   with `run`, which returns its address. If the reply has `changes`, say in a line each what
+   changed after their request and why, and name every change that tests less; every request it
+   lists must be the user's own words. If the code handles a case the idea doesn't mention, such
+   as input longer than a buffer, say so in one line and offer to add it to the idea. When
    `tests` says a generated test tried every value in its range, say that behavior was checked
    for every input in its range. Leave out hashes and seeds.
 
-### Running it for the user
+## Running it
 
 `run` runs the checked program with `path`, plus `args` and `stdin` when it reads them, within 10
-seconds, or within the `timeout_seconds` you pass, up to 40. A program that works on files runs in
-a folder of the user's: pass it as `folder` and name the files in `args` relative to it; the
-program can't touch anything outside it, and lengua opens every name it asks for. A server
-starts in the background on its idea's port and `run` returns its address: try it with your own
-tools, such as `curl` or `nc`, then call `run` with `stop: true` to stop it and see what it
-printed. A program that connects gets its connections from lengua, made before it starts to the
-places its idea names, and reaches nothing else; `run`'s report says which it made, and why one
-couldn't be.
+seconds, or within the `timeout_seconds` you pass, up to 40. A program that works on files runs
+in a folder of the user's: pass it as `folder` and name the files in `args` relative to it; the
+program can't touch anything outside it. `stdin_file` names a file in `folder` to give as
+standard input, up to 16 MiB for main.wat, and `env` gives environment variables to a program
+whose idea uses the environment, and to no other. A server starts in the background on its
+idea's port, and `run` returns its address: try it with your own tools, such as `curl` or `nc`,
+then call `run` with `stop: true` to stop it and see what it printed. A program that connects
+gets its connections from lengua, made before it starts to the places its idea names, and reaches
+nothing else; `run`'s report says which it made, and why one couldn't be.
 
-### Shared ideas
+From a shell, `lengua-mcp run <folder> [arguments…]` runs the checked program with the shell's
+own standard streams and no time limit, in the current folder or the one `--in <folder>` names,
+with only the environment variables each `--env NAME=value` gives; an argument that starts with
+`-` goes after `--`. It exits with the program's exit code, with 134 when the program traps, and
+with 125, saying why, when it won't run the folder. The `done` reply's `shell` is this command
+for this computer. `lengua-mcp check <folder>` is the idea's attester: it builds, checks, tests
+and proves a folder with no lock and no key, writes nothing, and ends with `attested` or
+`not attested`.
 
-People share ideas, not code: the idea is the source of truth, and main.s is disposable. An idea
-someone shares compiles here like any other: write `main.s` for this computer. To share a program,
-the user shares `idea.md`, and anyone's agent compiles it for their own computer. Each compile is
-a new program that passes the same checks, so whatever must be the same everywhere belongs in the
-idea. A `main.s` that comes along in a copied folder is checked from scratch before `run` runs it;
-when its second line says it was compiled for another computer or a CPU feature this one lacks,
-`check` says so, and you compile the idea again for this one. lengua's line names the code, it
-doesn't protect it: `lengua-mcp link main.s` prints main.s followed by lengua's file, so anyone
-can build it outside lengua, and its guarantees hold only for programs that `run` runs after
-`check`. lengua supports two targets so far, Linux on x86-64 and on
-AArch64, the same lengua on each: every rule, limit and capability of one is the other's, and each
-example and fixture has its twin on the other CPU, compiled from the very same idea. Every
-program has a baseline form that runs on every computer of its target, and an optional extension
-(AVX-512, SVE) is only ever a faster tier beside it, chosen from the `machine` line. Adding a CPU
-or OS is set out in [porting.md](references/porting.md).
+## Shared ideas
 
-## Making it faster
+People share ideas, not code: the idea is the source of truth, and main.wat is disposable. Every
+computer builds, checks and runs the same main.wat the same way, so an idea someone shares
+compiles here like any other, and whatever must be the same everywhere belongs in the idea. A
+main.wat that comes along in a copied folder is checked from scratch before `run` runs it: call
+`check` on the folder. lengua's entry in `verified` records which idea and which main.wat lengua
+checked, and `lengua-mcp check` lets anyone check that on their own computer; lengua's guarantees
+hold for the programs that `run` runs after `check`.
 
-Only when the user asks for a faster program: read `performance` in the `done` reply. For each
-test it gives, in one line, the instructions each run executed over all its runs (the steadiest
-measure of work), and, from the test's largest input run alone five times, the median CPU cycles
-in the program's own code (its time, where slow instructions such as division weigh more), the CPU
-time in microseconds (which also counts the kernel's work for system calls, so many small writes
-show up there; for a short run it's mostly the kernel starting and ending the process), and the
-time on the clock. Change `main.s` and call `check` again: the tests must stay green, and the
-cycles and CPU time should drop. Every measure varies a little between runs. Starting and ending a
-process costs about 100 microseconds whatever the program does, so speed work shows on large
-inputs: compare cycles on the tests with the largest inputs. For a program with threads, the
-measures cover every thread, and the time on the clock says how long it took.
+## Ideas compiled to main.s
 
-The biggest win on text and arrays is usually vector instructions: one `pcmpeqb` compares 16 bytes,
-and AVX2 and AVX-512 do 32 and 64. [The vector template](assets/vector-template.s) (with
-[its idea](assets/vector-template-idea.md)) is a checked SSE2 program that finds a newline and
-capitalizes a line 16 bytes at a time, and on AArch64
-[its NEON form](assets/linux-aarch64/vector-template.s) does the same from the same idea. Keep
-the 16-byte form as the program's baseline, which runs on every computer of its target, and
-use AVX2 or AVX-512 as a faster tier beside it when `machine` lists them (the fast `wc` is
-both: [`wc`](assets/fast/wc/main.s) and [`wc-avx512`](assets/fast/wc-avx512/main.s), one idea).
-Keep every vector access inside its buffer: see "Vectors" in
-[the rules](references/power-of-10.md).
-With AVX-512BW, a byte test is one compare into a mask register and the change one masked
-instruction: `vpsubb zmm4, zmm0, zmm1` (subtract `'a'`), `vpcmpub k1, zmm4, zmm2, 1` (below 26),
-`vpsubb zmm0 {k1}, zmm0, zmm3` (subtract the case bit). Measured against Rust and C on a 1 MiB
-file, that loop takes 5 times fewer cycles than `gcc -O3 -march=native`, where the 16-byte one
-takes more instructions than C. Memory the program touches costs kernel time too, a page fault
-per 4 KiB: work in place where the rules allow it. For floating point, packed instructions do 2
-to 8 doubles at once, or 4 to 16 singles, as long as each element's steps stay in the formula's
-order; on AArch64, NEON's do 2 doubles or 4 singles (`fmul v0.2d, v1.2d, v2.2d`).
+An idea of `type: lengua/program-idea` compiles to `main.s`, assembly for this computer's target,
+until lengua retires that path: Linux on x86-64 or on AArch64, the first word of the `machine`
+line (`linux-x86_64` or `linux-aarch64`), built with LLVM's `llvm-mc` and `ld.lld`. The steps
+above hold for it, with these differences:
 
-When the idea allows threads (`- Threads: up to N`), split heavy work across cores with
-`parallel_for`: [the parallel template](assets/parallel-template.s) (with
-[its idea](assets/parallel-template-idea.md); on AArch64
-[its form](assets/linux-aarch64/parallel-template.s)) capitalizes up to a megabyte on 16
-threads, each worker filling its own slot; it has no WebAssembly form, since a WebAssembly program
-has no threads. Call `parallel_for` as it does, follow "Threads" in
-[the rules](references/power-of-10.md), and compare the time on the clock, which threads
-shorten. Starting a thread costs tens of microseconds, so give each one at least a few hundred
-kilobytes of vector work: on a megabyte, one 64-byte loop is as fast as sixteen threads.
+- Start from [the template](assets/main-template.s) ([its idea](assets/template-idea.md)), whose
+  first line is `.intel_syntax noprefix`, or on `linux-aarch64` from
+  [the AArch64 template](assets/linux-aarch64/main-template.s), whose first line is
+  `.arch armv8-a`. `main` takes the argument count, the arguments and the environment in its
+  first three argument registers, and ends with `call os_exit`. The other native templates are
+  [the streaming filter](assets/stream-template.s), [the vector template](assets/vector-template.s),
+  [the event-loop server](assets/server-template.s), [the key reader](assets/terminal-template.s),
+  [the word tally](assets/tally-template.s) and [the parallel template](assets/parallel-template.s),
+  each beside its idea, with their AArch64 forms in `assets/linux-aarch64`.
+- Write by [the native rules](references/power-of-10.md), with functions of at most 60
+  instructions; call only [the edge's](references/edge.md) operations (`os_read`, `os_write`,
+  `os_open`, …) and library (`assert_fail`, `fill`, `parallel_for`); and follow
+  [the x86-64 reference](references/x86_64.md) or [the AArch64 reference](references/aarch64.md)
+  for the calling convention and the dialect's form. Write for the target's baseline first: SSE2
+  to SSE4.2 and POPCNT on x86-64, ARMv8.0-A with NEON on AArch64. An extension the `machine` line
+  lists is only ever a faster tier beside the baseline, from the very same idea, as
+  [the fast wc](assets/fast/wc/main.s) has one in `assets/fast`.
+- A broken rule is reported as `rule N (name) main.s:LINE`. Once a check passes, lengua writes
+  main.s's second line itself, naming the idea, the target and the CPU features the code needs:
+  never write that line. A function from a part has a `# from: ../sort` line in the comment
+  above its `.type`.
+- The proofs run on the machine code, and follow vector code from SSE2 to AVX-512 and NEON,
+  floats, threads, and clients and servers on the network; a read loop through `fill` is proven
+  for every length by induction (`every length by induction over its read loop`). `memory` adds
+  that on every run a proof covers, each access stays inside the object its pointer was made
+  from.
+- `performance` gives instructions, cycles and CPU time, and an idea that allows threads
+  (`- Threads: up to N`) may split its work with `parallel_for`.
+- [porting.md](references/porting.md) says how lengua would take another CPU or system.
+
+To move such an idea to WebAssembly, make it an Attested Computation with the write-idea skill,
+write main.wat, and delete main.s: `check` says so when the folder holds a code file the idea's
+type doesn't take.
