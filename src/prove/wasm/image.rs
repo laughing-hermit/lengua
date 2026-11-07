@@ -168,6 +168,171 @@ impl Binary {
     }
 }
 
+/// An operator on floats, of the width its operand has, 32 or 64 bits: arithmetic, the
+/// comparisons, which give an i32, and the conversions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Float {
+    /// `add`.
+    Add,
+    /// `sub`.
+    Sub,
+    /// `mul`.
+    Mul,
+    /// `div`.
+    Div,
+    /// `min`: a NaN beside anything is NaN, and -0 is below +0.
+    Min,
+    /// `max`.
+    Max,
+    /// `copysign`: the first's magnitude with the second's sign.
+    Copysign,
+    /// `abs`: the sign bit cleared.
+    Abs,
+    /// `neg`: the sign bit flipped.
+    Neg,
+    /// `sqrt`.
+    Sqrt,
+    /// `ceil`.
+    Ceil,
+    /// `floor`.
+    Floor,
+    /// `trunc`.
+    Trunc,
+    /// `nearest`: to the nearest whole float, ties to even.
+    Nearest,
+    /// `eq`.
+    Eq,
+    /// `ne`: true for a NaN.
+    Ne,
+    /// `lt`.
+    Lt,
+    /// `gt`.
+    Gt,
+    /// `le`.
+    Le,
+    /// `ge`.
+    Ge,
+    /// `convert`: a whole number of the operand's width as the nearest float of `to` bits.
+    Convert {
+        /// The float's bits.
+        to: u32,
+        /// Whether the number is read signed.
+        signed: bool,
+    },
+    /// `demote` and `promote`: the nearest float of `to` bits.
+    Resize {
+        /// The float's bits.
+        to: u32,
+    },
+    /// `trunc_sat`: toward zero, to a whole number of `to` bits that saturates at either end,
+    /// 0 for a NaN.
+    TruncSat {
+        /// The number's bits.
+        to: u32,
+        /// Whether it's signed.
+        signed: bool,
+    },
+}
+
+/// An operator of SIMD128 on the lanes of two vectors, `width` bits each: the result's lane is
+/// the operator's on the two lanes in its place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Lane {
+    /// `add`, wrapping.
+    Add,
+    /// `sub`, wrapping.
+    Sub,
+    /// `mul`, wrapping.
+    Mul,
+    /// `min_s`.
+    MinS,
+    /// `min_u`.
+    MinU,
+    /// `max_s`.
+    MaxS,
+    /// `max_u`.
+    MaxU,
+    /// `add_sat_s`: held between the least and the most a lane holds, signed.
+    AddSatS,
+    /// `add_sat_u`.
+    AddSatU,
+    /// `sub_sat_s`.
+    SubSatS,
+    /// `sub_sat_u`.
+    SubSatU,
+    /// `avgr_u`: the two's sum plus one, halved, without wrapping.
+    AvgrU,
+    /// A comparison, as the integer one is: all ones in the lane where it holds, else zeros.
+    Compare(Binary),
+}
+
+/// A SIMD128 operator: a 128-bit vector's lanes as terms, each lane `width` bits wide, 8, 16, 32
+/// or 64, lane 0 its lowest bits, as memory's lowest bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Vector {
+    /// `splat`: a scalar's low `width` bits in every lane.
+    Splat(u32),
+    /// `extract_lane`: a lane, widened to an i32 signed or not where it's narrower.
+    Extract {
+        /// The lanes' width.
+        width: u32,
+        /// Which lane.
+        lane: u8,
+        /// Whether a narrow lane is sign-extended.
+        signed: bool,
+    },
+    /// `replace_lane`: a lane set to a scalar's low bits.
+    Replace {
+        /// The lanes' width.
+        width: u32,
+        /// Which lane.
+        lane: u8,
+    },
+    /// `v128.not`.
+    Not,
+    /// `v128.and`.
+    And,
+    /// `v128.andnot`: the first and not the second.
+    AndNot,
+    /// `v128.or`.
+    Or,
+    /// `v128.xor`.
+    Xor,
+    /// `v128.bitselect`: the first's bits where the third's are set, the second's elsewhere.
+    Bitselect,
+    /// `v128.any_true`: 1 where any bit is set.
+    AnyTrue,
+    /// `all_true`: 1 where every lane of `width` bits isn't zero.
+    AllTrue(u32),
+    /// `bitmask`: each lane's top bit, lane 0's lowest, as an i32.
+    Bitmask(u32),
+    /// An operator lane by lane on two vectors.
+    Lanes {
+        /// The lanes' width.
+        width: u32,
+        /// The operator.
+        op: Lane,
+    },
+    /// `neg`, wrapping, lane by lane.
+    Neg(u32),
+    /// `abs`, wrapping for the least value, lane by lane.
+    Abs(u32),
+    /// A shift of every lane by a scalar count, modulo the lane's width: `shl`, `shr_s` or
+    /// `shr_u` as [`Binary`] names them.
+    Shift {
+        /// The lanes' width.
+        width: u32,
+        /// `Shl`, `ShrS` or `ShrU`.
+        op: Binary,
+    },
+    /// `i8x16.shuffle`: each lane a byte of the two vectors, 0 to 15 the first's and 16 to 31
+    /// the second's.
+    Shuffle([u8; 16]),
+    /// `i8x16.swizzle`: each lane the first vector's byte the second's lane picks, or zero for a
+    /// pick past 15.
+    Swizzle,
+}
+
 /// One operator, as the model runs it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Op {
@@ -251,6 +416,10 @@ pub(super) enum Op {
     Unary(Unary),
     /// An operator on two integers, of the width their operands have.
     Binary(Binary),
+    /// An operator on floats.
+    Float(Float),
+    /// A SIMD128 operator.
+    Vector(Vector),
     /// An operator the model doesn't follow yet, by its name.
     Other(String),
 }
@@ -324,34 +493,28 @@ pub struct Module {
 /// it.
 #[derive(Debug, Clone)]
 struct Reading {
-    /// Whether every read it makes goes through lengua's `$fill` to the end of the input: no
-    /// function but `$fill` calls `fd_read`, none waits on `poll_oneoff`, and each call of `$fill`
-    /// stops at no byte.
+    /// Whether every read it makes goes through lengua's `$fill`, each with a stop byte known
+    /// before it runs: no function but `$fill` calls `fd_read`, and none waits on `poll_oneoff`.
     whole: bool,
     /// The call of `$fill` in a loop of main.wat's own code, by function and operator, or why
     /// there's none a proof by induction takes.
     in_a_loop: Result<(u32, usize), String>,
 }
 
-/// Whether `stop`, the operator that leaves `$fill`'s stop operand, leaves -1: a constant, or a
-/// global the module never changes that holds it.
-fn reads_to_the_end(stop: Option<&Op>, globals: &[(u32, u128)], mutable: &[bool]) -> bool {
+/// Whether `stop`, the operator that leaves `$fill`'s stop operand, leaves a value known before
+/// the program runs: a constant, or a global the module never changes.
+fn stop_is_known(stop: Option<&Op>, mutable: &[bool]) -> bool {
     match stop {
-        Some(Op::Const { width: 32, value }) => *value == 0xffff_ffff,
-        Some(Op::GlobalGet(index)) => usize::try_from(*index).is_ok_and(|index| {
-            globals.get(index) == Some(&(32, 0xffff_ffff)) && mutable.get(index) == Some(&false)
-        }),
+        Some(Op::Const { width: 32, .. }) => true,
+        Some(Op::GlobalGet(index)) => usize::try_from(*index)
+            .is_ok_and(|index| mutable.get(index) == Some(&false)),
         _ => false,
     }
 }
 
-/// How the module of `functions` reads, `$fill` being the function `fill`.
-fn reading(
-    functions: &[Function],
-    fill: Option<u32>,
-    globals: &[(u32, u128)],
-    mutable: &[bool],
-) -> Reading {
+/// How the module of `functions` reads, `$fill` being the function `fill`, its globals'
+/// mutability `mutable`.
+fn reading(functions: &[Function], fill: Option<u32>, mutable: &[bool]) -> Reading {
     let imports = |index: u32, name: &str| {
         usize::try_from(index)
             .ok()
@@ -379,7 +542,7 @@ fn reading(
                     let before = at.checked_sub(1).and_then(|before| function.ops.get(before));
                     if raw
                         || imports(*callee, "poll_oneoff")
-                        || (fills && !reads_to_the_end(before, globals, mutable))
+                        || (fills && !stop_is_known(before, mutable))
                     {
                         whole = false;
                     }
@@ -411,17 +574,21 @@ const RAW_READ_LOOP: &str = "its read loop reads with fd_read itself, whose read
 const READ_LOOPS: &str =
     "it reads in more than one place in its loops, which the induction doesn't take";
 
-/// Why one that reads other than through `$fill` to the end of the input isn't.
-const NOT_WHOLE: &str = "it reads other than through $fill to the end of its input, or waits on \
+/// Why one that reads other than through `$fill` isn't.
+const NOT_WHOLE: &str = "it reads other than through $fill with a stop it knows, or waits on \
                          poll_oneoff, or is on the network, so its reads see how its input is \
                          cut";
 
-/// A constant expression's value when it's one integer constant: its width and bits.
+/// A constant expression's value when it's one constant of a number or a vector: its width and
+/// bits, a float's and a vector's as they are.
 fn constant(expression: &ConstExpr<'_>) -> Option<(u32, u128)> {
     let mut reader = expression.get_operators_reader();
     let value = match reader.read().ok()? {
         Operator::I32Const { value } => (32, u128::from(value.cast_unsigned())),
         Operator::I64Const { value } => (64, u128::from(value.cast_unsigned())),
+        Operator::F32Const { value } => (32, u128::from(value.bits())),
+        Operator::F64Const { value } => (64, u128::from(value.bits())),
+        Operator::V128Const { value } => (128, u128::from(value)),
         _ => return None,
     };
     matches!(reader.read().ok()?, Operator::End).then_some(value)
@@ -624,8 +791,252 @@ fn op_of(operator: &Operator<'_>, types: &[Option<Signature>]) -> Result<Op, Str
         Operator::I64Extend8S => Op::Unary(U::Extend8),
         Operator::I64Extend16S => Op::Unary(U::Extend16),
         Operator::I64Extend32S => Op::Unary(U::Extend32),
-        other => Op::Other(variant(other)),
+        other => float_of(other)
+            .or_else(|| vector_of(other))
+            .unwrap_or_else(|| Op::Other(variant(other))),
     })
+}
+
+/// `operator` in the model's form when it's on floats: their loads and stores, which move their
+/// bits, constants, arithmetic, comparisons and conversions. A reinterpretation leaves the bits
+/// as they are. The trapping conversions to whole numbers the dialect has none of, and the model
+/// doesn't follow them.
+fn float_of(operator: &Operator<'_>) -> Option<Op> {
+    use Float as F;
+    let float = |op| Some(Op::Float(op));
+    match operator {
+        Operator::F32Load { memarg } => Some(load(4, 32, false, memarg)),
+        Operator::F64Load { memarg } => Some(load(8, 64, false, memarg)),
+        Operator::F32Store { memarg } => Some(store(4, memarg)),
+        Operator::F64Store { memarg } => Some(store(8, memarg)),
+        Operator::F32Const { value } => Some(Op::Const {
+            width: 32,
+            value: u128::from(value.bits()),
+        }),
+        Operator::F64Const { value } => Some(Op::Const {
+            width: 64,
+            value: u128::from(value.bits()),
+        }),
+        Operator::I32ReinterpretF32
+        | Operator::I64ReinterpretF64
+        | Operator::F32ReinterpretI32
+        | Operator::F64ReinterpretI64 => Some(Op::Nop),
+        Operator::F32Add | Operator::F64Add => float(F::Add),
+        Operator::F32Sub | Operator::F64Sub => float(F::Sub),
+        Operator::F32Mul | Operator::F64Mul => float(F::Mul),
+        Operator::F32Div | Operator::F64Div => float(F::Div),
+        Operator::F32Min | Operator::F64Min => float(F::Min),
+        Operator::F32Max | Operator::F64Max => float(F::Max),
+        Operator::F32Copysign | Operator::F64Copysign => float(F::Copysign),
+        Operator::F32Abs | Operator::F64Abs => float(F::Abs),
+        Operator::F32Neg | Operator::F64Neg => float(F::Neg),
+        Operator::F32Sqrt | Operator::F64Sqrt => float(F::Sqrt),
+        Operator::F32Ceil | Operator::F64Ceil => float(F::Ceil),
+        Operator::F32Floor | Operator::F64Floor => float(F::Floor),
+        Operator::F32Trunc | Operator::F64Trunc => float(F::Trunc),
+        Operator::F32Nearest | Operator::F64Nearest => float(F::Nearest),
+        Operator::F32Eq | Operator::F64Eq => float(F::Eq),
+        Operator::F32Ne | Operator::F64Ne => float(F::Ne),
+        Operator::F32Lt | Operator::F64Lt => float(F::Lt),
+        Operator::F32Gt | Operator::F64Gt => float(F::Gt),
+        Operator::F32Le | Operator::F64Le => float(F::Le),
+        Operator::F32Ge | Operator::F64Ge => float(F::Ge),
+        Operator::F32ConvertI32S | Operator::F32ConvertI64S => float(F::Convert {
+            to: 32,
+            signed: true,
+        }),
+        Operator::F32ConvertI32U | Operator::F32ConvertI64U => float(F::Convert {
+            to: 32,
+            signed: false,
+        }),
+        Operator::F64ConvertI32S | Operator::F64ConvertI64S => float(F::Convert {
+            to: 64,
+            signed: true,
+        }),
+        Operator::F64ConvertI32U | Operator::F64ConvertI64U => float(F::Convert {
+            to: 64,
+            signed: false,
+        }),
+        Operator::F32DemoteF64 => float(F::Resize { to: 32 }),
+        Operator::F64PromoteF32 => float(F::Resize { to: 64 }),
+        Operator::I32TruncSatF32S | Operator::I32TruncSatF64S => float(F::TruncSat {
+            to: 32,
+            signed: true,
+        }),
+        Operator::I32TruncSatF32U | Operator::I32TruncSatF64U => float(F::TruncSat {
+            to: 32,
+            signed: false,
+        }),
+        Operator::I64TruncSatF32S | Operator::I64TruncSatF64S => float(F::TruncSat {
+            to: 64,
+            signed: true,
+        }),
+        Operator::I64TruncSatF32U | Operator::I64TruncSatF64U => float(F::TruncSat {
+            to: 64,
+            signed: false,
+        }),
+        _ => None,
+    }
+}
+
+/// `operator` in the model's form when it's one of SIMD128's the model follows: a vector's loads
+/// and stores and constants, the lanes' splats, extractions and replacements, the bitwise
+/// operators, the integer lanes' arithmetic, comparisons, shifts, tests and bitmasks, and the
+/// shuffles. The float lanes' arithmetic, the lanes' narrowing, widening and pairwise forms, and
+/// the loads of a lane, the model doesn't follow.
+#[allow(clippy::too_many_lines)]
+fn vector_of(operator: &Operator<'_>) -> Option<Op> {
+    use Binary as B;
+    use Lane as L;
+    let vector = |op| Some(Op::Vector(op));
+    let lanes = |width, op| Some(Op::Vector(Vector::Lanes { width, op }));
+    let compare = |width, op| lanes(width, L::Compare(op));
+    let shift = |width, op| Some(Op::Vector(Vector::Shift { width, op }));
+    let extract = |width, lane: &u8, signed| {
+        Some(Op::Vector(Vector::Extract {
+            width,
+            lane: *lane,
+            signed,
+        }))
+    };
+    let replace = |width, lane: &u8| Some(Op::Vector(Vector::Replace { width, lane: *lane }));
+    match operator {
+        Operator::V128Load { memarg } => Some(load(16, 128, false, memarg)),
+        Operator::V128Store { memarg } => Some(store(16, memarg)),
+        Operator::V128Const { value } => Some(Op::Const {
+            width: 128,
+            value: u128::from(*value),
+        }),
+        Operator::I8x16Splat => vector(Vector::Splat(8)),
+        Operator::I16x8Splat => vector(Vector::Splat(16)),
+        Operator::I32x4Splat | Operator::F32x4Splat => vector(Vector::Splat(32)),
+        Operator::I64x2Splat | Operator::F64x2Splat => vector(Vector::Splat(64)),
+        Operator::I8x16ExtractLaneS { lane } => extract(8, lane, true),
+        Operator::I8x16ExtractLaneU { lane } => extract(8, lane, false),
+        Operator::I16x8ExtractLaneS { lane } => extract(16, lane, true),
+        Operator::I16x8ExtractLaneU { lane } => extract(16, lane, false),
+        Operator::I32x4ExtractLane { lane } | Operator::F32x4ExtractLane { lane } => {
+            extract(32, lane, false)
+        }
+        Operator::I64x2ExtractLane { lane } | Operator::F64x2ExtractLane { lane } => {
+            extract(64, lane, false)
+        }
+        Operator::I8x16ReplaceLane { lane } => replace(8, lane),
+        Operator::I16x8ReplaceLane { lane } => replace(16, lane),
+        Operator::I32x4ReplaceLane { lane } | Operator::F32x4ReplaceLane { lane } => {
+            replace(32, lane)
+        }
+        Operator::I64x2ReplaceLane { lane } | Operator::F64x2ReplaceLane { lane } => {
+            replace(64, lane)
+        }
+        Operator::V128Not => vector(Vector::Not),
+        Operator::V128And => vector(Vector::And),
+        Operator::V128AndNot => vector(Vector::AndNot),
+        Operator::V128Or => vector(Vector::Or),
+        Operator::V128Xor => vector(Vector::Xor),
+        Operator::V128Bitselect => vector(Vector::Bitselect),
+        Operator::V128AnyTrue => vector(Vector::AnyTrue),
+        Operator::I8x16AllTrue => vector(Vector::AllTrue(8)),
+        Operator::I16x8AllTrue => vector(Vector::AllTrue(16)),
+        Operator::I32x4AllTrue => vector(Vector::AllTrue(32)),
+        Operator::I64x2AllTrue => vector(Vector::AllTrue(64)),
+        Operator::I8x16Bitmask => vector(Vector::Bitmask(8)),
+        Operator::I16x8Bitmask => vector(Vector::Bitmask(16)),
+        Operator::I32x4Bitmask => vector(Vector::Bitmask(32)),
+        Operator::I64x2Bitmask => vector(Vector::Bitmask(64)),
+        Operator::I8x16Shuffle { lanes } => vector(Vector::Shuffle(*lanes)),
+        Operator::I8x16Swizzle => vector(Vector::Swizzle),
+        Operator::I8x16Neg => vector(Vector::Neg(8)),
+        Operator::I16x8Neg => vector(Vector::Neg(16)),
+        Operator::I32x4Neg => vector(Vector::Neg(32)),
+        Operator::I64x2Neg => vector(Vector::Neg(64)),
+        Operator::I8x16Abs => vector(Vector::Abs(8)),
+        Operator::I16x8Abs => vector(Vector::Abs(16)),
+        Operator::I32x4Abs => vector(Vector::Abs(32)),
+        Operator::I64x2Abs => vector(Vector::Abs(64)),
+        Operator::I8x16Shl => shift(8, B::Shl),
+        Operator::I8x16ShrS => shift(8, B::ShrS),
+        Operator::I8x16ShrU => shift(8, B::ShrU),
+        Operator::I16x8Shl => shift(16, B::Shl),
+        Operator::I16x8ShrS => shift(16, B::ShrS),
+        Operator::I16x8ShrU => shift(16, B::ShrU),
+        Operator::I32x4Shl => shift(32, B::Shl),
+        Operator::I32x4ShrS => shift(32, B::ShrS),
+        Operator::I32x4ShrU => shift(32, B::ShrU),
+        Operator::I64x2Shl => shift(64, B::Shl),
+        Operator::I64x2ShrS => shift(64, B::ShrS),
+        Operator::I64x2ShrU => shift(64, B::ShrU),
+        Operator::I8x16Add => lanes(8, L::Add),
+        Operator::I8x16Sub => lanes(8, L::Sub),
+        Operator::I8x16AddSatS => lanes(8, L::AddSatS),
+        Operator::I8x16AddSatU => lanes(8, L::AddSatU),
+        Operator::I8x16SubSatS => lanes(8, L::SubSatS),
+        Operator::I8x16SubSatU => lanes(8, L::SubSatU),
+        Operator::I8x16MinS => lanes(8, L::MinS),
+        Operator::I8x16MinU => lanes(8, L::MinU),
+        Operator::I8x16MaxS => lanes(8, L::MaxS),
+        Operator::I8x16MaxU => lanes(8, L::MaxU),
+        Operator::I8x16AvgrU => lanes(8, L::AvgrU),
+        Operator::I16x8Add => lanes(16, L::Add),
+        Operator::I16x8Sub => lanes(16, L::Sub),
+        Operator::I16x8Mul => lanes(16, L::Mul),
+        Operator::I16x8AddSatS => lanes(16, L::AddSatS),
+        Operator::I16x8AddSatU => lanes(16, L::AddSatU),
+        Operator::I16x8SubSatS => lanes(16, L::SubSatS),
+        Operator::I16x8SubSatU => lanes(16, L::SubSatU),
+        Operator::I16x8MinS => lanes(16, L::MinS),
+        Operator::I16x8MinU => lanes(16, L::MinU),
+        Operator::I16x8MaxS => lanes(16, L::MaxS),
+        Operator::I16x8MaxU => lanes(16, L::MaxU),
+        Operator::I16x8AvgrU => lanes(16, L::AvgrU),
+        Operator::I32x4Add => lanes(32, L::Add),
+        Operator::I32x4Sub => lanes(32, L::Sub),
+        Operator::I32x4Mul => lanes(32, L::Mul),
+        Operator::I32x4MinS => lanes(32, L::MinS),
+        Operator::I32x4MinU => lanes(32, L::MinU),
+        Operator::I32x4MaxS => lanes(32, L::MaxS),
+        Operator::I32x4MaxU => lanes(32, L::MaxU),
+        Operator::I64x2Add => lanes(64, L::Add),
+        Operator::I64x2Sub => lanes(64, L::Sub),
+        Operator::I64x2Mul => lanes(64, L::Mul),
+        Operator::I8x16Eq => compare(8, B::Eq),
+        Operator::I8x16Ne => compare(8, B::Ne),
+        Operator::I8x16LtS => compare(8, B::LtS),
+        Operator::I8x16LtU => compare(8, B::LtU),
+        Operator::I8x16GtS => compare(8, B::GtS),
+        Operator::I8x16GtU => compare(8, B::GtU),
+        Operator::I8x16LeS => compare(8, B::LeS),
+        Operator::I8x16LeU => compare(8, B::LeU),
+        Operator::I8x16GeS => compare(8, B::GeS),
+        Operator::I8x16GeU => compare(8, B::GeU),
+        Operator::I16x8Eq => compare(16, B::Eq),
+        Operator::I16x8Ne => compare(16, B::Ne),
+        Operator::I16x8LtS => compare(16, B::LtS),
+        Operator::I16x8LtU => compare(16, B::LtU),
+        Operator::I16x8GtS => compare(16, B::GtS),
+        Operator::I16x8GtU => compare(16, B::GtU),
+        Operator::I16x8LeS => compare(16, B::LeS),
+        Operator::I16x8LeU => compare(16, B::LeU),
+        Operator::I16x8GeS => compare(16, B::GeS),
+        Operator::I16x8GeU => compare(16, B::GeU),
+        Operator::I32x4Eq => compare(32, B::Eq),
+        Operator::I32x4Ne => compare(32, B::Ne),
+        Operator::I32x4LtS => compare(32, B::LtS),
+        Operator::I32x4LtU => compare(32, B::LtU),
+        Operator::I32x4GtS => compare(32, B::GtS),
+        Operator::I32x4GtU => compare(32, B::GtU),
+        Operator::I32x4LeS => compare(32, B::LeS),
+        Operator::I32x4LeU => compare(32, B::LeU),
+        Operator::I32x4GeS => compare(32, B::GeS),
+        Operator::I32x4GeU => compare(32, B::GeU),
+        Operator::I64x2Eq => compare(64, B::Eq),
+        Operator::I64x2Ne => compare(64, B::Ne),
+        Operator::I64x2LtS => compare(64, B::LtS),
+        Operator::I64x2GtS => compare(64, B::GtS),
+        Operator::I64x2LeS => compare(64, B::LeS),
+        Operator::I64x2GeS => compare(64, B::GeS),
+        _ => None,
+    }
 }
 
 /// For each `block`, `loop`, `if` and `else` among `ops`, the place of its `end`, and for each
@@ -1025,7 +1436,7 @@ impl Module {
             (!function.own && function.import.is_none() && function.name.as_deref() == Some("fill"))
                 .then_some(index)
         });
-        let reading = reading(&functions, fill, &globals, &mutable);
+        let reading = reading(&functions, fill, &mutable);
         Ok(Self {
             functions,
             globals,
@@ -1050,10 +1461,11 @@ impl Module {
         self.functions.get(usize::try_from(index).ok()?)
     }
 
-    /// Whether every way the program's standard input can be cut gives each of its reads the same
-    /// bytes: it reads only through lengua's `$fill`, to the end of the input each time, never
-    /// waits on `poll_oneoff`, and isn't on the network. A proof then reads each `$fill` of
-    /// standard input as a whole, for input of any length ([`super::fill`]).
+    /// Whether a proof can take every way the program's standard input can be cut: it reads only
+    /// through lengua's `$fill`, each call's stop byte known before the program runs, never waits
+    /// on `poll_oneoff`, and isn't on the network. A proof then reads each `$fill` of standard
+    /// input as a whole, every place it can stop a run of its own, for input of any length
+    /// ([`super::fill`]).
     #[must_use]
     pub fn reads_whole(&self) -> bool {
         self.reading.whole && !self.policy.network()

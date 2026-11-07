@@ -11,13 +11,18 @@
 //! by -1, and `unreachable` reached. The stack never runs out: [`Module`] refuses a module whose
 //! calls recurse, or may go deeper than the engine's stack holds.
 //!
+//! Floats are the pool's float terms with the engine's canonical NaN (`float`), and a SIMD128
+//! vector is one 128-bit term whose lanes each operator takes as terms of their own (`vector`).
+//!
 //! A proof takes every way the input can be cut where the program reads standard input only
-//! through lengua's `$fill` to the end ([`Module::reads_whole`]): each such `$fill` is then read
-//! as a whole, for input of any length (`fill`). And a program whose read loop calls `$fill` is
-//! proven for every length by induction, as the native prover proves one ([`hooked`]): its
-//! loop's head is that call, and its slots the globals, the calls' locals and the operands.
+//! through lengua's `$fill` ([`Module::reads_whole`]): each such `$fill` is then read as a whole,
+//! every place it can stop a run of its own, for input of any length (`fill`). And a program
+//! whose read loop calls `$fill` is proven for every length by induction, as the native prover
+//! proves one ([`hooked`]): its loop's head is that call, and its slots the globals, the calls'
+//! locals and the operands.
 
 mod fill;
+mod float;
 mod host;
 mod image;
 mod induction;
@@ -25,6 +30,7 @@ mod memory;
 mod step;
 #[cfg(test)]
 mod tests;
+mod vector;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -297,7 +303,8 @@ pub enum Ended {
     Exit(u8),
     /// The engine would stop it at a trap: what, with main.wat's line where it has one.
     Trap(String),
-    /// The model doesn't follow something the run does, such as a SIMD operator: what.
+    /// The model doesn't follow something the run does, such as a float lane's arithmetic, or a
+    /// run too long for it: what.
     NotModelled(String),
     /// The run ended another way, such as a wait that never comes: why.
     Other(String),

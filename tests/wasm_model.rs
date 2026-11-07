@@ -1,8 +1,10 @@
 //! The prover's model of WebAssembly against what lengua's host and engine do, on every system:
 //! every case of `tests/host-cases/` run in the model gives what its file says, as the host's own
-//! runs do (tests/host.rs); and on every test of the ideas of add, echo and greet, and of the
-//! other WebAssembly fixtures and the compile skill's WebAssembly templates where the model
-//! follows what they do, the model and the engine do the same.
+//! runs do (tests/host.rs); on every test of the ideas of the fixtures the model follows in full,
+//! their floats and SIMD128 among them, and of the other WebAssembly fixtures and the compile
+//! skill's WebAssembly templates where the model follows what they do, the model and the engine
+//! do the same; and each float and SIMD128 operator the model follows gives the engine's bits on
+//! chosen and random operands.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -15,6 +17,8 @@ use lengua::supply::{Supply, Time};
 use lengua::testfile::{Case as Sample, Example, TestSuite};
 use lengua::wasm::job::unhex;
 use lengua::wasm::{Policy, Pool, Program, Spec};
+use rand::rngs::ChaCha8Rng;
+use rand::{RngExt, SeedableRng};
 use serde::Deserialize;
 
 /// What a host case gives its program, and what the program must do, as tests/host.rs reads it.
@@ -279,11 +283,27 @@ fn launcher() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_lengua-mcp"))
 }
 
-/// The fixtures the model must follow on every test of their ideas. Of every other WebAssembly
-/// program, the fixtures W9 ports and the templates, a run the model doesn't follow yet, such as
-/// one with floats or SIMD, is listed with its reason rather than failed: the engine runs every
-/// test of theirs in tests/wasm_every_program.rs and tests/wasm_templates.rs.
-const FOLLOWED_IN_FULL: [&str; 3] = ["add", "echo", "greet"];
+/// The fixtures the model must follow on every test of their ideas, their floats and SIMD128
+/// among them. Of every other WebAssembly program, the fixtures W9 ports and the templates, a run
+/// the model doesn't follow yet, such as one too long for it, is listed with its reason rather
+/// than failed: the engine runs every test of theirs in tests/wasm_every_program.rs and
+/// tests/wasm_templates.rs.
+const FOLLOWED_IN_FULL: [&str; 8] = [
+    "add",
+    "aes",
+    "count",
+    "echo",
+    "greet",
+    "hypotenuse",
+    "lines",
+    "padded",
+];
+
+/// The most input, in bytes, a test here runs in the model and on the engine to compare them: a
+/// mebibyte's run takes the model seconds, and the tests of the programs that read that much
+/// would take this test past an hour. The engine runs every test of every program in
+/// tests/wasm_every_program.rs, and the longer ones take the same code round more times.
+const MODEL_INPUT: usize = 65_536;
 
 /// Every WebAssembly program whose ideas' tests the model must run as the engine does: each
 /// fixture of `tests/fixtures-wasm/` with a main.wat, and each of the compile skill's templates
@@ -509,6 +529,8 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
     // test of theirs in tests/wasm_every_program.rs and tests/wasm_templates.rs. Every test of
     // add, echo and greet the model must follow.
     let mut not_modelled = Vec::new();
+    // The tests past MODEL_INPUT, which this test leaves to the engine's own runs.
+    let mut too_long = Vec::new();
     for (idea_path, wat_path) in &programs {
         let shown = wat_path.display().to_string();
         let folder = wat_path.parent();
@@ -583,6 +605,14 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
                 .map(|(number, sample)| Test::sample(sample, *number)),
         );
         for test in &tests {
+            let input = test.stdin.len()
+                + test.files.values().map(String::len).sum::<usize>()
+                + test.args.iter().map(String::len).sum::<usize>();
+            if input > MODEL_INPUT {
+                let name: String = test.name.chars().take(80).collect();
+                too_long.push(format!("{shown}, {name}…: {input} bytes of input"));
+                continue;
+            }
             let spec = Spec {
                 files: test.files,
                 folders: test.folders,
@@ -621,6 +651,14 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
     }
     for line in &not_modelled {
         lengua::skiplog::note(&format!("not modelled: {line}"));
+    }
+    if !too_long.is_empty() {
+        lengua::skiplog::note(&format!(
+            "{} tests of more than {MODEL_INPUT} bytes of input left to the engine's own runs, \
+             the first {}",
+            too_long.len(),
+            too_long[0]
+        ));
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
@@ -858,4 +896,407 @@ async fn a_wait_beside_the_listener_ends_in_the_model_as_on_the_engine() {
             engine.end, model.end
         );
     }
+}
+
+/// A value's type in WebAssembly, as a probe of an operator gives it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    I32,
+    I64,
+    F32,
+    F64,
+    V128,
+}
+
+impl Kind {
+    /// Its name in WebAssembly text.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+            Self::V128 => "v128",
+        }
+    }
+
+    /// Its bytes.
+    const fn bytes(self) -> usize {
+        match self {
+            Self::I32 | Self::F32 => 4,
+            Self::I64 | Self::F64 => 8,
+            Self::V128 => 16,
+        }
+    }
+}
+
+/// One expression an operator is tried on, and the type of what it gives.
+type Probe = (Kind, String);
+
+/// Where the probes' results start in memory.
+const RESULTS: usize = 4096;
+
+/// A module that stores each of `probes`' results, one after another from [`RESULTS`], and writes
+/// them all to standard output.
+fn probing(probes: &[Probe]) -> String {
+    let mut body = String::new();
+    let mut at = RESULTS;
+    for (kind, expression) in probes {
+        body.push_str(&format!(
+            "    ({}.store (i32.const {at}) {expression})\n",
+            kind.name()
+        ));
+        at += kind.bytes();
+    }
+    let length = at - RESULTS;
+    format!(
+        "(module\n  (import \"wasi_snapshot_preview1\" \"fd_write\"\n    (func $fd_write (param \
+         i32 i32 i32 i32) (result i32)))\n  (import \"wasi_snapshot_preview1\" \"proc_exit\" \
+         (func $exit (param i32)))\n  (memory (export \"memory\") 2 2)\n  (func (export \
+         \"_start\")\n{body}    (i32.store (i32.const 1024) (i32.const {RESULTS}))\n    \
+         (i32.store (i32.const 1028) (i32.const {length}))\n    (drop (call $fd_write (i32.const \
+         1) (i32.const 1024) (i32.const 1) (i32.const 1032)))\n    (call $exit (i32.const 0))))\n"
+    )
+}
+
+/// The doubles tried: zeros of both signs, ones, halves and ties, the largest and the smallest,
+/// infinities, NaNs quiet and signaling with payloads and signs, and the edges of the whole
+/// numbers a conversion takes.
+const CHOSEN_F64: [u64; 24] = [
+    0,
+    0x8000_0000_0000_0000,
+    0x3ff0_0000_0000_0000,
+    0xbff0_0000_0000_0000,
+    0x3fe0_0000_0000_0000,
+    0x4004_0000_0000_0000,
+    0x400c_0000_0000_0000,
+    0xc004_0000_0000_0000,
+    0x7fef_ffff_ffff_ffff,
+    0x0000_0000_0000_0001,
+    0x7ff0_0000_0000_0000,
+    0xfff0_0000_0000_0000,
+    0x7ff8_0000_0000_0000,
+    0xfff8_0000_0000_0001,
+    0x7ff0_0000_0000_0001,
+    0x41e0_0000_0000_0000,
+    0x41f0_0000_0000_0000,
+    0x43e0_0000_0000_0000,
+    0x43f0_0000_0000_0000,
+    0xc1e0_0000_0010_0000,
+    0xc1e0_0000_0020_0000,
+    0x41ef_ffff_ffe0_0000,
+    0xc3e0_0000_0000_0000,
+    0x4340_0000_0000_0001,
+];
+
+/// The singles tried, as [`CHOSEN_F64`] are chosen.
+const CHOSEN_F32: [u32; 20] = [
+    0,
+    0x8000_0000,
+    0x3f80_0000,
+    0xbf80_0000,
+    0x3f00_0000,
+    0x4020_0000,
+    0x4060_0000,
+    0x7f7f_ffff,
+    0x0000_0001,
+    0x7f80_0000,
+    0xff80_0000,
+    0x7fc0_0000,
+    0xffc0_0001,
+    0x7f80_0001,
+    0x4f00_0000,
+    0x4f80_0000,
+    0x5f00_0000,
+    0x5f80_0000,
+    0xcf00_0000,
+    0xdf00_0000,
+];
+
+/// The whole numbers tried in a conversion to a float.
+const CHOSEN_I64: [u64; 10] = [
+    0,
+    1,
+    u64::MAX,
+    0x7fff_ffff_ffff_ffff,
+    0x8000_0000_0000_0000,
+    0x0020_0000_0000_0001,
+    0x0000_0000_0100_0001,
+    0x8000_0000_0000_0401,
+    0xffff_ffff_8000_0000,
+    0x0000_0000_ffff_ffff,
+];
+
+/// A double of `bits`, as WebAssembly text.
+fn f64_of(bits: u64) -> String {
+    format!("(f64.reinterpret_i64 (i64.const {bits:#x}))")
+}
+
+/// A single of `bits`, as WebAssembly text.
+fn f32_of(bits: u32) -> String {
+    format!("(f32.reinterpret_i32 (i32.const {bits:#x}))")
+}
+
+/// The floats tried at `kind`'s width: the chosen ones and `random` drawn ones, raw bits and
+/// numbers of a size a program works with.
+fn floats(kind: Kind, rng: &mut ChaCha8Rng, random: usize) -> Vec<String> {
+    let mut values = Vec::new();
+    if kind == Kind::F64 {
+        values.extend(CHOSEN_F64.iter().map(|bits| f64_of(*bits)));
+        for _ in 0..random {
+            values.push(f64_of(rng.random::<u64>()));
+            let number = f64::from(rng.random::<i32>()) / 1024.0;
+            values.push(f64_of(number.to_bits()));
+        }
+    } else {
+        values.extend(CHOSEN_F32.iter().map(|bits| f32_of(*bits)));
+        for _ in 0..random {
+            values.push(f32_of(rng.random::<u32>()));
+            let number = f32::from(rng.random::<i16>()) / 64.0;
+            values.push(f32_of(number.to_bits()));
+        }
+    }
+    values
+}
+
+/// Probes of every float operator at `kind`'s width, on chosen and random operands.
+fn float_probes(kind: Kind, rng: &mut ChaCha8Rng) -> Vec<Vec<Probe>> {
+    let name = kind.name();
+    let values = floats(kind, rng, 8);
+    let mut modules = Vec::new();
+    for op in ["add", "sub", "mul", "div", "min", "max", "copysign"] {
+        let mut probes = Vec::new();
+        for a in &values {
+            for b in &values {
+                probes.push((kind, format!("({name}.{op} {a} {b})")));
+            }
+        }
+        modules.push(probes);
+    }
+    for op in ["eq", "ne", "lt", "gt", "le", "ge"] {
+        let mut probes = Vec::new();
+        for a in &values {
+            for b in &values {
+                probes.push((Kind::I32, format!("({name}.{op} {a} {b})")));
+            }
+        }
+        modules.push(probes);
+    }
+    let mut unary = Vec::new();
+    for value in &values {
+        for op in ["abs", "neg", "sqrt", "ceil", "floor", "trunc", "nearest"] {
+            unary.push((kind, format!("({name}.{op} {value})")));
+        }
+        let (other, resize) = if kind == Kind::F64 {
+            (Kind::F32, "f32.demote_f64")
+        } else {
+            (Kind::F64, "f64.promote_f32")
+        };
+        unary.push((other, format!("({resize} {value})")));
+        for (to, sign) in [(Kind::I32, "s"), (Kind::I32, "u"), (Kind::I64, "s"), (Kind::I64, "u")]
+        {
+            let to_name = to.name();
+            unary.push((to, format!("({to_name}.trunc_sat_{name}_{sign} {value})")));
+        }
+    }
+    let mut numbers: Vec<u64> = CHOSEN_I64.to_vec();
+    numbers.extend((0..16).map(|_| rng.random::<u64>()));
+    for number in numbers {
+        for sign in ["s", "u"] {
+            unary.push((
+                kind,
+                format!("({name}.convert_i64_{sign} (i64.const {number:#x}))"),
+            ));
+            let low = number & 0xffff_ffff;
+            unary.push((
+                kind,
+                format!("({name}.convert_i32_{sign} (i32.const {low:#x}))"),
+            ));
+        }
+    }
+    modules.push(unary);
+    modules
+}
+
+/// A vector of four 32-bit lanes, as WebAssembly text.
+fn v128_of(lanes: [u32; 4]) -> String {
+    let [a, b, c, d] = lanes;
+    format!("(v128.const i32x4 {a:#x} {b:#x} {c:#x} {d:#x})")
+}
+
+/// The vectors tried: zeros, ones, each byte's top bit, a ramp of bytes, alternating signs, and
+/// `random` drawn ones.
+fn vectors(rng: &mut ChaCha8Rng, random: usize) -> Vec<String> {
+    let mut values = vec![
+        v128_of([0; 4]),
+        v128_of([u32::MAX; 4]),
+        v128_of([0x8080_8080; 4]),
+        v128_of([0x0302_0100, 0x0706_0504, 0x0b0a_0908, 0x0f0e_0d0c]),
+        v128_of([0x7fff_8000, 0x8000_7fff, 0x0001_ffff, 0xffff_0001]),
+        v128_of([0x8000_0000, 0x7fff_ffff, 1, 0xffff_fffe]),
+    ];
+    for _ in 0..random {
+        values.push(v128_of([
+            rng.random::<u32>(),
+            rng.random::<u32>(),
+            rng.random::<u32>(),
+            rng.random::<u32>(),
+        ]));
+    }
+    values
+}
+
+/// Probes of every SIMD128 operator the model follows, on chosen and random vectors, lanes,
+/// counts and picks.
+fn vector_probes(rng: &mut ChaCha8Rng) -> Vec<Vec<Probe>> {
+    let values = vectors(rng, 10);
+    let mut modules = Vec::new();
+    let mut binary = Vec::new();
+    let mut pairs: Vec<(&String, &String)> = Vec::new();
+    for (index, a) in values.iter().enumerate() {
+        pairs.push((a, &values[(index + 1) % values.len()]));
+        pairs.push((a, a));
+    }
+    let lanewise = [
+        ("i8x16", &["add", "sub", "add_sat_s", "add_sat_u", "sub_sat_s", "sub_sat_u", "min_s",
+            "min_u", "max_s", "max_u", "avgr_u", "eq", "ne", "lt_s", "lt_u", "gt_s", "gt_u", "le_s",
+            "le_u", "ge_s", "ge_u"][..]),
+        ("i16x8", &["add", "sub", "mul", "add_sat_s", "add_sat_u", "sub_sat_s", "sub_sat_u",
+            "min_s", "min_u", "max_s", "max_u", "avgr_u", "eq", "ne", "lt_s", "lt_u", "gt_s", "gt_u",
+            "le_s", "le_u", "ge_s", "ge_u"][..]),
+        ("i32x4", &["add", "sub", "mul", "min_s", "min_u", "max_s", "max_u", "eq", "ne", "lt_s",
+            "lt_u", "gt_s", "gt_u", "le_s", "le_u", "ge_s", "ge_u"][..]),
+        ("i64x2", &["add", "sub", "mul", "eq", "ne", "lt_s", "gt_s", "le_s", "ge_s"][..]),
+    ];
+    for (shape, ops) in lanewise {
+        for op in ops {
+            for (a, b) in &pairs {
+                binary.push((Kind::V128, format!("({shape}.{op} {a} {b})")));
+            }
+        }
+    }
+    for op in ["and", "andnot", "or", "xor"] {
+        for (a, b) in &pairs {
+            binary.push((Kind::V128, format!("(v128.{op} {a} {b})")));
+        }
+    }
+    for (a, b) in &pairs {
+        binary.push((Kind::V128, format!("(v128.bitselect {a} {b} {})", values[2])));
+        binary.push((Kind::V128, format!("(i8x16.swizzle {a} {b})")));
+        let picks: Vec<String> = (0..16)
+            .map(|_| rng.random_range(0..32_u32).to_string())
+            .collect();
+        binary.push((
+            Kind::V128,
+            format!("(i8x16.shuffle {} {a} {b})", picks.join(" ")),
+        ));
+    }
+    modules.push(binary);
+    let mut unary = Vec::new();
+    for value in &values {
+        unary.push((Kind::V128, format!("(v128.not {value})")));
+        unary.push((Kind::I32, format!("(v128.any_true {value})")));
+        for shape in ["i8x16", "i16x8", "i32x4", "i64x2"] {
+            for op in ["all_true", "bitmask"] {
+                unary.push((Kind::I32, format!("({shape}.{op} {value})")));
+            }
+            for op in ["neg", "abs"] {
+                unary.push((Kind::V128, format!("({shape}.{op} {value})")));
+            }
+            for count in [0, 1, 7, 8, 9, 15, 16, 31, 33, 63, 64, 100] {
+                for op in ["shl", "shr_s", "shr_u"] {
+                    unary.push((
+                        Kind::V128,
+                        format!("({shape}.{op} {value} (i32.const {count}))"),
+                    ));
+                }
+            }
+        }
+        for lane in [0, 5, 15] {
+            unary.push((Kind::I32, format!("(i8x16.extract_lane_s {lane} {value})")));
+            unary.push((Kind::I32, format!("(i8x16.extract_lane_u {lane} {value})")));
+            unary.push((
+                Kind::V128,
+                format!("(i8x16.replace_lane {lane} {value} (i32.const 0x1ab))"),
+            ));
+        }
+        for lane in [0, 7] {
+            unary.push((Kind::I32, format!("(i16x8.extract_lane_s {lane} {value})")));
+            unary.push((Kind::I32, format!("(i16x8.extract_lane_u {lane} {value})")));
+        }
+        unary.push((Kind::I32, format!("(i32x4.extract_lane 3 {value})")));
+        unary.push((Kind::I64, format!("(i64x2.extract_lane 1 {value})")));
+        unary.push((Kind::F64, format!("(f64x2.extract_lane 0 {value})")));
+        unary.push((
+            Kind::V128,
+            format!("(i64x2.replace_lane 1 {value} (i64.const -2))"),
+        ));
+    }
+    for scalar in [0_u32, 1, 0x7f, 0x80, 0xff, 0x1234_5678, u32::MAX] {
+        for shape in ["i8x16", "i16x8", "i32x4"] {
+            unary.push((
+                Kind::V128,
+                format!("({shape}.splat (i32.const {scalar:#x}))"),
+            ));
+        }
+        unary.push((
+            Kind::V128,
+            format!("(i64x2.splat (i64.const {scalar:#x}))"),
+        ));
+    }
+    modules.push(unary);
+    modules
+}
+
+/// Each float and SIMD128 operator the model follows does what the engine does, bit for bit, on
+/// chosen operands, a NaN's sign and payload among them, and on random ones: every NaN an
+/// operation gives canonical, as the engine makes it; `abs`, `neg` and `copysign` on the sign bit
+/// alone; `min`, `max` and the comparisons with NaNs and zeros; the conversions at their edges,
+/// `trunc_sat` saturating; and the lanes of every shape.
+#[tokio::test(flavor = "multi_thread")]
+async fn each_float_and_vector_operator_does_what_the_engine_does() {
+    let pool = Pool::new(launcher(), None);
+    let mut rng = ChaCha8Rng::seed_from_u64(0x0f10_a75e);
+    let mut modules = float_probes(Kind::F64, &mut rng);
+    modules.extend(float_probes(Kind::F32, &mut rng));
+    modules.extend(vector_probes(&mut rng));
+    let mut failures = Vec::new();
+    for probes in &modules {
+        // A module of at most a few thousand probes, so its function stays well inside the
+        // engine's stack and the model's.
+        for chunk in probes.chunks(600) {
+            let text = probing(chunk);
+            let program = Program::of_text(&text).unwrap_or_else(|problem| panic!("{problem}"));
+            let engine = pool
+                .run(&program, Spec::new(&[], &[], Policy::default()), Limits::default())
+                .await
+                .expect("the engine runs it");
+            let module = Module::new(program.built(), Policy::default()).expect("the model");
+            let model = run(&module, &Given::default()).expect("the model runs it");
+            if engine.end != End::Exited(0) || model.end != Ended::Exit(0) {
+                failures.push(format!(
+                    "the engine ended {:?}, the model {:?}, on {:?}",
+                    engine.end, model.end, chunk[0].1
+                ));
+                continue;
+            }
+            let mut at = 0;
+            for (kind, expression) in chunk {
+                let end = at + kind.bytes();
+                let (theirs, ours) = (engine.stdout.get(at..end), model.stdout.get(at..end));
+                if theirs != ours {
+                    failures.push(format!(
+                        "{expression}: the engine gave {theirs:02x?}, the model {ours:02x?}"
+                    ));
+                }
+                at = end;
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} differences:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
