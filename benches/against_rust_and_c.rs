@@ -1801,7 +1801,12 @@ fn report(results: &Results) -> String {
          its wall time on the clock, and the size of what ran. lengua's program runs through \
          `lengua-mcp run`, with every check it makes; C, C++ and Rust compiled to WebAssembly \
          run in lengua's host, in the same engine ({engine}) with the same cache of compiled \
-         modules; their native builds, made on this runner, run as a shell starts them.\n"
+         modules; their native builds, made on this runner, run as a shell starts them. Linux \
+         begins a process's count of its peak memory at what the process it was started from \
+         held, so there every version starts from lengua-spawn, a small process of lengua's \
+         that forks it and counts it, and writes the counts and the version's time on the clock \
+         for `measure`: the count begins at the few hundred KiB of lengua-spawn's copy, not at \
+         lengua-mcp's megabytes.\n"
     );
     let runtime = bytes(results.runtime as f64);
     let _ = writeln!(

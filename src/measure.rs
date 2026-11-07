@@ -4,6 +4,14 @@
 //! the child process alone: `getrusage` of the children on Linux and macOS, the process's own
 //! counters on Windows (`lengua_os::process_usage`).
 //!
+//! Linux begins a process's count of its peak memory at what the process it was started from
+//! held, there lengua-mcp, whose megabytes are more than many a program's own peak. So on Linux
+//! the program starts from lengua-spawn ([`SPAWNER`]), a small process beside lengua-mcp that
+//! forks it, counts it as its own child and writes what it counted to a file: the count then
+//! begins at the few hundred KiB of lengua-spawn's copy. Where lengua-spawn isn't there, or the
+//! CPU's counters would count its work too, the program starts straight from lengua-mcp, and a
+//! peak no higher than lengua-mcp's own is no peak of the program's: it is left out.
+//!
 //! It runs three kinds of program, each as it is run outside lengua's tests:
 //! - a program folder whose code is `main.wat`: `lengua-mcp run`, with every check `run` makes
 //!   (the lock, its signature, the build) before the module runs in lengua's host;
@@ -45,6 +53,10 @@ pub const TRAPPED: i32 = 134;
 
 /// The exit code when lengua can't run what it was asked to run.
 pub const REFUSED: i32 = 125;
+
+/// The small program that starts a program on Linux, beside lengua-mcp's own executable, where
+/// Cargo builds it (src/bin/lengua-spawn.rs).
+pub const SPAWNER: &str = "lengua-spawn";
 
 /// The bytes of one request to a server under load, its newline included.
 pub const REQUEST_BYTES: usize = 64;
@@ -402,6 +414,135 @@ struct Ended {
     problem: Option<String>,
 }
 
+/// What a run cost, as the system counted it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Spent {
+    /// Its CPU time in user space, in nanoseconds.
+    user_ns: u64,
+    /// The CPU time the kernel spent for it, in nanoseconds.
+    system_ns: u64,
+    /// The most memory it held resident at once, in bytes, where the count is the program's own.
+    peak_bytes: Option<u64>,
+    /// How it ended, its exit code or none for a signal, and its time on the clock, as the
+    /// spawner saw them: none when it started straight from this process.
+    ran: Option<(Option<i32>, Duration)>,
+}
+
+impl Spent {
+    /// The spawner's report, `text`: one line of the program's exit code, or `signal` when a
+    /// signal ended it, then its CPU time in user space and in the kernel and its time on the
+    /// clock, in nanoseconds, and its peak resident memory, in bytes.
+    fn reported(text: &str) -> Option<Self> {
+        let mut fields = text.split_whitespace();
+        let exit = match fields.next()? {
+            "signal" => None,
+            code => Some(code.parse::<i32>().ok()?),
+        };
+        let mut count = || fields.next()?.parse::<u64>().ok();
+        let (user_ns, system_ns, wall_ns, peak_bytes) = (count()?, count()?, count()?, count()?);
+        if fields.next().is_some() {
+            return None;
+        }
+        Some(Self {
+            user_ns,
+            system_ns,
+            peak_bytes: Some(peak_bytes),
+            ran: Some((exit, Duration::from_nanos(wall_ns))),
+        })
+    }
+}
+
+/// How a run starts, which decides what counts it.
+enum Start {
+    /// Straight from this process, which the system counts it for.
+    Straight,
+    /// On Linux, from the spawner, which counts it as its own child.
+    Spawned {
+        /// The spawner, beside this executable.
+        spawner: PathBuf,
+        /// The file the spawner writes what it counted to.
+        report: tempfile::NamedTempFile,
+    },
+}
+
+impl Start {
+    /// From the spawner on Linux, where it is beside this executable, unless the CPU's counters,
+    /// which would count its work too, are asked for; else straight from here.
+    fn choose(request: &Request) -> Result<Self, String> {
+        if !cfg!(target_os = "linux") || request.counters {
+            return Ok(Self::Straight);
+        }
+        let spawner = std::env::current_exe().map(|exe| exe.with_file_name(SPAWNER));
+        match spawner {
+            Ok(spawner) if spawner.is_file() => {
+                let report = tempfile::NamedTempFile::new()
+                    .map_err(|error| format!("a file for {SPAWNER}'s report: {error}"))?;
+                Ok(Self::Spawned { spawner, report })
+            }
+            _ => Ok(Self::Straight),
+        }
+    }
+
+    /// `command`, as this start starts it: through the spawner, the command is the spawner's,
+    /// its report's file and then the program and its arguments, with the program's environment
+    /// and folder.
+    fn command(&self, command: Command) -> Command {
+        let Self::Spawned { spawner, report } = self else {
+            return command;
+        };
+        let mut spawned = bare(spawner);
+        spawned
+            .arg(report.path())
+            .arg(command.get_program())
+            .args(command.get_args())
+            .envs(command.get_envs().filter_map(|(name, value)| Some((name, value?))));
+        if let Some(folder) = command.get_current_dir() {
+            spawned.current_dir(folder);
+        }
+        spawned
+    }
+
+    /// Stops the program, as a server is stopped once measured: straight, or through the
+    /// spawner with SIGTERM, which the spawner turns into the program's SIGKILL before it writes
+    /// what it counted.
+    fn stop(&self, child: &mut Child) {
+        match self {
+            Self::Straight => {
+                let _ = child.kill();
+            }
+            Self::Spawned { .. } => terminate(child),
+        }
+    }
+
+    /// What the run cost, once `child` has ended: as the system counted it for this process's
+    /// children, or as the spawner's report says.
+    fn spent(&self, child: &Child) -> Result<Spent, String> {
+        let Self::Spawned { report, .. } = self else {
+            return usage(child);
+        };
+        let text = std::fs::read_to_string(report.path())
+            .map_err(|error| format!("{SPAWNER}'s report: {error}"))?;
+        Spent::reported(&text).ok_or_else(|| format!("{SPAWNER}'s report isn't one: {text:?}"))
+    }
+}
+
+/// Asks `child`, the spawner, to stop the program it started: SIGTERM, which it turns into the
+/// program's SIGKILL.
+#[cfg(unix)]
+fn terminate(child: &mut Child) {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+    if let Ok(pid) = i32::try_from(child.id()) {
+        let _ = kill(Pid::from_raw(pid), Signal::SIGTERM);
+    }
+}
+
+/// Where there are no signals there is no spawner, and `child` is the program itself.
+#[cfg(not(unix))]
+fn terminate(child: &mut Child) {
+    let _ = child.kill();
+}
+
 /// Runs `request`'s program once, in a process of its own, and gives what it cost. A main.wat
 /// program needs `data_dir`, where the key of its lock is, as `lengua-mcp run` does.
 ///
@@ -418,7 +559,8 @@ pub fn measure(data_dir: Option<&DataDir>, request: &Request) -> Result<Measures
         .as_ref()
         .map_or_else(|| here.clone(), |folder| absolute(&here, folder));
     let size = size_of(kind, &program)?;
-    let mut command = command_for(kind, data_dir, request, &program, &folder)?;
+    let start = Start::choose(request)?;
+    let mut command = start.command(command_for(kind, data_dir, request, &program, &folder)?);
     command
         .stdin(input(request.stdin.as_deref())?)
         .stdout(output(request.stdout.as_deref())?)
@@ -444,17 +586,23 @@ pub fn measure(data_dir: Option<&DataDir>, request: &Request) -> Result<Measures
                 problem: None,
             }
         }
-        Some(load) => serve(&mut child, load)?,
+        Some(load) => serve(&mut child, load, &start)?,
     };
-    let (user_ns, system_ns, peak_bytes) = usage(&child)?;
+    let spent = start.spent(&child)?;
     let [l1d_misses, llc_misses, dtlb_misses] = counters::read(&mut counters);
+    // The spawner saw how the program ended, and its time on the clock without the spawner's own
+    // start; a server's time runs from its first connection, and it was stopped.
+    let (exit, wall) = match (spent.ran, request.serve) {
+        (Some(ran), None) => ran,
+        _ => (ended.exit, ended.wall),
+    };
     Ok(Measures {
         kind,
-        exit: ended.exit,
-        user_ns,
-        system_ns,
-        wall_ns: u64::try_from(ended.wall.as_nanos()).unwrap_or(u64::MAX),
-        peak_bytes,
+        exit,
+        user_ns: spent.user_ns,
+        system_ns: spent.system_ns,
+        wall_ns: u64::try_from(wall.as_nanos()).unwrap_or(u64::MAX),
+        peak_bytes: spent.peak_bytes,
         size,
         l1d_misses,
         llc_misses,
@@ -465,9 +613,9 @@ pub fn measure(data_dir: Option<&DataDir>, request: &Request) -> Result<Measures
 }
 
 /// Measures `child` as a server under `load`: it waits until the server takes a connection,
-/// connects every client, has each send its requests, and then stops the server. Its time on the
-/// clock runs from the first connection to the last answer.
-fn serve(child: &mut Child, load: Load) -> Result<Ended, String> {
+/// connects every client, has each send its requests, and then stops the server as `start`
+/// stops it. Its time on the clock runs from the first connection to the last answer.
+fn serve(child: &mut Child, load: Load, start: &Start) -> Result<Ended, String> {
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, load.port));
     let deadline = Instant::now() + SERVER_START;
     let first = loop {
@@ -480,7 +628,7 @@ fn serve(child: &mut Child, load: Load) -> Result<Ended, String> {
             ));
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
+            start.stop(child);
             let _ = child.wait();
             return Err(format!(
                 "the server took no connection on port {} in {} s",
@@ -516,7 +664,7 @@ fn serve(child: &mut Child, load: Load) -> Result<Ended, String> {
             .collect()
     });
     let wall = connected.elapsed();
-    let _ = child.kill();
+    start.stop(child);
     child
         .wait()
         .map_err(|error| format!("couldn't wait for the server: {error}"))?;
@@ -572,10 +720,10 @@ fn exchange(mut stream: TcpStream, client: usize, requests: usize) -> Result<u64
 }
 
 /// What the system counted for `child`, which has ended: its CPU time in user space and in the
-/// kernel, in nanoseconds, and its peak resident memory in bytes. On a Unix, the children this
+/// kernel, and its peak resident memory where the count is its own. On a Unix, the children this
 /// process waited for, of which `child` is the one.
 #[cfg(unix)]
-fn usage(_child: &Child) -> Result<(u64, u64, Option<u64>), String> {
+fn usage(_child: &Child) -> Result<Spent, String> {
     use nix::sys::resource::{UsageWho, getrusage};
     use nix::sys::time::TimeVal;
     let usage =
@@ -594,20 +742,42 @@ fn usage(_child: &Child) -> Result<(u64, u64, Option<u64>), String> {
             peak.saturating_mul(1024)
         }
     });
-    Ok((
-        nanoseconds(usage.user_time()),
-        nanoseconds(usage.system_time()),
-        peak,
-    ))
+    Ok(Spent {
+        user_ns: nanoseconds(usage.user_time()),
+        system_ns: nanoseconds(usage.system_time()),
+        peak_bytes: peak.filter(|peak| the_childs_own(*peak)),
+        ran: None,
+    })
 }
 
 /// What the system counted for `child`, which has ended: its CPU time in user space and in the
-/// kernel, in nanoseconds, and its peak working set in bytes, as Windows counts them for the
-/// process.
+/// kernel, and its peak working set, as Windows counts them for the process.
 #[cfg(windows)]
-fn usage(child: &Child) -> Result<(u64, u64, Option<u64>), String> {
+fn usage(child: &Child) -> Result<Spent, String> {
     let usage = lengua_os::process_usage(child)?;
-    Ok((usage.user_ns, usage.kernel_ns, Some(usage.peak_bytes)))
+    Ok(Spent {
+        user_ns: usage.user_ns,
+        system_ns: usage.kernel_ns,
+        peak_bytes: Some(usage.peak_bytes),
+        ran: None,
+    })
+}
+
+/// Whether `peak`, the peak resident memory the system counted for a child of this process, is
+/// the child's own. Linux begins a child's count at what this process held when it started the
+/// child, so a peak no higher than this process's own may be this process's and not the child's;
+/// macOS starts a child with memory of its own.
+fn the_childs_own(peak: u64) -> bool {
+    !cfg!(target_os = "linux") || own_peak().is_some_and(|own| peak > own)
+}
+
+/// The most memory this process has held resident at once, in bytes, as Linux says in
+/// /proc/self/status.
+fn own_peak() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find_map(|line| line.strip_prefix("VmHWM:"))?;
+    let kib = line.trim().strip_suffix("kB")?.trim().parse::<u64>().ok()?;
+    Some(kib.saturating_mul(1024))
 }
 
 /// The CPU's counters of a program's misses, Linux's generic cache events on reads in user space.
@@ -873,5 +1043,60 @@ mod tests {
         assert_eq!(env, [("A", "b")]);
         // A main.wat program needs the data folder, where its lock's key is.
         assert!(command_for(Kind::Wat, None, &request, folder.path(), folder.path()).is_err());
+    }
+
+    /// Through the spawner, the command is the spawner's: the file it reports to, then the
+    /// program and its arguments, with the program's environment and folder.
+    #[test]
+    fn the_spawner_starts_the_program_with_its_words() {
+        let request = Request {
+            args: vec!["2".to_owned()],
+            env: BTreeMap::from([("A".to_owned(), "b".to_owned())]),
+            ..Request::default()
+        };
+        let folder = tempfile::tempdir().expect("a folder");
+        let program = Path::new("/bin/true");
+        let native = command_for(Kind::Native, None, &request, program, folder.path());
+        let start = Start::Spawned {
+            spawner: PathBuf::from("/lengua/lengua-spawn"),
+            report: tempfile::NamedTempFile::new().expect("a file"),
+        };
+        let spawned = start.command(native.expect("a command"));
+        assert_eq!(spawned.get_program(), "/lengua/lengua-spawn");
+        let args: Vec<_> = spawned.get_args().collect();
+        assert_eq!(args.len(), 3, "{args:?}");
+        assert_eq!(args[1..], ["/bin/true", "2"]);
+        assert_eq!(spawned.get_current_dir(), Some(folder.path()));
+        let env: Vec<_> = spawned
+            .get_envs()
+            .filter_map(|(name, value)| Some((name.to_str()?, value?.to_str()?)))
+            .filter(|(name, _)| *name != "SystemRoot")
+            .collect();
+        assert_eq!(env, [("A", "b")]);
+    }
+
+    /// The spawner's report: an exit code or `signal`, then four counts; anything else is none.
+    #[test]
+    fn the_spawners_report_is_read_back() {
+        let spent = Spent::reported("3 10 20 30 40\n").expect("a report");
+        assert_eq!((spent.user_ns, spent.system_ns), (10, 20));
+        assert_eq!(spent.peak_bytes, Some(40));
+        assert_eq!(spent.ran, Some((Some(3), Duration::from_nanos(30))));
+        let ended = Spent::reported("signal 1 2 3 4").expect("a report");
+        assert_eq!(ended.ran.map(|ran| ran.0), Some(None));
+        for text in ["", "3 1 2 3", "3 1 2 3 4 5", "three 1 2 3 4", "3 1 2 -3 4"] {
+            assert_eq!(Spent::reported(text), None, "{text:?}");
+        }
+    }
+
+    /// Linux says the most this process has held resident, and a child's peak no higher is no
+    /// peak of the child's own.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_childs_peak_no_higher_than_this_processs_is_not_its_own() {
+        let own = own_peak().expect("this process's peak");
+        assert!(own > 0);
+        assert!(!the_childs_own(own));
+        assert!(the_childs_own(own + (1 << 40)));
     }
 }
