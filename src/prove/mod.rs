@@ -7,12 +7,15 @@
 //! matched through its digits' common root, so "prints the formula's value" becomes one linear
 //! question instead of twenty divisions. What a run did beyond its machine, its output, files and
 //! network, and the conditions it met, is its [`world`], which the checks of a finished run read.
+//! A WebAssembly program is proven the same way on its own core, [`wasm`]: the driver explores
+//! either kind of program and checks their runs alike.
 
 pub mod exec;
 pub mod formula;
 pub mod induction;
 pub mod smt;
 pub mod term;
+pub mod wasm;
 pub mod watch;
 pub mod world;
 
@@ -2557,6 +2560,102 @@ fn same_terms(pool: &mut Pool, a: &[Term], b: &[Term]) -> Term {
     pool.all(&checks)
 }
 
+/// A program a proof runs: native machine code ([`Image`]) or a WebAssembly module
+/// ([`wasm::Module`]), each with the core its runs take their steps on. The driver lays out the
+/// inputs, explores the runs and checks each against the block the same way for both.
+trait Program: Sync + Sized {
+    /// The core its runs take their steps on.
+    type Core: exec::Core<Image = Self>;
+
+    /// The state its runs start in: `args`, the environment's `NAME=value` strings and `stdin`
+    /// as byte terms.
+    fn begin(
+        &self,
+        pool: &mut Pool,
+        args: &[Vec<Term>],
+        env: &[Vec<Term>],
+        stdin: Vec<Term>,
+    ) -> State<Self::Core>;
+
+    /// Whether it reads its input through the canonical fill, which a proof reads as a whole for
+    /// every way its input can be cut.
+    fn fills(&self) -> bool;
+
+    /// The functions no run of the proof called, of which the proof says nothing.
+    fn uncalled(&self) -> Vec<String>;
+
+    /// `state` taking the read loop's head as `hook` says, in an induction's base.
+    ///
+    /// # Errors
+    ///
+    /// Where the core has no read loop's head to take.
+    fn hooked(
+        state: State<Self::Core>,
+        hook: std::rc::Rc<exec::induction::Hook>,
+    ) -> Result<State<Self::Core>, String>;
+}
+
+impl Program for Image {
+    type Core = exec::Native;
+
+    fn begin(
+        &self,
+        pool: &mut Pool,
+        args: &[Vec<Term>],
+        env: &[Vec<Term>],
+        stdin: Vec<Term>,
+    ) -> State {
+        State::start(self, pool, args, env, stdin)
+    }
+
+    fn fills(&self) -> bool {
+        self.has_fill()
+    }
+
+    fn uncalled(&self) -> Vec<String> {
+        self.unreached()
+    }
+
+    fn hooked(state: State, hook: std::rc::Rc<exec::induction::Hook>) -> Result<State, String> {
+        Ok(state.with_hook(hook))
+    }
+}
+
+impl Program for wasm::Module {
+    type Core = wasm::Wasm;
+
+    fn begin(
+        &self,
+        pool: &mut Pool,
+        args: &[Vec<Term>],
+        env: &[Vec<Term>],
+        stdin: Vec<Term>,
+    ) -> State<wasm::Wasm> {
+        wasm::begin(self, pool, args, env, stdin)
+    }
+
+    /// lengua's library's `$fill` runs as the code it is, each of its reads one the world gives.
+    fn fills(&self) -> bool {
+        false
+    }
+
+    fn uncalled(&self) -> Vec<String> {
+        self.unreached()
+    }
+
+    fn hooked(
+        _state: State<wasm::Wasm>,
+        _hook: std::rc::Rc<exec::induction::Hook>,
+    ) -> Result<State<wasm::Wasm>, String> {
+        Err("the WebAssembly model takes no read loop's head yet: every length by induction is \
+             the prover's third step"
+            .into())
+    }
+}
+
+/// Why a block that uses `now` isn't proven.
+const USES_NOW: &str = "it uses now, the second a run starts, which a proof can't fix";
+
 /// Proves `block` about the program `machine` holds, within `budget`.
 #[must_use]
 pub fn prove(machine: &Machine, block: &Generated, budget: &Budget) -> Verdict {
@@ -2565,7 +2664,7 @@ pub fn prove(machine: &Machine, block: &Generated, budget: &Budget) -> Verdict {
 
 fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verdict, String> {
     if block.uses_now() {
-        return Err("it uses now, the second a run starts, which a proof can't fix".into());
+        return Err(USES_NOW.into());
     }
     let image = Image::new(machine).ok_or("the program has no _start")?;
     // A streaming filter is proven for every length at once where its read loop's step holds;
@@ -2897,8 +2996,8 @@ fn replay(image: &Image, block: &Generated, input: &[u8]) -> Result<Option<Verdi
 
 /// Proves `block` length by length, as far as the budget goes: each input combination its own
 /// shape. With `hook`, each run takes the read loop's head as an induction's base does.
-fn by_length(
-    image: &Image,
+fn by_length<P: Program>(
+    image: &P,
     block: &Generated,
     budget: &Budget,
     hook: Option<&exec::induction::Hook>,
@@ -2926,7 +3025,7 @@ fn by_length(
     }
     // What a test's peer sends arrives whole or cut, each way the tests' runs and the merges of
     // their pieces cut it; through fill, every way at once.
-    if (!block.server.is_empty() || !block.client.is_empty()) && !image.has_fill() {
+    if (!block.server.is_empty() || !block.client.is_empty()) && !image.fills() {
         let deliveries = Delivery::ALL
             .iter()
             .map(|delivery| Part::Delivery(*delivery));
@@ -2975,7 +3074,7 @@ fn by_length(
     let questions = AtomicUsize::new(0);
     let alone: Mutex<Option<String>> = Mutex::new(None);
     let stop = AtomicBool::new(false);
-    let cut_any_way = AtomicBool::new(image.has_fill());
+    let cut_any_way = AtomicBool::new(image.fills());
     let found: Mutex<Option<BTreeMap<String, Value>>> = Mutex::new(None);
     let failure: Mutex<Option<String>> = Mutex::new(None);
     // In length order, the shortest text length something couldn't be proven at, and why:
@@ -3206,7 +3305,7 @@ fn by_length(
         alone: alone.into_inner().ok().flatten(),
         bound,
         cut_any_way: cut_any_way.into_inner(),
-        unreached: image.unreached(),
+        unreached: image.uncalled(),
         induction: None,
         lookback: 0,
     })
@@ -3522,8 +3621,8 @@ impl From<&str> for Stop {
 /// Proves one combination of shapes, with its own terms and solver so questions only carry what
 /// they're about. Returns how many paths it followed, and why one solver answered alone when no
 /// second one checked it.
-fn prove_shape(
-    image: &Image,
+fn prove_shape<P: Program>(
+    image: &P,
     block: &Generated,
     each: &[(String, Vec<Part>)],
     combination: usize,
@@ -3601,7 +3700,7 @@ fn prove_shape(
     let stdin = pattern_bytes(&mut pool, &block.stdin, &inputs)?;
     // The model has one read return everything that's there, which a pipe guarantees only for
     // what one write of at most 4096 bytes put in it; fill reads any length cut any way.
-    if stdin.len() > PIPE_WRITE && !image.has_fill() {
+    if stdin.len() > PIPE_WRITE && !image.fills() {
         return Err(Stop::Beyond(format!(
             "standard input past {PIPE_WRITE} bytes is more than one pipe write, which the proof \
              reads whole; read it with fill to be proven for any length"
@@ -3678,8 +3777,9 @@ fn prove_shape(
         eager: false,
     };
     // fill, where the program has it, is read as a whole for every way its input can be cut.
-    let every_cut = image.has_fill();
-    let mut base = State::start(image, &mut pool, &args, &env, stdin)
+    let every_cut = image.fills();
+    let mut base = image
+        .begin(&mut pool, &args, &env, stdin)
         .with_files(files)
         .with_folders(block.folders.clone())
         .with_supply(random, clock)
@@ -3705,7 +3805,7 @@ fn prove_shape(
     let mut offsets = HashMap::new();
     let mut relative = None;
     if let Some(hook) = hook {
-        base = base.with_hook(std::rc::Rc::new(hook.clone()));
+        base = P::hooked(base, std::rc::Rc::new(hook.clone()))?;
         let pieces = block.stdout.pieces();
         let mut folds = Vec::new();
         for (slot, fold) in &hook.folds {
@@ -4240,12 +4340,12 @@ fn sample_text(text: &str) -> String {
 
 /// The state a sample's run starts in: its arguments, input, files, folders, environment,
 /// network, random bytes and clock, all as the sample has them.
-fn sample_start(
-    image: &Image,
+fn sample_start<P: Program>(
+    image: &P,
     pool: &mut Pool,
     case: &crate::testfile::Case,
     listens: bool,
-) -> State {
+) -> State<P::Core> {
     let fill = sample_text;
     let args: Vec<Vec<Term>> = case
         .args
@@ -4320,7 +4420,8 @@ fn sample_start(
         .iter()
         .map(|(name, value)| exec::bytes(pool, format!("{name}={value}").as_bytes()))
         .collect();
-    State::start(image, pool, &args, &env, stdin)
+    image
+        .begin(pool, &args, &env, stdin)
         .with_files(files)
         .with_folders(case.folders.clone())
         .with_supply(random, clock)
@@ -4379,6 +4480,37 @@ pub fn agrees_until(
     deadline: Instant,
 ) -> Result<Option<Verdict>, String> {
     let image = Image::new(machine).ok_or("the program has no _start")?;
+    agrees_with(&image, cases, listens, deadline)
+}
+
+/// [`agrees_until`] for the WebAssembly program `built`, whose idea lets it reach what `policy`
+/// allows: its model's runs of the samples against what the real program did on them.
+///
+/// # Errors
+///
+/// Describes the first disagreement, what the model can't run, or that the time is up.
+pub fn agrees_wasm(
+    built: &crate::wasm::Built,
+    policy: crate::wasm::Policy,
+    cases: &[crate::testfile::Case],
+    listens: bool,
+    deadline: Instant,
+) -> Result<Option<Verdict>, String> {
+    let module = wasm::Module::new(built, policy)?;
+    agrees_with(&module, cases, listens, deadline)
+}
+
+/// [`agrees_until`]'s work, for either kind of program.
+///
+/// # Errors
+///
+/// Describes the first disagreement, what the model can't run, or that the time is up.
+fn agrees_with<P: Program>(
+    image: &P,
+    cases: &[crate::testfile::Case],
+    listens: bool,
+    deadline: Instant,
+) -> Result<Option<Verdict>, String> {
     // Smallest first: once one is too long for the model to follow, the larger ones are too.
     let mut cases: Vec<&crate::testfile::Case> = cases.iter().collect();
     cases.sort_by_key(|case| {
@@ -4389,8 +4521,8 @@ pub fn agrees_until(
     for case in cases {
         let mut pool = Pool::default();
         let fill = sample_text;
-        let start = sample_start(&image, &mut pool, case, listens);
-        let mut runs = exec::explore(&image, start, &mut pool, &mut ConcreteUntil(deadline), 2)?;
+        let start = sample_start(image, &mut pool, case, listens);
+        let mut runs = exec::explore(image, start, &mut pool, &mut ConcreteUntil(deadline), 2)?;
         let run = runs.pop().ok_or("the model didn't run")?.world;
         if let Some(End::Unsafe(problem)) = &run.end {
             let mut values = case.inputs.clone();

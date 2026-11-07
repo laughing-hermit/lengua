@@ -1,6 +1,7 @@
-;; add: adds the two whole numbers in its arguments and prints the sum, in the WebAssembly
-;; dialect 1 (references/power-of-10-webassembly.md), from the compile skill's main-template.wat:
-;; every rule passes, and lengua's library gives $assert_fail and $write_all.
+;; add: prints the sum of the two whole numbers in its arguments. A fixture of the WebAssembly
+;; prover, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md): lengua's library
+;; gives $assert_fail and $write_all. The sum's digits come from the most significant: a power of
+;; ten, found first, divides each digit out in turn.
 (module
   (import "wasi_snapshot_preview1" "args_sizes_get"
     (func $args_sizes_get (param i32 i32) (result i32)))
@@ -23,13 +24,12 @@
   (global $ARGC_EXPECTED i32 (i32.const 3))
   (global $MAX_CHARS i32 (i32.const 20))
   (global $MAX_DIGITS i32 (i32.const 19))
+  (global $MAX_SCALES i32 (i32.const 18))
   (global $NEWLINE_AT i32 (i32.const 20))
   (global $MAX_TENTH i64 (i64.const 922337203685477580))
   (global $MAX_MAGNITUDE i64 (i64.const 9223372036854775807))
   (global $TEN i64 (i64.const 10))
-  ;; The idea's range of each number.
-  (global $MIN_NUMBER i64 (i64.const -1000000000))
-  (global $MAX_NUMBER i64 (i64.const 1000000000))
+  (global $ONE i64 (i64.const 1))
   ;; Characters.
   (global $NEWLINE i32 (i32.const 10))
   (global $MINUS i32 (i32.const 45))
@@ -44,27 +44,25 @@
   ;; The argument count and the size of the arguments' text, as args_sizes_get writes them.
   (global $sizes i32 (i32.const 2048))
   (global $sizes.size i32 (i32.const 8))
-  ;; Where each argument starts, as args_get writes it: the program's name, then the numbers.
+  ;; Where each argument starts, as args_get writes it: the program's name, then a and b.
   (global $argv i32 (i32.const 2064))
   (global $argv.size i32 (i32.const 12))
   ;; The arguments' text, each ended by a NUL.
   (global $args i32 (i32.const 2080))  ;; shared: main has the host fill it; parse_i64 reads it
   (global $args.size i32 (i32.const 64))
-  ;; A number read, which main lends parse_i64 to write.
+  ;; The number read, which main lends parse_i64 to write.
   (global $number i32 (i32.const 2144))
   (global $number.size i32 (i32.const 8))
   ;; The output: a sign, 19 digits and a newline.
   (global $out i32 (i32.const 2160))
   (global $out.size i32 (i32.const 21))
 
-  ;; Reads the two arguments, parses them and prints their sum, or shows the usage line when
-  ;; they aren't two numbers in the idea's range. Never returns: every path ends in proc_exit.
+  ;; Reads the two arguments, parses them and prints their sum, or the usage line. Never returns:
+  ;; every path ends in proc_exit.
   (func $main (export "_start")
     (local $err i32)
     (local $size i32)
-    (local $at i32)
     (local $a i64)
-    (local $b i64)
     (block $write_failed
       (block $usage
         (local.set $err
@@ -78,22 +76,22 @@
         (local.set $err (call $args_get (global.get $argv) (global.get $args)))
         (if (local.get $err)
           (then (call $assert_fail (i32.const 2)) unreachable))
-        ;; Each number starts where its argv entry points: an offset into $args, which
-        ;; parse_i64 checks.
-        (local.set $at (i32.sub (i32.load offset=4 (global.get $argv)) (global.get $args)))
-        (local.set $err (call $parse_i64 (local.get $at) (global.get $number)))
+        ;; Each number starts where its argv entry points: an offset into $args, which parse_i64
+        ;; checks.
+        (local.set $err
+          (call $parse_i64
+            (i32.sub (i32.load offset=4 (global.get $argv)) (global.get $args))
+            (global.get $number)))
         (br_if $usage (local.get $err))
         (local.set $a (i64.load (global.get $number)))
-        (local.set $at (i32.sub (i32.load offset=8 (global.get $argv)) (global.get $args)))
-        (local.set $err (call $parse_i64 (local.get $at) (global.get $number)))
+        (local.set $err
+          (call $parse_i64
+            (i32.sub (i32.load offset=8 (global.get $argv)) (global.get $args))
+            (global.get $number)))
         (br_if $usage (local.get $err))
-        (local.set $b (i64.load (global.get $number)))
-        ;; Both within the idea's range, so the sum fits.
-        (br_if $usage (i64.lt_s (local.get $a) (global.get $MIN_NUMBER)))
-        (br_if $usage (i64.gt_s (local.get $a) (global.get $MAX_NUMBER)))
-        (br_if $usage (i64.lt_s (local.get $b) (global.get $MIN_NUMBER)))
-        (br_if $usage (i64.gt_s (local.get $b) (global.get $MAX_NUMBER)))
-        (br_if $write_failed (call $write_i64 (i64.add (local.get $a) (local.get $b))))
+        ;; Each number is at most 19 digits, so the sum of two the idea gives fits.
+        (br_if $write_failed
+          (call $write_i64 (i64.add (local.get $a) (i64.load (global.get $number)))))
         (call $proc_exit (global.get $EXIT_OK))
         unreachable)
       (br_if $write_failed
@@ -104,8 +102,8 @@
     unreachable)
 
   ;; Parses the decimal whole number that starts at byte $at of $args: an optional minus sign,
-  ;; then at most 19 digits, ended by the argument's NUL. Writes it at $into, 8 bytes.
-  ;; Gives 0, or ERROR_INVALID when the text isn't a number from -9223372036854775807 to
+  ;; then at most 19 digits, ended by the argument's NUL. Writes it at $into, 8 bytes. Gives 0, or
+  ;; ERROR_INVALID when the text isn't a number from -9223372036854775807 to
   ;; 9223372036854775807.
   (func $parse_i64 (param $at i32) (param $into i32) (result i32)  ;; returns: result
     (local $i i32)
@@ -151,9 +149,12 @@
       (local.set $status (global.get $NO_ERROR)))
     (local.get $status))
 
-  ;; Writes $value in decimal, then a newline, to standard output. Gives 0, or an error number.
+  ;; Writes $value in decimal, then a newline, to standard output: its sign, then its digits from
+  ;; the most significant, each its magnitude divided by a power of ten. Gives 0, or an error
+  ;; number.
   (func $write_i64 (param $value i64) (result i32)  ;; returns: result
     (local $magnitude i64)
+    (local $power i64)
     (local $at i32)
     (local $left i32)
     (local.set $magnitude (local.get $value))
@@ -162,30 +163,39 @@
     ;; The most negative number has no magnitude in 64 bits.
     (if (i64.lt_s (local.get $magnitude) (i64.const 0))
       (then (call $assert_fail (i32.const 5)) unreachable))
-    ;; The newline last, the digits before it from the last, then the sign.
-    (local.set $at (global.get $NEWLINE_AT))
-    (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get $NEWLINE))
-    (block $sign
+    ;; The sign, for a value below zero.
+    (if (i64.lt_s (local.get $value) (i64.const 0))
+      (then
+        (i32.store8 (global.get $out) (global.get $MINUS))
+        (local.set $at (i32.const 1))))
+    ;; The power of ten of the first digit: the largest that isn't above the magnitude.
+    (local.set $power (global.get $ONE))
+    (block $scaled
+      (local.set $left (global.get $MAX_SCALES))
+      (loop $scale  ;; bound: 18
+        (br_if $scaled
+          (i64.gt_u (i64.mul (local.get $power) (global.get $TEN)) (local.get $magnitude)))
+        (local.set $power (i64.mul (local.get $power) (global.get $TEN)))
+        (local.set $left (i32.sub (local.get $left) (i32.const 1)))
+        (br_if $scale (local.get $left))))
+    ;; Each digit, from the first, until the power runs out.
+    (block $written
       (local.set $left (global.get $MAX_DIGITS))
       (loop $digit  ;; bound: 19
-        (local.set $at (i32.sub (local.get $at) (i32.const 1)))
-        (if (i32.ge_u (local.get $at) (global.get $out.size))
+        (br_if $written (i64.eqz (local.get $power)))
+        (if (i32.ge_u (local.get $at) (global.get $NEWLINE_AT))
           (then (call $assert_fail (i32.const 6)) unreachable))
         (i32.store8 (i32.add (global.get $out) (local.get $at))
           (i32.add (global.get $ZERO)
-            (i32.wrap_i64 (i64.rem_u (local.get $magnitude) (global.get $TEN)))))
-        (local.set $magnitude (i64.div_u (local.get $magnitude) (global.get $TEN)))
-        (br_if $sign (i64.eqz (local.get $magnitude)))
+            (i32.wrap_i64
+              (i64.rem_u
+                (i64.div_u (local.get $magnitude) (local.get $power))
+                (global.get $TEN)))))
+        (local.set $at (i32.add (local.get $at) (i32.const 1)))
+        (local.set $power (i64.div_u (local.get $power) (global.get $TEN)))
         (local.set $left (i32.sub (local.get $left) (i32.const 1)))
-        (br_if $digit (local.get $left)))
-      ;; 19 digits are all a magnitude has.
-      (call $assert_fail (i32.const 7))
-      unreachable)
-    (if (i64.lt_s (local.get $value) (i64.const 0))
-      (then
-        (local.set $at (i32.sub (local.get $at) (i32.const 1)))
-        (if (i32.ge_u (local.get $at) (global.get $out.size))
-          (then (call $assert_fail (i32.const 8)) unreachable))
-        (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get $MINUS))))
-    (call $write_all (global.get $STDOUT) (i32.add (global.get $out) (local.get $at))
-      (i32.sub (global.get $out.size) (local.get $at)))))
+        (br_if $digit (local.get $left))))
+    (if (i32.ge_u (local.get $at) (global.get $out.size))
+      (then (call $assert_fail (i32.const 7)) unreachable))
+    (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get $NEWLINE))
+    (call $write_all (global.get $STDOUT) (global.get $out) (i32.add (local.get $at) (i32.const 1)))))
