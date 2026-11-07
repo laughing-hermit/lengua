@@ -454,7 +454,8 @@ impl Names {
     /// Keeps the names `map` gives to what it names, each `named`.
     fn other(&mut self, named: Named, map: NameMap<'_>) {
         for naming in map.flatten() {
-            self.others.push((named, naming.index, naming.name.to_owned()));
+            self.others
+                .push((named, naming.index, naming.name.to_owned()));
         }
     }
 }

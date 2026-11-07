@@ -329,7 +329,10 @@ pub enum Value {
 impl Value {
     /// Whether it's an address: a region's, a parameter's, or one of several.
     fn is_address(&self) -> bool {
-        matches!(self, Self::Address { .. } | Self::Param { .. } | Self::Several(_))
+        matches!(
+            self,
+            Self::Address { .. } | Self::Param { .. } | Self::Several(_)
+        )
     }
 
     /// Whether it may be a plain number.
@@ -3055,9 +3058,7 @@ fn exclusive_writes(
         let mut reported = BTreeSet::new();
         for written in borrowed.iter().filter(|access| access.written) {
             for other in &borrowed {
-                if written.buffer == other.buffer
-                    || !same_owner(&written.address, &other.address)
-                {
+                if written.buffer == other.buffer || !same_owner(&written.address, &other.address) {
                     continue;
                 }
                 let overlap = match (span(written), span(other)) {

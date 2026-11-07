@@ -747,15 +747,16 @@ impl Checker<'_, '_, '_> {
         match ty {
             BlockType::Empty => false,
             BlockType::Type(ty) => reference(&ty),
-            BlockType::FuncType(index) => module
-                .sub_types
-                .get(to_usize(index))
-                .is_some_and(|sub| match &sub.composite_type.inner {
-                    CompositeInnerType::Func(func) => {
-                        func.params().iter().chain(func.results()).any(reference)
+            BlockType::FuncType(index) => {
+                module.sub_types.get(to_usize(index)).is_some_and(|sub| {
+                    match &sub.composite_type.inner {
+                        CompositeInnerType::Func(func) => {
+                            func.params().iter().chain(func.results()).any(reference)
+                        }
+                        _ => false,
                     }
-                    _ => false,
-                }),
+                })
+            }
         }
     }
 }
