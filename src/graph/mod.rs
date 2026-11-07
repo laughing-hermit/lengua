@@ -411,8 +411,9 @@ fn stale(folder: &Path, idea: &[u8], code: Option<&str>, key: Option<&Key>) -> O
         return Some(Stale::Idea);
     }
     let stamp = recorded.code?;
-    let bytes = std::fs::read(folder.join(code?)).ok()?;
-    (stamp.sha256 != crate::header::code_hash(&bytes)).then_some(Stale::Code)
+    let name = code?;
+    let bytes = std::fs::read(folder.join(name)).ok()?;
+    (stamp.sha256 != crate::state::code_hash(name, &bytes)).then_some(Stale::Code)
 }
 
 /// `count` things, in the plural unless there's one.

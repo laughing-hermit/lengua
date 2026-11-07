@@ -18,12 +18,23 @@ use crate::hash::{Sha256Hex, hex};
 /// The lock's file name inside a program folder.
 pub const LOCK_FILE: &str = "lengua.lock";
 
-/// The lock format this server reads and writes. Version 5 names the idea file (`[idea]`, from
-/// `idea.md`) where version 4 named a spec.
-pub const VERSION: u32 = 5;
+/// The lock format this server writes. Version 5 names the idea file (`[idea]`, from `idea.md`)
+/// where version 4 named a spec; version 6 adds the stamp of WebAssembly code, main.wat's.
+pub const VERSION: u32 = 6;
 
-/// The lengua dialect this server checks.
+/// The oldest lock format this server still reads: version 5, whose native code stamp version 6
+/// keeps as it was, so a program checked before stays checked. lengua writes it again as 6.
+pub const OLDEST_VERSION: u32 = 5;
+
+/// The lengua dialect this server checks main.s against.
 pub const DIALECT: u32 = 4;
+
+/// The dialect a lock of checked main.wat records: the WebAssembly dialect 1, which
+/// `plugin/skills/compile/references/power-of-10-webassembly.md` writes down.
+pub const WASM_DIALECT: &str = "webassembly 1";
+
+/// The target of a stamp of main.wat: one module for every computer.
+pub const WASM_TARGET: &str = "webassembly";
 
 const HEADER: &str = "# lengua.lock: written only by the lengua MCP server. Do not edit.\n";
 const SIGNATURE_DOMAIN: &[u8] = b"lengua-lock-v1\n";
@@ -74,26 +85,38 @@ pub struct IdeaStamp {
     pub sha256: Sha256Hex,
 }
 
-/// The checked code.
+/// The checked code: main.s's, or main.wat's when its target is [`WASM_TARGET`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeStamp {
-    /// SHA-256 of main.s.
+    /// SHA-256 of the code: main.s without lengua's line, or main.wat as it is.
     pub sha256: Sha256Hex,
-    /// SHA-256 of the linked executable that passed the checks.
+    /// SHA-256 of what passed the checks: the linked executable, or the module lengua built
+    /// from main.wat, which the lock calls `module_sha256`.
     pub executable_sha256: Sha256Hex,
-    /// The assembler and linker versions that built it.
+    /// What built it: the assembler and linker versions, or for main.wat the engine that runs
+    /// the module, such as `wasmtime 50.0.1`, which the lock calls `engine`.
     pub toolchain: String,
-    /// The deepest stack the program can use.
+    /// The deepest stack the program can use, as the rules count it.
     pub max_stack_bytes: u64,
-    /// How many `# unsafe:` blocks the code has.
+    /// How many `# unsafe:` blocks main.s has, or `;; unsafe:` blocks main.wat has.
     pub unsafe_blocks: u32,
-    /// The target it was compiled and checked for, such as `linux-x86_64`.
+    /// The target it was compiled and checked for, such as `linux-x86_64`, or
+    /// [`WASM_TARGET`] for main.wat.
     pub target: String,
-    /// The CPU features its instructions need beyond the target's baseline, in order.
+    /// The CPU features its instructions need beyond the target's baseline, in order; for
+    /// main.wat, the WebAssembly features its module uses beyond WebAssembly 1.0.
     pub features: Vec<String>,
     /// What ran its tests when this computer runs the target's programs only through QEMU,
     /// such as `qemu-aarch64 10.2.2`; none when they ran natively.
     pub emulator: Option<String>,
+}
+
+impl CodeStamp {
+    /// Whether it stamps main.wat: WebAssembly, for every computer.
+    #[must_use]
+    pub fn is_wasm(&self) -> bool {
+        self.target == WASM_TARGET
+    }
 }
 
 /// A generated test proven for every input with texts up to a length.
@@ -177,12 +200,27 @@ impl Lock {
         parse_body(body)
     }
 
-    /// The canonical text before the `[signature]` table.
+    /// The canonical text before the `[signature]` table, in the format this server writes.
     fn body(&self) -> String {
+        self.body_in(VERSION)
+    }
+
+    /// The dialect the checked code was held to, as the lock writes it: main.wat's name, or
+    /// main.s's number, which a lock with no code yet keeps too.
+    fn dialect_line(&self) -> String {
+        if self.code.as_ref().is_some_and(CodeStamp::is_wasm) {
+            format!("dialect = {}", toml_string(WASM_DIALECT))
+        } else {
+            format!("dialect = {DIALECT}")
+        }
+    }
+
+    /// The canonical text before the `[signature]` table, in lock format `version`.
+    fn body_in(&self, version: u32) -> String {
         let mut text = String::from(HEADER);
         // Writing to a String can't fail.
-        let _ = writeln!(text, "version = {VERSION}");
-        let _ = writeln!(text, "dialect = {DIALECT}");
+        let _ = writeln!(text, "version = {version}");
+        let _ = writeln!(text, "{}", self.dialect_line());
         if let Some(fingerprint) = self.fingerprint() {
             let _ = writeln!(text, "fingerprint = \"{fingerprint}\"");
         }
@@ -202,9 +240,15 @@ impl Lock {
         if let Some(code) = &self.code {
             let features: Vec<String> =
                 code.features.iter().map(|name| toml_string(name)).collect();
+            // main.wat's stamp names what it is: a module, and the engine that runs it.
+            let (built, by) = if code.is_wasm() {
+                ("module_sha256", "engine")
+            } else {
+                ("executable_sha256", "toolchain")
+            };
             let _ = write!(
                 text,
-                "\n[code]\nsha256 = \"{}\"\nexecutable_sha256 = \"{}\"\ntoolchain = {}\n\
+                "\n[code]\nsha256 = \"{}\"\n{built} = \"{}\"\n{by} = {}\n\
                  max_stack_bytes = {}\nunsafe_blocks = {}\ntarget = {}\nfeatures = [{}]\n",
                 code.sha256,
                 code.executable_sha256,
@@ -271,13 +315,23 @@ struct VersionOnly {
     version: Option<i64>,
 }
 
+/// The `dialect` a lock says: main.s's dialect, a number, or main.wat's, a name.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DialectField {
+    /// The native dialect's number.
+    Number(u32),
+    /// The WebAssembly dialect's name.
+    Name(String),
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LockFile {
     /// Already checked through `VersionOnly`; declared so `deny_unknown_fields` accepts it.
     #[serde(rename = "version")]
     _version: u32,
-    dialect: u32,
+    dialect: DialectField,
     fingerprint: Option<String>,
     request: RequestTable,
     idea: IdeaTable,
@@ -328,12 +382,20 @@ struct IdeaTable {
     sha256: String,
 }
 
+/// The `[code]` table: main.s's names its executable and toolchain, main.wat's its module and
+/// engine.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CodeTable {
     sha256: String,
-    executable_sha256: String,
-    toolchain: String,
+    #[serde(default)]
+    executable_sha256: Option<String>,
+    #[serde(default)]
+    module_sha256: Option<String>,
+    #[serde(default)]
+    toolchain: Option<String>,
+    #[serde(default)]
+    engine: Option<String>,
     max_stack_bytes: u64,
     unsafe_blocks: u32,
     target: String,
@@ -344,18 +406,27 @@ struct CodeTable {
 
 pub(crate) fn parse_body(body: &str) -> Result<Lock, LockError> {
     let malformed = |detail: &str| LockError::Malformed(detail.to_owned());
-    let version = toml::from_str::<VersionOnly>(body)
+    let found = toml::from_str::<VersionOnly>(body)
         .map_err(|_| malformed("it isn't valid TOML"))?
         .version;
-    if version != Some(i64::from(VERSION)) {
+    let Some(version) = found
+        .and_then(|version| u32::try_from(version).ok())
+        .filter(|version| (OLDEST_VERSION..=VERSION).contains(version))
+    else {
         return Err(LockError::UnsupportedVersion(
-            version.map_or_else(|| "none".to_owned(), |version| version.to_string()),
+            found.map_or_else(|| "none".to_owned(), |version| version.to_string()),
         ));
-    }
+    };
     let file: LockFile =
         toml::from_str(body).map_err(|_| malformed("it has fields lengua doesn't write"))?;
-    if file.dialect != DIALECT {
-        return Err(LockError::UnsupportedDialect(file.dialect));
+    match &file.dialect {
+        DialectField::Number(number) if *number != DIALECT => {
+            return Err(LockError::UnsupportedDialect(*number));
+        }
+        DialectField::Name(name) if name != WASM_DIALECT => {
+            return Err(LockError::UnsupportedWasmDialect(name.clone()));
+        }
+        DialectField::Number(_) | DialectField::Name(_) => {}
     }
     let digest = |text: &str| Sha256Hex::parse(text).ok_or_else(|| malformed("a hash is damaged"));
     if file.request.words.is_empty() || file.request.words.len() > MAX_REQUESTS {
@@ -372,10 +443,24 @@ pub(crate) fn parse_body(body: &str) -> Result<Lock, LockError> {
         code: file
             .code
             .map(|code| {
+                // main.s's stamp names an executable and a toolchain; main.wat's, a module and
+                // an engine.
+                let wasm = code.target == WASM_TARGET;
+                let (built, by) = match (
+                    wasm,
+                    code.executable_sha256,
+                    code.module_sha256,
+                    code.toolchain,
+                    code.engine,
+                ) {
+                    (false, Some(built), None, Some(by), None)
+                    | (true, None, Some(built), None, Some(by)) => (built, by),
+                    _ => return Err(malformed("its [code] table is damaged")),
+                };
                 Ok::<_, LockError>(CodeStamp {
                     sha256: digest(&code.sha256)?,
-                    executable_sha256: digest(&code.executable_sha256)?,
-                    toolchain: code.toolchain,
+                    executable_sha256: digest(&built)?,
+                    toolchain: by,
                     max_stack_bytes: code.max_stack_bytes,
                     unsafe_blocks: code.unsafe_blocks,
                     target: code.target,
@@ -418,11 +503,17 @@ pub(crate) fn parse_body(body: &str) -> Result<Lock, LockError> {
     {
         return Err(malformed("its proofs are about a build it doesn't record"));
     }
+    // Format 5 came before main.wat: no lock of it holds WebAssembly code.
+    if version < VERSION && lock.code.as_ref().is_some_and(CodeStamp::is_wasm) {
+        return Err(malformed(
+            "it holds WebAssembly code in lock format 5, which has none",
+        ));
+    }
     let fingerprint = file.fingerprint.as_deref().map(digest).transpose()?;
     if fingerprint != lock.fingerprint() {
         return Err(malformed("its fingerprint doesn't match its hashes"));
     }
-    if lock.body() != body {
+    if lock.body_in(version) != body {
         return Err(malformed("it isn't laid out the way lengua writes it"));
     }
     Ok(lock)
@@ -464,6 +555,8 @@ pub enum LockError {
     UnsupportedVersion(String),
     /// The file was checked against a dialect this server doesn't check.
     UnsupportedDialect(u32),
+    /// The file's main.wat was checked against a WebAssembly dialect this server doesn't check.
+    UnsupportedWasmDialect(String),
 }
 
 impl fmt::Display for LockError {
@@ -481,11 +574,17 @@ impl fmt::Display for LockError {
             ),
             Self::UnsupportedVersion(version) => write!(
                 f,
-                "it uses lock format version {version}; this lengua reads version {VERSION}"
+                "it uses lock format version {version}; this lengua reads versions \
+                 {OLDEST_VERSION} to {VERSION}"
             ),
             Self::UnsupportedDialect(dialect) => write!(
                 f,
                 "it was checked against dialect {dialect}; this lengua checks dialect {DIALECT}"
+            ),
+            Self::UnsupportedWasmDialect(dialect) => write!(
+                f,
+                "its main.wat was checked against the dialect {dialect}; this lengua checks \
+                 {WASM_DIALECT}"
             ),
         }
     }
@@ -908,14 +1007,106 @@ mod tests {
         ));
     }
 
+    /// main.wat's stamp, as `check` writes it once its tests pass.
+    fn wasm_lock() -> Lock {
+        Lock {
+            code: Some(CodeStamp {
+                sha256: Sha256Hex::of(b"main.wat"),
+                executable_sha256: Sha256Hex::of(b"module"),
+                toolchain: "wasmtime 50.0.1".into(),
+                max_stack_bytes: 1184,
+                unsafe_blocks: 0,
+                target: WASM_TARGET.into(),
+                features: vec!["bulk-memory".into()],
+                emulator: None,
+            }),
+            ..full_lock()
+        }
+    }
+
+    /// main.wat's stamp names a module and an engine, and the lock the WebAssembly dialect.
+    #[test]
+    fn round_trips_a_stamp_of_main_wat() {
+        let lock = wasm_lock();
+        let text = lock.to_signed_text(&key(1));
+        assert!(
+            text.contains("version = 6\ndialect = \"webassembly 1\"\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "\n[code]\nsha256 = \"{}\"\nmodule_sha256 = \"{}\"\nengine = \"wasmtime \
+                 50.0.1\"\nmax_stack_bytes = 1184\nunsafe_blocks = 0\ntarget = \
+                 \"webassembly\"\nfeatures = [\"bulk-memory\"]\n",
+                Sha256Hex::of(b"main.wat"),
+                Sha256Hex::of(b"module")
+            )),
+            "{text}"
+        );
+        assert!(!text.contains("executable_sha256") && !text.contains("toolchain"));
+        assert_eq!(Lock::from_signed_text(&text, &key(1)), Ok(lock.clone()));
+        // A lock with no code yet, or main.s's, keeps main.s's dialect.
+        let native = full_lock().to_signed_text(&key(1));
+        assert!(native.contains("version = 6\ndialect = 4\n"), "{native}");
+        let body = lock.body();
+        let cases = [
+            // The names of the other kind of stamp, or both, or neither.
+            body.replace("module_sha256", "executable_sha256"),
+            body.replace("engine = ", "toolchain = "),
+            body.replace("engine = \"wasmtime 50.0.1\"\n", ""),
+            // The dialect of the other kind of code.
+            body.replace("dialect = \"webassembly 1\"", "dialect = 4"),
+            full_lock()
+                .body()
+                .replace("dialect = 4", "dialect = \"webassembly 1\""),
+            // Format 5 came before main.wat.
+            body.replace("version = 6", "version = 5"),
+        ];
+        for body in cases {
+            assert!(
+                matches!(
+                    Lock::from_signed_text(&forge(&body, &key(1)), &key(1)),
+                    Err(LockError::Malformed(_))
+                ),
+                "accepted:\n{body}"
+            );
+        }
+        let later = forge(
+            &body.replace("\"webassembly 1\"", "\"webassembly 2\""),
+            &key(1),
+        );
+        assert_eq!(
+            Lock::from_signed_text(&later, &key(1)),
+            Err(LockError::UnsupportedWasmDialect("webassembly 2".into()))
+        );
+    }
+
+    /// A lock of format 5, as the server wrote before main.wat, still reads: its code stays
+    /// checked, and lengua writes it again as format 6.
+    #[test]
+    fn a_lock_of_format_5_still_reads() {
+        let lock = full_lock();
+        let five = lock.body().replace("version = 6", "version = 5");
+        assert!(five.contains("version = 5\n"), "{five}");
+        let read = Lock::from_signed_text(&forge(&five, &key(1)), &key(1));
+        assert_eq!(read, Ok(lock.clone()));
+        let again = lock.to_signed_text(&key(1));
+        assert!(again.contains("version = 6\n"), "{again}");
+    }
+
     #[test]
     fn unknown_versions_and_dialects_are_reported() {
         let body = full_lock().body();
         // Version 4 named the program's spec.md, before idea files.
-        let older = forge(&body.replace("version = 5", "version = 4"), &key(1));
+        let older = forge(&body.replace("version = 6", "version = 4"), &key(1));
         assert_eq!(
             Lock::from_signed_text(&older, &key(1)),
             Err(LockError::UnsupportedVersion("4".into()))
+        );
+        let newer = forge(&body.replace("version = 6", "version = 7"), &key(1));
+        assert_eq!(
+            Lock::from_signed_text(&newer, &key(1)),
+            Err(LockError::UnsupportedVersion("7".into()))
         );
         // Dialect 3 had no jump tables.
         let dialect = forge(&body.replace("dialect = 4", "dialect = 3"), &key(1));

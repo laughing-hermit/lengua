@@ -28,6 +28,17 @@ pub const WASM_CODE_FILE: &str = "main.wat";
 /// Every code file a program folder may hold, in the order lengua looks for them.
 pub const CODE_FILES: [&str; 2] = [CODE_FILE, WASM_CODE_FILE];
 
+/// lengua's hash of the code file `name`, which holds `bytes`: main.s without lengua's line in
+/// it ([`crate::header::code_hash`]), main.wat as it is, since it has no such line.
+#[must_use]
+pub fn code_hash(name: &str, bytes: &[u8]) -> Sha256Hex {
+    if name == WASM_CODE_FILE {
+        Sha256Hex::of(bytes)
+    } else {
+        crate::header::code_hash(bytes)
+    }
+}
+
 /// Where the server keeps a copy of each idea.md it recorded, by hash, so later changes can be
 /// shown against them.
 #[must_use]
@@ -89,8 +100,13 @@ pub struct Snapshot {
     /// lengua's hash of idea.md, which leaves its trust record out
     /// ([`crate::trust::idea_hash`]), when it exists.
     pub idea: Option<Sha256Hex>,
-    /// SHA-256 of main.s without lengua's line in it, when it exists.
+    /// lengua's hash of the code file ([`code_hash`]), when the folder holds one: main.s, or
+    /// main.wat when it holds no main.s.
     pub code: Option<Sha256Hex>,
+    /// Whether that code file is main.wat.
+    pub wasm: bool,
+    /// Whether the folder holds both main.s and main.wat, which no check takes.
+    pub both: bool,
     /// Whether lengua.lock exists and can be trusted.
     pub lock: LockStatus,
 }
@@ -113,14 +129,18 @@ impl Snapshot {
     ///
     /// Fails when a file exists but can't be read.
     pub fn read(folder: &ProgramFolder, key: Option<&Key>) -> io::Result<Self> {
-        let hash = |name: &str, of: fn(&[u8]) -> Sha256Hex| match std::fs::read(folder.file(name)) {
-            Ok(bytes) => Ok(Some(of(&bytes))),
+        let read = |name: &str| match std::fs::read(folder.file(name)) {
+            Ok(bytes) => Ok(Some(bytes)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         };
+        let native = read(CODE_FILE)?.map(|bytes| code_hash(CODE_FILE, &bytes));
+        let wasm = read(WASM_CODE_FILE)?.map(|bytes| code_hash(WASM_CODE_FILE, &bytes));
         Ok(Self {
-            idea: hash(IDEA_FILE, crate::trust::idea_hash)?,
-            code: hash(CODE_FILE, crate::header::code_hash)?,
+            idea: read(IDEA_FILE)?.map(|bytes| crate::trust::idea_hash(&bytes)),
+            both: native.is_some() && wasm.is_some(),
+            wasm: native.is_none() && wasm.is_some(),
+            code: native.or(wasm),
             lock: match lock::read(folder.path(), key) {
                 Ok(None) => LockStatus::Missing,
                 Ok(Some(lock)) => LockStatus::Valid(Box::new(lock)),
@@ -173,9 +193,15 @@ impl State {
         if lock.idea.sha256 != *idea {
             return Self::IdeaUnrecorded;
         }
+        // Both code files are one too many, which check says how to fix; a stamp is of the very
+        // code file it names, main.s or main.wat.
         match (&lock.code, &snapshot.code) {
             (_, None) => Self::CodeMissing,
-            (Some(stamp), Some(current)) if stamp.sha256 == *current => Self::Ready,
+            (Some(stamp), Some(current))
+                if !snapshot.both && stamp.is_wasm() == snapshot.wasm && stamp.sha256 == *current =>
+            {
+                Self::Ready
+            }
             (_, Some(_)) => Self::CodeUnchecked,
         }
     }
@@ -196,6 +222,13 @@ impl State {
     /// The single next thing to do, as one sentence an agent can follow.
     #[must_use]
     pub fn next_step(&self, folder: &ProgramFolder) -> String {
+        self.next_step_in(folder, CODE_FILE)
+    }
+
+    /// [`Self::next_step`] for a folder whose code is `code`: main.s, or main.wat for an idea
+    /// that is an Attested Computation.
+    #[must_use]
+    pub fn next_step_in(&self, folder: &ProgramFolder, code: &str) -> String {
         match self {
             Self::NoIdea => format!(
                 "Next: write {}, its tests included, with the write-idea skill, then call check \
@@ -216,7 +249,7 @@ impl State {
                 "Next: compile {} into {} with the compile skill, then call check with path \
                  {folder}.",
                 folder.file(IDEA_FILE).display(),
-                folder.file(CODE_FILE).display()
+                folder.file(code).display()
             ),
             Self::CodeUnchecked | Self::Ready => {
                 format!("Next: call check with path {folder}.")
@@ -256,7 +289,48 @@ mod tests {
 
     fn state(files: [Option<&str>; 2], lock: LockStatus) -> State {
         let [idea, code] = files.map(|name| name.map(digest));
-        State::of(&Snapshot { idea, code, lock })
+        State::of(&Snapshot {
+            idea,
+            code,
+            wasm: false,
+            both: false,
+            lock,
+        })
+    }
+
+    /// A lock that stamps main.wat.
+    fn with_wasm_code() -> Lock {
+        let mut lock = with_code();
+        if let Some(stamp) = lock.code.as_mut() {
+            stamp.target = crate::lock::WASM_TARGET.into();
+            stamp.toolchain = "wasmtime 50.0.1".into();
+        }
+        lock
+    }
+
+    /// A stamp is of the code file it names, and a folder with both code files isn't ready.
+    #[test]
+    fn a_stamp_is_of_its_own_code_file() {
+        let of = |wasm: bool, both: bool, lock: Lock| {
+            State::of(&Snapshot {
+                idea: Some(digest("idea")),
+                code: Some(digest("code")),
+                wasm,
+                both,
+                lock: LockStatus::Valid(Box::new(lock)),
+            })
+        };
+        assert_eq!(of(true, false, with_wasm_code()), State::Ready);
+        assert_eq!(of(false, false, with_code()), State::Ready);
+        // main.wat's stamp doesn't stand for main.s's code, nor main.s's for main.wat's.
+        assert_eq!(of(false, false, with_wasm_code()), State::CodeUnchecked);
+        assert_eq!(of(true, false, with_code()), State::CodeUnchecked);
+        assert_eq!(of(false, true, with_code()), State::CodeUnchecked);
+        assert!(
+            State::CodeMissing
+                .next_step_in(&add(), WASM_CODE_FILE)
+                .contains(&add().file(WASM_CODE_FILE).display().to_string())
+        );
     }
 
     /// An absolute path on this system: `rest` below its root.
@@ -397,6 +471,18 @@ mod tests {
         assert_eq!(snapshot.idea, Some(digest("idea")));
         assert_eq!(snapshot.code, None);
         assert_eq!(snapshot.lock, LockStatus::Missing);
+        // main.wat is hashed as it is; with main.s beside it, the folder holds both.
+        let wat = "(module)\n# lengua: compiled from idea.md sha256:00 for linux-x86_64\n";
+        std::fs::write(program.file(WASM_CODE_FILE), wat).expect("write main.wat");
+        let snapshot = Snapshot::read(&program, None).expect("read the folder");
+        assert_eq!(snapshot.code, Some(digest(wat)));
+        assert!(snapshot.wasm && !snapshot.both);
+        std::fs::write(program.file(CODE_FILE), "_start:\n").expect("write main.s");
+        let snapshot = Snapshot::read(&program, None).expect("read the folder");
+        assert_eq!(snapshot.code, Some(digest("_start:\n")));
+        assert!(!snapshot.wasm && snapshot.both);
+        std::fs::remove_file(program.file(CODE_FILE)).expect("remove main.s");
+        std::fs::remove_file(program.file(WASM_CODE_FILE)).expect("remove main.wat");
         // lengua's hash of idea.md leaves out its trust record.
         let idea = "---\ntitle: add\n---\n# Purpose\n";
         let at = "2026-11-06T23:00:00Z";
