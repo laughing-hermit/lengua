@@ -228,3 +228,14 @@ proven" for memory, never proven: the memory rules can't follow a loaded address
   core WebAssembly, so an idea's tests don't ask for one.
 - **Vectors** (`v128`) are the deterministic SIMD128 instructions; their lane accesses obey M2
   like any other.
+
+## Secrets and caches
+
+- **Secrets.** An idea whose `# Constraints` has a `- Secret:` line adds the secret rule: no value
+  computed from an input the line names decides a branch, a `select`, an address, a length, a
+  loop's count, a division or a float operation, or reaches a host call but as the bytes it writes
+  out. [constant-time.md](constant-time.md) says what `check` refuses and how to write code that
+  passes it, with masks. The rule checks the WebAssembly; the engine's machine code is trusted to
+  keep its timing.
+- **Caches.** The `machine` line names this computer's caches as its system describes them;
+  [caches.md](caches.md) says how to lay work out for them, the same way on every computer.

@@ -16,7 +16,11 @@ It reads the folder's `idea.md` and `main.wat`, then:
    the idea's SHA-256 with its `verified` and `generated` keys left out, and `code`, the SHA-256
    of `main.wat`;
 2. builds `main.wat` into its WebAssembly module, as [`run`](run.md) does;
-3. checks the module against every rule of lengua's WebAssembly dialect;
+3. checks the module against every rule of lengua's WebAssembly dialect, and, for an idea with a
+   `- Secret:` line, the secret rule: no value computed from an input the line names decides a
+   branch, an address, a length, a loop's count, a division or a float operation of `main.wat`,
+   or reaches a host call but as the bytes it writes out (the rule checks the WebAssembly, and
+   trusts the engine's machine code to keep its timing);
 4. runs every test the idea holds, its examples and its generated tests, and compares each run's
    receipt with what the idea says;
 5. proves each generated test, as lengua's `check` tool does, within five minutes for all of

@@ -17,6 +17,9 @@ program reaches the computer only through [lengua's host](references/host.md), W
 lengua implements it, and only through the calls its idea allows.
 [Writing main.wat](references/wasm.md) shows how to write code that meets the rules on the first
 check.
+For an idea with a `- Secret:` line, write `main.wat` by [the secret rule](references/constant-time.md),
+with masks where a branch would decide on a secret. The `machine` line names the CPU's caches, and
+[caches.md](references/caches.md) says how to lay work out for them.
 
 The idea's frontmatter says which code it takes. `type: Attested Computation` takes `main.wat`, by
 the steps below. `type: lengua/program-idea`, an idea from before WebAssembly, takes `main.s`,
