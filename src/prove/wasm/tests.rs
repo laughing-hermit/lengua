@@ -1,11 +1,17 @@
 //! The WebAssembly model on its own: WebAssembly's integer semantics, each trap at its line of
 //! main.wat, lengua's library, the host's calls, and a branch, a division and a load the input
-//! decides.
+//! decides; then, with the solvers, the add, echo and greet fixtures proven for every input and a
+//! planted bug in each found, the traps naming their lines.
 
 use std::collections::HashMap;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 use super::*;
+use crate::expr::{Generator, Value};
 use crate::prove::exec::Oracle;
+use crate::prove::{Budget, UNSAFE, Verdict, prove_wasm};
+use crate::testfile::Generated;
 use crate::wasm::Policy;
 use crate::wasm::text::build;
 
@@ -503,4 +509,209 @@ fn a_listing_is_taken_in_both_orders() {
         };
         assert_eq!(ran(text, files, &given).end, Ended::Exit(name));
     }
+}
+
+/// Whether z3 is installed, which every proof needs: a test without it says so and passes.
+fn solvers_installed() -> bool {
+    let installed = std::process::Command::new("z3")
+        .arg("--version")
+        .output()
+        .is_ok();
+    if !installed {
+        crate::skiplog::note("z3 isn't installed");
+    }
+    installed
+}
+
+/// Whether cvc5 is installed too, which confirms every answer of z3's that rules a case out.
+fn both_solvers() -> bool {
+    std::process::Command::new("cvc5")
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
+/// A file of the WebAssembly fixture `name`.
+fn fixture(name: &str, file: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures-wasm")
+        .join(name)
+        .join(file);
+    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+/// The generated blocks of the fixture `name`'s idea, and what its idea lets it reach.
+fn blocks_of(name: &str) -> (Vec<Generated>, Policy) {
+    let idea = crate::idea::parse(&fixture(name, "idea.md"))
+        .unwrap_or_else(|problems| panic!("{name}: {problems:?}"));
+    let suite = crate::testfile::check(&idea)
+        .unwrap_or_else(|problems| panic!("{name}: {problems:?}"));
+    (suite.generated, Policy::of(&idea.uses, &idea.network))
+}
+
+/// A proof's budget: at most `seconds`, its listener at descriptor 4 when it `listens`.
+fn budget(seconds: u64, listens: bool) -> Budget {
+    Budget {
+        max_paths: 64,
+        max_shapes: 2000,
+        ..Budget::until(Instant::now() + Duration::from_secs(seconds), listens)
+    }
+}
+
+/// Whether `verdict` proves every input in range, z3 and cvc5 agreeing where both are installed.
+fn proven(verdict: &Verdict) -> bool {
+    matches!(
+        verdict,
+        Verdict::Proven { bound: None, alone, .. } if alone.is_none() || !both_solvers()
+    )
+}
+
+/// add's first block over the shapes of every sign and of up to three digits: the whole range,
+/// to 10^9, is a longer proof of the same code.
+fn sums() -> Generated {
+    let (blocks, _) = blocks_of("add");
+    let mut sums = blocks[0].clone();
+    for (_, generator) in &mut sums.vars {
+        *generator = Generator::Int { lo: -999, hi: 999 };
+    }
+    sums
+}
+
+/// `source` with the first `from` in it made `to`.
+fn edited(source: &str, (from, to): (&str, &str)) -> String {
+    assert!(source.contains(from), "the program has no {from:?}");
+    source.replacen(from, to, 1)
+}
+
+/// The line of `text`, from 1, of the first that holds `needle`.
+fn line_of(text: &str, needle: &str) -> usize {
+    text.lines()
+        .position(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("no line holds {needle:?}"))
+        + 1
+}
+
+/// The trap a counterexample found, with what it says.
+fn trap(verdict: &Verdict) -> String {
+    let Verdict::Counterexample(found) = verdict else {
+        panic!("not a counterexample: {verdict:?}");
+    };
+    match found.get(UNSAFE) {
+        Some(Value::Str(problem)) => problem.clone(),
+        other => panic!("not a trap: {other:?} in {found:?}"),
+    }
+}
+
+#[test]
+fn proves_add_echo_and_greet_for_every_input() {
+    if !solvers_installed() {
+        return;
+    }
+    let (_, policy) = blocks_of("add");
+    let built = build(&fixture("add", "main.wat")).expect("add builds");
+    let verdict = prove_wasm(&built, policy, &sums(), &budget(900, false));
+    assert!(proven(&verdict), "add: {verdict:?}");
+    let (blocks, policy) = blocks_of("greet");
+    let built = build(&fixture("greet", "main.wat")).expect("greet builds");
+    for (number, block) in blocks.iter().enumerate() {
+        let verdict = prove_wasm(&built, policy, block, &budget(900, false));
+        assert!(proven(&verdict), "greet's block {number}: {verdict:?}");
+    }
+    let (blocks, policy) = blocks_of("echo");
+    let built = build(&fixture("echo", "main.wat")).expect("echo builds");
+    let verdict = prove_wasm(&built, policy, &blocks[0], &budget(900, true));
+    assert!(proven(&verdict), "echo: {verdict:?}");
+}
+
+/// add's sign, which a wrong constant makes zero's too.
+const SIGN: &str = ";; The sign, for a value below zero.\n    (if (i64.lt_s (local.get $value) \
+                    (i64.const 0))";
+
+/// add's check that ends its digits, without which its last division is by zero.
+const GUARD: &str = "        (br_if $written (i64.eqz (local.get $power)))\n";
+
+/// echo's call of `$fill`, which an access one past its region lends one byte too many.
+const FILL: &str = "(global.get $line) (global.get $line.size) (global.get $NEWLINE)";
+
+/// echo's answer, which an off-by-one cuts short.
+const ANSWER: &str = "(call $write_all (local.get $fd) (global.get $line) (local.get $got))";
+
+/// greet's check of a name's length, which an off-by-one makes refuse the longest.
+const LONGEST: &str = "(br_if $usage (i32.gt_u (local.get $length) (global.get $MAX_NAME)))";
+
+#[test]
+fn finds_a_planted_bug_in_each_fixture() {
+    if !solvers_installed() {
+        return;
+    }
+    let (_, adds) = blocks_of("add");
+    let add = fixture("add", "main.wat");
+    // A wrong constant: a sum of zero comes out as "-0".
+    let below_one = SIGN.replace("(i64.const 0)", "(i64.const 1)");
+    let wrong = edited(&add, (SIGN, below_one.as_str()));
+    let built = build(&wrong).expect("it builds");
+    let verdict = prove_wasm(&built, adds, &sums(), &budget(900, false));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("a wrong constant: {verdict:?}");
+    };
+    let (Some(Value::Int(a)), Some(Value::Int(b))) = (found.get("a"), found.get("b")) else {
+        panic!("a wrong constant: {found:?}");
+    };
+    assert_eq!(a + b, 0, "a wrong constant: {found:?}");
+    // An unguarded division: the digits go on past the last, and divide by a power of zero.
+    let unguarded = edited(&add, (GUARD, ""));
+    let line = line_of(&unguarded, "(i64.div_u (local.get $magnitude) (local.get $power))");
+    let built = build(&unguarded).expect("it builds");
+    let verdict = prove_wasm(&built, adds, &sums(), &budget(900, false));
+    assert_eq!(
+        trap(&verdict),
+        format!("main.wat line {line}: an integer division by zero")
+    );
+    // An access one past a region: $fill is lent a byte past the line, past the memory's end.
+    let (echoes, policy) = blocks_of("echo");
+    let echo = fixture("echo", "main.wat");
+    let past = edited(
+        &echo,
+        (
+            FILL,
+            "(global.get $line) (i32.add (global.get $line.size) (i32.const 1)) (global.get \
+             $NEWLINE)",
+        ),
+    );
+    let line = line_of(&past, "(call $fill");
+    let built = build(&past).expect("it builds");
+    let verdict = prove_wasm(&built, policy, &echoes[0], &budget(900, true));
+    assert_eq!(
+        trap(&verdict),
+        format!("main.wat line {line}: it reached memory outside its own")
+    );
+    // An off-by-one: the answer loses its last byte.
+    let short = edited(
+        &echo,
+        (
+            ANSWER,
+            "(call $write_all (local.get $fd) (global.get $line) (i32.sub (local.get $got) \
+             (i32.const 1)))",
+        ),
+    );
+    let built = build(&short).expect("it builds");
+    let verdict = prove_wasm(&built, policy, &echoes[0], &budget(900, true));
+    assert!(
+        matches!(verdict, Verdict::Counterexample(_)),
+        "an off-by-one: {verdict:?}"
+    );
+    // An off-by-one in greet: the longest name gets the usage line.
+    let (greets, policy) = blocks_of("greet");
+    let greet = fixture("greet", "main.wat");
+    let at_most = LONGEST.replace("i32.gt_u", "i32.ge_u");
+    let refused = edited(&greet, (LONGEST, at_most.as_str()));
+    let built = build(&refused).expect("it builds");
+    let verdict = prove_wasm(&built, policy, &greets[0], &budget(900, false));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("greet's off-by-one: {verdict:?}");
+    };
+    assert!(
+        matches!(found.get("name"), Some(Value::Str(name)) if name.chars().count() == 8),
+        "greet's off-by-one: {found:?}"
+    );
 }
