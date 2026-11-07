@@ -1859,8 +1859,7 @@ impl LenguaServer {
                     }
                     Prover::Wasm(code) => {
                         let pool = self.pool();
-                        wat::replay(&pool, &code.program, idea, block, values, kernel_values)
-                            .await
+                        wat::replay(&pool, &code.program, idea, block, values, kernel_values).await
                     }
                 },
             };
@@ -3447,7 +3446,9 @@ mod tests {
     #[test]
     fn a_real_run_settles_what_a_proof_found() {
         let trap = "main.wat line 12: it reached memory outside its own";
-        let failed = Ok(Some("the program was trapped at main.wat line 12".to_owned()));
+        let failed = Ok(Some(
+            "the program was trapped at main.wat line 12".to_owned(),
+        ));
         let (line, wrong) = settled(WASM_CODE_FILE, "n = 3", Some(trap), failed, true);
         assert!(wrong, "{line}");
         let (line, wrong) = settled(WASM_CODE_FILE, "n = 3", Some(trap), Ok(None), true);

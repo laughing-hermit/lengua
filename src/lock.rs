@@ -940,7 +940,10 @@ mod tests {
                 .contains("unproven = [{ id = \"B4\", why = \"the proof ran out of time\" }]\n"),
             "{unproven_text}"
         );
-        assert_eq!(Lock::from_signed_text(&unproven_text, &key(1)), Ok(unproven));
+        assert_eq!(
+            Lock::from_signed_text(&unproven_text, &key(1)),
+            Ok(unproven)
+        );
         // Proofs about some other build can't be in a lock lengua wrote.
         let other = text
             .split("\n[signature]")
