@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use super::*;
 use crate::expr::{Generator, Value};
 use crate::prove::exec::Oracle;
+use crate::prove::exec::induction::Held;
 use crate::prove::{Budget, UNSAFE, Verdict, prove_wasm};
 use crate::testfile::Generated;
 use crate::wasm::Policy;
@@ -1271,6 +1272,54 @@ fn a_read_before_the_read_loops_head_stops_the_step() {
     assert!(why.contains("before the read loop's head"), "{why}");
 }
 
+/// A program that makes the folder `d` before its read loop and copies each piece it reads only
+/// where removing `d` works: the first time round alone, so of every input longer than its
+/// buffer of 64 bytes it prints the first 64 alone.
+const REMOVES_A_FOLDER_IN_ITS_LOOP: &str = r#"(module
+  (import "wasi_snapshot_preview1" "path_create_directory"
+    (func $mkdir (param i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "path_remove_directory"
+    (func $rmdir (param i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (data (i32.const 512) "d")
+  (func (export "_start")
+    (local $got i32)
+    (drop (call $mkdir (i32.const 3) (i32.const 512) (i32.const 1)))
+    (block $done
+      (loop $piece
+        (local.set $got
+          (call $fill (i32.const 0) (i32.const 1024) (i32.const 64) (i32.const -1)))
+        (br_if $done (i32.eqz (local.get $got)))
+        (if (i32.eqz (call $rmdir (i32.const 3) (i32.const 512) (i32.const 1)))
+          (then (drop (call $write_all (i32.const 1) (i32.const 1024) (local.get $got)))))
+        (br $piece)))
+    (call $exit (i32.const 0))))
+"#;
+
+/// What a time round the read loop does to the working folder, the next one finds there: a time
+/// round that removes a folder has changed the state the loop's head stands for, which a proof
+/// by induction can't take for the next time round's.
+#[test]
+fn a_time_round_that_changes_the_working_folder_is_a_change() {
+    let files = Policy {
+        standard_input: true,
+        files: true,
+        ..Policy::default()
+    };
+    let (_, runs) = step_runs(REMOVES_A_FOLDER_IN_ITS_LOOP, files);
+    let [run] = runs.as_slice() else {
+        panic!("{} runs", runs.len());
+    };
+    assert_eq!(run.world.end, Some(End::Looped));
+    let changes = run.changes();
+    assert_eq!(
+        changes.other.first().map(String::as_str),
+        Some("a time round the read loop changes the working folder"),
+        "{changes:?}"
+    );
+}
+
 /// cat-stream's copy, written a buffer-full at a time.
 const WRITES: &str = "(call $write_all (global.get $STDOUT) (global.get $buffer) (local.get $got))";
 
@@ -1332,6 +1381,38 @@ fn finds_the_bytes_a_read_before_the_read_loop_drops() {
     };
     let Some(Value::Str(text)) = found.get("text") else {
         panic!("a read before the loop: {found:?}");
+    };
+    assert!(text.len() > 64, "{} bytes", text.len());
+}
+
+/// The program that removes a folder in its read loop, which an induction blind to the working
+/// folder would prove for every length: proven by length, the bytes past its first buffer-full
+/// it drops are found. Its texts are of a byte or more, so the folder is always removed: after
+/// an empty one it stays, which the block doesn't allow.
+#[test]
+fn finds_the_bytes_a_folder_removed_in_the_read_loop_drops() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, _) = blocks_of("cat-stream");
+    let mut block = blocks[0].clone();
+    for (_, generator) in &mut block.vars {
+        if let Generator::Str { min, max, .. } = generator {
+            (*min, *max) = (1, 200);
+        }
+    }
+    let files = Policy {
+        standard_input: true,
+        files: true,
+        ..Policy::default()
+    };
+    let built = build(REMOVES_A_FOLDER_IN_ITS_LOOP).expect("it builds");
+    let verdict = prove_wasm(&built, files, &block, &stream_budget(900));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("a folder removed in the loop: {verdict:?}");
+    };
+    let Some(Value::Str(text)) = found.get("text") else {
+        panic!("a folder removed in the loop: {found:?}");
     };
     assert!(text.len() > 64, "{} bytes", text.len());
 }

@@ -248,7 +248,8 @@ pub struct Changes {
     pub vectors: BTreeSet<usize>,
     /// Mask registers.
     pub masks: BTreeSet<usize>,
-    /// What else differs, which no hook makes arbitrary: the calls under way, threads, files.
+    /// What else differs, which no hook makes arbitrary: the calls under way, threads, files and
+    /// the working folder.
     pub other: Vec<String>,
 }
 
@@ -419,14 +420,9 @@ impl State {
     }
 
     /// Where the run stands, as the world keeps it at the read loop's head: what its slots hold,
-    /// and how far it has read and written.
+    /// how far it has read and written, and what it has made of the working folder.
     fn arrival(&self) -> Arrival {
-        Arrival {
-            slots: self.core.registers.to_vec(),
-            stdout: self.world.stdout.len(),
-            stderr: self.world.stderr.len(),
-            stdin_read: self.world.stdin_read,
-        }
+        self.world.arrival(self.core.registers.to_vec())
     }
 
     /// What differs between where the run stood the first time at the head and where it stands
@@ -525,6 +521,11 @@ impl State {
             changes
                 .other
                 .push("a time round the read loop opens files or connections".into());
+        }
+        if world.folder_changed(at_head) {
+            changes
+                .other
+                .push("a time round the read loop changes the working folder".into());
         }
         if world.raw_reads {
             changes
