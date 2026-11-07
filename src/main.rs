@@ -17,11 +17,15 @@ const USAGE: &str = "usage: lengua-mcp [--data-dir <absolute path>] [--version]
        lengua-mcp [--data-dir <absolute path>] run <program folder> [--in <folder>] \
 [--env NAME=value]... [[--] <argument>...]
        lengua-mcp check <program folder>
+       lengua-mcp [--data-dir <absolute path>] doctor
        lengua-mcp link <main.s>
        lengua-mcp wasm <main.wat> [-o <main.wasm>]";
 
 /// The exit code of `lengua-mcp check` when the folder isn't attested.
 const NOT_ATTESTED: u8 = 1;
+
+/// The exit code of `lengua-mcp doctor` when it finds a problem.
+const PROBLEMS_FOUND: u8 = 1;
 
 /// The exit code when lengua won't run a program or can't start it, as `timeout` and `env` use:
 /// the program's own codes stay its own.
@@ -69,6 +73,7 @@ fn main() -> ExitCode {
         Ok(Command::Serve(data_dir)) => data_dir,
         Ok(Command::Run(data_dir, request)) => return run_from_shell(&data_dir, &request),
         Ok(Command::Check(path)) => return attest(&path),
+        Ok(Command::Doctor(data_dir)) => return doctor(data_dir.as_ref()),
         Ok(Command::Link(path)) => return link(&path),
         Ok(Command::Wasm(path, output)) => return wasm(&path, output),
         Ok(Command::Version) => {
@@ -133,6 +138,21 @@ fn attest(path: &str) -> ExitCode {
     }
 }
 
+/// Checks what lengua needs on this computer, with `data_dir` its data folder: prints one line
+/// for each thing it checks, a sentence under each problem saying what to do, and the verdict
+/// last, and exits 0 only when nothing is wrong.
+fn doctor(data_dir: Option<&DataDir>) -> ExitCode {
+    let report = lengua::doctor::doctor(data_dir);
+    for line in report.lines() {
+        println!("{line}");
+    }
+    if report.problems() == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(PROBLEMS_FOUND)
+    }
+}
+
 /// Prints the text a program is built from: main.s, and for one in the edge form lengua.s after
 /// it, so that it can be assembled outside lengua.
 fn link(path: &std::path::Path) -> ExitCode {
@@ -194,6 +214,7 @@ enum Command {
     Serve(DataDir),
     Run(DataDir, ShellRun),
     Check(String),
+    Doctor(Option<DataDir>),
     Link(PathBuf),
     Wasm(PathBuf, Option<PathBuf>),
     Version,
@@ -256,6 +277,12 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
                     return Err(format!("check takes one program folder, not {extra:?}"));
                 }
                 return Ok(Command::Check(path));
+            }
+            "doctor" => {
+                if let Some(extra) = args.next() {
+                    return Err(format!("doctor takes no more words, not {extra:?}"));
+                }
+                return Ok(Command::Doctor(data_dir.or_else(DataDir::from_env)));
             }
             "link" => {
                 let path = args.next().ok_or("link needs a main.s")?;
@@ -338,5 +365,16 @@ mod tests {
         ));
         assert!(parse_args(words(&["check"])).is_err());
         assert!(parse_args(words(&["check", "./add", "./sum"])).is_err());
+    }
+
+    /// `doctor` takes the data folder `--data-dir` names before it, and no more words.
+    #[test]
+    fn doctor_takes_the_data_folder_named_before_it() {
+        let folder = if cfg!(windows) { "C:\\data" } else { "/data" };
+        assert!(matches!(
+            parse_args(words(&["--data-dir", folder, "doctor"])),
+            Ok(Command::Doctor(Some(data_dir))) if data_dir.path() == std::path::Path::new(folder)
+        ));
+        assert!(parse_args(words(&["doctor", "now"])).is_err());
     }
 }

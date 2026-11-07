@@ -341,8 +341,9 @@ fn listed(names: &[&str]) -> String {
     }
 }
 
-/// How wide this CPU's vectors go, which Cranelift compiles WebAssembly's 128-bit SIMD to.
-fn simd_level(machine: &Machine) -> String {
+/// How wide this CPU's vectors go, which Cranelift compiles WebAssembly's 128-bit SIMD to; the
+/// `machine` line and `lengua-mcp doctor` both say it.
+pub(crate) fn simd_level(machine: &Machine) -> String {
     let cpu = machine.features;
     match machine.arch {
         "x86_64" => [

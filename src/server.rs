@@ -7,6 +7,9 @@ mod wat;
 
 pub use self::wat::{Attestation, attest};
 
+// How wide the CPU's vectors go, which `lengua-mcp doctor` says as the machine line does.
+pub(crate) use self::wat::simd_level;
+
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

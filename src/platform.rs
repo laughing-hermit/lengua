@@ -566,9 +566,69 @@ impl Machine {
     }
 }
 
+/// The CPU's model, as the system names it, read once: a process's CPU doesn't change, and on
+/// macOS and Windows reading it starts a program.
 fn cpu_model() -> Option<String> {
+    static MODEL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    MODEL.get_or_init(read_cpu_model).clone()
+}
+
+/// Linux names the CPU in /proc/cpuinfo.
+#[cfg(target_os = "linux")]
+fn read_cpu_model() -> Option<String> {
     let cpuinfo = std::fs::read_to_string("/proc/cpuinfo").ok()?;
     model_name_from_cpuinfo(&cpuinfo)
+}
+
+/// macOS names the CPU in sysctl's `machdep.cpu.brand_string`, such as `Apple M2 Pro`.
+#[cfg(target_os = "macos")]
+fn read_cpu_model() -> Option<String> {
+    let output = std::process::Command::new("/usr/sbin/sysctl")
+        .args(["-n", "machdep.cpu.brand_string"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let name = String::from_utf8(output.stdout).ok()?;
+    let name = name.trim();
+    (output.status.success() && !name.is_empty()).then(|| name.to_owned())
+}
+
+/// Windows names the CPU in its registry's `ProcessorNameString`, which `reg query` prints.
+#[cfg(windows)]
+fn read_cpu_model() -> Option<String> {
+    let output = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+            "/v",
+            "ProcessorNameString",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    processor_name_from_reg(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Another system's CPU goes unnamed.
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+const fn read_cpu_model() -> Option<String> {
+    None
+}
+
+/// The name `reg query … /v ProcessorNameString` prints after the value's type, on a line such as
+/// `    ProcessorNameString    REG_SZ    AMD EPYC 7763 64-Core Processor`.
+#[cfg(any(windows, test))]
+fn processor_name_from_reg(printed: &str) -> Option<String> {
+    printed.lines().find_map(|line| {
+        let (_, value) = line.split_once("REG_SZ")?;
+        let name = value.trim();
+        (!name.is_empty()).then(|| name.to_owned())
+    })
 }
 
 /// The CPU's model: its `model name`, which x86-64 Linux gives, or else, as on ARM64 Linux,
@@ -924,6 +984,22 @@ mod tests {
         assert_eq!(
             model_name_from_cpuinfo(arm).as_deref(),
             Some("CPU implementer 0x41, part 0xd0c")
+        );
+    }
+
+    /// Windows's registry names the CPU after the value's type, padded with spaces.
+    #[test]
+    fn reads_the_registry_s_processor_name() {
+        let printed = "\r\nHKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0\
+                       \r\n    ProcessorNameString    REG_SZ    Snapdragon 8cx Gen 3  \r\n\r\n";
+        assert_eq!(
+            processor_name_from_reg(printed).as_deref(),
+            Some("Snapdragon 8cx Gen 3")
+        );
+        assert_eq!(processor_name_from_reg("ERROR: not found\r\n"), None);
+        assert_eq!(
+            processor_name_from_reg("    ProcessorNameString    REG_SZ    \r\n"),
+            None
         );
     }
 
