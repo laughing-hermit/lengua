@@ -1222,6 +1222,15 @@ pub enum Room {
     Unsettled,
 }
 
+/// Which of the buffers a call borrows an access is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Buffer {
+    /// The one lent in this argument, counted from 0.
+    Argument(usize),
+    /// The one this iovec entry points to, counted from 0.
+    Iovec(usize),
+}
+
 /// An access to memory, or a buffer a call borrows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Access {
@@ -1237,8 +1246,8 @@ pub struct Access {
     pub room: Room,
     /// Whether it writes.
     pub written: bool,
-    /// For a call's borrow, the argument it's lent in.
-    pub argument: Option<usize>,
+    /// For a buffer a call borrows, which one it is.
+    pub buffer: Option<Buffer>,
 }
 
 /// One function as the checker followed it.
@@ -2524,7 +2533,12 @@ fn room_of(bytes: Bytes, arguments: &[Value]) -> Room {
             if range.bounded() {
                 Room::Bytes(range.high.saturating_mul(u64::from(entry)))
             } else {
-                Room::Unsettled
+                // As many entries as a count the rules don't bound: checked as much as the count
+                // was, as a length is.
+                Room::Length(Value::Number(Range {
+                    checked: range.checked,
+                    ..Range::full()
+                }))
             }
         }
         Bytes::Sized => Room::Unsettled,
@@ -2546,7 +2560,7 @@ fn accesses(
         };
         let operand = |position: usize| record.operands.get(position).cloned();
         let mut push =
-            |what: String, address: Option<Value>, room: Room, written: bool, argument| {
+            |what: String, address: Option<Value>, room: Room, written: bool, borrowed| {
                 if let Some(address) = address {
                     found.push(Access {
                         at,
@@ -2555,7 +2569,7 @@ fn accesses(
                         address,
                         room,
                         written,
-                        argument,
+                        buffer: borrowed,
                     });
                 }
             };
@@ -2618,7 +2632,7 @@ fn accesses(
                         operand(lend.argument),
                         room,
                         lend.written,
-                        Some(lend.argument),
+                        Some(Buffer::Argument(lend.argument)),
                     );
                 }
                 if let Some(entries) = &record.iovecs {
@@ -2628,7 +2642,7 @@ fn accesses(
                             Some(buffer.clone()),
                             Room::Length(length.clone()),
                             writes_iovec_buffers(callee),
-                            None,
+                            Some(Buffer::Iovec(entry)),
                         );
                     }
                 }
@@ -2643,7 +2657,7 @@ fn accesses(
                             operand(to_usize(*param)),
                             room,
                             borrow.written,
-                            Some(to_usize(*param)),
+                            Some(Buffer::Argument(to_usize(*param))),
                         );
                     }
                 }
@@ -2695,8 +2709,8 @@ fn summarize(function: &Function<'_>, accesses: &[Access], returns: Option<Value
     // A call that writes through one lent address while it reads another needs them apart.
     for written in accesses.iter().filter(|access| access.written) {
         for other in accesses {
-            let both_lent = written.argument.is_some() && other.argument.is_some();
-            if written.at != other.at || !both_lent || written.argument == other.argument {
+            let both_lent = written.buffer.is_some() && other.buffer.is_some();
+            if written.at != other.at || !both_lent || written.buffer == other.buffer {
                 continue;
             }
             for mine in parts(&written.address).iter().filter_map(lent) {
@@ -2890,6 +2904,10 @@ pub fn judge(module: &Module<'_>, function: &Function<'_>, access: &Access) -> V
                 verdicts.push(Verdict::Unsettled(format!(
                     "{what} is checked against a limit the rules don't follow"
                 )));
+            } else if offset.checked {
+                verdicts.push(Verdict::Unchecked(format!(
+                    "{what} is as long as a number nothing checks, so it may reach past {name}"
+                )));
             } else {
                 verdicts.push(Verdict::Unchecked(format!(
                     "{what} indexes {name} with {index}, which isn't bounds-checked first"
@@ -3003,8 +3021,15 @@ pub fn check(
     stack(module, flows, violations, facts);
 }
 
-/// M4: at each call, an argument the callee writes through names no part of a region another
-/// argument names.
+/// Two of a call's buffers, the lesser first, so a pair counts once whichever of the two is
+/// written.
+fn ordered(a: Option<Buffer>, b: Option<Buffer>) -> (Option<Buffer>, Option<Buffer>) {
+    if a <= b { (a, b) } else { (b, a) }
+}
+
+/// M4: at each call, a buffer the callee writes, lent in an argument or pointed to by an iovec,
+/// names no part of a region another buffer of the call names, the iovec array and the count
+/// included.
 fn exclusive_writes(
     module: &Module<'_>,
     function: &Function<'_>,
@@ -3018,17 +3043,19 @@ fn exclusive_writes(
         let Operator::Call { function_index } = op.operator else {
             continue;
         };
+        // Every buffer the call borrows: those its arguments lend, and those its iovecs point
+        // to.
         let borrowed: Vec<&Access> = followed
             .accesses
             .iter()
-            .filter(|access| access.at == at && access.argument.is_some())
+            .filter(|access| access.at == at && access.buffer.is_some())
             .collect();
         let callee = module.function(function_index);
         let shown = callee.map_or_else(String::new, Function::shown);
         let mut reported = BTreeSet::new();
         for written in borrowed.iter().filter(|access| access.written) {
             for other in &borrowed {
-                if written.argument == other.argument
+                if written.buffer == other.buffer
                     || !same_owner(&written.address, &other.address)
                 {
                     continue;
@@ -3039,19 +3066,13 @@ fn exclusive_writes(
                     }
                     _ => true,
                 };
-                let pair = (written.argument, other.argument);
-                if overlap && reported.insert(pair) {
-                    let (Some(first), Some(second)) = pair else {
-                        continue;
-                    };
+                if overlap && reported.insert(ordered(written.buffer, other.buffer)) {
                     violation(
                         Rule::ExclusiveWrites,
                         op.line,
                         format!(
-                            "{shown} writes through argument {} while argument {} may name the \
-                             same bytes",
-                            first + 1,
-                            second + 1
+                            "{} is written while {} may name the same bytes",
+                            written.what, other.what
                         ),
                         fix,
                     );
@@ -3072,9 +3093,11 @@ fn exclusive_writes(
             ) else {
                 continue;
             };
-            if same_owner(a, b)
-                && reported.insert((Some(to_usize(*first)), Some(to_usize(*second))))
-            {
+            let pair = ordered(
+                Some(Buffer::Argument(to_usize(*first))),
+                Some(Buffer::Argument(to_usize(*second))),
+            );
+            if same_owner(a, b) && reported.insert(pair) {
                 violation(
                     Rule::ExclusiveWrites,
                     op.line,
