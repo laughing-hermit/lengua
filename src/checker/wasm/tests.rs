@@ -1207,7 +1207,8 @@ fn secret_lines(report: &Report) -> Vec<usize> {
 
 /// The secret rule refuses each way a value computed from a secret can decide how the program
 /// runs, on its line: a branch, a loop's count, a `select`, an address, a length, a division, a
-/// float operator, a host call's argument, a buffer a host call reads, and `$fill`'s stop byte.
+/// float operator, a host call's argument, a buffer a host call reads, and `$fill`'s stop byte;
+/// and a call it can't follow.
 #[test]
 fn the_secret_rule_refuses_every_way_a_secret_decides_how_the_program_runs() {
     let refused = [
@@ -1278,6 +1279,11 @@ fn the_secret_rule_refuses_every_way_a_secret_decides_how_the_program_runs() {
             "(local.set $got (call $fill (global.get $STDIN) (global.get $text) (global.get \
              $text.size) (global.get $NEWLINE)))",
             "`$fill` reads a secret here up to its stop byte",
+        ),
+        // What the rule can't follow it refuses too, as rule 1 does recursion.
+        (
+            "(call $main)",
+            "the secret rule can't follow a call that leads back to its caller",
         ),
     ];
     for (code, needle) in refused {
