@@ -213,6 +213,7 @@ Runs, as they land:
 | W2 | 42304371890 (the suite natively on all five runners at f762aa2; macOS's one failure, a proof's time test that a fast machine finished early, is fixed at e9f4700) |
 | W3 | 42308171081 (the suite on all five runners at 5acdb65; its format patch is applied at e9f4700) |
 | W3b | 42317583638 (at 2fb46f1, the chain's tip: format, the suite on all five runners and the gate, green); main fast-forwarded to it |
+| W4 | 42327997413 (the runtime at 63af1eb: format, the suite on all five runners and the gate, green, with the 109 host cases and the limit tests passing the same on every runner); its security and correctness review's 15 findings fixed before it; main fast-forwarded to the same code |
 
 ## Superseded by the pivot
 
