@@ -264,7 +264,9 @@ pub enum Ended {
     Exit(u8),
     /// The engine would stop it at a trap: what, with main.wat's line where it has one.
     Trap(String),
-    /// The run ended another way, or the model couldn't follow it: why.
+    /// The model doesn't follow something the run does, such as a SIMD operator: what.
+    NotModelled(String),
+    /// The run ended another way, such as a wait that never comes: why.
     Other(String),
 }
 
@@ -355,7 +357,8 @@ pub fn run(module: &Module, given: &Given) -> Result<Ran, String> {
                 .ok_or("an exit code the model doesn't know")?,
         ),
         Some(End::Unsafe(problem)) => Ended::Trap(problem.clone()),
-        Some(End::Unsupported(why) | End::Stuck(why)) => Ended::Other(why.clone()),
+        Some(End::Unsupported(why)) => Ended::NotModelled(why.clone()),
+        Some(End::Stuck(why)) => Ended::Other(why.clone()),
         other => Ended::Other(format!("{other:?}")),
     };
     let mut names: BTreeSet<&String> = world.files_before().keys().collect();

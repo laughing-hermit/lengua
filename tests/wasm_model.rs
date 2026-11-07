@@ -303,8 +303,15 @@ fn programs() -> Vec<(PathBuf, PathBuf)> {
             else {
                 continue;
             };
-            let idea = assets.join(format!("{stem}-template-idea.md"));
-            if idea.is_file() {
+            // A template with a native twin keeps its own idea beside it, `-wat-idea.md`.
+            let idea = [
+                format!("{stem}-template-wat-idea.md"),
+                format!("{stem}-template-idea.md"),
+            ]
+            .into_iter()
+            .map(|name| assets.join(name))
+            .find(|idea| idea.is_file());
+            if let Some(idea) = idea {
                 found.push((idea, path));
             }
         }
@@ -490,8 +497,15 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
     );
     let pool = Pool::new(launcher(), None);
     let mut failures = Vec::new();
+    // What the model doesn't follow in a template, such as the vector template's SIMD, is listed
+    // here and not failed: the engine runs every template's tests in tests/wasm_templates.rs. A
+    // fixture's every test the model must follow.
+    let mut not_modelled = Vec::new();
     for (idea_path, wat_path) in &programs {
         let shown = wat_path.display().to_string();
+        let template = wat_path
+            .parent()
+            .is_some_and(|folder| folder.ends_with("assets"));
         let idea_text = std::fs::read_to_string(idea_path).expect("the idea reads");
         let wat = std::fs::read_to_string(wat_path).expect("the program reads");
         let idea = lengua::idea::parse(&idea_text)
@@ -523,6 +537,9 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
             let listens = idea.network.listens.is_some();
             match lengua::prove::agrees_wasm(&built, policy, &samples(&suite), listens, deadline) {
                 Ok(None) => {}
+                Ok(Some(lengua::prove::Verdict::NotProven(why))) if template => {
+                    not_modelled.push(format!("{shown}: {why}"));
+                }
                 other => failures.push(format!("{shown}: the model {other:?}")),
             }
             continue;
@@ -569,11 +586,20 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
                     continue;
                 }
             };
+            if let Ended::NotModelled(why) = &model.end
+                && template
+            {
+                not_modelled.push(format!("{shown}, {}: {why}", test.name));
+                continue;
+            }
             let found = differences(&engine, &model);
             if !found.is_empty() {
                 failures.push(format!("{shown}, {}: {}", test.name, found.join("; ")));
             }
         }
+    }
+    for line in &not_modelled {
+        lengua::skiplog::note(&format!("not modelled: {line}"));
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
