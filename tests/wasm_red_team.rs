@@ -420,6 +420,39 @@ const ATTEMPTS: &[Attempt] = &[
         refusal: Refusal::Rule(Rule::ExclusiveWrites, "may name the same bytes"),
     },
     Attempt {
+        name: "an unsafe block that runs on into the next function, over its unchecked index",
+        edits: &[
+            (
+                "    (local.get $status))\n",
+                "    ;; unsafe: the digits stay inside $out\n    (local.get $status))\n",
+            ),
+            (
+                "        (if (i32.ge_u (local.get $at) (global.get $out.size))\n          (then \
+                 (call $assert_fail (i32.const 6)) unreachable))\n",
+                "",
+            ),
+            (
+                "        (local.set $magnitude (i64.div_u (local.get $magnitude) (global.get \
+                 $TEN)))\n",
+                "        ;; end unsafe\n        (local.set $magnitude (i64.div_u (local.get \
+                 $magnitude) (global.get $TEN)))\n",
+            ),
+        ],
+        module: None,
+        refusal: Refusal::Rule(Rule::Indirection, "runs past the end of its function"),
+    },
+    Attempt {
+        name: "a bare descriptor kept in a local first",
+        edits: &[(
+            "        (br_if $write_failed\n          (call $write_all (global.get $STDERR) \
+             (global.get $usage)",
+            "        (local.set $err (i32.const 2))\n        (br_if $write_failed\n          \
+             (call $write_all (local.get $err) (global.get $usage)",
+        )],
+        module: None,
+        refusal: Refusal::Rule(Rule::Constants, "descriptor 2 is a bare number"),
+    },
+    Attempt {
         name: "lengua's addresses below 1024, through a plain number",
         edits: &[(
             "    (local.set $magnitude (local.get $value))\n",

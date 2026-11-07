@@ -658,6 +658,51 @@ fn rule_8_names_every_constant() {
         line_of(&falls, "(func $main"),
         "`_start` can reach its end",
     );
+    // -1 is a bound like any other number.
+    let minus_one = with(
+        "(i32.gt_u (local.get $size) (global.get $args.size))",
+        "(i32.gt_u (local.get $size) (i32.const -1))",
+    );
+    let report = check_text(&minus_one);
+    assert_violation(
+        &report,
+        Rule::Constants,
+        line_of(&minus_one, "(i32.const -1))"),
+        "the bound -1 is a bare number",
+    );
+    // An error number is named, as references/host.md names it.
+    let error = with(
+        "          (if (local.get $err)\n            (then (call $assert_fail (i32.const 2))",
+        "          (if (i32.eq (local.get $err) (i32.const 8))\n            (then (call \
+         $assert_fail (i32.const 2))",
+    );
+    let report = check_text(&error);
+    assert_violation(
+        &report,
+        Rule::Constants,
+        line_of(&error, "(if (i32.eq (local.get $err) (i32.const 8))"),
+        "the error number 8 is a bare number",
+    );
+    // So is a host call's mode, here the clock's.
+    let clock = with(
+        "  (memory (export \"memory\") 1 1)",
+        "  (import \"wasi_snapshot_preview1\" \"clock_time_get\"\n    (func $clock_time_get \
+         (param i32 i64 i32) (result i32)))\n  (memory (export \"memory\") 1 1)",
+    );
+    let clock = clock.replacen(
+        "          (local.set $n (i64.load (global.get $number)))\n",
+        "          (local.set $err (call $clock_time_get (i32.const 1) (i64.const 0) (global.get \
+         $number)))\n          (br_if $not_a_number (local.get $err))\n          (local.set $n \
+         (i64.load (global.get $number)))\n",
+        1,
+    );
+    let report = check_with(&clock, &["the clock"], "");
+    assert_violation(
+        &report,
+        Rule::Constants,
+        line_of(&clock, "(call $clock_time_get"),
+        "the mode 1 is a bare number",
+    );
 }
 
 #[test]

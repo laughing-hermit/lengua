@@ -80,12 +80,120 @@ fn produced<'o, 'a>(
     ops.get(producer)
 }
 
-/// The value of operand `operand` of the operator at `at`, when it's a bare constant.
+/// The most locals followed back to the bare number one was set from.
+const MAX_FOLLOWED: usize = 8;
+
+/// The write that gives local `local` its value at the operator `at`, on every path that
+/// reaches it: the nearest `local.set` or `local.tee` of it before `at`, with nothing between
+/// them but code that runs straight on and blocks skipped whole that don't write it. `None`
+/// when there is none, as at a loop's start, which its end comes back to.
+fn defined(ops: &[Op<'_>], shape: &Shape, at: usize, local: u32) -> Option<usize> {
+    let writes = |index: usize| {
+        matches!(
+            ops[index].operator,
+            Operator::LocalSet { local_index } | Operator::LocalTee { local_index }
+                if local_index == local
+        )
+    };
+    let mut index = at;
+    while index > 0 {
+        index -= 1;
+        match ops[index].operator {
+            _ if writes(index) => return Some(index),
+            // A block that ends before: skipped whole, when it doesn't write the local.
+            Operator::End => {
+                let opener = *shape.openers.get(&index)?;
+                if (opener..index).any(writes) {
+                    return None;
+                }
+                index = opener;
+            }
+            // The start of an `else`: control came from its `if`.
+            Operator::Else => index = *shape.openers.get(&index)?,
+            Operator::Loop { .. } => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The bare number the value the operator at `producer` gives is: an `i32.const` or an
+/// `i64.const`, itself or kept in locals set from one right before.
+fn literal_of(ops: &[Op<'_>], shape: &Shape, producer: usize) -> Option<i64> {
+    let mut producer = producer;
+    for _ in 0..MAX_FOLLOWED {
+        match ops.get(producer)?.operator {
+            Operator::I32Const { value } => return Some(i64::from(value)),
+            Operator::I64Const { value } => return Some(value),
+            Operator::LocalGet { local_index } => {
+                let set = defined(ops, shape, producer, local_index)?;
+                producer = shape.producers.get(set)?.first().copied().flatten()?;
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// The value of operand `operand` of the operator at `at`, when it's a bare constant, written
+/// there or kept in a local right before.
 fn bare(ops: &[Op<'_>], shape: &Shape, at: usize, operand: usize) -> Option<i64> {
-    match produced(ops, shape, at, operand)?.operator {
-        Operator::I32Const { value } => Some(i64::from(value)),
-        Operator::I64Const { value } => Some(value),
-        _ => None,
+    let producer = shape.producers.get(at)?.get(operand).copied().flatten()?;
+    literal_of(ops, shape, producer)
+}
+
+/// Whether a call of `callee` gives an error number: a host call's, lengua's `$fill` and
+/// `$write_all`, or main.wat's own function marked `;; returns: result`.
+fn gives_error(module: &Module<'_>, callee: &Function<'_>) -> bool {
+    match callee.kind {
+        Kind::Import | Kind::LibraryImport => callee.results == [ValType::I32],
+        Kind::Library => callee.is_library("fill") || callee.is_library("write_all"),
+        Kind::Own => returns_result(module, callee),
+    }
+}
+
+/// Whether operand `operand` of the operator at `at` of `function` is an error number: what a
+/// call that gives one gave, itself or kept in a local right before.
+fn error_number(
+    module: &Module<'_>,
+    function: &Function<'_>,
+    shape: &Shape,
+    at: usize,
+    operand: usize,
+) -> bool {
+    let ops = &function.body;
+    let mut producer = shape
+        .producers
+        .get(at)
+        .and_then(|taken| taken.get(operand).copied());
+    for _ in 0..MAX_FOLLOWED {
+        let Some(index) = producer.flatten() else {
+            return false;
+        };
+        match ops[index].operator {
+            Operator::Call { .. } => {
+                return callee_at(module, function, index)
+                    .is_some_and(|callee| gives_error(module, callee));
+            }
+            Operator::LocalGet { local_index } => {
+                producer = defined(ops, shape, index, local_index)
+                    .and_then(|set| shape.producers.get(set)?.first().copied());
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// The arguments of a host function that are modes or flags, which are named like the rest.
+fn modes(host: &str) -> &'static [usize] {
+    match host {
+        "path_open" => &[1, 4, 5, 6, 7],
+        "path_filestat_get" | "sock_accept" | "sock_shutdown" => &[1],
+        "fd_seek" => &[2],
+        "clock_res_get" | "clock_time_get" => &[0],
+        "sock_recv" | "sock_send" => &[3],
+        _ => &[],
     }
 }
 
@@ -346,12 +454,7 @@ impl Checker<'_, '_, '_> {
             let Some(callee) = callee_at(module, function, at) else {
                 continue;
             };
-            let gives_error = match callee.kind {
-                Kind::Import | Kind::LibraryImport => callee.results == [ValType::I32],
-                Kind::Library => callee.is_library("fill") || callee.is_library("write_all"),
-                Kind::Own => returns_result(module, callee),
-            };
-            if !gives_error {
+            if !gives_error(module, callee) {
                 continue;
             }
             // Its result is the caller's own, which the caller's callers test.
@@ -376,8 +479,8 @@ impl Checker<'_, '_, '_> {
         }
     }
 
-    /// Rule 8: exit statuses, descriptors, sizes and bounds are named constants, and a region's
-    /// size matches what it holds.
+    /// Rule 8: exit statuses, descriptors, modes, sizes, bounds and error numbers are named
+    /// constants, not bare numbers, nor bare numbers kept in a local right before.
     fn constants(&mut self, function: &Function<'_>, shape: &Shape) {
         let module = self.module;
         let ops = &function.body;
@@ -433,9 +536,25 @@ impl Checker<'_, '_, '_> {
                         );
                     }
                 }
+                let host = callee.host().map_or("", |host| host.name);
+                for mode in modes(host) {
+                    if let Some(value) = literal(at, *mode)
+                        && value != 0
+                    {
+                        self.violation(
+                            Rule::Constants,
+                            op.line,
+                            format!("the mode {value} is a bare number"),
+                            format!(
+                                "name it after what it means: `(global $… i32 (i32.const \
+                                 {value}))`"
+                            ),
+                        );
+                    }
+                }
                 continue;
             }
-            let unsigned = matches!(
+            let ordered = matches!(
                 op.operator,
                 Operator::I32LtU
                     | Operator::I32LeU
@@ -445,17 +564,27 @@ impl Checker<'_, '_, '_> {
                     | Operator::I64LeU
                     | Operator::I64GtU
                     | Operator::I64GeU
+                    | Operator::I32LtS
+                    | Operator::I32LeS
+                    | Operator::I32GtS
+                    | Operator::I32GeS
+                    | Operator::I64LtS
+                    | Operator::I64LeS
+                    | Operator::I64GtS
+                    | Operator::I64GeS
             );
-            if !unsigned {
-                continue;
-            }
+            let equality = matches!(
+                op.operator,
+                Operator::I32Eq | Operator::I32Ne | Operator::I64Eq | Operator::I64Ne
+            );
             for (local, other) in [(0, 1), (1, 0)] {
+                let Some(value) = literal(at, other) else {
+                    continue;
+                };
                 let reads_local = produced(ops, shape, at, local)
                     .is_some_and(|producer| matches!(producer.operator, Operator::LocalGet { .. }));
-                if let Some(value) = literal(at, other)
-                    && reads_local
-                    && value >= 2
-                {
+                // Only 0 and 1 may be bare in a bound: -1 is a number like any other.
+                if ordered && reads_local && !(0..=1).contains(&value) {
                     self.violation(
                         Rule::Constants,
                         op.line,
@@ -466,7 +595,31 @@ impl Checker<'_, '_, '_> {
                         ),
                     );
                 }
+                if equality && value != 0 && error_number(module, function, shape, at, local) {
+                    self.violation(
+                        Rule::Constants,
+                        op.line,
+                        format!("the error number {value} is a bare number"),
+                        format!(
+                            "name it as references/host.md does: `(global $… i32 (i32.const \
+                             {value}))`"
+                        ),
+                    );
+                }
             }
+        }
+        // What a function marked `;; returns: result` gives is a named error number too.
+        if returns_result(module, function)
+            && let Some(last) = ops.len().checked_sub(2)
+            && let Some(value) = literal_of(ops, shape, last)
+            && value != 0
+        {
+            self.violation(
+                Rule::Constants,
+                ops[last].line,
+                format!("{} gives the bare error number {value}", function.shown()),
+                format!("name it: `(global $ERROR_… i32 (i32.const {value}))`"),
+            );
         }
     }
 
@@ -602,12 +755,23 @@ impl Checker<'_, '_, '_> {
             let inside = ranges
                 .iter()
                 .any(|(first, last)| (*first..=*last).contains(&block.start));
+            // Another of main.wat's functions starts before the block ends.
+            let crosses = ranges
+                .iter()
+                .any(|(first, _)| block.start < *first && *first <= block.end);
             if !inside {
                 self.violation(
                     Rule::Indirection,
                     Some(block.start),
                     "`;; unsafe:` is outside a function",
                     "put unsafe blocks around accesses inside a function",
+                );
+            } else if crosses {
+                self.violation(
+                    Rule::Indirection,
+                    Some(block.start),
+                    "this `;; unsafe:` block runs past the end of its function, into another",
+                    "end the block with `;; end unsafe` inside the function it starts in",
                 );
             }
         }
