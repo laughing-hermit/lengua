@@ -2662,6 +2662,34 @@ pub fn prove(machine: &Machine, block: &Generated, budget: &Budget) -> Verdict {
     attempt(machine, block, budget).unwrap_or_else(Verdict::NotProven)
 }
 
+/// Proves `block` about the WebAssembly program `built`, whose idea lets it reach what `policy`
+/// allows, within `budget`, as [`prove`] proves a native program: the same shapes of the inputs,
+/// the same paths, solvers and checks of every run, on the WebAssembly model's runs, and the
+/// same verdicts. A trap the engine would stop at is a counterexample that names main.wat's
+/// line. Texts are proven up to a length, a [`Bound`]; every length is the prover's next step.
+#[must_use]
+pub fn prove_wasm(
+    built: &crate::wasm::Built,
+    policy: crate::wasm::Policy,
+    block: &Generated,
+    budget: &Budget,
+) -> Verdict {
+    attempt_wasm(built, policy, block, budget).unwrap_or_else(Verdict::NotProven)
+}
+
+fn attempt_wasm(
+    built: &crate::wasm::Built,
+    policy: crate::wasm::Policy,
+    block: &Generated,
+    budget: &Budget,
+) -> Result<Verdict, String> {
+    if block.uses_now() {
+        return Err(USES_NOW.into());
+    }
+    let module = wasm::Module::new(built, policy)?;
+    by_length(&module, block, budget, None)
+}
+
 fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verdict, String> {
     if block.uses_now() {
         return Err(USES_NOW.into());
