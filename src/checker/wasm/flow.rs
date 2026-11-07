@@ -507,9 +507,9 @@ impl Checker<'_, '_, '_> {
             return;
         };
         let line = ops[at].line;
-        let fix = "write a loop as: `(local.set $n (global.get $MAX_…))` right before `(loop $name  \
-                   ;; bound: N`, the body, then `(local.set $n (i32.sub (local.get $n) \
-                   (i32.const 1)))` and `(br_if $name (local.get $n))` as its last two \
+        let fix = "write a loop as: `(local.set $n (global.get $MAX_…))` right before \
+                   `(loop $name  ;; bound: N`, the body, then `(local.set $n (i32.sub (local.get \
+                   $n) (i32.const 1)))` and `(br_if $name (local.get $n))` as its last two \
                    instructions";
         let marker = line.and_then(|line| module.notes.marker(line, "bound:"));
         let Some(marker) = marker else {
@@ -808,6 +808,9 @@ fn closing(ops: &[super::model::Op<'_>], at: usize, end: usize) -> Option<(u32, 
     };
     let takes_one = matches!(operator(sub)?, Operator::I32Sub)
         && matches!(operator(sub + 1)?, Operator::I32Const { value: 1 })
-        && matches!(operator(sub + 2)?, Operator::LocalGet { local_index } if *local_index == counter);
+        && matches!(
+            operator(sub + 2)?,
+            Operator::LocalGet { local_index } if *local_index == counter
+        );
     takes_one.then_some((counter, decrement))
 }

@@ -276,9 +276,10 @@ impl Checker<'_, '_, '_> {
     ) -> usize {
         let module = self.module;
         let ops = &function.body;
-        let shape_fix = "write an assertion as `(call $assert_fail (i32.const N))` and `unreachable`, \
-                         with N from 1 to 899, in the `then` of an `if` whose condition is the \
-                         check, or right after a `br_if` that leaves when the check holds";
+        let shape_fix = "write an assertion as `(call $assert_fail (i32.const N))` and \
+                         `unreachable`, with N from 1 to 899, in the `then` of an `if` whose \
+                         condition is the check, or right after a `br_if` that leaves when the \
+                         check holds";
         let mut count = 0;
         for (at, op) in ops.iter().enumerate() {
             if !callee_at(module, function, at).is_some_and(is_assert_fail) {
@@ -416,7 +417,10 @@ impl Checker<'_, '_, '_> {
                 .own()
                 .filter(|function| {
                     function.body.iter().any(|op| {
-                        matches!(op.operator, Operator::GlobalGet { global_index } if global_index == region.global)
+                        matches!(
+                            op.operator,
+                            Operator::GlobalGet { global_index } if global_index == region.global
+                        )
                     })
                 })
                 .map(Function::shown)

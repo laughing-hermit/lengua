@@ -1092,8 +1092,9 @@ fn every_computer_computes_the_same_bits() {
 fn every_division_is_guarded() {
     let unguarded = with(
         "          (local.set $err (call $args_get (global.get $argv) (global.get $args)))\n",
-        "          (local.set $err (i32.div_u (global.get $args.size) (local.get $size)))\n          \
-         (local.set $err (call $args_get (global.get $argv) (global.get $args)))\n",
+        "          (local.set $err (i32.div_u (global.get $args.size) (local.get \
+         $size)))\n          (local.set $err (call $args_get (global.get $argv) (global.get \
+         $args)))\n",
     );
     let report = check_text(&unguarded);
     assert_violation(
