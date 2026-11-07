@@ -234,8 +234,8 @@ fn workload(name: &str) -> Option<Workload> {
                 "Sorts the lines of 64 MiB of standard input in byte order, as `LC_ALL=C sort` \
                  does. Each version sorts with its own language's sort: lengua's program finds \
                  the lines 16 bytes a step from a bitmask of the newlines and orders their 4-byte \
-                 starts with a bottom-up merge sort, the template's, comparing two lines 16 bytes \
-                 at a time with SIMD128, written by hand, and prints them through a 1 MiB buffer; \
+                 starts with a bottom-up merge sort that compares two lines 16 bytes at a time \
+                 with SIMD128, written by hand, and prints them through a 1 MiB buffer; \
                  C sorts with its C library's qsort (wasi-libc's in WebAssembly), C++ with \
                  std::sort and Rust with sort_unstable, each comparing lines with its library's \
                  memcmp or comparison of slices, and they print through a 64 KiB buffer.",
