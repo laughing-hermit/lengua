@@ -58,6 +58,11 @@ const SHUT_WRITE: u64 = 1;
 const EVERY_CUT: &str = "a read whose every count a proof takes, which the WebAssembly model \
                          follows from the prover's third step";
 
+/// How a run ends that waits on poll_oneoff for what doesn't come before a test's time limit
+/// stops it.
+pub(super) const NEVER_COMES: &str =
+    "it waits on poll_oneoff for what doesn't come in a test's time";
+
 /// What a name in the working folder is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Found {
@@ -1513,8 +1518,11 @@ impl Call<'_> {
     }
 
     /// `poll_oneoff(in, out, count, events)`: every subscription that's ready now, each as an
-    /// event; where none is, the clocks that come soonest. In a test a wait for times alone, a
-    /// sleep, ends at once.
+    /// event. In a test a wait for times alone, a sleep, ends at once; beside a descriptor, a
+    /// wait takes its time, as lengua's host waits in real time then, so where nothing is ready
+    /// the waits that come soonest come where that is within a test's time limit, and never
+    /// past it. A time on the test's clock that is still to come never does, as the clock's
+    /// readings don't move while the program waits.
     #[allow(clippy::too_many_lines)]
     fn poll_oneoff(&mut self, input: u64, output: u64, count: u64, out: u64) -> Result<(), Fail> {
         self.check(out, 4)?;
@@ -1549,8 +1557,12 @@ impl Call<'_> {
             .all(|(_, wanted)| matches!(wanted, Wanted::Clock { .. }));
         let policy = self.module.policy;
         let clocks = policy.clock || policy.terminal;
+        // A test's time limit, in nanoseconds: no wait ends past it.
+        let test_time = crate::runner::Limits::default().timeout;
+        let limit = u64::try_from(test_time.as_nanos()).unwrap_or(u64::MAX);
         let mut happened = Vec::new();
-        // The clocks that haven't come yet, with how long until they do.
+        // The waits that haven't come yet and will within a test's time, with how long until
+        // they do.
         let mut coming: Vec<(Term, u64)> = Vec::new();
         for (userdata, wanted) in &subscriptions {
             let userdata = *userdata;
@@ -1604,7 +1616,11 @@ impl Call<'_> {
                         if left == 0 {
                             Some(0)
                         } else {
-                            coming.push((userdata, left));
+                            // A wait comes once its time has passed, if that is before the
+                            // test's limit; a time on the test's clock never does.
+                            if !absolute && left < limit {
+                                coming.push((userdata, left));
+                            }
                             None
                         }
                     };
@@ -1620,12 +1636,11 @@ impl Call<'_> {
                 }
             }
         }
-        // Nothing yet: the soonest clocks come, as time passes at once in a test.
+        // Nothing yet: the soonest waits come, as their time passes, and where none will, the
+        // test's limit stops the run while it waits.
         if happened.is_empty() {
             let Some(soonest) = coming.iter().map(|(_, left)| *left).min() else {
-                return Err(Fail::End(End::Stuck(
-                    "it waits on poll_oneoff for what never comes".into(),
-                )));
+                return Err(Fail::End(End::Stuck(NEVER_COMES.into())));
             };
             for (userdata, left) in coming {
                 if left == soonest {

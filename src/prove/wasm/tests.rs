@@ -594,6 +594,60 @@ fn a_connection_reads_what_the_host_took_in_at_once() {
     assert_eq!(pool.constant(*code), Some(0));
 }
 
+/// Waits with poll_oneoff on the listener, which no client calls, and on the time of day's
+/// clock, for TIMEOUT nanoseconds, or till that reading where FLAGS is 1; then exits with the
+/// first event's own word: 2, the clock's.
+const WAITS: &str = r#"(module
+  (import "wasi_snapshot_preview1" "poll_oneoff"
+    (func $poll (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    ;; A read on descriptor 4, the listener, with the word 1.
+    (i64.store (i32.const 1280) (i64.const 1))
+    (i32.store8 (i32.const 1288) (i32.const 1))
+    (i32.store (i32.const 1296) (i32.const 4))
+    ;; The time of day's clock, with the word 2.
+    (i64.store (i32.const 1328) (i64.const 2))
+    (i32.store8 (i32.const 1336) (i32.const 0))
+    (i32.store (i32.const 1344) (i32.const 0))
+    (i64.store (i32.const 1352) (i64.const TIMEOUT))
+    (i32.store16 (i32.const 1368) (i32.const FLAGS))
+    (drop (call $poll (i32.const 1280) (i32.const 1216) (i32.const 2) (i32.const 1064)))
+    (call $exit (i32.wrap_i64 (i64.load (i32.const 1216))))))
+"#;
+
+/// A wait beside a descriptor takes its time, as lengua's host waits in real time then: beside
+/// the listener, which no client calls, a wait of a second comes, as does a time the test's
+/// clock, at a second, has passed; one of 5 seconds, past a test's time limit, never does, nor
+/// does a time on the test's clock that is still to come, as its readings don't move.
+#[test]
+fn a_wait_beside_a_descriptor_comes_only_within_a_tests_time() {
+    let serves = Policy {
+        clock: true,
+        listens: true,
+        ..Policy::default()
+    };
+    let given = Given {
+        clock: vec![(1, 0)],
+        listens: true,
+        ..Given::default()
+    };
+    let waits = [
+        ("1000000000", "0", Some(2)),
+        ("500000000", "1", Some(2)),
+        ("5000000000", "0", None),
+        ("2000000000", "1", None),
+    ];
+    for (timeout, flags, exit) in waits {
+        let text = WAITS.replace("TIMEOUT", timeout).replace("FLAGS", flags);
+        let done = ran(&text, serves, &given);
+        let never = Ended::Other(host::NEVER_COMES.to_owned());
+        let wanted = exit.map_or(never, Ended::Exit);
+        assert_eq!(done.end, wanted, "{timeout} {flags}");
+    }
+}
+
 /// An oracle for which every branch can go both ways.
 struct Anything;
 
