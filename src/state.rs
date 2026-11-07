@@ -86,7 +86,8 @@ impl std::fmt::Display for ProgramFolder {
 /// Hashes of a program folder's files and its lock's status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
-    /// SHA-256 of idea.md, when it exists.
+    /// lengua's hash of idea.md, which leaves its trust record out
+    /// ([`crate::trust::idea_hash`]), when it exists.
     pub idea: Option<Sha256Hex>,
     /// SHA-256 of main.s without lengua's line in it, when it exists.
     pub code: Option<Sha256Hex>,
@@ -118,7 +119,7 @@ impl Snapshot {
             Err(error) => Err(error),
         };
         Ok(Self {
-            idea: hash(IDEA_FILE, Sha256Hex::of)?,
+            idea: hash(IDEA_FILE, crate::trust::idea_hash)?,
             code: hash(CODE_FILE, crate::header::code_hash)?,
             lock: match lock::read(folder.path(), key) {
                 Ok(None) => LockStatus::Missing,
