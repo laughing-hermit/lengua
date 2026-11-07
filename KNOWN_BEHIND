@@ -1,0 +1,27 @@
+# KNOWN_BEHIND: the rows of the gate where lengua isn't ahead yet (todo.md's finish line, point 4;
+# src/gate.rs reads this file). A row is a runner, a workload, the version lengua is set against,
+# and a measure, each a name or * for every one, and what follows a # says why:
+#
+# - runners: linux-x86_64, linux-aarch64, macos-aarch64, windows-x86_64, windows-aarch64;
+# - workloads: empty, add, hypotenuse, upcase, upcase-stdin, shout, wc, histogram, crc32c, sort,
+#   tally, server, files, readings;
+# - versions: c-wasm, cpp-wasm and rust-wasm, compiled to WebAssembly and run the same way as
+#   lengua's program; c, cpp and rust, built natively with the runner's own compilers;
+# - measures: cpu, wall, memory, size.
+#
+# The list may only shrink. `cargo bench --bench against_rust_and_c` fails on a runner when it finds
+# lengua behind or undecided on a row the list doesn't name, or ahead on a row it names, and it
+# writes target/bench/KNOWN_BEHIND-<runner>.txt, the rows that would pass, into the run's
+# artifacts. A row the gate can't decide is undecided, never level, and stays here. The bench also
+# fails when a change to this file, anywhere in the history it measures, named a row the list
+# before the change didn't: lines may be taken out or made narrower, never added or widened,
+# except for a runner, a workload, a version or a measure the gate didn't have before.
+#
+# No runner has been measured yet, so every row of each is named. Each runner's first gate run
+# then fails wherever lengua is ahead, and its KNOWN_BEHIND-<runner>.txt takes that runner's line's
+# place here, with the rows where lengua isn't ahead, each with what the run found.
+linux-x86_64 * * *  # not measured yet
+linux-aarch64 * * *  # not measured yet
+macos-aarch64 * * *  # not measured yet
+windows-x86_64 * * *  # not measured yet
+windows-aarch64 * * *  # not measured yet

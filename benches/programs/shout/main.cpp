@@ -2,7 +2,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
-#include <unistd.h>
+
+#include "../io.h"
 
 namespace {
 constexpr std::size_t limit = 1048576;
@@ -10,9 +11,10 @@ std::array<unsigned char, limit + 1> buffer;
 }  // namespace
 
 int main() {
+    bench_binary();
     std::size_t length = 0;
     for (;;) {
-        ssize_t got = read(0, buffer.data() + length, buffer.size() - length);
+        bench_ssize got = bench_read(0, buffer.data() + length, buffer.size() - length);
         if (got < 0) {
             return 2;
         }
@@ -29,12 +31,5 @@ int main() {
                    [](unsigned char c) -> unsigned char {
                        return c >= 'a' && c <= 'z' ? c - ('a' - 'A') : c;
                    });
-    for (std::size_t done = 0; done < length;) {
-        ssize_t wrote = write(1, buffer.data() + done, length - done);
-        if (wrote <= 0) {
-            return 2;
-        }
-        done += static_cast<std::size_t>(wrote);
-    }
-    return 0;
+    return bench_write_all(1, buffer.data(), length) == 0 ? 0 : 2;
 }

@@ -7,6 +7,8 @@
 #   llvm     LLVM 22, for lengua's assembler and linker: apt.llvm.org on Linux, conda-forge's build
 #            (installed with micromamba, pinned in tools.tsv) on macOS and Windows
 #   solvers  z3 and cvc5, pinned by SHA-256 in tools.tsv
+#   wasi     wasi-sdk, pinned in tools.tsv, in ~/wasi-sdk (WASI_SDK names it), and Rust's
+#            wasm32-wasip1 target: what bench-wasm.sh compiles the benchmark's programs with
 set -euo pipefail
 
 RUST_VERSION="1.99.1"
@@ -145,6 +147,27 @@ solvers() {
   add_to_path "$dest/bin"
   z3 --version
   cvc5 --version | head -1
+}
+
+# After the rust step: the wasm32-wasip1 target goes into its toolchain.
+wasi() {
+  dest="$HOME/wasi-sdk"
+  if [ ! -x "$dest/bin/clang" ]; then
+    row="$(awk -F'\t' -v g="$target" '$1 == "wasi-sdk" && $2 == g { print $3 " " $4 }' "$here/tools.tsv")"
+    [ -n "$row" ] || { echo "tools.tsv has no wasi-sdk for $target" >&2; exit 1; }
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    curl -sSfL -o "$HOME/wasi-sdk.tar.gz" "${row%% *}"
+    check_sha "$HOME/wasi-sdk.tar.gz" "${row##* }"
+    tar -xzf "$HOME/wasi-sdk.tar.gz" -C "$dest" --strip-components=1
+    rm "$HOME/wasi-sdk.tar.gz"
+  fi
+  export WASI_SDK="$dest"
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    echo "WASI_SDK=$dest" >> "$GITHUB_ENV"
+  fi
+  "$dest/bin/clang" --version | head -1
+  rustup target add wasm32-wasip1
 }
 
 for step in "$@"; do

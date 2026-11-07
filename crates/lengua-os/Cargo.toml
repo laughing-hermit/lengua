@@ -19,6 +19,12 @@ missing_docs = "warn"
 [lints.clippy]
 unwrap_used = "warn"
 
-# The Unix calls that need unsafe code (the nix crate is empty elsewhere).
+# The Unix calls that need unsafe code (the nix crate is empty elsewhere): on Linux, the fork
+# lengua-spawn starts a program with, its wait and its counts.
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", default-features = false, features = ["signal"] }
+nix = { version = "0.31", default-features = false, features = ["process", "resource", "signal"] }
+
+# Windows's counters of a process: its times and its peak working set. The version the lock
+# already holds for the rest of the workspace.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }

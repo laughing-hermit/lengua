@@ -22,12 +22,14 @@ pub mod expect;
 pub mod expr;
 #[cfg(test)]
 mod fuzz;
+pub mod gate;
 pub mod graph;
 pub mod hash;
 pub mod header;
 pub mod idea;
 pub mod isa;
 pub mod lock;
+pub mod measure;
 pub mod names;
 mod os;
 pub mod platform;

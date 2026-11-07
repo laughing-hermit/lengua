@@ -1,6 +1,7 @@
 //! `lengua-mcp`: the lengua MCP server, speaking MCP over stdio; `lengua-mcp run`, which runs a
-//! checked program from a shell; and `lengua-mcp check`, which attests a WebAssembly program's
-//! folder on any computer, as its idea's attester.
+//! checked program from a shell; `lengua-mcp check`, which attests a WebAssembly program's folder
+//! on any computer, as its idea's attester; and `lengua-mcp measure`, which runs a program in a
+//! process of its own and prints what it cost.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -19,7 +20,11 @@ const USAGE: &str = "usage: lengua-mcp [--data-dir <absolute path>] [--version]
        lengua-mcp check <program folder>
        lengua-mcp [--data-dir <absolute path>] doctor
        lengua-mcp link <main.s>
-       lengua-mcp wasm <main.wat> [-o <main.wasm>]";
+       lengua-mcp wasm <main.wat> [-o <main.wasm>]
+       lengua-mcp [--data-dir <absolute path>] measure [--in <folder>] [--stdin <file>] \
+[--stdout <file>] [--stderr <file>] [--env NAME=value]... [--uses <words>] [--network <line>] \
+[--serve <port> [--clients <n>] [--requests <n>]] [--counters] <program folder, module.wasm or \
+executable> [[--] <argument>...]";
 
 /// The exit code of `lengua-mcp check` when the folder isn't attested.
 const NOT_ATTESTED: u8 = 1;
@@ -46,6 +51,20 @@ fn main() -> ExitCode {
     {
         raw.next();
         return lengua::wasm::worker::main(raw);
+    }
+    // Module mode, hidden: a child of `measure` that runs one WebAssembly module of another
+    // toolchain in lengua's host, its run given as JSON.
+    if raw
+        .peek()
+        .is_some_and(|arg| arg == lengua::measure::MODULE_FLAG)
+    {
+        raw.next();
+        let spec = raw
+            .next()
+            .and_then(|spec| spec.into_string().ok())
+            .unwrap_or_default();
+        let code = lengua::measure::run_module(&spec);
+        return ExitCode::from(u8::try_from(code).unwrap_or(REFUSED));
     }
 
     // stdout carries the MCP protocol, so all logging goes to stderr.
@@ -76,6 +95,7 @@ fn main() -> ExitCode {
         Ok(Command::Doctor(data_dir)) => return doctor(data_dir.as_ref()),
         Ok(Command::Link(path)) => return link(&path),
         Ok(Command::Wasm(path, output)) => return wasm(&path, output),
+        Ok(Command::Measure(data_dir, request)) => return measure(data_dir.as_ref(), &request),
         Ok(Command::Version) => {
             println!("lengua-mcp {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
@@ -192,6 +212,24 @@ fn wasm(path: &std::path::Path, output: Option<PathBuf>) -> ExitCode {
     }
 }
 
+/// Runs a program once in a process of its own and prints what it cost, one line of JSON: a
+/// main.wat folder as `run` runs it, a module in lengua's host, or an executable.
+fn measure(data_dir: Option<&DataDir>, request: &lengua::measure::Request) -> ExitCode {
+    let printed = lengua::measure::measure(data_dir, request).and_then(|measures| {
+        serde_json::to_string(&measures).map_err(|error| format!("the measures: {error}"))
+    });
+    match printed {
+        Ok(line) => {
+            println!("{line}");
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("lengua-mcp: {message}");
+            ExitCode::from(REFUSED)
+        }
+    }
+}
+
 async fn serve(data_dir: DataDir) -> ExitCode {
     let server = LenguaServer::new(data_dir);
     let running = match server.serve(stdio()).await {
@@ -217,6 +255,7 @@ enum Command {
     Doctor(Option<DataDir>),
     Link(PathBuf),
     Wasm(PathBuf, Option<PathBuf>),
+    Measure(Option<DataDir>, Box<lengua::measure::Request>),
     Version,
 }
 
@@ -305,6 +344,13 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
                     }
                 }
                 return Ok(Command::Wasm(PathBuf::from(path), output));
+            }
+            "measure" => {
+                let request = lengua::measure::Request::parse(args)?;
+                return Ok(Command::Measure(
+                    data_dir.or_else(DataDir::from_env),
+                    Box::new(request),
+                ));
             }
             "--data-dir" => {
                 let value = args.next().ok_or("--data-dir needs a path")?;

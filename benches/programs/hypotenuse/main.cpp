@@ -5,6 +5,8 @@
 #include <optional>
 #include <string_view>
 
+#include "../io.h"
+
 namespace {
 // A side in thousandths: digits, then optionally a point and one to three digits; nullopt
 // with the exit code for a side that isn't a number (2) or is out of range (3).
@@ -42,6 +44,7 @@ int parse(std::string_view text, long long& units) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    bench_binary();
     if (argc != 3) {
         std::fputs("usage: hypotenuse <a> <b>\n", stderr);
         return 1;

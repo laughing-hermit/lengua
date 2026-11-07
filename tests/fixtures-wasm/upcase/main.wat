@@ -2,9 +2,9 @@
 ;; twin of examples/upcase, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
 ;; lengua's library gives $fill and $write_all. It copies each file's name from its argument to a
 ;; region of its own, so each path starts where its region does; it reads the whole input file
-;; with $fill, capitalizes it a byte at a time, as stream-template.wat does, where the native twin
-;; takes 16 bytes at a time with SSE2, and writes it to the output file, which it makes or empties
-;; first.
+;; with $fill, capitalizes it 16 bytes at a time with 128-bit vectors, as vector-template.wat does
+;; and as the native twin does with SSE2, the last bytes one at a time, and writes it to the output
+;; file, which it makes or empties first.
 (module
   (import "wasi_snapshot_preview1" "args_sizes_get"
     (func $args_sizes_get (param i32 i32) (result i32)))
@@ -41,6 +41,11 @@
   (global $NAME_MAX i32 (i32.const 1023))
   (global $NAME_SCAN i32 (i32.const 1024))
   (global $MAX_INPUT i32 (i32.const 1048576))
+  ;; The input's steps of 16 bytes, where the last of them starts, and the bytes after them.
+  (global $CHUNK i32 (i32.const 16))
+  (global $CHUNKS i32 (i32.const 65536))
+  (global $LAST_CHUNK i32 (i32.const 1048560))
+  (global $TAIL_MAX i32 (i32.const 15))
   ;; Characters: a to z are the 26 bytes from 97, and each capital is 32 below its letter.
   (global $SMALL_A i32 (i32.const 97))
   (global $LETTERS i32 (i32.const 26))
@@ -243,31 +248,57 @@
       (br_if $done (local.get $err)))
     (local.get $err))
 
-  ;; Capitalizes the $len bytes at $at, which main lends it: a to z become A to Z, and the other
-  ;; bytes stay as they are, those that aren't ASCII too. Each byte's change is arithmetic, not a
-  ;; branch.
+  ;; Capitalizes the $len bytes at $at, at most MAX_INPUT, which main lends it: 16 bytes at a time
+  ;; while 16 are left, then the rest one at a time. a to z become A to Z, and the other bytes stay
+  ;; as they are, those that aren't ASCII too. Each byte's change is arithmetic, not a branch.
   (func $shout (param $at i32) (param $len i32)
     (local $i i32)
     (local $c i32)
     (local $left i32)
+    (local $chunk v128)
+    (local $small_a v128)
+    (local $letters v128)
+    (local $case_bit v128)
     (if (i32.gt_u (local.get $len) (global.get $MAX_INPUT))
       (then (call $assert_fail (i32.const 13)) unreachable))
+    ;; The constants spread over every lane, once, before the loop.
+    (local.set $small_a (i8x16.splat (global.get $SMALL_A)))
+    (local.set $letters (i8x16.splat (global.get $LETTERS)))
+    (local.set $case_bit (i8x16.splat (global.get $CASE_BIT)))
+    (block $tail
+      (local.set $left (global.get $CHUNKS))
+      (loop $chunks  ;; bound: 65536
+        (br_if $tail (i32.gt_u (i32.add (local.get $i) (global.get $CHUNK)) (local.get $len)))
+        ;; 16 bytes are left, so the vector starts at LAST_CHUNK or before.
+        (if (i32.gt_u (local.get $i) (global.get $LAST_CHUNK))
+          (then (call $assert_fail (i32.const 16)) unreachable))
+        (local.set $chunk (v128.load (i32.add (local.get $at) (local.get $i))))
+        ;; A lane of all ones where the byte is a to z: below `a` wraps to a large number, so one
+        ;; unsigned compare finds them. Masked to the case bit, it is what comes off each lane.
+        (v128.store (i32.add (local.get $at) (local.get $i))
+          (i8x16.sub (local.get $chunk)
+            (v128.and (local.get $case_bit)
+              (i8x16.lt_u (i8x16.sub (local.get $chunk) (local.get $small_a))
+                (local.get $letters)))))
+        (local.set $i (i32.add (local.get $i) (global.get $CHUNK)))
+        (local.set $left (i32.sub (local.get $left) (i32.const 1)))
+        (br_if $chunks (local.get $left))))
+    ;; The scalar tail: fewer than 16 bytes are left, one at a time, with the same change in
+    ;; arithmetic: the test's 1 times the case bit is what comes off.
     (block $done
-      (local.set $left (global.get $MAX_INPUT))
-      (loop $byte  ;; bound: 1048576
+      (local.set $left (global.get $TAIL_MAX))
+      (loop $bytes  ;; bound: 15
         (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
         (if (i32.ge_u (local.get $i) (global.get $MAX_INPUT))
           (then (call $assert_fail (i32.const 14)) unreachable))
         (local.set $c (i32.load8_u (i32.add (local.get $at) (local.get $i))))
-        ;; Below `a` wraps to a large number, so one unsigned test finds a to z, and the test's 1
-        ;; times the case bit is what comes off.
         (i32.store8 (i32.add (local.get $at) (local.get $i))
           (i32.sub (local.get $c)
             (i32.mul (global.get $CASE_BIT)
               (i32.lt_u (i32.sub (local.get $c) (global.get $SMALL_A)) (global.get $LETTERS)))))
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
         (local.set $left (i32.sub (local.get $left) (i32.const 1)))
-        (br_if $byte (local.get $left)))))
+        (br_if $bytes (local.get $left)))))
 
   ;; Writes the $length bytes of $input_name to standard error. Gives 0, or an error number.
   (func $say_input (param $length i32) (result i32)  ;; returns: result

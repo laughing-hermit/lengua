@@ -3,6 +3,8 @@
 #include <math.h>
 #include <stdio.h>
 
+#include "../io.h"
+
 /* A side in thousandths: digits, then optionally a point and one to three digits. Returns 0,
    or the exit code for a side that isn't a number (2) or is out of range (3). */
 static int parse(const char *text, long long *units) {
@@ -38,6 +40,7 @@ static int parse(const char *text, long long *units) {
 
 int main(int argc, char **argv) {
     long long a, b;
+    bench_binary();
     if (argc != 3) {
         fputs("usage: hypotenuse <a> <b>\n", stderr);
         return 1;

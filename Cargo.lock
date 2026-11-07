@@ -1292,6 +1292,7 @@ name = "lengua-os"
 version = "0.2.0"
 dependencies = [
  "nix",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

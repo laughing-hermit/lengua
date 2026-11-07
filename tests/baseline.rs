@@ -769,7 +769,8 @@ fn the_baseline_lists_are_held_to_the_programs() {
 }
 
 /// Every variant under benches/programs is listed apart, and every listed one is there: a variant
-/// can't be added to the benchmark and escape the baseline.
+/// can't be added to the benchmark and escape the baseline. A workload is a folder there; a file
+/// beside them, such as io.h, which the C and C++ versions include, is none.
 #[test]
 fn every_benchmark_variant_is_listed_for_the_baseline() {
     let mut listed: Vec<String> = Vec::new();
@@ -784,6 +785,9 @@ fn every_benchmark_variant_is_listed_for_the_baseline() {
     listed.sort();
     let mut found = Vec::new();
     for folder in names("benches/programs") {
+        if !root().join(format!("benches/programs/{folder}")).is_dir() {
+            continue;
+        }
         for file in names(&format!("benches/programs/{folder}")) {
             if file.ends_with(".s") {
                 found.push(format!("benches/programs/{folder}/{file}"));

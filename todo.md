@@ -87,7 +87,7 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 | 1. AI language, Agent Plugin | The native plugin: `write-idea`, `compile`, `check`, `run`, `idea.md` and `main.s`, the `Builds on` graph | W1 (idea files), W3 (the graph), W6 (Attested Computation), W9 (the skills) |
 | 2. One product everywhere | Two native Linux targets pass the one suite (run 42178888801) | W2, then W4 to W9 on all five runners |
 | 3. Tailored | CPU tiers for x86-64 and ARM64 | W4 (the engine), W10 (caches), W12 |
-| 4. Competitive | Native programs measured, none gated | W12 (the gate) |
+| 4. Competitive | The gate built (W12): `lengua-mcp measure`, 14 workloads with lengua's programs and C, C++ and Rust in WebAssembly and native, the Mann-Whitney U looks, KNOWN_BEHIND's ratchet, the bench on all five runners and weekly; no runner has run it yet | The gate's first run on each runner, KNOWN_BEHIND from it, and the speed work it shows |
 | 5. Safe and proven | Native rules, proofs and Linux sandbox | W5, W8, W10, W13 |
 | 6. Truthful documents | Describe the native lengua | W15 |
 | 7. Shippable | Native archives for two Linux targets | W14 |
@@ -174,6 +174,39 @@ Each can be reversed.
 - **The performance finish line** compares lengua with C, C++ and Rust compiled to WebAssembly
   (built once, on Linux, and shared) and run the same way, process against process, and publishes
   the gaps against their native builds (point 4).
+- **The gate's looks** (W12): a row's runs grow until both of its tests decide, so the gate looks
+  at 20, 40, 80, 160, 320, 640, 1,280 and 2,000 runs of each version, and each look decides at
+  p < 0.00125, the 1% split over the eight looks (Bonferroni's bound): a row looked at again and
+  again is still decided wrongly with a chance below 1%. A row also stops at ten minutes; one the
+  looks don't decide is undecided, and KNOWN_BEHIND must name it.
+- **What the gate runs** (W12): lengua's program through `lengua-mcp run`, with every check it
+  makes on each run (the lock, its signature, main.wat built again); C, C++ and Rust's modules in
+  lengua's host through `lengua-mcp measure`, with the same engine and the same cache of compiled
+  modules, the policy from the words of lengua's program's idea, and memory that may grow to
+  4 GiB, as lengua's host holds a module to the maximum it declares. The native builds use each
+  system's own compilers: GCC on Linux, Apple's clang on macOS, LLVM's clang on Windows, rustc
+  everywhere, each for this CPU with link-time optimization, falling back to a CPU flag every
+  runner of its kind has where the compiler doesn't take `native`.
+- **KNOWN_BEHIND's first state** (W12) names every row of each runner, as none is measured yet.
+  Each runner's first gate run fails wherever lengua is ahead, and its KNOWN_BEHIND-<target>.txt
+  (in the run's artifacts) takes the place of that runner's line, naming only the rows where
+  lengua isn't ahead.
+- **KNOWN_BEHIND only shrinks** (W12): the bench holds each change to the list in the history it
+  measures to the list before it, and fails where a change named a row the list before it didn't
+  (a runner, workload, version or measure new to the gate excepted), so a bench leg checks out
+  the whole history.
+- **Peak memory on Linux** (W12): Linux begins a process's count of its peak at what the process
+  it was started from held, so `measure` starts each program from lengua-spawn, a small process
+  beside lengua-mcp that forks it and counts it; without lengua-spawn, a peak no higher than
+  lengua-mcp's own is left out, undecided.
+- **Size against native builds** (W12): lengua's size on those rows is its module's and the
+  lengua-mcp executable's that runs it; against the other modules, the module's alone.
+- **The other versions' forms** (W12): C, C++ and Rust use their own libraries' sorts and plain
+  loops their compilers vectorize, with no SIMD by hand, where lengua's programs use SIMD128 by
+  hand; each workload's description in the report says so. Their programs carry no handicap the
+  others don't: C stores every byte, as C++ and Rust do; wc counts in byte counters in all three;
+  C++'s tally uses C's table; Rust writes large outputs straight to its descriptor, as C does.
+  The gate's test corrects for continuity by half of U's step between runs of tied values.
 - **Secrets**: an idea line `- Secret:` names data that must not reach a branch, a `select`, an
   address, a length, a loop's count, division or floating point (point 5), checked first in the
   WebAssembly and then in the machine code the engine makes, with the native lengua's decoders.
