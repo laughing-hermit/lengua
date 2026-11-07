@@ -36,8 +36,8 @@
   (global $TEXT_MAX i32 (i32.const 1048576))
   ;; The most words a text holds, each a byte and the whitespace after it, and one more.
   (global $MAX_WORDS i32 (i32.const 524289))
-  ;; A word's entry, 8 bytes: its count, its start in the input and its length, 21 bits each,
-  ;; the count highest, so adding ONE_MORE counts it once more.
+  ;; A word's entry, 8 bytes: its length in the lowest 21 bits, its start in the input in the
+  ;; next 21 and its count in the top 22, so adding ONE_MORE counts it once more.
   (global $ENTRY_SHIFT i32 (i32.const 3))
   (global $FIELD_BITS i64 (i64.const 21))
   (global $FIELD_MASK i64 (i64.const 2097151))
