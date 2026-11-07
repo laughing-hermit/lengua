@@ -785,7 +785,7 @@ fn every_benchmark_variant_is_listed_for_the_baseline() {
     listed.sort();
     let mut found = Vec::new();
     for folder in names("benches/programs") {
-        if !root().join("benches/programs").join(&folder).is_dir() {
+        if !root().join(format!("benches/programs/{folder}")).is_dir() {
             continue;
         }
         for file in names(&format!("benches/programs/{folder}")) {
