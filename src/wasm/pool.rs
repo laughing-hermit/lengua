@@ -484,7 +484,7 @@ impl Running {
             Ok(Ok(Err(error))) => (
                 lost(
                     self.id,
-                    Ending::Trapped(Trap::Other, None),
+                    Ending::Trapped(Trap::Other, Vec::new()),
                     format!(
                         "lengua's WebAssembly worker stopped while it ran the program: {error}"
                     ),
@@ -494,7 +494,7 @@ impl Running {
             Ok(Err(_)) => (
                 lost(
                     self.id,
-                    Ending::Trapped(Trap::Other, None),
+                    Ending::Trapped(Trap::Other, Vec::new()),
                     "lengua's WebAssembly worker stopped while it ran the program".to_owned(),
                 ),
                 None,

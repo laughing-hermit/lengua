@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use super::*;
-use crate::runner::Trap;
+use crate::runner::{End, Trap};
 use crate::wasm::engine::{self, Setup};
 use crate::wasm::job::Ending;
 use crate::wasm::runner::{self, Executed};
@@ -88,10 +88,22 @@ fn kept(output: &stdio::Output) -> Vec<u8> {
 
 /// The code a run exited with.
 fn exited(executed: &Executed) -> i32 {
-    match executed.ending {
-        Ending::Exited(code) => code,
+    match &executed.ending {
+        Ending::Exited(code) => *code,
         other => panic!("it didn't exit: {other:?} {:?}", executed.problem),
     }
+}
+
+/// Runs the module `text` given `world`, as [`run`] does, and says how it went as the runner
+/// does, with a trap on main.wat's line.
+fn run_placed(text: &str, world: World) -> crate::runner::Run {
+    let built = crate::wasm::text::build(text).unwrap_or_else(|problem| panic!("{problem}"));
+    let executed = run(text, world);
+    runner::run_of(
+        runner::done(0, executed, Vec::new()),
+        (Ok(BTreeMap::new()), std::collections::BTreeSet::new()),
+        |offset| built.line_at(offset),
+    )
 }
 
 /// A folder holding `files`, a name ending in `/` for a folder, as a program's working folder.
@@ -372,11 +384,40 @@ fn poll_oneoff_ends_a_tests_sleep_at_once() {
 fn a_trap_names_its_kind_and_its_place() {
     let text = module(&[], r#"(func (export "_start") (unreachable))"#);
     let executed = run(&text, world(Policy::default()));
-    assert!(
-        matches!(executed.ending, Ending::Trapped(Trap::Unreachable, Some(_))),
-        "{:?}",
-        executed.ending
-    );
+    let Ending::Trapped(Trap::Unreachable, offsets) = &executed.ending else {
+        panic!("{:?}", executed.ending);
+    };
+    assert!(!offsets.is_empty());
+}
+
+#[test]
+fn a_trap_and_a_host_calls_stop_are_placed_on_main_wat_s_lines() {
+    // An `unreachable` on line 5, in a function after another.
+    let unreachable = "(module
+  (memory (export \"memory\") 1)
+  (func $first (nop))
+  (func (export \"_start\")
+    (unreachable)))";
+    let ran = run_placed(unreachable, world(Policy::default()));
+    assert_eq!(ran.end, End::Trapped(Trap::Unreachable, Some(5)));
+    // A buffer outside the memory, given to the host on line 7: the call's line.
+    let outside = "(module
+  (import \"wasi_snapshot_preview1\" \"fd_write\"
+    (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (memory (export \"memory\") 1)
+  (func (export \"_start\")
+    (i32.store (i32.const 0) (i32.const 70000))
+    (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))))";
+    let ran = run_placed(outside, world(Policy::default()));
+    assert_eq!(ran.end, End::Trapped(Trap::OutOfBounds, Some(7)));
+    // The same buffer given to lengua's library, which stops in its own code: the line of
+    // main.wat's call of it, line 4.
+    let library = "(module
+  (memory (export \"memory\") 1)
+  (func (export \"_start\")
+    (drop (call $write_all (i32.const 1) (i32.const 70000) (i32.const 2)))))";
+    let ran = run_placed(library, world(Policy::default()));
+    assert_eq!(ran.end, End::Trapped(Trap::OutOfBounds, Some(4)));
 }
 
 #[test]

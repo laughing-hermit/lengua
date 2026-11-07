@@ -130,7 +130,7 @@ pub struct Job {
 }
 
 /// How a job's program ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Ending {
     /// It exited with this code.
     Exited(i32),
@@ -140,8 +140,10 @@ pub enum Ending {
     OutputTooLarge,
     /// lengua stopped it.
     Stopped,
-    /// It trapped, at this offset of its module when the engine knows it.
-    Trapped(Trap, Option<u64>),
+    /// It trapped, at these offsets of its module, as far as the engine knows them: each frame's,
+    /// the innermost first. The first in main.wat's own code is its place, so a trap in lengua's
+    /// library is placed at the call of it main.wat made.
+    Trapped(Trap, Vec<u64>),
     /// It never started: the job's `problem` says why.
     Unstarted,
 }
