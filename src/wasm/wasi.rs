@@ -19,7 +19,8 @@ pub const MODULE: &str = "wasi_snapshot_preview1";
 pub mod errno {
     /// No error.
     pub const SUCCESS: u16 = 0;
-    /// A name the program may not use, such as a link or a way out of its folder.
+    /// A name the program may not use: a link, what is neither a file nor a folder, or one the
+    /// system refuses it.
     pub const ACCES: u16 = 2;
     /// Nothing to do yet.
     pub const AGAIN: u16 = 6;
@@ -59,7 +60,7 @@ pub mod errno {
     pub const PIPE: u16 = 64;
     /// A seek on something that has no places.
     pub const SPIPE: u16 = 70;
-    /// What the program's idea doesn't allow.
+    /// What the program's idea doesn't allow, such as a way out of its working folder.
     pub const NOTCAPABLE: u16 = 76;
 }
 

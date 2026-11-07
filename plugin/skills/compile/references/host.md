@@ -28,7 +28,8 @@ import (rule 3 of [the WebAssembly dialect](power-of-10-webassembly.md)).
 
 A descriptor not in use gives `BADF`. A program never opens a connection or a listener itself:
 lengua makes what the idea names before the program starts, so a program reaches only those.
-Files are names inside the working folder; a name that would leave it gives `NOTCAPABLE`.
+Files are names inside the working folder; a name that would leave it, with `..` or from `/`,
+gives `NOTCAPABLE`, and a link, which no name may lead through, gives `ACCES`.
 
 ## What a call borrows
 
