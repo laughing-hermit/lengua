@@ -83,11 +83,7 @@ async fn template(pool: &Pool, code: &str, idea_file: &str) -> Result<usize, Str
     .await
     .map_err(|error| format!("its tests couldn't run: {error}"))?;
     if !outcome.passed() {
-        return Err(format!(
-            "{} of its test runs failed: {}",
-            outcome.failures.len(),
-            outcome.failures.join("; ")
-        ));
+        return Err(format!("its tests failed: {}", outcome.failures.join("; ")));
     }
     if outcome.runs == 0 {
         return Err(format!("{idea_file} gave it no test to run"));
