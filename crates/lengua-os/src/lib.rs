@@ -220,17 +220,23 @@ mod tests {
         assert!(processor_caches(&[0, 0, 0, 0, 0, 0, 0, 0]).is_empty());
     }
 
-    /// Windows describes this computer's L1 data cache.
+    /// Windows describes this computer's caches: on x86-64, where Windows always describes them,
+    /// an L1 data cache; on ARM64 the call answers, with what it describes.
     #[cfg(windows)]
     #[test]
     fn windows_describes_its_caches() {
-        let caches = super::caches().expect("Windows describes its caches");
-        assert!(
-            caches
-                .iter()
-                .any(|cache| cache.level == 1 && cache.kind == 2 && cache.bytes > 0),
-            "{caches:?}"
-        );
+        let described = super::caches();
+        if cfg!(target_arch = "x86_64") {
+            let caches = described.expect("Windows describes its caches");
+            assert!(
+                caches
+                    .iter()
+                    .any(|cache| cache.level == 1 && cache.kind == 2 && cache.bytes > 0),
+                "{caches:?}"
+            );
+        } else if let Ok(caches) = described {
+            assert!(caches.iter().all(|cache| cache.level > 0), "{caches:?}");
+        }
     }
 
     /// A process that has asked to ignore SIGXFSZ survives raising it, which ends it by default.
