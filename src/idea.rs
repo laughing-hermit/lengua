@@ -1,14 +1,24 @@
 //! `idea.md`: a program's source of truth, written in Open Knowledge Format (OKF) markdown.
 //!
-//! The file starts with YAML frontmatter (`type: lengua/program-idea`, `title` and
-//! `description`), followed by markdown sections: `# Purpose`, `# Behaviors` with one
-//! `## B<n>: <title>` heading per behavior written as Given/When/Then steps, each followed by its
-//! generated tests under a `###` heading, and `# Constraints`, which names what the program uses:
-//! `- Uses:`, `- Network:` and `- Threads:` lines. Nothing in it is particular to one computer.
+//! The file starts with YAML frontmatter (`type`, `title` and `description`), followed by
+//! markdown sections: `# Purpose`, `# Behaviors` with one `## B<n>: <title>` heading per behavior
+//! written as Given/When/Then steps, each followed by its generated tests under a `###` heading,
+//! and `# Constraints`, which names what the program uses: `- Uses:`, `- Network:` and
+//! `- Threads:` lines. Nothing in it is particular to one computer.
+//!
+//! An idea that lengua compiles to WebAssembly is an OKF Attested Computation (OKF v0.2 §10):
+//! `type: Attested Computation`, with `runtime: webassembly`, `computation: main.wat`, the
+//! `parameters` a run fills (each with lengua's key `from`, where its value comes from), lengua's
+//! `run` as its `executor` and lengua's `check` as its `attester`. An idea compiled to main.s is
+//! `type: lengua/program-idea` and has none of those keys. OKF's other keys, and any key lengua
+//! doesn't know, are kept and never refused.
 
 use std::fmt;
 
 use serde::Deserialize;
+use serde_json::Value;
+
+use crate::trust::Block;
 
 /// The OKF `type` that every lengua idea declares.
 pub const IDEA_TYPE: &str = "lengua/program-idea";
@@ -16,6 +26,25 @@ pub const IDEA_TYPE: &str = "lengua/program-idea";
 /// The `type` lengua's ideas declared when the file was called `spec.md`: still read, so a renamed
 /// file works as it was.
 pub const LEGACY_IDEA_TYPE: &str = "lengua/program-spec";
+
+/// The OKF `type` of an idea that lengua compiles to WebAssembly (OKF v0.2 §10), its name
+/// exactly as OKF writes it.
+pub const ATTESTED_TYPE: &str = "Attested Computation";
+
+/// An Attested Computation's `runtime`: lengua runs the computation as WebAssembly.
+pub const RUNTIME: &str = "webassembly";
+
+/// The `resource` of an Attested Computation's `executor`: lengua's `run`.
+pub const EXECUTOR: &str = "lengua run";
+
+/// The `resource` of an Attested Computation's `attester`: lengua's `check`.
+pub const ATTESTER: &str = "lengua check";
+
+/// The keys only an Attested Computation has, which an idea compiled to main.s is refused for.
+const ATTESTED_KEYS: [&str; 4] = ["runtime", "computation", "executor", "attester"];
+
+/// A parameter as an Attested Computation writes it, for the problems to show.
+const PARAMETER: &str = "{ name: a, type: integer, required: true, from: argument 1 }";
 
 /// The exit code reserved for failed assertions.
 pub const ASSERTION_EXIT_CODE: u8 = 134;
@@ -53,6 +82,144 @@ pub struct Idea {
     /// The plain markdown links in its text, outside code and its `- Builds on:` line: with its
     /// parts, the graph's edges where they lead to other ideas.
     pub links: Vec<Link>,
+    /// What its frontmatter says as an Attested Computation, the form of an idea that lengua
+    /// compiles to WebAssembly; `None` for an idea compiled to main.s.
+    pub attested: Option<Attested>,
+}
+
+/// What an Attested Computation's frontmatter says beyond a native idea's (OKF v0.2 §10): how
+/// lengua runs the computation, `main.wat`, and what a run returns for its check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attested {
+    /// `runtime`: `webassembly`, which says what the parameters mean.
+    pub runtime: String,
+    /// `computation`: `main.wat`, the code file beside idea.md.
+    pub computation: String,
+    /// `parameters`: the typed, named holes a run fills, in order.
+    pub parameters: Vec<Parameter>,
+    /// `executor.receipt`: what each run returns for the attester to check, in order.
+    pub receipt: Vec<Receipt>,
+}
+
+/// One of an Attested Computation's parameters: `{ name: a, type: integer, required: true, from:
+/// argument 1 }`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Parameter {
+    /// Its `name`: a lowercase letter, then lowercase letters, digits and `_`.
+    pub name: String,
+    /// Its `type`.
+    pub kind: ParameterType,
+    /// Whether each run must give it: its `required`, true when the idea leaves it out.
+    pub required: bool,
+    /// Where its value comes from: lengua's key `from`.
+    pub from: Source,
+    /// The line it starts on.
+    pub line: usize,
+}
+
+/// The type of a parameter's value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParameterType {
+    /// A whole number.
+    Integer,
+    /// A number written in decimal, which may have a fraction.
+    Decimal,
+    /// Text.
+    Text,
+    /// Bytes of any value.
+    Bytes,
+}
+
+impl ParameterType {
+    /// Every type, in the order the problems list them.
+    pub const ALL: [Self; 4] = [Self::Integer, Self::Decimal, Self::Text, Self::Bytes];
+
+    /// The name an idea gives it: `integer`, `decimal`, `text` or `bytes`.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Integer => "integer",
+            Self::Decimal => "decimal",
+            Self::Text => "text",
+            Self::Bytes => "bytes",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.name() == name)
+    }
+}
+
+/// Where a parameter's value comes from, as its `from` says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Source {
+    /// The program's argument at this place, from 1: `argument 1`.
+    Argument(usize),
+    /// Standard input: `standard input`.
+    StandardInput,
+    /// The environment variable of this name: `environment HOME`.
+    Environment(String),
+    /// The file of this name, by its path in the working folder: `file input.txt`.
+    File(String),
+}
+
+impl Source {
+    /// The words of `from` that name it: `argument 1`, `standard input`, `environment HOME` or
+    /// `file input.txt`.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Argument(place) => format!("argument {place}"),
+            Self::StandardInput => "standard input".to_owned(),
+            Self::Environment(name) => format!("environment {name}"),
+            Self::File(name) => format!("file {name}"),
+        }
+    }
+
+    /// What the idea's `- Uses:` line must name for the program to read it, when anything: an
+    /// argument needs nothing.
+    #[must_use]
+    pub fn uses(&self) -> Option<Use> {
+        match self {
+            Self::Argument(_) => None,
+            Self::StandardInput => Some(Use::StandardInput),
+            Self::Environment(_) => Some(Use::Environment),
+            Self::File(_) => Some(Use::Files),
+        }
+    }
+}
+
+/// A part of what lengua's `run` returns, which an executor's `receipt` lists for the attester.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Receipt {
+    /// What the program wrote to standard output.
+    Stdout,
+    /// What it wrote to standard error.
+    Stderr,
+    /// Its exit code.
+    Exit,
+    /// The files it left in its working folder.
+    Files,
+}
+
+impl Receipt {
+    /// Every part, in the order the problems list them.
+    pub const ALL: [Self; 4] = [Self::Stdout, Self::Stderr, Self::Exit, Self::Files];
+
+    /// The name a receipt gives it: `stdout`, `stderr`, `exit` or `files`.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+            Self::Exit => "exit",
+            Self::Files => "files",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|part| part.name() == name)
+    }
 }
 
 /// A plain markdown link in an idea's text: `[sort lines](../sort/idea.md)`.
@@ -739,21 +906,23 @@ pub fn parse(text: &str) -> Result<Idea, Vec<Problem>> {
         );
         return Err(parser.into_problems());
     };
-    let header = parser.frontmatter(&lines[1..end].join("\n"));
+    let blocks = crate::trust::blocks(&lines, 1, end);
+    let keys = Keys {
+        lines: &lines,
+        blocks: &blocks,
+    };
+    let header = parser.frontmatter(&keys, end);
     // An idea travels to every computer: its words name none, unless one is its subject.
     let subject = header
         .as_ref()
         .map(|(title, _)| title.to_lowercase())
         .unwrap_or_default();
-    if let Some((index, line)) = lines[1..end]
-        .iter()
-        .enumerate()
-        .find(|(_, line)| line.trim_start().starts_with("description:"))
-    {
-        parser.portable(index + 2, line, &subject);
+    if let Some(block) = keys.block("description") {
+        let number = block.start + 1;
+        parser.portable(number, lines[block.start], &subject);
         // The description is prose, in STE as the rest of the idea is.
         if let Some((_, Some(description))) = &header {
-            parser.prose.text(index + 2, description);
+            parser.prose.text(number, description);
         }
     }
     // An open code block: the line it starts on, its language, and its lines so far.
@@ -802,12 +971,104 @@ fn frontmatter_end(lines: &[&str]) -> Option<usize> {
         .map(|position| position + 1)
 }
 
-#[derive(Debug, Deserialize)]
+/// The frontmatter's keys that lengua reads. An Attested Computation's are read as any YAML, so
+/// that a problem can say what each holds instead of only that the YAML doesn't fit.
+#[derive(Debug, Default, Deserialize)]
 struct Frontmatter {
     #[serde(rename = "type")]
     kind: Option<String>,
     title: Option<String>,
     description: Option<String>,
+    runtime: Option<Value>,
+    computation: Option<Value>,
+    parameters: Option<Value>,
+    executor: Option<Value>,
+    attester: Option<Value>,
+    status: Option<Value>,
+}
+
+/// The idea's lines and its frontmatter's top-level keys, which put each problem with the
+/// frontmatter on its line.
+struct Keys<'a> {
+    /// The idea's lines.
+    lines: &'a [&'a str],
+    /// The frontmatter's top-level keys, each with its lines.
+    blocks: &'a [Block],
+}
+
+impl Keys<'_> {
+    /// The top-level key `key`, when the frontmatter has it.
+    fn block(&self, key: &str) -> Option<&Block> {
+        self.blocks.iter().find(|block| block.key == key)
+    }
+
+    /// The line the top-level key `key` is on.
+    fn line(&self, key: &str) -> Option<usize> {
+        self.block(key).map(|block| block.start + 1)
+    }
+
+    /// The line `key` starts on inside the value of the top-level key `parent`, or else
+    /// `parent`'s own line.
+    fn nested(&self, parent: &str, key: &str) -> Option<usize> {
+        let block = self.block(parent)?;
+        let at = crate::trust::key_line(self.lines, block.start + 1, block.end, key)
+            .unwrap_or(block.start);
+        Some(at + 1)
+    }
+
+    /// The lines of each entry of the list that the top-level key `key` holds, when it's written
+    /// an entry a line or more: each one's first line, and one past its last.
+    fn entries(&self, key: &str) -> Vec<(usize, usize)> {
+        self.block(key)
+            .map(|block| crate::trust::entries(self.lines, block.start + 1, block.end))
+            .unwrap_or_default()
+    }
+
+    /// The line `key` starts on in the lines `span` of an entry, or else `line`, the entry's.
+    fn within(&self, span: Option<(usize, usize)>, key: &str, line: usize) -> usize {
+        span.and_then(|(start, end)| crate::trust::key_line(self.lines, start, end, key))
+            .map_or(line, |at| at + 1)
+    }
+}
+
+/// A YAML scalar's text: a string, a number or a boolean. `None` for no value, a list or a
+/// mapping.
+fn scalar_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+/// A YAML value as a problem shows it: a scalar's text, or a list or a mapping as JSON writes it.
+fn shown(value: &Value) -> String {
+    scalar_text(value).unwrap_or_else(|| value.to_string())
+}
+
+/// Whether `name` can be the environment variable a parameter's value comes from: capitals,
+/// digits and `_`.
+fn variable_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+/// Why `name` can't be the file a parameter's value comes from, when it can't: it must name a
+/// file in the program's working folder, by a path there that every system takes.
+fn file_problem(name: &str) -> Option<String> {
+    if name.split('/').all(|part| part.is_empty() || part == ".") {
+        return Some("it names no file".to_owned());
+    }
+    if name.starts_with('/') {
+        return Some("a path from the root leaves the working folder".to_owned());
+    }
+    if name.split('/').any(|part| part == "..") {
+        return Some("`..` leaves the working folder".to_owned());
+    }
+    crate::names::broken(name.as_bytes()).map(|broken| broken.why)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -859,6 +1120,11 @@ struct Parser {
     purpose_values: Vec<String>,
     /// What STE's checks find in the idea's prose, reported after every other problem.
     prose: crate::ste::Prose,
+    /// The frontmatter of an Attested Computation, as far as it reads.
+    attested: Option<Attested>,
+    /// Each parameter's source that reads, with the parameter as a problem names it and its line,
+    /// whether or not the rest of the parameter reads.
+    sources: Vec<(String, Source, usize)>,
 }
 
 impl Default for Parser {
@@ -880,6 +1146,8 @@ impl Default for Parser {
             purpose_written: false,
             purpose_values: Vec::new(),
             prose: crate::ste::Prose::default(),
+            attested: None,
+            sources: Vec::new(),
         }
     }
 }
@@ -981,16 +1249,18 @@ impl Parser {
         self.problems
     }
 
-    /// Returns the title and description when the frontmatter is valid.
-    fn frontmatter(&mut self, yaml: &str) -> Option<(String, Option<String>)> {
+    /// Returns the title and description when the frontmatter is valid. `end` is the line of its
+    /// closing `---`, from 0.
+    fn frontmatter(&mut self, keys: &Keys, end: usize) -> Option<(String, Option<String>)> {
+        let yaml = keys.lines[1..end].join("\n");
+        // Only `true` and `false` are booleans, so a parameter may be called `n` or `y`.
         let parsed = if yaml.trim().is_empty() {
-            Ok(Frontmatter {
-                kind: None,
-                title: None,
-                description: None,
-            })
+            Ok(Frontmatter::default())
         } else {
-            serde_saphyr::from_str::<Frontmatter>(yaml)
+            serde_saphyr::from_str_with_options::<Frontmatter>(
+                &yaml,
+                serde_saphyr::options! { strict_booleans: true },
+            )
         };
         let frontmatter = match parsed {
             Ok(frontmatter) => frontmatter,
@@ -1004,21 +1274,28 @@ impl Parser {
                 return None;
             }
         };
-        match frontmatter.kind.as_deref() {
-            Some(IDEA_TYPE | LEGACY_IDEA_TYPE) => {}
+        let kind = frontmatter.kind.as_deref();
+        match kind {
+            Some(ATTESTED_TYPE | IDEA_TYPE | LEGACY_IDEA_TYPE) => {}
             Some(other) => self.problem(
-                Some(1),
+                keys.line("type").or(Some(1)),
                 format!(
-                    "the frontmatter says `type: {other}`; lengua ideas use `type: {IDEA_TYPE}`"
+                    "the frontmatter says `type: {other}`; a lengua idea is `type: \
+                     {ATTESTED_TYPE}`, which lengua compiles to main.wat, or `type: {IDEA_TYPE}`, \
+                     compiled to main.s"
                 ),
             ),
             None => self.problem(
                 Some(1),
-                format!("the frontmatter has no `type`; add `type: {IDEA_TYPE}`"),
+                format!(
+                    "the frontmatter has no `type`; add `type: {ATTESTED_TYPE}` for an idea that \
+                     lengua compiles to main.wat, or `type: {IDEA_TYPE}` for one compiled to main.s"
+                ),
             ),
         }
         let title = frontmatter
             .title
+            .as_deref()
             .map(|title| title.trim().to_owned())
             .filter(|title| !title.is_empty());
         if title.is_none() {
@@ -1029,6 +1306,7 @@ impl Parser {
         }
         let description = frontmatter
             .description
+            .as_deref()
             .map(|description| description.trim().to_owned())
             .filter(|description| !description.is_empty());
         if description.is_none() {
@@ -1040,7 +1318,542 @@ impl Parser {
                  with",
             );
         }
+        match kind {
+            Some(ATTESTED_TYPE) => self.attested_keys(keys, &frontmatter),
+            Some(kind @ (IDEA_TYPE | LEGACY_IDEA_TYPE)) => self.native_keys(keys, kind),
+            _ => {}
+        }
         title.map(|title| (title, description))
+    }
+
+    /// An idea compiled to main.s has none of an Attested Computation's own keys.
+    fn native_keys(&mut self, keys: &Keys, kind: &str) {
+        for key in ATTESTED_KEYS {
+            if let Some(line) = keys.line(key) {
+                self.problem(
+                    Some(line),
+                    format!(
+                        "`{key}` is a key of an Attested Computation, and this idea is `type: \
+                         {kind}`: write `type: {ATTESTED_TYPE}` to compile it to main.wat, or \
+                         remove `{key}`"
+                    ),
+                );
+            }
+        }
+    }
+
+    /// An Attested Computation's own keys: `runtime`, `computation`, `executor` and `attester`,
+    /// which it must have, and `parameters` and `status`, which it may.
+    fn attested_keys(&mut self, keys: &Keys, front: &Frontmatter) {
+        self.exact(
+            keys,
+            ("runtime", RUNTIME),
+            front.runtime.as_ref(),
+            "lengua runs an Attested Computation as WebAssembly",
+        );
+        self.exact(
+            keys,
+            ("computation", crate::state::WASM_CODE_FILE),
+            front.computation.as_ref(),
+            "the computation is main.wat, the code file beside idea.md",
+        );
+        let receipt = self.executor(keys, front.executor.as_ref());
+        self.attester(keys, front.attester.as_ref());
+        let parameters = self.parameters(keys, front.parameters.as_ref());
+        self.status(keys, front.status.as_ref());
+        self.attested = Some(Attested {
+            runtime: RUNTIME.to_owned(),
+            computation: crate::state::WASM_CODE_FILE.to_owned(),
+            parameters,
+            receipt,
+        });
+    }
+
+    /// A key, `(key, expected)`, that an Attested Computation must give just one value, for the
+    /// reason `why`.
+    fn exact(
+        &mut self,
+        keys: &Keys,
+        (key, expected): (&str, &str),
+        value: Option<&Value>,
+        why: &str,
+    ) {
+        let fix = format!("{key}: {expected}");
+        match value {
+            None => self.missing(keys, key, &fix, why),
+            Some(value) if scalar_text(value).as_deref() == Some(expected) => {}
+            Some(value) => self.problem(
+                keys.line(key),
+                format!(
+                    "the frontmatter says `{key}: {}`; {why}, so write `{fix}`",
+                    shown(value)
+                ),
+            ),
+        }
+    }
+
+    /// A key that an Attested Computation must have, with no value: on the frontmatter's first
+    /// line when it's missing, or on its own when it's empty.
+    fn missing(&mut self, keys: &Keys, key: &str, fix: &str, why: &str) {
+        match keys.line(key) {
+            Some(line) => self.problem(
+                Some(line),
+                format!("`{key}` is empty; {why}, so write `{fix}`"),
+            ),
+            None => self.problem(
+                Some(1),
+                format!("the frontmatter has no `{key}`; {why}, so add `{fix}`"),
+            ),
+        }
+    }
+
+    /// `executor`: lengua's `run`, and the receipt each run returns, which it returns.
+    fn executor(&mut self, keys: &Keys, value: Option<&Value>) -> Vec<Receipt> {
+        const FIX: &str = "executor: { resource: lengua run, receipt: [stdout, stderr, exit] }";
+        const WHY: &str = "lengua's `run` runs the computation and returns a receipt";
+        let Some(value) = value else {
+            self.missing(keys, "executor", FIX, WHY);
+            return Vec::new();
+        };
+        let Some(map) = value.as_object() else {
+            self.problem(
+                keys.line("executor"),
+                format!(
+                    "the frontmatter says `executor: {}`; {WHY}, so write `{FIX}`",
+                    shown(value)
+                ),
+            );
+            return Vec::new();
+        };
+        self.resource(
+            keys,
+            ("executor", EXECUTOR),
+            map.get("resource"),
+            "lengua's `run` runs the computation",
+        );
+        self.receipt(keys, map.get("receipt"))
+    }
+
+    /// `executor.receipt`: what each run returns for the attester, from stdout, stderr, exit and
+    /// files, each once.
+    fn receipt(&mut self, keys: &Keys, value: Option<&Value>) -> Vec<Receipt> {
+        let line = keys.nested("executor", "receipt");
+        let names = "stdout, stderr, exit and files";
+        let usage = format!(
+            "it lists what each run returns for the attester to check, from {names}: write \
+             `receipt: [stdout, stderr, exit]`"
+        );
+        let items = match value.filter(|value| !value.is_null()) {
+            None => {
+                self.problem(line, format!("`executor` has no `receipt`; {usage}"));
+                return Vec::new();
+            }
+            Some(value) => match value.as_array() {
+                Some(items) if !items.is_empty() => items,
+                _ => {
+                    self.problem(
+                        line,
+                        format!("`executor` says `receipt: {}`; {usage}", shown(value)),
+                    );
+                    return Vec::new();
+                }
+            },
+        };
+        let mut receipt = Vec::new();
+        for item in items {
+            match scalar_text(item).as_deref().and_then(Receipt::from_name) {
+                Some(part) if receipt.contains(&part) => self.problem(
+                    line,
+                    format!("`receipt` names `{}` twice; keep it once", part.name()),
+                ),
+                Some(part) => receipt.push(part),
+                None => self.problem(
+                    line,
+                    format!(
+                        "`receipt` names `{}`, which lengua's `run` doesn't return: use {names}",
+                        shown(item)
+                    ),
+                ),
+            }
+        }
+        receipt
+    }
+
+    /// `attester`: lengua's `check`.
+    fn attester(&mut self, keys: &Keys, value: Option<&Value>) {
+        const FIX: &str = "attester: { resource: lengua check }";
+        const WHY: &str = "lengua's `check` checks each run";
+        let Some(value) = value else {
+            self.missing(keys, "attester", FIX, WHY);
+            return;
+        };
+        match value.as_object() {
+            Some(map) => self.resource(keys, ("attester", ATTESTER), map.get("resource"), WHY),
+            None => self.problem(
+                keys.line("attester"),
+                format!(
+                    "the frontmatter says `attester: {}`; {WHY}, so write `{FIX}`",
+                    shown(value)
+                ),
+            ),
+        }
+    }
+
+    /// The `resource` of `(parent, expected)`, an executor or an attester, which must be
+    /// lengua's, for the reason `why`.
+    fn resource(
+        &mut self,
+        keys: &Keys,
+        (parent, expected): (&str, &str),
+        value: Option<&Value>,
+        why: &str,
+    ) {
+        let line = keys.nested(parent, "resource");
+        match value.filter(|value| !value.is_null()) {
+            Some(value) if scalar_text(value).as_deref() == Some(expected) => {}
+            Some(value) => self.problem(
+                line,
+                format!(
+                    "`{parent}` says `resource: {}`; {why}, so write `resource: {expected}`",
+                    shown(value)
+                ),
+            ),
+            None => self.problem(
+                line,
+                format!("`{parent}` has no `resource`; {why}, so add `resource: {expected}`"),
+            ),
+        }
+    }
+
+    /// `status`, when it's given: one of OKF's three (§5.4).
+    fn status(&mut self, keys: &Keys, value: Option<&Value>) {
+        let Some(value) = value else {
+            return;
+        };
+        if !matches!(
+            scalar_text(value).as_deref(),
+            Some("draft" | "stable" | "deprecated")
+        ) {
+            self.problem(
+                keys.line("status"),
+                format!(
+                    "the frontmatter says `status: {}`; OKF's statuses are draft, stable and \
+                     deprecated: write one of them, or leave `status` out, which means stable",
+                    shown(value)
+                ),
+            );
+        }
+    }
+
+    /// `parameters`, when it's given: a list of `{ name, type, required, from }`, each name its
+    /// own and each source with one parameter, the arguments numbered from 1 without gaps.
+    /// Returns the parameters that are right.
+    fn parameters(&mut self, keys: &Keys, value: Option<&Value>) -> Vec<Parameter> {
+        let Some(value) = value else {
+            return Vec::new();
+        };
+        let at = keys.line("parameters").unwrap_or(1);
+        let Some(items) = value.as_array() else {
+            self.problem(
+                Some(at),
+                format!(
+                    "the frontmatter says `parameters: {}`; `parameters` is a list, a mapping for \
+                     each parameter, such as `- {PARAMETER}`",
+                    shown(value)
+                ),
+            );
+            return Vec::new();
+        };
+        let spans = keys.entries("parameters");
+        let mut parameters: Vec<Parameter> = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            let span = spans.get(index).copied();
+            let line = span.map_or(at, |(start, _)| start + 1);
+            if let Some(parameter) = self.parameter(keys, item, (line, span), &parameters) {
+                parameters.push(parameter);
+            }
+        }
+        self.check_sources();
+        parameters
+    }
+
+    /// One parameter, on the line `line` and the lines `span` when it has lines of its own;
+    /// `seen` the parameters before it.
+    fn parameter(
+        &mut self,
+        keys: &Keys,
+        item: &Value,
+        (line, span): (usize, Option<(usize, usize)>),
+        seen: &[Parameter],
+    ) -> Option<Parameter> {
+        let Some(map) = item.as_object() else {
+            self.problem(
+                Some(line),
+                format!(
+                    "each parameter is a mapping, such as `{PARAMETER}`, not `{}`",
+                    shown(item)
+                ),
+            );
+            return None;
+        };
+        let name = self.parameter_name(map.get("name"), keys.within(span, "name", line), seen);
+        let called = name.as_deref().map_or_else(
+            || "a parameter".to_owned(),
+            |name| format!("the parameter `{name}`"),
+        );
+        let kind = self.parameter_type(&called, map.get("type"), keys.within(span, "type", line));
+        let required = self.parameter_required(
+            &called,
+            map.get("required"),
+            keys.within(span, "required", line),
+        );
+        let from = self.parameter_source(&called, map.get("from"), keys.within(span, "from", line));
+        if let Some(source) = &from {
+            self.sources.push((called, source.clone(), line));
+        }
+        Some(Parameter {
+            name: name?,
+            kind: kind?,
+            required: required?,
+            from: from?,
+            line,
+        })
+    }
+
+    /// A parameter's `name`, on the line `line`: a lowercase letter, then lowercase letters,
+    /// digits and `_`, which no parameter in `seen` has.
+    fn parameter_name(
+        &mut self,
+        value: Option<&Value>,
+        line: usize,
+        seen: &[Parameter],
+    ) -> Option<String> {
+        let Some(value) = value.filter(|value| !value.is_null()) else {
+            self.problem(
+                Some(line),
+                "a parameter has no `name`; give it one in lowercase letters, digits and `_`, \
+                 such as `name: count`",
+            );
+            return None;
+        };
+        let name = shown(value);
+        let valid = name.starts_with(|first: char| first.is_ascii_lowercase())
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
+        if !valid {
+            self.problem(
+                Some(line),
+                format!(
+                    "the parameter name `{name}` isn't a lowercase letter and then lowercase \
+                     letters, digits and `_`: write it like `count` or `max_lines`"
+                ),
+            );
+            return None;
+        }
+        if let Some(first) = seen.iter().find(|parameter| parameter.name == name) {
+            self.problem(
+                Some(line),
+                format!(
+                    "the parameter `{name}` is named twice (also on line {}); give each parameter \
+                     its own name",
+                    first.line
+                ),
+            );
+            return None;
+        }
+        Some(name)
+    }
+
+    /// A parameter's `type`, on the line `line`.
+    fn parameter_type(
+        &mut self,
+        called: &str,
+        value: Option<&Value>,
+        line: usize,
+    ) -> Option<ParameterType> {
+        let types = ParameterType::ALL
+            .map(|kind| format!("`type: {}`", kind.name()))
+            .join(", ");
+        let Some(value) = value.filter(|value| !value.is_null()) else {
+            self.problem(
+                Some(line),
+                format!("{called} has no `type`; add one of {types}"),
+            );
+            return None;
+        };
+        let kind = scalar_text(value)
+            .as_deref()
+            .and_then(ParameterType::from_name);
+        if kind.is_none() {
+            self.problem(
+                Some(line),
+                format!(
+                    "{called} says `type: {}`; lengua's types are integer, decimal, text and \
+                     bytes: write one of {types}",
+                    shown(value)
+                ),
+            );
+        }
+        kind
+    }
+
+    /// A parameter's `required`, on the line `line`: a boolean, true when it's left out.
+    fn parameter_required(
+        &mut self,
+        called: &str,
+        value: Option<&Value>,
+        line: usize,
+    ) -> Option<bool> {
+        match value {
+            None | Some(Value::Null) => Some(true),
+            Some(Value::Bool(required)) => Some(*required),
+            Some(other) => {
+                self.problem(
+                    Some(line),
+                    format!(
+                        "{called} says `required: {}`; write `required: true` or `required: \
+                         false`, or leave it out, which means true",
+                        shown(other)
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// Where a parameter's value comes from, its `from` on the line `line`: `argument N`,
+    /// `standard input`, `environment NAME` or `file NAME`.
+    fn parameter_source(
+        &mut self,
+        called: &str,
+        value: Option<&Value>,
+        line: usize,
+    ) -> Option<Source> {
+        let forms = "`from: argument 1`, `from: standard input`, `from: environment NAME` or \
+                     `from: file NAME`";
+        let arguments = "arguments are numbered from 1, as in `from: argument 1`";
+        let variables = "an environment variable's name is capitals, digits and `_`, as in \
+                         `from: environment HOME`";
+        let files = "name a file in the working folder by its path there, as in `from: file \
+                     input.txt`";
+        let Some(value) = value.filter(|value| !value.is_null()) else {
+            self.problem(
+                Some(line),
+                format!("{called} has no `from`; say where its value comes from: {forms}"),
+            );
+            return None;
+        };
+        let text = shown(value);
+        let words = text.trim();
+        let says = format!("{called} says `from: {text}`");
+        let found = if words == "standard input" {
+            Ok(Source::StandardInput)
+        } else if let Some(place) = words.strip_prefix("argument ") {
+            match place.trim().parse::<usize>() {
+                Ok(place) if place >= 1 => Ok(Source::Argument(place)),
+                _ => Err(arguments.to_owned()),
+            }
+        } else if let Some(name) = words.strip_prefix("environment ") {
+            let name = name.trim();
+            if variable_name(name) {
+                Ok(Source::Environment(name.to_owned()))
+            } else {
+                Err(variables.to_owned())
+            }
+        } else if let Some(name) = words.strip_prefix("file ") {
+            let name = name.trim();
+            match file_problem(name) {
+                None => Ok(Source::File(name.to_owned())),
+                Some(why) => Err(format!("{why}: {files}")),
+            }
+        } else {
+            Err(format!("write {forms}"))
+        };
+        match found {
+            Ok(source) => Some(source),
+            Err(fix) => {
+                self.problem(Some(line), format!("{says}; {fix}"));
+                None
+            }
+        }
+    }
+
+    /// Each source gives one parameter, and the arguments are numbered from 1 without gaps.
+    fn check_sources(&mut self) {
+        let mut found = Vec::new();
+        for (index, (called, source, line)) in self.sources.iter().enumerate() {
+            let Some((other, _, at)) = self.sources[..index]
+                .iter()
+                .find(|(_, earlier, _)| earlier == source)
+            else {
+                continue;
+            };
+            let message = if *source == Source::StandardInput {
+                format!(
+                    "{called} comes from standard input, as {other} does (line {at}); a program \
+                     has one standard input, so give it to one parameter"
+                )
+            } else {
+                let source = source.describe();
+                format!(
+                    "{called} comes from `{source}`, as {other} does (line {at}); give each \
+                     parameter a source of its own"
+                )
+            };
+            found.push((*line, message));
+        }
+        let mut places: Vec<(usize, &str, usize)> = self
+            .sources
+            .iter()
+            .filter_map(|(called, source, line)| match source {
+                Source::Argument(place) => Some((*place, called.as_str(), *line)),
+                _ => None,
+            })
+            .collect();
+        places.sort_by_key(|(place, ..)| *place);
+        places.dedup_by_key(|(place, ..)| *place);
+        let gap = (1..)
+            .zip(&places)
+            .find(|(expected, (place, ..))| place != expected);
+        if let Some((expected, (place, called, line))) = gap {
+            found.push((
+                *line,
+                format!(
+                    "{called} comes from argument {place}, but no parameter comes from argument \
+                     {expected}: number the arguments from 1 without gaps"
+                ),
+            ));
+        }
+        for (line, message) in found {
+            self.problem(Some(line), message);
+        }
+    }
+
+    /// Each parameter's source is one that the idea's `- Uses:` line names, but an argument,
+    /// which needs nothing named.
+    fn sources_used(&mut self, uses: &[Use]) {
+        let mut unnamed = Vec::new();
+        for (called, source, line) in &self.sources {
+            let Some(needed) = source.uses() else {
+                continue;
+            };
+            if uses.contains(&needed) {
+                continue;
+            }
+            let source = source.describe();
+            let word = needed.name();
+            unnamed.push((
+                *line,
+                format!(
+                    "{called} comes from `{source}`, which the idea doesn't allow: add `{word}` \
+                     to the `- Uses:` line of `# Constraints`, as in `- Uses: {word}`"
+                ),
+            ));
+        }
+        for (line, message) in unnamed {
+            self.problem(Some(line), message);
+        }
     }
 
     /// Keeps the markdown links on the line, but a `- Builds on:` line's, which are its parts.
@@ -1855,6 +2668,7 @@ impl Parser {
         let syscalls = self.syscalls_for(&uses);
         let ops = crate::edge::ops_for(&uses, &self.network, self.threads);
         self.check_network();
+        self.sources_used(&uses);
         // STE's problems come last: what the idea says matters before how it says it.
         for (line, message) in std::mem::take(&mut self.prose).finish() {
             self.problem(Some(line), message);
@@ -1872,6 +2686,7 @@ impl Parser {
                 network: self.network,
                 parts: self.parts,
                 links: self.links,
+                attested: self.attested,
             }),
             _ => Err(self.into_problems()),
         }
@@ -3118,5 +3933,467 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         for invalid in ["B0", "B01", "b1", "B", "B10000", "B1a", "1"] {
             assert_eq!(BehaviorId::parse(invalid), None, "{invalid}");
         }
+    }
+
+    /// The add idea as an Attested Computation, which lengua compiles to main.wat.
+    const ATTESTED: &str = include_str!("../tests/fixtures-wasm/add/idea.md");
+
+    /// The parameters of [`ATTESTED`], on its lines 8 and 9.
+    const A: &str = "{ name: a, type: integer, required: true, from: argument 1 }";
+    const B: &str = "{ name: b, type: integer, required: true, from: argument 2 }";
+
+    /// [`ATTESTED`] with the first `from` in it made `to`.
+    fn attested(from: &str, to: &str) -> String {
+        assert!(ATTESTED.contains(from), "{from:?}");
+        ATTESTED.replacen(from, to, 1)
+    }
+
+    /// [`ATTESTED`] with its parameters written as `a` and `b`, and `uses` its `- Uses:` line.
+    fn with_parameters(a: &str, b: &str, uses: &str) -> String {
+        attested(A, a)
+            .replacen(B, b, 1)
+            .replace("- Uses: nothing", uses)
+    }
+
+    #[test]
+    fn parses_an_attested_computation() {
+        let idea = parse(ATTESTED).unwrap_or_else(|problems| panic!("{problems:#?}"));
+        let argument = |name: &str, place, line| Parameter {
+            name: name.to_owned(),
+            kind: ParameterType::Integer,
+            required: true,
+            from: Source::Argument(place),
+            line,
+        };
+        assert_eq!(
+            idea.attested,
+            Some(Attested {
+                runtime: "webassembly".to_owned(),
+                computation: "main.wat".to_owned(),
+                parameters: vec![argument("a", 1, 8), argument("b", 2, 9)],
+                receipt: vec![Receipt::Stdout, Receipt::Stderr, Receipt::Exit],
+            })
+        );
+        // The rest is the add idea's, whose native form has no computation's keys.
+        assert_eq!(idea.title, "add");
+        assert_eq!(idea.behaviors.len(), 2);
+        assert!(idea.uses.is_empty());
+        assert_eq!(parse(ADD).expect("valid idea").attested, None);
+    }
+
+    /// Each key an Attested Computation must have: missing, on the frontmatter's first line, or
+    /// wrong, on its own line, each with what to write.
+    #[test]
+    fn an_attested_computation_needs_its_keys() {
+        let missing = [
+            (
+                "runtime: webassembly\n",
+                "line 1: the frontmatter has no `runtime`; lengua runs an Attested Computation as \
+                 WebAssembly, so add `runtime: webassembly`",
+            ),
+            (
+                "computation: main.wat\n",
+                "line 1: the frontmatter has no `computation`; the computation is main.wat, the \
+                 code file beside idea.md, so add `computation: main.wat`",
+            ),
+            (
+                "executor:\n  resource: lengua run\n  receipt: [stdout, stderr, exit]\n",
+                "line 1: the frontmatter has no `executor`; lengua's `run` runs the computation \
+                 and returns a receipt, so add `executor: { resource: lengua run, receipt: \
+                 [stdout, stderr, exit] }`",
+            ),
+            (
+                "attester:\n  resource: lengua check\n",
+                "line 1: the frontmatter has no `attester`; lengua's `check` checks each run, so \
+                 add `attester: { resource: lengua check }`",
+            ),
+        ];
+        for (lines, problem) in missing {
+            assert_eq!(problems(&attested(lines, "")), [problem]);
+        }
+        let wrong = [
+            (
+                "runtime: webassembly",
+                "runtime: python",
+                "line 5: the frontmatter says `runtime: python`; lengua runs an Attested \
+                 Computation as WebAssembly, so write `runtime: webassembly`",
+            ),
+            (
+                "runtime: webassembly",
+                "runtime:",
+                "line 5: `runtime` is empty; lengua runs an Attested Computation as WebAssembly, \
+                 so write `runtime: webassembly`",
+            ),
+            (
+                "computation: main.wat",
+                "computation: add.wat",
+                "line 6: the frontmatter says `computation: add.wat`; the computation is \
+                 main.wat, the code file beside idea.md, so write `computation: main.wat`",
+            ),
+            (
+                "  resource: lengua run",
+                "  resource: python run.py",
+                "line 11: `executor` says `resource: python run.py`; lengua's `run` runs the \
+                 computation, so write `resource: lengua run`",
+            ),
+            (
+                "  resource: lengua run\n",
+                "",
+                "line 10: `executor` has no `resource`; lengua's `run` runs the computation, so \
+                 add `resource: lengua run`",
+            ),
+            (
+                "  resource: lengua check",
+                "  resource: lengua run",
+                "line 14: `attester` says `resource: lengua run`; lengua's `check` checks each \
+                 run, so write `resource: lengua check`",
+            ),
+            (
+                "executor:\n  resource: lengua run\n  receipt: [stdout, stderr, exit]",
+                "executor: lengua run",
+                "line 10: the frontmatter says `executor: lengua run`; lengua's `run` runs the \
+                 computation and returns a receipt, so write `executor: { resource: lengua run, \
+                 receipt: [stdout, stderr, exit] }`",
+            ),
+            (
+                "attester:\n  resource: lengua check",
+                "attester: lengua check",
+                "line 13: the frontmatter says `attester: lengua check`; lengua's `check` checks \
+                 each run, so write `attester: { resource: lengua check }`",
+            ),
+        ];
+        for (from, to, problem) in wrong {
+            assert_eq!(problems(&attested(from, to)), [problem], "{to}");
+        }
+    }
+
+    /// An executor's receipt lists what lengua's `run` returns, each once.
+    #[test]
+    fn a_receipt_lists_what_a_run_returns() {
+        let receipt = |list: &str| attested("[stdout, stderr, exit]", list);
+        let usage = "it lists what each run returns for the attester to check, from stdout, \
+                     stderr, exit and files: write `receipt: [stdout, stderr, exit]`";
+        assert_eq!(
+            problems(&attested("  receipt: [stdout, stderr, exit]\n", "")),
+            [format!("line 10: `executor` has no `receipt`; {usage}")]
+        );
+        for written in ["[]", "stdout"] {
+            assert_eq!(
+                problems(&receipt(written)),
+                [format!("line 12: `executor` says `receipt: {written}`; {usage}")]
+            );
+        }
+        assert_eq!(
+            problems(&receipt("[stdout, job_id]")),
+            [
+                "line 12: `receipt` names `job_id`, which lengua's `run` doesn't return: use \
+                 stdout, stderr, exit and files"
+            ]
+        );
+        assert_eq!(
+            problems(&receipt("[stdout, exit, stdout]")),
+            ["line 12: `receipt` names `stdout` twice; keep it once"]
+        );
+        let every = parse(&receipt("[files, exit, stderr, stdout]")).expect("valid idea");
+        assert_eq!(
+            every.attested.map(|attested| attested.receipt),
+            Some(vec![
+                Receipt::Files,
+                Receipt::Exit,
+                Receipt::Stderr,
+                Receipt::Stdout
+            ])
+        );
+    }
+
+    /// Each rule of `parameters`, on the line of the parameter it's about, or of its key.
+    #[test]
+    fn parameters_follow_their_rules() {
+        let types = "`type: integer`, `type: decimal`, `type: text`, `type: bytes`";
+        let nothing = "- Uses: nothing";
+        let one = |a: &str| problems(&with_parameters(a, B, nothing));
+        assert_eq!(
+            one(&A.replace("name: a", "name: A1")),
+            [
+                "line 8: the parameter name `A1` isn't a lowercase letter and then lowercase \
+                 letters, digits and `_`: write it like `count` or `max_lines`"
+            ]
+        );
+        assert_eq!(
+            one(&A.replace("name: a, ", "")),
+            [
+                "line 8: a parameter has no `name`; give it one in lowercase letters, digits and \
+                 `_`, such as `name: count`"
+            ]
+        );
+        let twice = with_parameters(A, &B.replace("name: b", "name: a"), nothing);
+        assert_eq!(
+            problems(&twice),
+            [
+                "line 9: the parameter `a` is named twice (also on line 8); give each parameter \
+                 its own name"
+            ]
+        );
+        assert_eq!(
+            one(&A.replace("type: integer", "type: float")),
+            [format!(
+                "line 8: the parameter `a` says `type: float`; lengua's types are integer, \
+                 decimal, text and bytes: write one of {types}"
+            )]
+        );
+        assert_eq!(
+            one(&A.replace("type: integer, ", "")),
+            [format!("line 8: the parameter `a` has no `type`; add one of {types}")]
+        );
+        // Only `true` and `false` are booleans, so YAML's older words for them are refused.
+        for required in ["maybe", "yes"] {
+            assert_eq!(
+                one(&A.replace("required: true", &format!("required: {required}"))),
+                [format!(
+                    "line 8: the parameter `a` says `required: {required}`; write `required: \
+                     true` or `required: false`, or leave it out, which means true"
+                )]
+            );
+        }
+        let optional = parse(&with_parameters(
+            &A.replace("required: true", "required: false"),
+            &B.replace("required: true, ", ""),
+            nothing,
+        ))
+        .expect("valid idea");
+        let required: Vec<bool> = optional
+            .attested
+            .iter()
+            .flat_map(|attested| &attested.parameters)
+            .map(|parameter| parameter.required)
+            .collect();
+        assert_eq!(required, [false, true], "true when it's left out");
+        // Each type, and names YAML could read as something else.
+        for (kind, name) in [("decimal", "n"), ("text", "y"), ("bytes", "no_2")] {
+            let a = A
+                .replace("integer", kind)
+                .replace("name: a", &format!("name: {name}"));
+            let idea = parse(&with_parameters(&a, B, nothing)).expect("valid idea");
+            let first = idea
+                .attested
+                .and_then(|attested| attested.parameters.into_iter().next())
+                .expect("a parameter");
+            assert_eq!((first.name.as_str(), first.kind.name()), (name, kind));
+        }
+    }
+
+    /// Where a parameter's value comes from: each argument and each other source gives one
+    /// parameter, the arguments numbered from 1 without gaps, and each source but an argument is
+    /// one the idea's `- Uses:` line names.
+    #[test]
+    fn each_parameter_comes_from_one_source() {
+        let nothing = "- Uses: nothing";
+        let from = |text: &str| A.replace("argument 1", text);
+        // `a` from the source `text`, with what it uses, and `b` from the first argument.
+        let sources = |text: &str, uses: &str| {
+            let b = B.replace("argument 2", "argument 1");
+            let idea = parse(&with_parameters(&from(text), &b, uses))
+                .unwrap_or_else(|problems| panic!("{text}: {problems:#?}"));
+            idea.attested
+                .map(|attested| attested.parameters[0].from.clone())
+                .expect("a parameter")
+        };
+        assert_eq!(
+            sources("standard input", "- Uses: standard input"),
+            Source::StandardInput
+        );
+        assert_eq!(
+            sources("environment HOME_2", "- Uses: the environment"),
+            Source::Environment("HOME_2".to_owned())
+        );
+        assert_eq!(
+            sources("file data/input.txt", "- Uses: files"),
+            Source::File("data/input.txt".to_owned())
+        );
+        let first = |text: &str| problems(&with_parameters(&from(text), B, nothing));
+        assert_problem(
+            &with_parameters(&A.replace(", from: argument 1", ""), B, nothing),
+            "line 8: the parameter `a` has no `from`; say where its value comes from: `from: \
+             argument 1`, `from: standard input`, `from: environment NAME` or `from: file NAME`",
+        );
+        let refused = [
+            (
+                "stdin",
+                "write `from: argument 1`, `from: standard input`, `from: environment NAME` or \
+                 `from: file NAME`",
+            ),
+            (
+                "argument 0",
+                "arguments are numbered from 1, as in `from: argument 1`",
+            ),
+            (
+                "environment home",
+                "an environment variable's name is capitals, digits and `_`, as in `from: \
+                 environment HOME`",
+            ),
+            ("file ../input.txt", "`..` leaves the working folder"),
+            (
+                "file /tmp/input.txt",
+                "a path from the root leaves the working folder",
+            ),
+            (
+                "file aux.txt",
+                "`aux.txt`: Windows reserves AUX, with any extension, in every folder",
+            ),
+        ];
+        for (text, fix) in refused {
+            assert_problem(
+                &with_parameters(&from(text), B, nothing),
+                &format!("line 8: the parameter `a` says `from: {text}`; {fix}"),
+            );
+        }
+        // One parameter a source, the arguments from 1 without gaps.
+        let second = B.replace("argument 2", "argument 1");
+        assert_eq!(
+            problems(&with_parameters(A, &second, nothing)),
+            [
+                "line 9: the parameter `b` comes from `argument 1`, as the parameter `a` does \
+                 (line 8); give each parameter a source of its own"
+            ]
+        );
+        let third = B.replace("argument 2", "argument 3");
+        assert_eq!(
+            problems(&with_parameters(A, &third, nothing)),
+            [
+                "line 9: the parameter `b` comes from argument 3, but no parameter comes from \
+                 argument 2: number the arguments from 1 without gaps"
+            ]
+        );
+        let input = from("standard input");
+        let more = B.replace("argument 2", "standard input");
+        assert_eq!(
+            problems(&with_parameters(&input, &more, "- Uses: standard input")),
+            [
+                "line 9: the parameter `b` comes from standard input, as the parameter `a` does \
+                 (line 8); a program has one standard input, so give it to one parameter"
+            ]
+        );
+        // A source other than an argument is one the idea's `- Uses:` line names.
+        assert_eq!(
+            first("standard input"),
+            [
+                "line 9: the parameter `b` comes from argument 2, but no parameter comes from \
+                 argument 1: number the arguments from 1 without gaps",
+                "line 8: the parameter `a` comes from `standard input`, which the idea doesn't \
+                 allow: add `standard input` to the `- Uses:` line of `# Constraints`, as in `- \
+                 Uses: standard input`"
+            ]
+        );
+        for (text, uses) in [
+            ("environment HOME", "the environment"),
+            ("file input.txt", "files"),
+        ] {
+            assert_problem(
+                &with_parameters(&from(text), &second, nothing),
+                &format!("which the idea doesn't allow: add `{uses}` to the `- Uses:` line"),
+            );
+        }
+    }
+
+    /// A parameter written as a block mapping has its keys on lines of their own, and each
+    /// problem goes on the line of the key it's about.
+    #[test]
+    fn a_block_parameter_s_problems_are_on_their_lines() {
+        let block = attested(
+            &format!("  - {A}\n  - {B}\n"),
+            "  - name: a\n    type: integer\n    from: argument 1\n  - name: b\n    type: \
+             float\n    from: argument 2\n",
+        );
+        assert_eq!(
+            problems(&block),
+            [
+                "line 12: the parameter `b` says `type: float`; lengua's types are integer, \
+                 decimal, text and bytes: write one of `type: integer`, `type: decimal`, `type: \
+                 text`, `type: bytes`"
+            ]
+        );
+        let idea = parse(&block.replace("type: float", "type: decimal")).expect("valid idea");
+        let lines: Vec<usize> = idea
+            .attested
+            .iter()
+            .flat_map(|attested| &attested.parameters)
+            .map(|parameter| parameter.line)
+            .collect();
+        assert_eq!(lines, [8, 11]);
+        // Not a list, or an entry that isn't a mapping.
+        let listed = attested(&format!("parameters:\n  - {A}\n  - {B}\n"), "parameters: a\n");
+        assert_eq!(
+            problems(&listed),
+            [format!(
+                "line 7: the frontmatter says `parameters: a`; `parameters` is a list, a mapping \
+                 for each parameter, such as `- {A}`"
+            )]
+        );
+        assert_problem(
+            &with_parameters("a", B, "- Uses: nothing"),
+            &format!("line 8: each parameter is a mapping, such as `{A}`, not `a`"),
+        );
+    }
+
+    /// OKF's other keys, and any key lengua doesn't know, are kept and never refused; a `status`
+    /// is one of OKF's three.
+    #[test]
+    fn okf_s_other_keys_are_kept() {
+        let others = "status: stable\ntags: [math, numbers]\nsources:\n  - { id: sum, resource: \
+                      https://example.com/sum }\ngenerated: { by: agent/1.0, at: \
+                      2026-11-06T22:00:00Z }\nverified:\n  - { by: human:ana, at: \
+                      2026-11-06T23:00:00Z }\nstale_after: 2027-01-01T00:00:00Z\nowner: the \
+                      numbers team\n";
+        let with_others = attested("attester:\n", &format!("{others}attester:\n"));
+        let idea = parse(&with_others).unwrap_or_else(|problems| panic!("{problems:#?}"));
+        assert!(idea.attested.is_some());
+        for status in ["draft", "deprecated"] {
+            let other = with_others.replace("status: stable", &format!("status: {status}"));
+            assert!(parse(&other).is_ok(), "{status}");
+        }
+        assert_eq!(
+            problems(&with_others.replace("status: stable", "status: approved")),
+            [
+                "line 13: the frontmatter says `status: approved`; OKF's statuses are draft, \
+                 stable and deprecated: write one of them, or leave `status` out, which means \
+                 stable"
+            ]
+        );
+        // The native form keeps them too, and reads none of them.
+        let native = ADD.replace("title: add\n", &format!("title: add\n{others}"));
+        assert!(parse(&native).is_ok());
+    }
+
+    /// An idea compiled to main.s has none of an Attested Computation's own keys, and each is
+    /// refused with the type that has it.
+    #[test]
+    fn a_native_idea_has_no_computation_keys() {
+        let native = ADD.replace("title: add\n", "title: add\nruntime: webassembly\n");
+        assert_eq!(
+            problems(&native),
+            [
+                "line 4: `runtime` is a key of an Attested Computation, and this idea is `type: \
+                 lengua/program-idea`: write `type: Attested Computation` to compile it to \
+                 main.wat, or remove `runtime`"
+            ]
+        );
+        for key in [
+            "computation: main.wat",
+            "executor: { resource: lengua run }",
+            "attester:",
+        ] {
+            let text = ADD.replace("title: add\n", &format!("title: add\n{key}\n"));
+            assert_problem(&text, "write `type: Attested Computation`");
+        }
+        assert_problem(
+            &native.replace(IDEA_TYPE, LEGACY_IDEA_TYPE),
+            "this idea is `type: lengua/program-spec`",
+        );
+        // A type lengua doesn't know is refused on its own line.
+        assert_problem(
+            &ATTESTED.replace(ATTESTED_TYPE, "Metric"),
+            "line 2: the frontmatter says `type: Metric`; a lengua idea is `type: Attested \
+             Computation`",
+        );
     }
 }
