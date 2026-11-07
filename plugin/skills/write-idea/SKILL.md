@@ -1,6 +1,6 @@
 ---
 name: write-idea
-description: Writes or updates a lengua program's idea.md from the user's request. idea.md is the program's source in natural language, written in ASD-STE100 Simplified Technical English (STE), with its behaviors, each shown by an example in Given/When/Then steps, and the generated tests that try fresh inputs on every run; the compile skill then compiles it into checked assembly. Use when the user asks for a program, such as a command, a filter, a server or a client, unless they name another language; when they want to change a lengua program; or when the lengua check tool says to write or fix idea.md. Ends when the check tool records the idea with the user's own words, without waiting for an approval.
+description: Writes or updates a lengua program's idea.md from the user's request. idea.md is the program's source in natural language, written in ASD-STE100 Simplified Technical English (STE), with its behaviors, each shown by an example in Given/When/Then steps, and the generated tests that try fresh inputs on every run; the compile skill then compiles it into checked code. Use when the user asks for a program, such as a command, a filter, a server or a client, unless they name another language; when they want to change a lengua program; or when the lengua check tool says to write or fix idea.md. Ends when the check tool records the idea with the user's own words, without waiting for an approval.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin.
 ---
@@ -8,12 +8,13 @@ compatibility: Needs the lengua MCP server from the lengua plugin.
 # Write a lengua idea
 
 A lengua program is a folder of two files: `idea.md`, which says what the program does and holds
-every test, and `main.s`, the assembly the compile skill compiles from it. lengua keeps its own
-record beside them in `lengua.lock`. The idea is the source of truth and the only file people
-share: `main.s` is disposable, compiled from it on each computer and checked there, so whatever
-must be the same everywhere goes in the idea. You write it from the user's request; their request
-is the go-ahead, so don't ask them to approve it. They read it in your final report, which says
-what it promises.
+every test, and its code, `main.wat`, the WebAssembly that the compile skill writes from it (until
+`check` takes `main.wat`, the compile skill writes `main.s`, assembly for this computer). lengua
+keeps its own record beside them in `lengua.lock`. The idea is the source of truth and the only
+file people share: the code is disposable, written from the idea and checked where it runs, so
+whatever must be the same everywhere goes in the idea. You write it from the user's request; their
+request is the go-ahead, so don't ask them to approve it. They read it in your final report, which
+says what it promises.
 
 ## Steps
 
@@ -31,10 +32,9 @@ what it promises.
    call `check` then.
 4. `check` lists every problem at once, in the idea and in its tests, with the fix for each; fix
    them all and call it again. If its `next_step` starts with "Blocked", tell the user and stop.
-   Then follow its `next_step`: next comes the code, `main.s` or for an Attested Computation
-   `main.wat`, with the compile skill. Its `graph` lines say how the program's bundle stands,
-   each starting with how much it matters: fix what `blocks` first, then the warnings in the
-   ideas you wrote; tell the user the rest.
+   Then follow its `next_step`: next comes the code, with the compile skill. Its `graph` lines
+   say how the program's bundle stands, each starting with how much it matters: fix what
+   `blocks` first, then the warnings in the ideas you wrote; tell the user the rest.
 
 ## The idea
 
@@ -50,15 +50,17 @@ by one concrete example in its steps, and its generated tests try that rule with
   [the template](assets/idea-template.md) begins: a short `title` and a one-sentence
   `description`, which `check` requires and the bundle's `index.md` lists the program with, then
   the keys that say how lengua runs and checks the computation, each as the template writes it:
-  - `runtime: webassembly` and `computation: main.wat`: the computation is `main.wat`, the
-    WebAssembly that the compile skill writes beside the idea.
+  - `runtime: webassembly` and `computation: main.wat`: the computation is the program's code,
+    `main.wat`.
   - `parameters`: a list with one `{ name, type, required, from }` for each input a run fills, in
-    order. A `name` is lowercase letters, digits and `_`; a `type` is `integer`, `decimal`,
-    `text` or `bytes`; `required` is `true`, or `false` for an input a run may leave out; and
-    `from` says where the value comes from: `argument 1` (the arguments numbered from 1 without
-    gaps), `standard input`, `environment NAME` or `file NAME`, each source for one parameter. A
-    source other than an argument needs its word in `- Uses:`. A program that reads none of
-    these, such as a server, whose clients send its input, leaves `parameters` out.
+    order. A `name` starts with a lowercase letter, then lowercase letters, digits and `_`, and
+    no two parameters share one; a `type` is `integer`, `decimal`, `text` or `bytes`; `required`
+    is `true`, or `false` for an input a run may leave out; and `from` says where the value comes
+    from: `argument 1` (the arguments numbered from 1 without gaps), `standard input`,
+    `environment NAME` (NAME in capitals, digits and `_`) or `file NAME` (a path inside the
+    working folder, with no `..` and no leading `/`), each source for one parameter. A source
+    other than an argument needs its word in `- Uses:`. A program that reads none of these, such
+    as a server, whose clients send its input, leaves `parameters` out.
   - `executor`, whose `resource` is lengua's `run`,
     `https://github.com/laughing-hermit/lengua/blob/main/docs/run.md`, and whose
     `receipt: [stdout, stderr, exit]` lists what each run returns for the check; add `files` to
@@ -140,7 +142,8 @@ by one concrete example in its steps, and its generated tests try that rule with
   `the environment` (its environment variables: only those a test, or the user's run, gives it),
   `the terminal` (keys as they're pressed, without Enter or echo, a wait for the next key, and the
   window's size: for games, menus and other interactive programs, whose tests give the keys as
-  standard input and write escape sequences with `\e`),
+  standard input and write escape sequences with `\e`; a computation in WebAssembly can't use the
+  terminal until lengua's host gives its two imports, so don't promise it to the user yet),
   or `- Uses: nothing`. lengua programs can't start processes or handle signals, and their memory
   is fixed by the idea's limits. lengua holds the program to this line when it runs, so it's a promise the user can rely
   on, and it means the same on every kind of computer. `# Constraints` holds only `- Uses:`,
@@ -156,8 +159,8 @@ by one concrete example in its steps, and its generated tests try that rule with
     as DNS writes it (or by address, never `localhost`: a port alone is this computer's). A line
     may name several ports, as `ports 80 and 8080`, and an idea several lines, up to 16
     connections. Each is one connection, made before the program starts, in the order the lines
-    name them; the program reads and writes the first on descriptor 4, the next on 5, and so on.
-    With no server there, the program gets that connection already ended: its first
+    name them, and lengua hands each one to the program: the compile skill says on which
+    descriptor. With no server there, the program gets that connection already ended: its first
     read gives the end and its first write fails. Give such a program a behavior for it, as
     fetch's "Says when the server can't be reached", with ``- And no server on port `8080` ``.
     The program needs no port or address in its arguments; the person running it can't point
@@ -215,7 +218,7 @@ by one concrete example in its steps, and its generated tests try that rule with
   memory costs nothing until it's used, and the tests and proofs still try smaller inputs, given
   in backticks of their own.
 - **Programs built from programs:** a program can build on others, each a folder with its own
-  idea.md and main.s, linked as a graph is: `- Builds on: [sort lines](../sort/idea.md)` under
+  idea.md and code, linked as a graph is: `- Builds on: [sort lines](../sort/idea.md)` under
   `# Constraints`, each part by a path relative to this idea. Build on a part when the program
   needs what another program already does, such as sorting, parsing numbers or a hash table,
   rather than doing it again. A part is a whole program, with its own behaviors and tests: a
@@ -238,7 +241,9 @@ by one concrete example in its steps, and its generated tests try that rule with
 - **Threads:** when the user wants a program that does heavy work on large inputs as fast as
   possible, add `- Threads: up to N` under `# Constraints`, with N up to the machine's cores
   (`check` reports them in `machine`; at most 64). The program may then split its work across
-  that many cores. Behaviors don't change: the output is the same as on one thread.
+  that many cores. Behaviors don't change: the output is the same as on one thread. A
+  computation in WebAssembly runs on one thread, so the line doesn't make it faster: don't
+  promise the user more cores.
 
 ## Write it in Simplified Technical English
 
@@ -309,8 +314,8 @@ writing the output fails, the program exits with code 2.
 After:
 
 ```text
-Reads standard input of any length, one piece at a time. If the program cannot write its
-output, it exits with code 2.
+The program reads standard input of any length, one piece at a time. If the program cannot
+write its output, it exits with code 2.
 ```
 
 ## The tests
@@ -341,8 +346,9 @@ before the code, and they decide whether it's right.
   `{places(scaled(a, 2) + scaled(b, 2), 2)}`. For measured decimals, compute in doubles and print
   with `fixed`: `{fixed(sqrt(x), 3)}`, or in singles when the idea says single precision:
   `{fixed(sqrt(single(x)), 3)}`. Write a multiply followed by an add, as in a dot product or a
-  polynomial, as `fma(a, b, c)`: it rounds once, which is more accurate, and computers do it in
-  one step. Write `2.0`, not `2`, next to decimals.
+  polynomial, as `a * b + c`, which rounds after each step, as WebAssembly computes it: it has no
+  fused multiply-add, so don't use `fma(a, b, c)`, which rounds once. Write `2.0`, not `2`, next
+  to decimals.
 - **A computing behavior gets a row of its numbers alone.** The proof goes through text lengths
   one by one, so a row with several free texts proves only short ones. When a behavior computes
   with numbers among other text (a total of amounts between other fields, a date, a count), add a
@@ -383,9 +389,9 @@ attester:
   resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
-Lets a shell script add two whole numbers. It prints the sum of two numbers between `-1000000000`
-and `1000000000`, which it gets as arguments. If the program cannot write its output, it exits
-with code 2.
+A shell script can use this program to add two whole numbers. It prints the sum of two numbers
+between `-1000000000` and `1000000000`, which it gets as arguments. If the program cannot write
+its output, it exits with code 2.
 
 # Behaviors
 ## B1: Adds two numbers
@@ -410,20 +416,53 @@ with code 2.
 - Then it prints `usage: add <a> <b>` and a newline to standard error
 - And it exits with code `1`
 
+## B3: Rejects a number out of range or text that is not a number
+- Given the arguments `1000000001` and `3`
+- When the program runs
+- Then it prints `error: not a number in range` and a newline to standard error
+- And it exits with code `3`
+
+### For any argument that is not a number in range
+- Given the arguments `{a}` and `{b}`
+- When the program runs
+- Then it prints `error: not a number in range` and a newline to standard error
+- And it exits with code `3`
+
+| a | b | runs |
+|---|---|---|
+| `choice("1000000001", "-1000000001", "12x", "-", "1.5", "--1", "")` | `int(-1000000000, 1000000000)` | 50 |
+
+## B4: Exits with code 2 when it cannot write its output
+- Given the arguments `2` and `3`
+- And standard output is closed
+- When the program runs
+- Then it exits with code `2`
+
+### For any two numbers, with standard output closed
+- Given the arguments `{a}` and `{b}`
+- And standard output is closed
+- When the program runs
+- Then it exits with code `2`
+
+| a | b | runs |
+|---|---|---|
+| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | 20 |
+
 # Constraints
 - Uses: nothing
 ```
 
 B2 gives the program nothing, so it needs no generated tests. Each of B1's runs draws a new `a`
 and `b` and expects their sum. The first runs try the boundary values: the ends of the range, 0,
-1 and -1.
+1 and -1. B3's runs try numbers just past the range and text that goes wrong late, and B4's try
+numbers whose sum the program can't write.
 
 ## After recording
 
 Every edit to `idea.md`, its tests included, is recorded by the next `check` under the words
 already recorded, and the code is checked against it again: pass `request` again only with the
 user's new words, when they ask for something new. When `check` reports a failing test, decide
-from the idea whether the test or `main.s` is wrong; if the test is, fix it and call `check`,
+from the idea whether the test or the code is wrong; if the test is, fix it and call `check`,
 with no one to ask. lengua shows every change after the user's request in its final reply
 (`changes`), with its own marks on the changes that test less (`tests_less`), and keeps every
 request of a build until its code passes, so nothing drops out: tell the user each change, and

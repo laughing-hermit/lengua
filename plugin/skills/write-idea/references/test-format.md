@@ -142,7 +142,7 @@ An idea that says `- Network: connects to TCP port N` or `- Network: listens on 
 tests with their own servers or client: never the real places, which only `run` reaches.
 
 - **A program that connects** gets each connection its idea names from lengua before it starts,
-  at descriptor 4 and on in the idea's order, in tests as in `run`. A test's server step stands
+  in the idea's order, in tests as in `run`. A test's server step stands
   in for one of them: it reads exactly what the program sends there (failing at the first byte
   that differs), sends its reply, closes its side, and expects nothing more. A connection a test
   gives no server comes ended, as one lengua couldn't make does in a run: its first read gives
