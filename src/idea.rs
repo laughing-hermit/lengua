@@ -34,11 +34,13 @@ pub const ATTESTED_TYPE: &str = "Attested Computation";
 /// An Attested Computation's `runtime`: lengua runs the computation as WebAssembly.
 pub const RUNTIME: &str = "webassembly";
 
-/// The `resource` of an Attested Computation's `executor`: lengua's `run`.
-pub const EXECUTOR: &str = "lengua run";
+/// The `resource` of an Attested Computation's `executor`: the page that says how lengua's `run`
+/// runs it, a URL, as OKF §6.2 asks of `executor.resource`.
+pub const EXECUTOR: &str = "https://github.com/laughing-hermit/lengua/blob/main/docs/run.md";
 
-/// The `resource` of an Attested Computation's `attester`: lengua's `check`.
-pub const ATTESTER: &str = "lengua check";
+/// The `resource` of an Attested Computation's `attester`: the page that says how lengua's
+/// `check` attests a run, a URL, as OKF §6.2 asks of `attester.resource`.
+pub const ATTESTER: &str = "https://github.com/laughing-hermit/lengua/blob/main/docs/check.md";
 
 /// The keys only an Attested Computation has, which an idea compiled to main.s is refused for.
 const ATTESTED_KEYS: [&str; 4] = ["runtime", "computation", "executor", "attester"];
@@ -1416,7 +1418,7 @@ impl Parser {
 
     /// `executor`: lengua's `run`, and the receipt each run returns, which it returns.
     fn executor(&mut self, keys: &Keys, value: Option<&Value>) -> Vec<Receipt> {
-        const FIX: &str = "executor: { resource: lengua run, receipt: [stdout, stderr, exit] }";
+        const FIX: &str = "executor: { resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md, receipt: [stdout, stderr, exit] }";
         const WHY: &str = "lengua's `run` runs the computation and returns a receipt";
         let Some(value) = value else {
             self.missing(keys, "executor", FIX, WHY);
@@ -1488,7 +1490,7 @@ impl Parser {
 
     /// `attester`: lengua's `check`.
     fn attester(&mut self, keys: &Keys, value: Option<&Value>) {
-        const FIX: &str = "attester: { resource: lengua check }";
+        const FIX: &str = "attester: { resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md }";
         const WHY: &str = "lengua's `check` checks each run";
         let Some(value) = value else {
             self.missing(keys, "attester", FIX, WHY);
@@ -4017,15 +4019,15 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
                  code file beside idea.md, so add `computation: main.wat`",
             ),
             (
-                "executor:\n  resource: lengua run\n  receipt: [stdout, stderr, exit]\n",
+                "executor:\n  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md\n  receipt: [stdout, stderr, exit]\n",
                 "line 1: the frontmatter has no `executor`; lengua's `run` runs the computation \
-                 and returns a receipt, so add `executor: { resource: lengua run, receipt: \
+                 and returns a receipt, so add `executor: { resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md, receipt: \
                  [stdout, stderr, exit] }`",
             ),
             (
-                "attester:\n  resource: lengua check\n",
+                "attester:\n  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md\n",
                 "line 1: the frontmatter has no `attester`; lengua's `check` checks each run, so \
-                 add `attester: { resource: lengua check }`",
+                 add `attester: { resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md }`",
             ),
         ];
         for (lines, problem) in missing {
@@ -4051,35 +4053,35 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
                  main.wat, the code file beside idea.md, so write `computation: main.wat`",
             ),
             (
-                "  resource: lengua run",
+                "  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md",
                 "  resource: python run.py",
                 "line 11: `executor` says `resource: python run.py`; lengua's `run` runs the \
-                 computation, so write `resource: lengua run`",
+                 computation, so write `resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md`",
             ),
             (
-                "  resource: lengua run\n",
+                "  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md\n",
                 "",
                 "line 10: `executor` has no `resource`; lengua's `run` runs the computation, so \
-                 add `resource: lengua run`",
+                 add `resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md`",
             ),
             (
-                "  resource: lengua check",
-                "  resource: lengua run",
-                "line 14: `attester` says `resource: lengua run`; lengua's `check` checks each \
-                 run, so write `resource: lengua check`",
+                "  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md",
+                "  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md",
+                "line 14: `attester` says `resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md`; lengua's `check` checks each \
+                 run, so write `resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md`",
             ),
             (
-                "executor:\n  resource: lengua run\n  receipt: [stdout, stderr, exit]",
+                "executor:\n  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md\n  receipt: [stdout, stderr, exit]",
                 "executor: lengua run",
                 "line 10: the frontmatter says `executor: lengua run`; lengua's `run` runs the \
-                 computation and returns a receipt, so write `executor: { resource: lengua run, \
+                 computation and returns a receipt, so write `executor: { resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md, \
                  receipt: [stdout, stderr, exit] }`",
             ),
             (
-                "attester:\n  resource: lengua check",
+                "attester:\n  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md",
                 "attester: lengua check",
                 "line 13: the frontmatter says `attester: lengua check`; lengua's `check` checks \
-                 each run, so write `attester: { resource: lengua check }`",
+                 each run, so write `attester: { resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md }`",
             ),
         ];
         for (from, to, problem) in wrong {
@@ -4425,7 +4427,7 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         );
         for key in [
             "computation: main.wat",
-            "executor: { resource: lengua run }",
+            "executor: { resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md }",
             "attester:",
         ] {
             let text = ADD.replace("title: add\n", &format!("title: add\n{key}\n"));

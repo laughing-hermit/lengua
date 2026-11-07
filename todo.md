@@ -133,7 +133,9 @@ Each can be reversed.
   the tiers that need CPU instructions (AES, SHA, CRC, AVX-512, SVE), are retired.
 - **`idea.md` is an Open Knowledge Format `Attested Computation`**: `runtime: webassembly`,
   `computation: main.wat`, `parameters` with a lengua key `from` (an argument, standard input, an
-  environment variable or a file), `run` its executor and `check` its attester. The format says an
+  environment variable or a file), `run` its executor and `check` its attester. OKF §6.2 makes
+  `executor.resource` and `attester.resource` paths or URLs, so an idea names two pages of this
+  repository, [docs/run.md](docs/run.md) and [docs/check.md](docs/check.md). The format says an
   agent must not author a computation; lengua reads that as: the agent writes `main.wat` only while
   the idea is unverified, and any edit starts a new, unverified definition. `check` writes
   `verified: [{ by: lengua/<version>, at, idea: sha256:…, code: sha256:… }]` at `done` (a
