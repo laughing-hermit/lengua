@@ -51,3 +51,24 @@ What a run gives back, the fields an idea's `executor.receipt` lists:
 | `files` | the files it left in the working folder |
 
 To check a run against its idea, see [check.md](check.md).
+
+## Measure it
+
+```sh
+lengua-mcp measure [--in <folder>] [--stdin <file>] [--stdout <file>] <folder> [-- arguments…]
+```
+
+`lengua-mcp measure` runs the program once, in a process of its own, exactly as `lengua-mcp run`
+runs it, and prints one line of JSON: its CPU time in user space and in the kernel, its time on
+the clock, its peak resident memory and the size of the module it ran, as the system counts them
+for that process (`getrusage` on Linux and macOS, the process's counters on Windows). Standard
+input comes from the file `--stdin` names, standard output goes to the file `--stdout` names.
+
+It measures other programs the same way, so they can be set side by side: any WebAssembly module
+of WASI preview 1, such as a C, C++ or Rust toolchain makes, runs in lengua's own host, in the
+same configuration of the engine, with what `--uses` and `--network` allow, written as an idea's
+`- Uses:` and `- Network:` lines are; and a native executable runs as a shell starts it. With
+`--serve <port>`, the program is a server: 64 clients each send 1,000 lines of 64 bytes, one at a
+time, and must get each back in capitals, and its time on the clock runs from its first
+connection to its last answer. The gate that holds lengua to C, C++ and Rust,
+`benches/against_rust_and_c.rs`, measures every program this way.

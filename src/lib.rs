@@ -27,6 +27,7 @@ pub mod header;
 pub mod idea;
 pub mod isa;
 pub mod lock;
+pub mod measure;
 pub mod names;
 mod os;
 pub mod platform;

@@ -22,3 +22,8 @@ unwrap_used = "warn"
 # The Unix calls that need unsafe code (the nix crate is empty elsewhere).
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", default-features = false, features = ["signal"] }
+
+# Windows's counters of a process: its times and its peak working set. The version the lock
+# already holds for the rest of the workspace.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
