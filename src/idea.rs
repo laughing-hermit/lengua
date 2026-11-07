@@ -4709,7 +4709,8 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
             (
                 "- Uses: nothing",
                 "- Secret: the environment variable `KEY`",
-                "does not name the environment",
+                "the environment variable `KEY` is secret, but the `- Uses:` line does not name \
+                 the environment",
             ),
             (
                 "- Uses: nothing",
