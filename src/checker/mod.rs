@@ -3,7 +3,8 @@
 //!
 //! It reads main.s ([`source`]), reads the linked executable back and matches every instruction
 //! to its line ([`decode`]), builds each function's control flow and stack depths ([`cfg`]), and
-//! checks the rules ([`rules`], [`memory`] and [`threads`]).
+//! checks the rules ([`rules`], [`memory`] and [`threads`]). The WebAssembly dialect's checker,
+//! for main.wat, is [`wasm`]: the same rules and violations, in their WebAssembly meaning.
 
 pub mod aarch64;
 pub mod cfg;
@@ -13,6 +14,7 @@ pub mod rules;
 pub mod source;
 pub mod tables;
 pub mod threads;
+pub mod wasm;
 pub mod x86_64;
 
 #[cfg(test)]
@@ -163,17 +165,25 @@ pub struct Violation {
     pub fix: String,
 }
 
+impl Violation {
+    /// How a report shows the violation of a line of `file`: `rule 4 (small functions)
+    /// main.wat:12: problem. Fix: fix.` for main.wat's, as [`fmt::Display`] shows main.s's.
+    #[must_use]
+    pub fn in_file(&self, file: &str) -> String {
+        let rule = match self.rule {
+            Rule::Dialect => "dialect".to_owned(),
+            rule => format!("{} ({})", rule.label(), rule.name()),
+        };
+        let place = self
+            .line
+            .map_or_else(|| ": ".to_owned(), |line| format!(" {file}:{line}: "));
+        format!("{rule}{place}{}. Fix: {}.", self.problem, self.fix)
+    }
+}
+
 impl fmt::Display for Violation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.rule {
-            Rule::Dialect => f.write_str("dialect")?,
-            rule => write!(f, "{} ({})", rule.label(), rule.name())?,
-        }
-        match self.line {
-            Some(line) => write!(f, " main.s:{line}: ")?,
-            None => f.write_str(": ")?,
-        }
-        write!(f, "{}. Fix: {}.", self.problem, self.fix)
+        f.write_str(&self.in_file("main.s"))
     }
 }
 
