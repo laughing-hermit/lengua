@@ -25,6 +25,9 @@ use crate::wasm::wasi::{errno, fdflags, sock};
 /// The most a socket reads ahead at once.
 const CHUNK: usize = 16 * 1024;
 
+/// The most a closing connection reads and drops of what has arrived unread.
+const DRAIN: usize = 1 << 20;
+
 /// The first nap a wait on a TCP stream takes between two looks at it. Each nap is twice the one
 /// before, up to [`LAST_NAP`], so an answer that comes soon is seen soon, and a long wait costs
 /// little.
@@ -292,9 +295,30 @@ impl Socket {
         Ok(())
     }
 
-    /// Closes it: what the program sent ends there.
+    /// Closes it: what the program sent ends there, and what has arrived unread is dropped.
     pub fn close(&mut self) {
         let _ = self.shutdown(sock::SHUT_RD | sock::SHUT_WR);
+        self.drain();
+    }
+
+    /// Reads and drops what has arrived that the program didn't read, up to [`DRAIN`] bytes,
+    /// without waiting on a TCP stream and a moment on a place's: Linux answers the close of a
+    /// connection that holds unread bytes, such as the session tickets a TLS server sends, with
+    /// a reset, and the reset loses what lengua was still sending.
+    fn drain(&mut self) {
+        let wait = match self.link {
+            Link::Place(..) => Some(Duration::from_millis(1)),
+            Link::Tcp(_) | Link::Ended => None,
+        };
+        let mut chunk = vec![0_u8; CHUNK];
+        let mut dropped = 0;
+        while dropped < DRAIN {
+            match self.receive(&mut chunk, wait) {
+                Some(count) if count > 0 => dropped += count,
+                _ => break,
+            }
+        }
+        self.ahead.clear();
     }
 }
 
