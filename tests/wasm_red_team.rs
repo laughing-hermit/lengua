@@ -201,6 +201,49 @@ const ATTEMPTS: &[Attempt] = &[
         refusal: Refusal::Rule(Rule::Indirection, "isn't bounds-checked first"),
     },
     Attempt {
+        name: "an index a parameter gives, never checked",
+        edits: &[(
+            "    (if (i32.ge_u (local.get $i) (global.get $args.size))\n      (then (call \
+             $assert_fail (i32.const 3)) unreachable))\n",
+            "",
+        )],
+        module: None,
+        refusal: Refusal::Rule(
+            Rule::Indirection,
+            "indexes $args with $i, which isn't bounds-checked first",
+        ),
+    },
+    Attempt {
+        name: "a store into a read-only region at an index a parameter gives",
+        edits: &[(
+            "    (local.set $status (global.get $ERROR_INVALID))\n",
+            "    (local.set $status (global.get $ERROR_INVALID))\n    (i32.store8 (i32.add \
+             (global.get $nan) (local.get $at)) (global.get $MINUS))\n",
+        )],
+        module: None,
+        refusal: Refusal::Rule(Rule::Immutability, "writes to $nan, a read-only region"),
+    },
+    Attempt {
+        name: "an address made of two regions' addresses added",
+        edits: &[(
+            "    (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get $NEWLINE))\n",
+            "    (i32.store8 (i32.add (global.get $out) (global.get $out)) (global.get \
+             $NEWLINE))\n",
+        )],
+        module: None,
+        refusal: Refusal::Rule(Rule::Owners, "made from a plain number"),
+    },
+    Attempt {
+        name: "a store through one of two regions, one of them read-only",
+        edits: &[(
+            "    (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get $NEWLINE))\n",
+            "    (i32.store8 (select (global.get $out) (global.get $nan) (local.get $at)) \
+             (global.get $NEWLINE))\n",
+        )],
+        module: None,
+        refusal: Refusal::Rule(Rule::Immutability, "writes to $nan, a read-only region"),
+    },
+    Attempt {
         name: "lengua's addresses below 1024, through a plain number",
         edits: &[(
             "    (local.set $magnitude (local.get $value))\n",
