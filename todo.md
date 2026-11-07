@@ -313,3 +313,7 @@ routed around through other models or subagents.
   spikes were being planned. Nothing was lost, and its content isn't produced again. With three
   stops near the same ground, the tests that try to get past the sandbox on macOS and Windows are
   left for the owner or another engineer.
+- **2026-11-07.** A review of W10's secret rule for soundness (src/checker/wasm/secret.rs on
+  `wip/secret`) was stopped partway, when it had only read files. It confirmed no finding and
+  showed nothing about the rule, so the rule hasn't passed a soundness review. Its content isn't
+  produced again, and the owner decides how the review goes on.
