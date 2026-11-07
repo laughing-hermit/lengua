@@ -103,8 +103,7 @@ fn manifest(plugin: &Path, name: &str) -> Value {
     let path = plugin.join(name);
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    serde_json::from_str(&text)
-        .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+    serde_json::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
 /// What the archive ships, in `plugin`: its target, which must be this computer's; the
@@ -160,8 +159,8 @@ fn shipped(plugin: &Path) -> PathBuf {
     for file in ["LICENSE", "licenses/README.md"] {
         assert!(plugin.join(file).is_file(), "{file} isn't in the archive");
     }
-    let crates = std::fs::read_to_string(licences.join("rust-crates.txt"))
-        .expect("the crates' licences");
+    let crates =
+        std::fs::read_to_string(licences.join("rust-crates.txt")).expect("the crates' licences");
     assert!(
         crates.contains("\n== wasmtime "),
         "the crates' licences don't name wasmtime"
@@ -194,7 +193,10 @@ fn version_and_doctor(server: &Path, data: &Path) {
             line.starts_with(&format!("{solver}: "))
                 && line.contains("the version lengua pins, beside the server, ")
         });
-        assert!(beside, "the archive's {solver} isn't the one found:\n{said}");
+        assert!(
+            beside,
+            "the archive's {solver} isn't the one found:\n{said}"
+        );
     }
 }
 
@@ -216,9 +218,13 @@ async fn call(
         Some(true),
         "{tool} returned an error: {result:?}"
     );
-    result
-        .structured_content
-        .unwrap_or_else(|| panic!("{tool} returned no structured content: {:?}", result.content))
+    match result.structured_content {
+        Some(content) => content,
+        None => panic!(
+            "{tool} returned no structured content: {:?}",
+            result.content
+        ),
+    }
 }
 
 /// Whether any of `lines`, an array of text, contains `needle`.
@@ -306,10 +312,7 @@ async fn the_archive_works_as_a_user_gets_it() {
             "the server's proofs found no solver: {done}"
         );
     }
-    println!(
-        "release check: add is done; its proofs: {}",
-        done["proofs"]
-    );
+    println!("release check: add is done; its proofs: {}", done["proofs"]);
 
     // add runs through run, and from a shell.
     let sum = call(

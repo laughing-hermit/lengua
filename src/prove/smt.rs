@@ -1622,7 +1622,9 @@ mod tests {
         assert_eq!(find_in(Some(beside), Some(path), Kind::Cvc5), None);
         assert_eq!(find_in(None, None, Kind::Cvc5), None);
         assert_eq!(
-            find_in(None, Some(path), Kind::Z3).as_ref().map(Found::path),
+            find_in(None, Some(path), Kind::Z3)
+                .as_ref()
+                .map(Found::path),
             Some(on_path.as_path())
         );
     }

@@ -122,11 +122,7 @@ fn doctor_says_each_thing_on_its_line() {
     assert!(engine.starts_with(&ran), "{said}");
     assert_eq!(problem, None, "{said}");
     let (cpu, _) = line_of(&said, "cpu: ");
-    let target = format!(
-        "cpu: {}-{}, ",
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    );
+    let target = format!("cpu: {}-{}, ", std::env::consts::OS, std::env::consts::ARCH);
     assert!(
         cpu.starts_with(&target) && cpu.contains(", vectors up to "),
         "{said}"
@@ -140,11 +136,8 @@ fn doctor_says_each_thing_on_its_line() {
     assert_eq!(problem, None, "{said}");
     assert!(data.is_dir(), "doctor didn't make the data folder");
     let (plugin_data, problem) = line_of(&said, "PLUGIN_DATA: ");
-    assert_eq!(
-        plugin_data,
-        "PLUGIN_DATA: not set, so compiled modules are kept in the data folder",
-        "{said}"
-    );
+    let unset = "PLUGIN_DATA: not set, so compiled modules are kept in the data folder";
+    assert_eq!(plugin_data, unset, "{said}");
     assert_eq!(problem, None, "{said}");
 }
 
