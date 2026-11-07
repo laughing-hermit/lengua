@@ -30,7 +30,8 @@ pub mod errno {
     pub const BUSY: u16 = 10;
     /// A name that is taken.
     pub const EXIST: u16 = 20;
-    /// A file past its size limit, or the files past their total.
+    /// A file past its size limit, or the files past their total, which a new file or folder
+    /// counts against too.
     pub const FBIG: u16 = 22;
     /// A name that isn't text.
     pub const ILSEQ: u16 = 25;
@@ -507,6 +508,7 @@ pub const FUNCTIONS: &[Function] = &[
             ACCES,
             BADF,
             EXIST,
+            FBIG,
             ILSEQ,
             INVAL,
             IO,
@@ -550,6 +552,7 @@ pub const FUNCTIONS: &[Function] = &[
             ACCES,
             BADF,
             EXIST,
+            FBIG,
             ILSEQ,
             INVAL,
             IO,
