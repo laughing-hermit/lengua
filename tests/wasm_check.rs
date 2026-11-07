@@ -573,8 +573,10 @@ async fn add_s_proof_is_named_and_the_lock_keeps_it() {
 /// counterexample through check, the same state as a native program's: B1 runs only its ten
 /// boundary values, none of which sums to zero, so the tests pass, and the proof finds the sum,
 /// which a real run confirms. The lock records it, so run refuses the build, after a restart
-/// too, and lengua's entry never goes in; the attester, given an entry written by hand, doesn't
-/// take its word but finds the sum too.
+/// too. lengua's entry, which check writes only if it says done while the proof still runs, is
+/// gone once the proof finds the sum, and the check after the restart, which replays the lock's
+/// record, writes none; the attester, given an entry written by hand, doesn't take its word but
+/// finds the sum too.
 #[tokio::test]
 async fn a_planted_wrong_constant_is_a_counterexample_through_check() {
     if !solvers_installed() {
@@ -622,6 +624,8 @@ async fn a_planted_wrong_constant_is_a_counterexample_through_check() {
     let again = session.settle(&program).await;
     assert_eq!(again["state"], "tests_failed", "{again}");
     assert!(any_line(&again["problems"], found), "{again}");
+    let idea = program.read("idea.md").expect("idea.md");
+    assert!(trust::lengua_entries(&idea).is_empty(), "{idea}");
     session.service.cancel().await.expect("close the session");
     // The attester doesn't take an entry's word for it: given one by hand, it proves main.wat
     // and finds the sum too.
