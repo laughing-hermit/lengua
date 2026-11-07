@@ -5,8 +5,9 @@
 //!
 //! The record isn't the idea, so lengua's hash of an idea leaves it out: writing `verified` or
 //! `generated` changes no lock and no header. Each edit here changes lines of the frontmatter's
-//! text and never writes its YAML again, so comments, the other keys and the body stay byte for
-//! byte.
+//! text and never writes its YAML again, so the other keys and the body stay byte for byte, and
+//! so do the comments: only a comment inside a flow collection goes on a line of its own, and a
+//! comment at the margin that would no longer be the record's moves in.
 
 use serde::Deserialize;
 
@@ -32,6 +33,9 @@ const NULLS: [&str; 4] = ["~", "null", "Null", "NULL"];
 
 /// What a key written plain can't start with: a space, a tab, and YAML's indicators.
 const NOT_KEYS: &str = " \t#[]{},?:!&*|>%@`";
+
+/// What YAML separates the tokens on a line with: a space and a tab, and no other white space.
+const SPACES: [char; 2] = [' ', '\t'];
 
 /// One entry of `verified`: who confirmed the idea, when, and the idea and code they checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,8 +123,9 @@ pub fn idea_hash(bytes: &[u8]) -> Sha256Hex {
 /// `text`, an idea, with lengua's entry `entry` in its frontmatter's `verified`: every other
 /// entry as it was, lengua's earlier ones gone, and `entry` last. With no `verified` key, the key
 /// and the entry go just before the closing `---`; a bare mapping, which OKF lets `verified` be,
-/// becomes the list's first entry. Only those lines change, in the file's line endings, so
-/// [`idea_hash`] stays the same. A text with no frontmatter comes back as it is.
+/// becomes the list's first entry. A flow list's entries each go on a line of their own, and its
+/// comments too, each after the entry it follows. Only those lines change, in the file's line
+/// endings, so [`idea_hash`] stays the same. A text with no frontmatter comes back as it is.
 #[must_use]
 pub fn with_lengua_verified(text: &str, entry: &Verified) -> String {
     let Some(page) = Page::of(text) else {
@@ -157,9 +162,15 @@ pub fn without_lengua_verified(text: &str) -> Option<String> {
         return Some(page.splice(block.start, block.end, ""));
     }
     let mut kept = record.kept;
-    // A blank line or a comment at the margin, last, would no longer be the key's.
-    while kept.last().is_some_and(|line| neutral(line)) {
+    // A blank line, last, would no longer be the key's, and goes; a comment at the margin, last,
+    // moves in, where it stays the key's.
+    while kept.last().is_some_and(|line| blank(line)) {
         kept.pop();
+    }
+    if let Some(last) = kept.last_mut()
+        && neutral(last)
+    {
+        *last = moved(last);
     }
     let lines = format!("{}{}", record.head, kept.concat());
     Some(page.splice(block.start, block.end, &lines))
@@ -328,7 +339,7 @@ fn key_of(text: &str) -> Option<(&str, usize)> {
             let colon = (0..bytes.len()).find(|&at| {
                 bytes[at] == b':' && matches!(bytes.get(at + 1), None | Some(b' ' | b'\t'))
             })?;
-            let key = text[..colon].trim_end();
+            let key = text[..colon].trim_end_matches(SPACES);
             // A comment can't start before a key's colon.
             let commented = key.contains(" #") || key.contains("\t#");
             (!key.is_empty() && !commented).then_some((key, colon + 1))
@@ -464,17 +475,22 @@ impl Record {
         let (value, comment) = split_comment(rest);
         let head = format!("{prefix}{comment}{ending}");
         match value.chars().next() {
-            None => Self::under(line.to_owned(), below),
-            Some(open @ ('[' | '{')) => match flow(rest.trim_start(), below) {
-                Some((collection, closes, after)) => {
-                    let (_, comment) = split_comment(&after);
-                    let head = format!("{prefix}{comment}{ending}");
-                    let items = if open == '[' {
-                        flow_items(&collection)
+            None => Self::under(line.to_owned(), below, eol),
+            Some('[' | '{') => match flow(rest.trim_start_matches(SPACES), below) {
+                Some(mut collection) => {
+                    let head = if collection.closes == 0 {
+                        // The comment after the collection, on the key's line, stays there.
+                        let (_, comment) = split_comment(&collection.after);
+                        format!("{prefix}{}{ending}", spaced(comment))
                     } else {
-                        vec![one_line(&collection)]
+                        // The key's line keeps its own comment, which is the collection's.
+                        head
                     };
-                    Self::items(head, items, &below[closes.min(below.len())..], eol)
+                    collection.comments.retain(|note| note.line > 0);
+                    let mut record = Self::new(head, INDENT.len());
+                    record.add_flow(&collection, eol);
+                    record.keep(&below[collection.closes.min(below.len())..]);
+                    record
                 }
                 // Never closed: kept as it is written.
                 None => Self::scalar(head, value, below, eol),
@@ -484,16 +500,27 @@ impl Record {
         }
     }
 
-    /// `verified:` with nothing after it: a list under it, a bare mapping, or no entries.
-    fn under(head: String, below: &[&str]) -> Self {
+    /// `verified:` with nothing after it: a list under it, written an entry a line or more or as
+    /// a flow list, a bare mapping, or no entries.
+    fn under(head: String, below: &[&str], eol: &str) -> Self {
         let entries = entries(below, 0, below.len());
         if let Some(&(first, _)) = entries.first() {
             return Self::list(head, below, &entries, indentation(below[first]));
         }
-        match below.iter().position(|line| content(line)) {
-            Some(first) => Self::mapping(head, below, first),
-            None => Self::empty(head, below),
+        let Some(first) = below.iter().position(|line| content(line)) else {
+            return Self::empty(head, below);
+        };
+        let start = text_of(below[first]).trim_start_matches(SPACES);
+        if start.starts_with('[')
+            && let Some(collection) = flow(start, &below[first + 1..])
+        {
+            let mut record = Self::new(head, INDENT.len());
+            record.keep(&below[..first]);
+            record.add_flow(&collection, eol);
+            record.keep(&below[(first + 1 + collection.closes).min(below.len())..]);
+            return record;
         }
+        Self::mapping(head, below, first)
     }
 
     /// A list written an entry a line or more, its dashes `indent` spaces in: someone else's
@@ -534,20 +561,30 @@ impl Record {
         record
     }
 
-    /// The entries of a flow list, or a bare flow mapping, each made an item on a line of its own;
-    /// `rest` the lines after the one the flow closes on, which stay.
-    fn items(head: String, items: Vec<String>, rest: &[&str], eol: &str) -> Self {
-        let mut record = Self::new(head, INDENT.len());
-        for item in items {
-            if lengua_mapping(&item) {
-                record.lengua = true;
+    /// The entries of a flow list, or a bare flow mapping, each made an item on a line of its own,
+    /// and each of its comments a line of its own after the entry it follows.
+    fn add_flow(&mut self, flow: &Flow, eol: &str) {
+        self.add_notes(flow, 0, eol);
+        for (index, item) in flow.entries.iter().enumerate() {
+            if lengua_mapping(item) {
+                self.lengua = true;
             } else {
-                record.others += 1;
-                record.kept.push(format!("{INDENT}- {item}{eol}"));
+                self.others += 1;
+                self.kept.push(format!("{INDENT}- {item}{eol}"));
+            }
+            self.add_notes(flow, index + 1, eol);
+        }
+    }
+
+    /// The comments of `flow` that follow its first `count` entries, each on a line of its own,
+    /// indented as the entries are, so that it stays the key's.
+    fn add_notes(&mut self, flow: &Flow, count: usize, eol: &str) {
+        let last = flow.entries.len();
+        for note in &flow.comments {
+            if note.follows.min(last) == count {
+                self.kept.push(format!("{INDENT}{}{eol}", note.text));
             }
         }
-        record.keep(rest);
-        record
     }
 
     /// A value that OKF doesn't let `verified` be, such as a word: it stays, as the list's first
@@ -617,15 +654,21 @@ enum Part {
     Comment,
 }
 
+/// Whether YAML reads `character` as the space between two tokens, after which a comment or a
+/// scalar in quotes can start: a space, a tab or a line's end, and no other white space.
+fn separates(character: char) -> bool {
+    matches!(character, ' ' | '\t' | '\n')
+}
+
 /// Each character of `text`, with its byte and what it is part of: a scalar in quotes (`"…"` with
-/// its backslash escapes, or `'…'` with `''` for a quote), a comment (from a `#` after a space or
-/// a line's start, to the line's end), or the plain text around them.
+/// its backslash escapes, or `'…'` with `''` for a quote), a comment (from a `#` after a space, a
+/// tab or a line's start, to the line's end), or the plain text around them.
 fn parts(text: &str) -> Vec<(usize, char, Part)> {
     let mut found = Vec::with_capacity(text.len());
     let mut characters = text.char_indices().peekable();
     let mut previous = '\n';
     while let Some((at, character)) = characters.next() {
-        if character == '#' && previous.is_whitespace() {
+        if character == '#' && separates(previous) {
             found.push((at, character, Part::Comment));
             while let Some(&(at, next)) = characters.peek() {
                 if next == '\n' {
@@ -638,7 +681,7 @@ fn parts(text: &str) -> Vec<(usize, char, Part)> {
             continue;
         }
         let opens = matches!(character, '"' | '\'')
-            && (previous.is_whitespace() || matches!(previous, '[' | '{' | ',' | ':'));
+            && (separates(previous) || matches!(previous, '[' | '{' | ',' | ':'));
         previous = character;
         if !opens {
             found.push((at, character, Part::Plain));
@@ -665,8 +708,8 @@ fn parts(text: &str) -> Vec<(usize, char, Part)> {
     found
 }
 
-/// `rest`, what follows a key's colon on its line, as its value, trimmed, and its comment with the
-/// spaces before it: `("[a]", "  # note")` for ` [a]  # note`.
+/// `rest`, what follows a key's colon on its line, as its value without the spaces and tabs around
+/// it, and its comment with the spaces before it: `("[a]", "  # note")` for ` [a]  # note`.
 fn split_comment(rest: &str) -> (&str, &str) {
     let comment = parts(rest)
         .into_iter()
@@ -674,91 +717,141 @@ fn split_comment(rest: &str) -> (&str, &str) {
         .map(|(at, _, _)| at);
     match comment {
         Some(at) => {
-            let value = rest[..at].trim_end();
-            (value.trim_start(), &rest[value.len()..])
+            let value = rest[..at].trim_end_matches(SPACES);
+            (value.trim_start_matches(SPACES), &rest[value.len()..])
         }
-        None => (rest.trim(), ""),
+        None => (rest.trim_matches(SPACES), ""),
     }
 }
 
-/// The flow collection that `start`, on the key's line, opens, read on into the lines `below`:
-/// its text without comments, the line it closes on (0 for the key's, `n` for `below[n - 1]`),
-/// and what follows it on that line. `None` when it never closes.
-fn flow(start: &str, below: &[&str]) -> Option<(String, usize, String)> {
+/// `comment`, as it follows a key's colon on its line, with a space before it when nothing
+/// separates it from the colon, so that the line still starts the key.
+fn spaced(comment: &str) -> String {
+    if comment.is_empty() || comment.starts_with(SPACES) {
+        comment.to_owned()
+    } else {
+        format!(" {comment}")
+    }
+}
+
+/// A flow collection, `[…]` or `{…}`, read from the line it opens on to the line it closes on.
+struct Flow {
+    /// Its entries, each on one line and without comments: a list's, or the mapping itself.
+    entries: Vec<String>,
+    /// Its comments in order, the one after it on the line it closes on among them.
+    comments: Vec<Note>,
+    /// The line it closes on: 0 for the line it opens on, `n` for the `n`th line after that.
+    closes: usize,
+    /// What follows it on the line it closes on.
+    after: String,
+}
+
+/// A comment in a flow collection, or after it on the line it closes on.
+struct Note {
+    /// The comment, from its `#` to the end of its line.
+    text: String,
+    /// The line it's on: 0 for the line the collection opens on.
+    line: usize,
+    /// How many of the collection's entries begin before it: it goes after the last of them.
+    follows: usize,
+}
+
+/// The flow collection that `start` opens with `[` or `{`, read on into the lines `below`; `None`
+/// when it never closes.
+fn flow(start: &str, below: &[&str]) -> Option<Flow> {
     let mut text = text_of(start).to_owned();
     text.push('\n');
     for line in below {
         text.push_str(text_of(line));
         text.push('\n');
     }
-    let (collection, after) = flow_collection(&text)?;
-    let closes = text[..after].matches('\n').count();
-    let rest = text[after..]
-        .split('\n')
-        .next()
-        .unwrap_or_default()
-        .to_owned();
-    Some((collection, closes, rest))
-}
-
-/// The flow collection that `text` opens with `[` or `{`, without its comments, and the byte of
-/// `text` just past the bracket that closes it; `None` when none does.
-fn flow_collection(text: &str) -> Option<(String, usize)> {
+    let list = text.starts_with('[');
+    let mut entries: Vec<String> = Vec::new();
+    // The entry being read: a list's since its `[` or its last `,`, or all of a mapping.
+    let mut entry = String::new();
+    let mut comments: Vec<Note> = Vec::new();
     let mut depth = 0_usize;
-    let mut collection = String::new();
-    for (at, character, part) in parts(text) {
-        match part {
-            Part::Comment => continue,
-            Part::Quoted => {}
-            Part::Plain => match character {
-                '[' | '{' => depth += 1,
+    let mut line = 0;
+    let mut noting = false;
+    for (at, character, part) in parts(&text) {
+        if part == Part::Comment {
+            if !noting {
+                let begun = usize::from(!one_line(&entry).is_empty());
+                let follows = if list { entries.len() + begun } else { 1 };
+                comments.push(Note {
+                    text: String::new(),
+                    line,
+                    follows,
+                });
+            }
+            noting = true;
+            if let Some(note) = comments.last_mut() {
+                note.text.push(character);
+            }
+            continue;
+        }
+        noting = false;
+        line += usize::from(character == '\n');
+        if part == Part::Plain {
+            match character {
+                '[' | '{' => {
+                    depth += 1;
+                    // A list's own bracket is no part of its first entry.
+                    if list && depth == 1 {
+                        continue;
+                    }
+                }
                 ']' | '}' => {
                     depth = depth.saturating_sub(1);
                     if depth == 0 {
-                        collection.push(character);
-                        return Some((collection, at + character.len_utf8()));
+                        if !list {
+                            entry.push(character);
+                        }
+                        add_entry(&mut entries, &entry);
+                        let end = at + character.len_utf8();
+                        let after = text[end..].split('\n').next().unwrap_or_default();
+                        let (_, comment) = split_comment(after);
+                        if !comment.is_empty() {
+                            comments.push(Note {
+                                text: comment.trim_start_matches(SPACES).to_owned(),
+                                line,
+                                follows: entries.len(),
+                            });
+                        }
+                        return Some(Flow {
+                            entries,
+                            comments,
+                            closes: line,
+                            after: after.to_owned(),
+                        });
                     }
                 }
-                _ => {}
-            },
-        }
-        collection.push(character);
-    }
-    None
-}
-
-/// The entries of the flow list `list`, `[…]` without comments, each on one line.
-fn flow_items(list: &str) -> Vec<String> {
-    let inner = list
-        .strip_prefix('[')
-        .and_then(|rest| rest.strip_suffix(']'))
-        .unwrap_or(list);
-    let mut items = Vec::new();
-    let mut item = String::new();
-    let mut depth = 0_usize;
-    for (_, character, part) in parts(inner) {
-        if part == Part::Plain {
-            match character {
-                '[' | '{' => depth += 1,
-                ']' | '}' => depth = depth.saturating_sub(1),
-                ',' if depth == 0 => {
-                    items.push(one_line(&std::mem::take(&mut item)));
+                ',' if list && depth == 1 => {
+                    add_entry(&mut entries, &std::mem::take(&mut entry));
                     continue;
                 }
                 _ => {}
             }
         }
-        item.push(character);
+        entry.push(character);
     }
-    items.push(one_line(&item));
-    items.retain(|item| !item.is_empty());
-    items
+    None
 }
 
-/// `text` on one line: its lines trimmed, and joined with a space.
+/// Adds `entry`, a flow list's entry as it is written, to `entries` on one line, unless it's
+/// empty, as the text after a list's last `,` can be.
+fn add_entry(entries: &mut Vec<String>, entry: &str) {
+    let entry = one_line(entry);
+    if !entry.is_empty() {
+        entries.push(entry);
+    }
+}
+
+/// `text` on one line: each of its lines without the spaces and tabs at its ends, joined with a
+/// space.
 fn one_line(text: &str) -> String {
     text.lines()
-        .map(str::trim)
+        .map(|line| line.trim_matches(SPACES))
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
@@ -958,7 +1051,10 @@ mod tests {
             assert_eq!(written(&with(IDEA, empty)), once, "{empty}");
         }
         // A text with no frontmatter isn't an idea, and comes back as it is.
-        assert_eq!(with_lengua_verified("# Purpose\n", &lengua()), "# Purpose\n");
+        assert_eq!(
+            with_lengua_verified("# Purpose\n", &lengua()),
+            "# Purpose\n"
+        );
     }
 
     #[test]
@@ -1107,16 +1203,98 @@ mod tests {
                 &format!("verified:\n  - {ANA}\n# signed\nstatus: stable\n")
             )
         );
-        assert_eq!(
-            idea_hash(removed.as_bytes()),
-            idea_hash(beside.as_bytes())
-        );
+        assert_eq!(idea_hash(removed.as_bytes()), idea_hash(beside.as_bytes()));
         assert_eq!(actors(&removed), ["human:ana"]);
+        // A comment at the margin just above lengua's entry moves in, and stays the record's.
+        let item = lengua().item();
+        let signed = with(
+            IDEA,
+            &format!("verified:\n  - {ANA}\n# signed\n  - {item}\nstatus: stable\n"),
+        );
+        let kept = without_lengua_verified(&signed).expect("lengua's entry was there");
+        assert_eq!(
+            kept,
+            with(
+                IDEA,
+                &format!("verified:\n  - {ANA}\n  # signed\nstatus: stable\n")
+            )
+        );
+        assert_eq!(idea_hash(kept.as_bytes()), idea_hash(signed.as_bytes()));
         // Nothing to take away.
         let others = with(IDEA, &format!("verified:\n  - {ANA}\n"));
         assert_eq!(without_lengua_verified(&others), None);
         assert_eq!(without_lengua_verified(IDEA), None);
         assert_eq!(without_lengua_verified("# Purpose\n"), None);
+    }
+
+    /// A flow collection's comments each go on a line of their own, after the entry they follow,
+    /// and the key's line keeps its own.
+    #[test]
+    fn a_flow_s_comments_stay_on_lines_of_their_own() {
+        let item = lengua().item();
+        let text = format!(
+            "verified: [  # who checked it\n  {ANA},  # by hand\n  # and then\n  {ANA}\n]  # \
+             the end\n"
+        );
+        let once = written(&with(IDEA, &text));
+        assert_eq!(
+            once,
+            with(
+                IDEA,
+                &format!(
+                    "verified:  # who checked it\n  - {ANA}\n  # by hand\n  # and then\n  - \
+                     {ANA}\n  # the end\n  - {item}\n"
+                )
+            )
+        );
+        assert_eq!(actors(&once), ["human:ana", "human:ana", ACTOR]);
+        // A bare mapping on lines of its own, with its comments.
+        let bare = "verified: { by: human:ana,  # Ana\n  at: 2026-06-25T09:00:00Z }  # by \
+                    hand\n";
+        assert_eq!(
+            written(&with(IDEA, bare)),
+            with(
+                IDEA,
+                &format!("verified:  # Ana\n  - {ANA}\n  # by hand\n  - {item}\n")
+            )
+        );
+        // A flow list on the line under the key: its entries are the list's, and lengua's goes.
+        let under = with(IDEA, &format!("verified:\n  [{ANA}, {item}]\n"));
+        let others = with(IDEA, &format!("verified:\n  - {ANA}\n"));
+        assert_eq!(
+            written(&under),
+            with(IDEA, &format!("verified:\n  - {ANA}\n  - {item}\n"))
+        );
+        assert_eq!(without_lengua_verified(&under), Some(others));
+    }
+
+    /// A `#` starts a comment only after a space, a tab or a line's start, as YAML reads it, and
+    /// lengua's entry leaves the key's line a key's.
+    #[test]
+    fn a_comment_starts_where_yaml_starts_one() {
+        let item = lengua().item();
+        let cases = [
+            // A `#` after a no-break space is part of the scalar.
+            ("verified: x\u{a0}# y\n", "verified:\n  - x\u{a0}# y\n"),
+            // A `#` just after a flow list: a space keeps the comment from the colon.
+            ("verified: [a]#x\n", "verified: #x\n  - a\n"),
+        ];
+        for (record, kept) in cases {
+            let text = with(IDEA, record);
+            let once = with_lengua_verified(&text, &lengua());
+            assert_eq!(
+                once,
+                with(IDEA, &format!("{kept}  - {item}\n")),
+                "{record:?}"
+            );
+            assert_eq!(
+                idea_hash(once.as_bytes()),
+                idea_hash(text.as_bytes()),
+                "{record:?}"
+            );
+            let removed = without_lengua_verified(&once).expect("lengua's entry was there");
+            assert_eq!(removed, with(IDEA, kept));
+        }
     }
 
     #[test]
@@ -1145,7 +1323,15 @@ mod tests {
         // Quoted keys, and values with colons in them.
         assert_eq!(key_of("\"verified\" : [a]"), Some(("verified", 12)));
         assert_eq!(key_of("http://x: y"), Some(("http://x", 9)));
-        for text in ["  title: add", "- a: b", "# c: d", "[a, b]", "word", "a:b", ""] {
+        for text in [
+            "  title: add",
+            "- a: b",
+            "# c: d",
+            "[a, b]",
+            "word",
+            "a:b",
+            "",
+        ] {
             assert_eq!(key_of(text), None, "{text:?}");
         }
     }
