@@ -1,6 +1,7 @@
-//! How far a WebAssembly program may go: its memory up to the size its module declares, its time
-//! up to a deadline, which also bounds every call of the host that waits, its output up to a cap
-//! per stream, each file up to a size and all it writes to files up to a total.
+//! How far a WebAssembly program may go: its memory up to the size its module declares, its table
+//! up to [`TABLE_ELEMENTS`], its time up to a deadline, which also bounds every call of the host
+//! that waits, its output up to a cap per stream, each file up to a size and all it writes to
+//! files up to a total.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,6 +18,12 @@ pub const SLICE: Duration = Duration::from_millis(20);
 /// The most bytes a test's program writes to files in all, every write counted: past it a write
 /// is cut short, and the next fails with `FBIG`, as past one file's limit.
 pub const TEST_WRITTEN: u64 = 256 * 1024 * 1024;
+
+/// The most elements a module's table may hold, whatever the module declares or grows it to: room
+/// for every function a C, C++ or Rust toolchain's module calls through its table, and at 8
+/// bytes an element, 8 MiB of the worker's own memory. A module that declares more never starts,
+/// and a `table.grow` past it gives -1, as a `memory.grow` past the memory's limit does.
+pub const TABLE_ELEMENTS: usize = 1 << 20;
 
 /// A WebAssembly page.
 const PAGE: u64 = 64 * 1024;
@@ -120,11 +127,13 @@ impl Limits {
 }
 
 /// What the engine holds a store to: one instance, one memory of at most `memory` bytes, one
-/// table, and memory that fails to grow past that rather than trap.
+/// table of at most [`TABLE_ELEMENTS`], and a memory or table that fails to grow past that rather
+/// than trap.
 #[must_use]
 pub fn store_limits(memory: usize) -> StoreLimits {
     StoreLimitsBuilder::new()
         .memory_size(memory)
+        .table_elements(TABLE_ELEMENTS)
         .instances(1)
         .memories(1)
         .tables(1)

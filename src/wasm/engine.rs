@@ -18,9 +18,10 @@ use wasmtime::{Cache, CacheConfig, Config, Engine, Strategy};
 
 /// The WebAssembly features lengua's programs may use, the engine's and the validator's alike:
 /// floats, mutable globals, saturating float-to-int conversions, sign extension, reference types
-/// (the `funcref` tables of a C, C++ or Rust toolchain's module), multiple values, bulk memory
-/// and 128-bit SIMD. Everything else is off: the component model, GC, threads, 64-bit and
-/// multiple memories, tail calls, exceptions, relaxed SIMD and wide arithmetic.
+/// (the `funcref` tables of a C, C++ or Rust toolchain's module, which the store holds to
+/// [`crate::wasm::host::limits::TABLE_ELEMENTS`] entries), multiple values, bulk memory and
+/// 128-bit SIMD. Everything else is off: the component model, GC, threads, 64-bit and multiple
+/// memories, tail calls, exceptions, relaxed SIMD and wide arithmetic.
 pub const FEATURES: WasmFeatures = WasmFeatures::FLOATS
     .union(WasmFeatures::MUTABLE_GLOBAL)
     .union(WasmFeatures::SATURATING_FLOAT_TO_INT)
@@ -170,6 +171,17 @@ mod tests {
             .map_err(|error| error.to_string())
     }
 
+    /// A toolchain's module that calls through its table, the table's number written in five
+    /// bytes, as LLVM writes it with reference types on. In order: the magic number and version
+    /// 1; one type, `() -> ()`; one function of it; one `funcref` table of at least one entry;
+    /// and the function's body, 11 bytes: no locals, `i32.const 0`, `call_indirect` of type 0 on
+    /// table 0 written as `80 80 80 80 00`, and `end`.
+    const OVERLONG: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03,
+        0x02, 0x01, 0x00, 0x04, 0x04, 0x01, 0x70, 0x00, 0x01, 0x0a, 0x0d, 0x01, 0x0b, 0x00, 0x41,
+        0x00, 0x11, 0x00, 0x80, 0x80, 0x80, 0x80, 0x00, 0x0b,
+    ];
+
     /// What lengua turns on, the engine runs, in every configuration; what it turns off, the
     /// validator refuses.
     #[test]
@@ -181,11 +193,21 @@ mod tests {
         let saturating = "(module (func (result i32) (i32.trunc_sat_f32_s (f32.const 3.5))))";
         let sign = "(module (func (result i32) (i32.extend8_s (i32.const 255))))";
         let values = "(module (func (result i32 i32) (i32.const 1) (i32.const 2)))";
+        // A call through a module's table, and reference types' growing of it, which the store
+        // holds to its limit.
+        let table = "(module (type $t (func)) (table 1 funcref) (func (call_indirect (type $t) \
+                     (i32.const 0))))";
+        let grows = "(module (table 1 funcref) (func (drop (table.grow 0 (ref.null func) \
+                     (i32.const 1)))))";
         for setup in Setup::ALL {
-            for text in [simd, bulk, saturating, sign, values] {
+            for text in [simd, bulk, saturating, sign, values, table, grows] {
                 assert_eq!(compiles(setup, text), Ok(()), "{setup:?}: {text}");
             }
+            let engine = engine(setup, None).expect("the engine");
+            let module = wasmtime::Module::from_binary(&engine, OVERLONG);
+            assert!(module.is_ok(), "{setup:?}: {:?}", module.err());
         }
+        assert!(validate(OVERLONG).is_ok(), "{:?}", validate(OVERLONG).err());
         for refused in [
             // Two memories.
             "(module (memory 1) (memory 1))",
