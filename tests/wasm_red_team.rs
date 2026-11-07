@@ -5,7 +5,14 @@
 //! store into a read-only region, an access past its region, an index nothing checks, lengua's
 //! addresses below 1024, recursion and mutual recursion, a loop without a bound, a trapping
 //! conversion, an unguarded division, relaxed SIMD and atomics, a name lengua keeps, an exit
-//! status lengua keeps, and an ignored result.
+//! status lengua keeps, and an ignored result. And the ways around the value rules: an index a
+//! parameter gives, two regions' addresses added or chosen between, a check or a divisor's
+//! guard kept past a change of what it checked, a callee's comparison taken as the caller's, an
+//! address a loop passes back to itself, offsets that wrap or a bound of -1, a global that changes
+//! used as an address, an array lent with a count nothing checks, a count written over what an
+//! iovec gives to read, an early return through a branch, a `br_table` default into ordinary code,
+//! a reference, a name lengua keeps on a global, an unsafe block over two functions, a bare
+//! descriptor kept in a local, and a loop that runs forever without taking connections.
 //!
 //! An attempt is refused either by the build, whose validator holds a module to the engine's
 //! features, or by a rule, which names what it found on main.wat's line. Any attempt that isn't
