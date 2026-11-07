@@ -691,7 +691,7 @@ fn check(runner: &Runner, prepared: &Prepared, version: &Version) -> Result<u64,
 }
 
 /// A row of a workload's table in the report: its label, and how each version's cell is shown.
-type Row = (&'static str, fn(&Measured) -> String);
+type TableLine = (&'static str, fn(&Measured) -> String);
 
 /// One version's runs as the results keep them, and what it is.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1726,7 +1726,7 @@ fn workload_section(out: &mut String, outcome: &Outcome) {
     let names: Vec<&str> = versions.iter().map(|one| one.name.as_str()).collect();
     let _ = writeln!(out, "| | {} |", names.join(" | "));
     let _ = writeln!(out, "|---|{}", "---|".repeat(names.len()));
-    let lines: [Row; 5] = [
+    let lines: [TableLine; 5] = [
         ("counted runs", |one| one.cpu_ns.len().to_string()),
         ("CPU time", |one| median_shown(&one.cpu_ns, duration)),
         ("wall time", |one| median_shown(&one.wall_ns, duration)),
