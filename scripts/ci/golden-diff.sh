@@ -2,11 +2,12 @@
 # Usage: golden-diff.sh raw|ledger <base dir> <head dir>
 #
 # Compares the goldens recorded at a base commit with those recorded at the head (ci.yml's golden
-# mode). Each dir holds the four recordings, somewhere beneath it: checker-x86.txt,
-# checker-aarch64.txt, prover-x86.txt and prover-aarch64.txt (src/checker/golden.rs and
-# src/prove/golden.rs write them under target/golden/).
+# mode). Each dir holds the two recordings of the WebAssembly lengua, somewhere beneath it:
+# checker-wasm.txt and prover-wasm.txt (src/checker/golden.rs and src/prove/golden.rs write them
+# under target/golden/). A base from before W11 has the native lengua's four instead, for x86-64
+# and ARM64, which nothing here compares: the tag native-final keeps the scripts that did.
 #
-# - raw: the four files must be identical, byte for byte. This is the view while no program
+# - raw: the two files must be identical, byte for byte. This is the view while no program
 #   changes, so that a change to the checker or the prover that moves any report or proof shows.
 # - ledger: only the prover's proofs, one line per program and block, with what changes when a
 #   program is rewritten left out (see `ledger` below). This is the view after programs change.
@@ -48,9 +49,9 @@ without_expected() {
 # block (a `  B<n> proofs: ...` line), one `path B<n>: verdict` line. A verdict's counts are left
 # out (shapes, paths, questions, the induction's reach and lookback): they change with every
 # rewrite of a program, and say nothing of whether it is proven. So are the words of a bound's
-# `why` (they name functions and print addresses) and hexadecimal numbers. What stays is what a
-# proof covers: the kind of verdict, the bound's bytes, the cut, the induction, and which
-# functions no run reached.
+# `why` (they name functions and lines), main.wat's line numbers, and hexadecimal numbers. What
+# stays is what a proof covers: the kind of verdict, the bound's bytes, the cut, the induction,
+# and which functions no run reached.
 ledger() {
   awk '
     /^== / { program = substr($0, 4); next }
@@ -64,6 +65,7 @@ ledger() {
     -e 's/[0-9]+ (shapes|paths|questions), //g' \
     -e 's/, (reach|lookback) [0-9]+//g' \
     -e 's/why: "([^"\\]|\\.)*"/why: _/g' \
+    -e 's/main\.wat line [0-9]+/main.wat line _/g' \
     -e 's/0x[0-9a-fA-F]+/0x_/g'
 }
 
@@ -71,7 +73,7 @@ status=0
 
 case "$view" in
   raw)
-    for name in checker-x86.txt checker-aarch64.txt prover-x86.txt prover-aarch64.txt; do
+    for name in checker-wasm.txt prover-wasm.txt; do
       b=$(recording "$base" "$name")
       h=$(recording "$head" "$name")
       if [ -z "$b" ] || [ -z "$h" ]; then
@@ -91,7 +93,7 @@ case "$view" in
     done
     ;;
   ledger)
-    for name in prover-x86.txt prover-aarch64.txt; do
+    for name in prover-wasm.txt; do
       b=$(recording "$base" "$name")
       h=$(recording "$head" "$name")
       if [ -z "$b" ] || [ -z "$h" ]; then
