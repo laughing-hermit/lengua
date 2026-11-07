@@ -1,6 +1,6 @@
 [package]
 name = "lengua-mcp"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # Wasmtime 50's own floor (crates.io, 2026-10-29); CI's Rust, in scripts/ci/setup.sh, is above it.
 rust-version = "1.97"

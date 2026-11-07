@@ -40,7 +40,7 @@ list, as OKF §5.2 defines it:
 
 ```yaml
 verified:
-  - { by: lengua/0.1.0, at: 2026-11-06T23:00:00Z, idea: "sha256:…", code: "sha256:…" }
+  - { by: lengua/0.2.0, at: 2026-11-06T23:00:00Z, idea: "sha256:…", code: "sha256:…" }
 ```
 
 It changes no other entry and no other line of the file. When the idea or `main.wat` changes, the

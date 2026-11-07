@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.1.0/plugin.schema.json",
   "name": "lengua",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "An AI language: a behavior-driven idea in plain words, its tests inside, which the agent compiles into assembly for this computer, Linux on x86-64 or ARM64, and lengua checks against those tests, proofs and an adapted NASA Power of 10.",
   "license": "Apache-2.0",
   "author": {

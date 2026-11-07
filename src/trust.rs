@@ -16,7 +16,7 @@ use crate::hash::Sha256Hex;
 /// The top-level frontmatter keys that hold the trust record, which an idea's hash leaves out.
 pub const TRUST_KEYS: [&str; 2] = ["verified", "generated"];
 
-/// lengua as an actor (OKF §7): its name and its version, such as `lengua/0.1.0`.
+/// lengua as an actor (OKF §7): its name and its version, such as `lengua/0.2.0`.
 pub const ACTOR: &str = concat!("lengua/", env!("CARGO_PKG_VERSION"));
 
 /// How the actor of each of lengua's entries starts, whatever its version.
@@ -63,7 +63,7 @@ impl Verified {
         }
     }
 
-    /// The entry as one line of YAML, a flow mapping: `{ by: lengua/0.1.0, at:
+    /// The entry as one line of YAML, a flow mapping: `{ by: lengua/0.2.0, at:
     /// 2026-11-06T23:00:00Z, idea: "sha256:…", code: "sha256:…" }`.
     #[must_use]
     pub fn item(&self) -> String {
