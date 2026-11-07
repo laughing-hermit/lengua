@@ -244,6 +244,55 @@ const ATTEMPTS: &[Attempt] = &[
         refusal: Refusal::Rule(Rule::Immutability, "writes to $nan, a read-only region"),
     },
     Attempt {
+        name: "a check of an index kept, then the index changed before the check is used",
+        edits: &[(
+            "    (local.set $i (local.get $at))\n    (if (i32.ge_u (local.get $i) (global.get \
+             $args.size))\n      (then (call $assert_fail (i32.const 3)) unreachable))\n",
+            "    (local.set $c (i32.ge_u (local.get $i) (global.get $args.size)))\n    \
+             (local.set $i (local.get $at))\n    (if (local.get $c) (then (call $assert_fail \
+             (i32.const 3)) unreachable))\n",
+        )],
+        module: None,
+        refusal: Refusal::Rule(
+            Rule::Indirection,
+            "indexes $args with $i, which isn't bounds-checked first",
+        ),
+    },
+    Attempt {
+        name: "a divisor checked not zero, then changed before the division",
+        edits: &[(
+            "          (local.set $size (i32.load offset=4 (global.get $sizes)))\n",
+            "          (local.set $size (i32.load offset=4 (global.get $sizes)))\n          \
+             (local.set $err (i32.eqz (local.get $size)))\n          (local.set $size (i32.load \
+             (global.get $sizes)))\n          (br_if $not_a_number (local.get $err))\n          \
+             (local.set $err (i32.div_u (global.get $args.size) (local.get $size)))\n",
+        )],
+        module: None,
+        refusal: Refusal::Rule(Rule::Dialect, "nothing checks isn't zero"),
+    },
+    Attempt {
+        name: "a callee's comparison taken as a check of the caller's own local",
+        edits: &[
+            (
+                "  ;; Writes $value in decimal",
+                "  (func $small (param $k i32) (result i32)\n    (i32.lt_u (local.get $k) \
+                 (global.get $args.size)))\n\n  ;; Writes $value in decimal",
+            ),
+            (
+                "          (local.set $size (i32.load offset=4 (global.get $sizes)))\n",
+                "          (local.set $size (i32.load offset=4 (global.get $sizes)))\n          \
+                 (local.set $err (i32.load (global.get $sizes)))\n          (if (call $small \
+                 (local.get $size))\n            (then (drop (i32.load8_u (i32.add (global.get \
+                 $args) (local.get $err))))))\n",
+            ),
+        ],
+        module: None,
+        refusal: Refusal::Rule(
+            Rule::Indirection,
+            "indexes $args with $err, which isn't bounds-checked first",
+        ),
+    },
+    Attempt {
         name: "lengua's addresses below 1024, through a plain number",
         edits: &[(
             "    (local.set $magnitude (local.get $value))\n",
