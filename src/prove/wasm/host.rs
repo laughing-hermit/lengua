@@ -920,7 +920,8 @@ impl Call<'_> {
         }
     }
 
-    /// A send of the `length` bytes at `buffer` on the connection `fd`.
+    /// A send of the `length` bytes at `buffer` on the connection `fd`: every one of them, as
+    /// lengua's host waits until the connection has taken them all, as the world's send does.
     fn send(&mut self, fd: u32, buffer: u64, length: u64) -> Result<u64, Fail> {
         let Some(Handle::Socket {
             world: opened,
@@ -1705,7 +1706,7 @@ impl Call<'_> {
         self.put(out_flags, 16, 0)
     }
 
-    /// `sock_send(fd, iovs, count, flags, sent)`: as much of the buffers as goes now, in order.
+    /// `sock_send(fd, iovs, count, flags, sent)`: every byte of the buffers, in order.
     fn sock_send(&mut self, fd: u32, (iovs, count): (u64, u64), sent: u64) -> Result<(), Fail> {
         self.check(sent, 4)?;
         let buffers = self.iovecs(iovs, count)?;
