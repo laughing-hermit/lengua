@@ -536,6 +536,64 @@ fn host_calls_answer_as_lengua_s_host_does() {
     assert_eq!(done.end, Ended::Exit(76));
 }
 
+/// Reads the connection at descriptor 5 five times, each into a buffer of its own room, and exits
+/// with the number of the first read that doesn't give the count it should, or with 0.
+const CHUNKS: &str = r#"(module
+  (import "wasi_snapshot_preview1" "fd_read"
+    (func $fd_read (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 2 2)
+  ;; One read of the connection into $room bytes at 4096: its count.
+  (func $read (param $room i32) (result i32)
+    (i32.store (i32.const 1024) (i32.const 4096))
+    (i32.store (i32.const 1028) (local.get $room))
+    (drop (call $fd_read (i32.const 5) (i32.const 1024) (i32.const 1) (i32.const 1032)))
+    (i32.load (i32.const 1032)))
+  ;; Exits with $number where a read into $room bytes doesn't give $count.
+  (func $expect (param $number i32) (param $room i32) (param $count i32)
+    (if (i32.ne (call $read (local.get $room)) (local.get $count))
+      (then (call $exit (local.get $number)))))
+  (func (export "_start")
+    (call $expect (i32.const 1) (i32.const 32768) (i32.const 16384))
+    (call $expect (i32.const 2) (i32.const 10000) (i32.const 10000))
+    (call $expect (i32.const 3) (i32.const 32768) (i32.const 6384))
+    (call $expect (i32.const 4) (i32.const 32768) (i32.const 7232))
+    (call $expect (i32.const 5) (i32.const 32768) (i32.const 0))
+    (call $exit (i32.const 0))))
+"#;
+
+/// A connection's reads give what lengua's host gives: it takes what arrives in at most 16 KiB
+/// at a time, and a read gets only what one take brought in. The test's server replies 40,000
+/// bytes at once, which the host takes in as 16 KiB, 16 KiB and the rest, so the reads give
+/// 16,384 bytes, then 10,000 and 6,384 from the second take, then 7,232, and then the end.
+#[test]
+fn a_connection_reads_what_the_host_took_in_at_once() {
+    let one = Policy {
+        connections: 1,
+        ..Policy::default()
+    };
+    let module = module(CHUNKS, one);
+    let mut pool = Pool::default();
+    let reply = exec::bytes(&mut pool, &[7; 40_000]);
+    let network = net::Network {
+        server: vec![(Vec::new(), vec![reply])],
+        made: vec![Some(0)],
+        client: Vec::new(),
+        listening: false,
+        at_once: false,
+        eager: true,
+    };
+    let start = begin(&module, &mut pool, &[], &[], Vec::new()).with_network(network);
+    let runs = exec::explore(&module, start, &mut pool, &mut exec::Concrete, 2).expect("the run");
+    let [run] = runs.as_slice() else {
+        panic!("{} runs", runs.len());
+    };
+    let Some(End::Exit(code)) = &run.world.end else {
+        panic!("{:?}", run.world.end);
+    };
+    assert_eq!(pool.constant(*code), Some(0));
+}
+
 /// An oracle for which every branch can go both ways.
 struct Anything;
 

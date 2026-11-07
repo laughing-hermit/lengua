@@ -21,6 +21,7 @@ use crate::runner::{OPEN_FILES, TEST_FILE_LIMIT};
 use crate::wasm::host::fds::FOLDER;
 use crate::wasm::host::files::names_in;
 use crate::wasm::host::limits::{ENTRY, TEST_WRITTEN};
+use crate::wasm::host::net::CHUNK;
 use crate::wasm::wasi::{
     Function, Unasked, clock, errno, event, fdflags, filetype, oflags, rights, size, sock, whence,
 };
@@ -777,10 +778,25 @@ impl Call<'_> {
         }
     }
 
+    /// A read of at most `length` bytes, into `buffer`, of the connection the world keeps as
+    /// `opened`, as lengua's host reads it: the host takes what arrives in at most [`CHUNK`]
+    /// bytes at a time and gives a read only what it took, so a read of a piece of what the
+    /// peer sends ends at the next multiple of [`CHUNK`] in it.
+    fn read_socket(&mut self, opened: u64, buffer: u64, length: u64) -> Result<u64, Fail> {
+        let into = match self.world.connection_of(opened) {
+            Ok(Some(number)) => self.world.connections[number].taken,
+            _ => 0,
+        };
+        let chunk = CHUNK as u64;
+        let room = chunk - into as u64 % chunk;
+        self.read_world(opened, buffer, length.min(room))
+    }
+
     /// `fd_read(fd, iovs, count, out)`: standard input needs it named, or the terminal; a file,
     /// files; a connection, the network. Standard input and a connection fill the first buffer
     /// with room, as one read of a pipe or a socket does, standard input's at most what one pipe
-    /// write holds; a file fills them in order.
+    /// write holds and a connection's at most what lengua's host took in at once; a file fills
+    /// them in order.
     fn fd_read(&mut self, fd: u32, (iovs, count): (u64, u64), out: u64) -> Result<(), Fail> {
         self.check(out, 4)?;
         let buffers = self.iovecs(iovs, count)?;
@@ -846,7 +862,7 @@ impl Call<'_> {
                 }
                 match first {
                     Some((buffer, length)) if !read_shut => {
-                        self.read_world(opened, buffer, length)?
+                        self.read_socket(opened, buffer, length)?
                     }
                     _ => 0,
                 }
@@ -1699,7 +1715,7 @@ impl Call<'_> {
             )));
         }
         let total = match buffers.iter().copied().find(|(_, length)| *length > 0) {
-            Some((buffer, length)) if !read_shut => self.read_world(opened, buffer, length)?,
+            Some((buffer, length)) if !read_shut => self.read_socket(opened, buffer, length)?,
             _ => 0,
         };
         self.put(received, 32, u128::from(total))?;
