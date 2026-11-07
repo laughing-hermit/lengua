@@ -9,8 +9,10 @@ These are NASA's "Power of 10" rules for safety-critical code (Holzmann, 2006), 
 WebAssembly as the native dialect adapted them for assembly, and joined with Rust's promise of
 memory safety. A program that passes them, and its proofs, has the three guarantees Rust gives,
 proven rather than checked while it runs:
-- **no access outside its object:** every load, store and copy stays inside the region it names,
-  for every input (rule 9 and the memory rules M1 to M8);
+- **no access outside its object:** every load, store and copy the rules follow stays inside the
+  region it names, for every input (rule 9 and the memory rules M1 to M8). An access they leave to
+  the proof stays inside the program's memory on every run the proof covers, and inside its region
+  only as far as the tests show: `check`'s memory line lists each such access;
 - **no use after free:** nothing is allocated or freed while the program runs (rule 3), so no
   address outlives what it points to;
 - **no data race:** the program is one thread.
@@ -214,7 +216,9 @@ proven" for memory, never proven: the memory rules can't follow a loaded address
 
 - **Division:** `div_s`, `div_u`, `rem_s` and `rem_u` are preceded by a check that the divisor
   isn't zero and, for `div_s`, that it isn't the most negative number divided by -1, or the proof
-  shows neither can happen. Either way the program never traps.
+  shows neither can happen on every run it covers. With the check, the program never traps there;
+  where no proof settles it, that division is tested, not proven, and `check`'s memory line lists
+  it.
 - **Floats** are allowed (`f32`, `f64`). The engine makes every NaN canonical, so every computer
   computes the same bits, a NaN's too, wherever they go. A program never takes a NaN's bits as a
   number: `reinterpret` of a float that may be NaN is refused. `check` follows that one direct
