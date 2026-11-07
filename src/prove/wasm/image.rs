@@ -574,7 +574,7 @@ fn frame(function: &Function) -> u64 {
 
 /// The functions `function` calls, each once, by index.
 fn called(function: &Function) -> Vec<usize> {
-    let mut called: Vec<usize> = function
+    let mut callees: Vec<usize> = function
         .ops
         .iter()
         .filter_map(|op| match op {
@@ -582,9 +582,9 @@ fn called(function: &Function) -> Vec<usize> {
             _ => None,
         })
         .collect();
-    called.sort_unstable();
-    called.dedup();
-    called
+    callees.sort_unstable();
+    callees.dedup();
+    callees
 }
 
 /// How far the model has followed a function's calls, for [`deepest`].
