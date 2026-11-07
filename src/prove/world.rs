@@ -135,7 +135,8 @@ pub(super) struct Open {
 }
 
 /// Where a run stood when it reached the read loop's head, in a proof by induction: what the
-/// core's slots held, and how far it had read standard input and written its outputs.
+/// core's slots held, how far it had read standard input and written its outputs, and what it
+/// had made of the working folder.
 #[derive(Debug, Clone)]
 pub struct Arrival {
     /// What each of the core's slots held, by number.
@@ -146,6 +147,12 @@ pub struct Arrival {
     pub stderr: usize,
     /// How much of standard input it had read.
     pub stdin_read: usize,
+    /// The files it had created or replaced, by name.
+    pub(super) written: Vec<String>,
+    /// The folders it had made.
+    pub(super) made: BTreeSet<String>,
+    /// The files and folders it had deleted, or renamed away.
+    pub(super) removed: BTreeSet<String>,
 }
 
 impl Arrival {
@@ -332,6 +339,30 @@ impl World {
     #[must_use]
     pub fn at_second(&self) -> Option<&Arrival> {
         self.second.as_deref()
+    }
+
+    /// Where the run stands, as a proof by induction keeps it at the read loop's head: `slots`,
+    /// what the core's slots hold; how far it has read and written; and what it has made of the
+    /// working folder.
+    pub(super) fn arrival(&self, slots: Vec<Term>) -> Arrival {
+        Arrival {
+            slots,
+            stdout: self.stdout.len(),
+            stderr: self.stderr.len(),
+            stdin_read: self.stdin_read,
+            written: self.written.keys().cloned().collect(),
+            made: self.made.clone(),
+            removed: self.removed.clone(),
+        }
+    }
+
+    /// Whether the working folder isn't as the run had left it at `then`: a file created,
+    /// replaced, deleted or renamed since, or a folder made or removed. A time round the read
+    /// loop that changes it would find it changed the next time round.
+    pub(super) fn folder_changed(&self, then: &Arrival) -> bool {
+        self.made != then.made
+            || self.removed != then.removed
+            || !self.written.keys().eq(&then.written)
     }
 
     /// Whether this run and `other` have done the same in the world, so two runs of the same

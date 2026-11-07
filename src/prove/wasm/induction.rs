@@ -129,14 +129,9 @@ fn calls(core: &Wasm) -> Vec<Call> {
 }
 
 /// Where the run stands, as the world keeps it at the read loop's head: what its slots hold,
-/// and how far it has read and written.
+/// how far it has read and written, and what it has made of the working folder.
 fn arrival(state: &State<Wasm>) -> Arrival {
-    Arrival {
-        slots: slots(&state.core),
-        stdout: state.world.stdout.len(),
-        stderr: state.world.stderr.len(),
-        stdin_read: state.world.stdin_read,
-    }
+    state.world.arrival(slots(&state.core))
 }
 
 /// What the run holds beyond its slots, to compare a time round with.
@@ -329,6 +324,13 @@ impl Looping for Wasm {
             changes
                 .other
                 .push("a time round the read loop opens files or connections".into());
+        }
+        // The working folder as a time round leaves it is what the next one finds there: a
+        // folder removed the first time round is gone the second.
+        if world.folder_changed(at_head) {
+            changes
+                .other
+                .push("a time round the read loop changes the working folder".into());
         }
         if world.raw_reads {
             changes.other.push(
