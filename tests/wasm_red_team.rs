@@ -368,6 +368,58 @@ const ATTEMPTS: &[Attempt] = &[
         refusal: Refusal::Rule(Rule::Owners, "on some path is a plain number"),
     },
     Attempt {
+        name: "an iovec array lent with a count nothing checks",
+        edits: &[
+            (
+                "  (import \"wasi_snapshot_preview1\" \"proc_exit\"",
+                "  (import \"wasi_snapshot_preview1\" \"fd_write\"\n    (func $fd_write \
+                 (param i32 i32 i32 i32) (result i32)))\n  (import \"wasi_snapshot_preview1\" \
+                 \"proc_exit\"",
+            ),
+            (
+                "            (then (call $assert_fail (i32.const 2)) unreachable))\n",
+                "            (then (call $assert_fail (i32.const 2)) unreachable))\n          \
+                 (local.set $err (call $fd_write (global.get $STDOUT) (global.get $argv) \
+                 (i32.load (global.get $sizes)) (global.get $number)))\n          (if (local.get \
+                 $err)\n            (then (call $assert_fail (i32.const 9)) unreachable))\n",
+            ),
+        ],
+        module: None,
+        refusal: Refusal::Rule(Rule::Indirection, "is as long as a number nothing checks"),
+    },
+    Attempt {
+        name: "a count the host writes inside the buffer an iovec gives it to read",
+        edits: &[
+            (
+                "  (import \"wasi_snapshot_preview1\" \"proc_exit\"",
+                "  (import \"wasi_snapshot_preview1\" \"fd_write\"\n    (func $fd_write \
+                 (param i32 i32 i32 i32) (result i32)))\n  (import \"wasi_snapshot_preview1\" \
+                 \"proc_exit\"",
+            ),
+            (
+                "  (global $NINE i32 (i32.const 9))\n",
+                "  (global $NINE i32 (i32.const 9))\n  (global $IOV_BYTES i32 (i32.const 12))\n  \
+                 (global $IOV_COUNT i32 (i32.const 1))\n  (global $COUNT_AT i32 (i32.const 8))\n",
+            ),
+            (
+                "  (global $out.size i32 (i32.const 21))\n",
+                "  (global $out.size i32 (i32.const 21))\n  (global $io i32 (i32.const 2192))\n  \
+                 (global $io.size i32 (i32.const 16))\n",
+            ),
+            (
+                "            (then (call $assert_fail (i32.const 2)) unreachable))\n",
+                "            (then (call $assert_fail (i32.const 2)) unreachable))\n          \
+                 (i32.store (global.get $io) (global.get $io))\n          (i32.store offset=4 \
+                 (global.get $io) (global.get $IOV_BYTES))\n          (local.set $err (call \
+                 $fd_write (global.get $STDOUT) (global.get $io) (global.get $IOV_COUNT) (i32.add \
+                 (global.get $io) (global.get $COUNT_AT))))\n          (if (local.get $err) (then \
+                 (call $assert_fail (i32.const 9)) unreachable))\n",
+            ),
+        ],
+        module: None,
+        refusal: Refusal::Rule(Rule::ExclusiveWrites, "may name the same bytes"),
+    },
+    Attempt {
         name: "lengua's addresses below 1024, through a plain number",
         edits: &[(
             "    (local.set $magnitude (local.get $value))\n",
