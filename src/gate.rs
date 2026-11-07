@@ -163,7 +163,9 @@ fn normal_cdf(z: f64) -> f64 {
 
 /// The one-sided p-value of a Mann-Whitney U test that the values drawn as `smaller` tend to be
 /// smaller than those drawn as `larger`: the normal approximation, its variance corrected for
-/// ties, with a continuity correction. 1 when either sample is empty, or every value is the same.
+/// ties, with a continuity correction of half the step U takes between neighbouring runs of tied
+/// values (1/2 when no values are tied). 1 when either sample is empty, or every value is the
+/// same.
 #[must_use]
 pub fn p_smaller(smaller: &[f64], larger: &[f64]) -> f64 {
     let (n1, n2) = (smaller.len(), larger.len());
@@ -177,9 +179,12 @@ pub fn p_smaller(smaller: &[f64], larger: &[f64]) -> f64 {
         .collect();
     all.sort_by(|a, b| a.0.total_cmp(&b.0));
     let n = all.len();
-    // The ranks of `smaller`'s values, each run of tied values sharing the mean of its ranks, and
-    // the sum of t³ - t over the runs of t tied values.
+    // The ranks of `smaller`'s values, each run of tied values sharing the mean of its ranks; the
+    // sum of t³ - t over the runs of t tied values; and U's smallest step: a value that moves
+    // from a run of t values to the next, of t', moves U by the difference of their ranks,
+    // (t + t') / 2.
     let (mut rank_sum, mut ties) = (0.0, 0.0);
+    let (mut step, mut before) = (f64::INFINITY, None);
     let mut at = 0;
     while at < n {
         let mut end = at + 1;
@@ -190,6 +195,10 @@ pub fn p_smaller(smaller: &[f64], larger: &[f64]) -> f64 {
         let rank = (at + 1 + end) as f64 / 2.0;
         rank_sum += rank * all[at..end].iter().filter(|value| value.1).count() as f64;
         ties += tied * tied * tied - tied;
+        if let Some(previous) = before {
+            step = f64::min(step, (previous + tied) / 2.0);
+        }
+        before = Some(tied);
         at = end;
     }
     let (n1, n2, n) = (n1 as f64, n2 as f64, n as f64);
@@ -200,8 +209,10 @@ pub fn p_smaller(smaller: &[f64], larger: &[f64]) -> f64 {
         return 1.0;
     }
     // A small U is evidence that `smaller`'s values are smaller; the continuity correction moves
-    // it half a step towards the mean.
-    normal_cdf((u + 0.5 - mean) / variance.sqrt())
+    // it half a step towards the mean. Without ties a step is 1; runs of tied values, as CPU
+    // times counted in a clock's ticks are, make U's steps longer, and a correction of 1/2 would
+    // then make p smaller than the exact test's.
+    normal_cdf((u + step / 2.0 - mean) / variance.sqrt())
 }
 
 /// The gate's verdict on lengua's runs against another version's, for a measure the test decides
@@ -484,6 +495,24 @@ mod tests {
         // The normal distribution at 0 is a half, and the error function's fit holds far out.
         assert!((normal_cdf(0.0) - 0.5).abs() < 1e-7);
         assert!((normal_cdf(-3.0) - 0.001_35).abs() < 1e-5);
+    }
+
+    /// Runs tied in two values, as short CPU times counted in a clock's ticks are: 15 at 0 and 5
+    /// at 1 against 5 at 0 and 15 at 1. U is 100, its mean 200, and it moves in steps of 20, so
+    /// the correction is 10: p is about 0.0025. The exact one-sided p, from the hypergeometric
+    /// distribution of the 20 values at 0, is 265,184,142 / 137,846,528,820, about 0.00192; a
+    /// correction of 1/2 gave 0.00095, below a look's level, which the exact test isn't.
+    #[test]
+    fn tied_runs_are_decided_no_more_boldly_than_the_exact_test() {
+        let mut lengua = vec![0.0; 15];
+        lengua.extend([1.0; 5]);
+        let mut other = vec![0.0; 5];
+        other.extend([1.0; 15]);
+        let p = p_smaller(&lengua, &other);
+        assert!(p >= 265_184_142.0 / 137_846_528_820.0, "{p}");
+        assert!((p - 0.002_5).abs() < 1e-4, "{p}");
+        assert_eq!(tested_verdict(&lengua, &other, LOOK_ALPHA).0, Verdict::Undecided);
+        assert_eq!(tested_verdict(&lengua, &other, ALPHA).0, Verdict::Ahead);
     }
 
     #[test]
