@@ -576,7 +576,10 @@ mod tests {
         let p = p_smaller(&lengua, &other);
         assert!(p >= 265_184_142.0 / 137_846_528_820.0, "{p}");
         assert!((p - 0.002_5).abs() < 1e-4, "{p}");
-        assert_eq!(tested_verdict(&lengua, &other, LOOK_ALPHA).0, Verdict::Undecided);
+        assert_eq!(
+            tested_verdict(&lengua, &other, LOOK_ALPHA).0,
+            Verdict::Undecided
+        );
         assert_eq!(tested_verdict(&lengua, &other, ALPHA).0, Verdict::Ahead);
     }
 
@@ -660,7 +663,10 @@ mod tests {
         let wider = list("linux-x86_64 add c-wasm *\nlinux-x86_64 sort * *\n");
         let problems = grown(&narrowed, &wider, all);
         assert_eq!(problems.len(), 3, "{problems:?}");
-        assert!(problems[0].starts_with("linux-x86_64 add c-wasm wall:"), "{problems:?}");
+        assert!(
+            problems[0].starts_with("linux-x86_64 add c-wasm wall:"),
+            "{problems:?}"
+        );
         assert!(problems[0].contains("line 1"), "{problems:?}");
         let elsewhere = list("linux-x86_64 sort * *\nwindows-x86_64 add rust size\n");
         assert_eq!(grown(&narrowed, &elsewhere, all).len(), 1);

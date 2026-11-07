@@ -92,7 +92,10 @@ impl Kind {
     pub fn of(path: &Path) -> Self {
         if path.is_dir() {
             Self::Wat
-        } else if path.extension().is_some_and(|extension| extension == "wasm") {
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "wasm")
+        {
             Self::Wasm
         } else {
             Self::Native
@@ -195,9 +198,8 @@ impl Request {
                 "--serve" => {
                     let text = value(&mut args, "--serve")?;
                     let parsed = text.parse::<u16>().ok().filter(|port| *port > 0);
-                    port = Some(
-                        parsed.ok_or_else(|| format!("--serve needs a port, not {text:?}"))?,
-                    );
+                    port =
+                        Some(parsed.ok_or_else(|| format!("--serve needs a port, not {text:?}"))?);
                 }
                 "--clients" => clients = Some(count(&mut args, "--clients")?),
                 "--requests" => requests = Some(count(&mut args, "--requests")?),
@@ -879,9 +881,7 @@ fn module_run(spec: &str) -> Result<i32, String> {
         env: &run.env,
         folder: &run.folder,
         policy: Policy::of(&uses, &network),
-        listen: network
-            .listens
-            .map(|port| (port, network.serves_anywhere)),
+        listen: network.listens.map(|port| (port, network.serves_anywhere)),
         connections: &[],
         cache: run.cache.as_deref(),
         built: None,

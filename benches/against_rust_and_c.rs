@@ -477,7 +477,8 @@ fn tally(input: &[u8]) -> Vec<u8> {
 /// line's, or nothing.
 fn constraint(idea: &str, label: &str) -> String {
     let line = idea.lines().find_map(|line| line.strip_prefix(label));
-    line.map(|words| words.trim().to_owned()).unwrap_or_default()
+    line.map(|words| words.trim().to_owned())
+        .unwrap_or_default()
 }
 
 /// `error`, after what it happened to.
@@ -1217,14 +1218,12 @@ fn lengua_made(
     } else {
         format!(" at {commit}")
     };
-    let (release, engine) = (env!("CARGO_PKG_VERSION"), lengua::wasm::ENGINE);
+    let (release, engine) = (env!("CARGO_PKG_VERSION"), lengua::wasm::engine::ENGINE);
     let version = match checked {
         Some(Ok(checked)) => Ok(Version {
             name: name.to_owned(),
             program: checked.path().to_path_buf(),
-            made: format!(
-                "lengua-mcp {release} run, {engine}, tests/fixtures-wasm/{program}{at}"
-            ),
+            made: format!("lengua-mcp {release} run, {engine}, tests/fixtures-wasm/{program}{at}"),
         }),
         Some(Err(problem)) => Err(format!("lengua's program{at} isn't done: {problem}")),
         None => Err(format!("lengua's program{at} wasn't checked")),
@@ -1416,13 +1415,7 @@ fn grown_in_history(root: &Path, now: &str) -> Vec<String> {
                        history, not a shallow clone";
         return vec![problem.to_owned()];
     }
-    let log = [
-        "log",
-        "--first-parent",
-        "--format=%H",
-        "--",
-        "KNOWN_BEHIND",
-    ];
+    let log = ["log", "--first-parent", "--format=%H", "--", "KNOWN_BEHIND"];
     let Some(changes) = git(root, &log) else {
         return vec!["git can't list the changes to KNOWN_BEHIND".to_owned()];
     };
@@ -1992,7 +1985,7 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
         run,
         cpu: cpu_model(),
         cores: std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
-        engine: lengua::wasm::ENGINE.to_owned(),
+        engine: lengua::wasm::engine::ENGINE.to_owned(),
         toolchains: wasm_toolchains(&context.wasm),
         runtime: context.runtime,
         looks: gate::LOOKS.to_vec(),
