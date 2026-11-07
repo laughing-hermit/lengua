@@ -43,6 +43,16 @@ fn nothing_yet(error: &std::io::Error) -> bool {
     matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted)
 }
 
+/// What a write comes to on a connection that ended after it took `taken` bytes: those, or
+/// `PIPE` where it took none.
+fn ended(taken: usize) -> Result<usize, Fail> {
+    if taken > 0 {
+        Ok(taken)
+    } else {
+        Err(Fail::Errno(errno::PIPE))
+    }
+}
+
 /// The runtime that drives the connections lengua makes to places, TLS among them: one for the
 /// process, on the thread of whichever call drives it.
 #[must_use]
@@ -204,12 +214,16 @@ impl Socket {
         Ok(count)
     }
 
-    /// Sends `bytes`, as many as go now. Over TLS, the bytes TLS takes are taken once, however
-    /// many slices it takes to send them on.
+    /// Sends every byte of `bytes`, waiting while the connection takes them, as a blocking send
+    /// does: a program's one write sends all it gives, however much room the system's buffers
+    /// have, so it does the same on every system. Fewer only where the connection ends after it
+    /// took some. Over TLS, the bytes TLS takes are taken once, however many slices it takes to
+    /// send them on.
     ///
     /// # Errors
     ///
-    /// `PIPE` for a connection that ended or the program shut, and a stop at the deadline.
+    /// `PIPE` for a connection that ended, or the program shut, before it took any, and a stop
+    /// at the deadline.
     pub fn write(&mut self, bytes: &[u8], limits: &Limits) -> Result<usize, Fail> {
         if self.write_shut {
             return Err(Fail::Errno(errno::PIPE));
@@ -218,42 +232,46 @@ impl Socket {
             return Ok(0);
         }
         let mut nap = FIRST_NAP;
-        // How many of `bytes` a place's stream has taken: TLS takes them before the socket does,
-        // so a slice that runs out while it sends them on leaves them taken, and the next slice
-        // only sends them on. Written again, they would go twice.
-        let mut taken: Option<usize> = None;
+        // How many of `bytes` the connection has taken. Over TLS, TLS takes them before the
+        // socket does, so a slice that runs out while it sends them on leaves them taken, and the
+        // next slice only sends them on: written again, they would go twice.
+        let mut taken = 0;
         loop {
             let wait = limits.slice(SLICE)?;
             match &mut self.link {
-                Link::Ended => return Err(Fail::Errno(errno::PIPE)),
-                Link::Tcp(stream) => match stream.write(bytes) {
-                    Ok(0) => return Err(Fail::Errno(errno::PIPE)),
-                    Ok(count) => return Ok(count),
+                Link::Ended => return ended(taken),
+                Link::Tcp(stream) => match stream.write(&bytes[taken..]) {
+                    Ok(0) => return ended(taken),
+                    Ok(count) => {
+                        taken += count;
+                        if taken == bytes.len() {
+                            return Ok(taken);
+                        }
+                    }
                     Err(error) if nothing_yet(&error) => {
                         std::thread::sleep(nap.min(wait));
                         nap = next_nap(nap);
                     }
-                    Err(_) => return Err(Fail::Errno(errno::PIPE)),
+                    Err(_) => return ended(taken),
                 },
                 Link::Place(place, runtime) => {
                     let sent = runtime.block_on(async {
                         tokio::time::timeout(wait, async {
-                            let count = match taken {
-                                Some(count) => count,
-                                None => {
-                                    let count = place.write(bytes).await?;
-                                    taken = Some(count);
-                                    count
+                            while taken < bytes.len() {
+                                let count = place.write(&bytes[taken..]).await?;
+                                if count == 0 {
+                                    return Err(std::io::Error::from(ErrorKind::WriteZero));
                                 }
-                            };
+                                taken += count;
+                            }
                             place.flush().await?;
-                            Ok::<usize, std::io::Error>(count)
+                            Ok::<(), std::io::Error>(())
                         })
                         .await
                     });
                     match sent {
-                        Ok(Ok(0) | Err(_)) => return Err(Fail::Errno(errno::PIPE)),
-                        Ok(Ok(count)) => return Ok(count),
+                        Ok(Ok(())) => return Ok(taken),
+                        Ok(Err(_)) => return ended(taken),
                         // The slice ran out: what was taken is sent on in the next.
                         Err(_) => {}
                     }
@@ -474,7 +492,8 @@ pub fn sock_recv(
     memory::write_u16(memory, out.1, 0)
 }
 
-/// `sock_send(fd, iovs, count, flags, sent)`: as much of the buffers as goes now, in order.
+/// `sock_send(fd, iovs, count, flags, sent)`: every byte of the buffers, in order, as a blocking
+/// send takes them.
 ///
 /// # Errors
 ///
@@ -641,6 +660,34 @@ mod tests {
         socket.close();
         drop(socket);
         assert_eq!(counted.join().expect("the server"), bytes.len());
+    }
+
+    /// A write over TCP waits until the connection has taken every byte, as a blocking send
+    /// does, so one write sends all it gives, on every system, as the prover's model has it: the
+    /// other end waits before it reads, so the sockets between them fill first.
+    #[test]
+    fn a_write_takes_every_byte_while_the_other_end_waits_to_read() {
+        let (mut socket, mut other) = connected();
+        let counted = std::thread::spawn(move || {
+            // Long past a slice, while the write fills the sockets.
+            std::thread::sleep(Duration::from_millis(300));
+            let mut chunk = vec![0_u8; CHUNK];
+            let mut total = 0;
+            loop {
+                match std::io::Read::read(&mut other, &mut chunk) {
+                    Ok(0) | Err(_) => break total,
+                    Ok(count) => total += count,
+                }
+            }
+        });
+        let limits = limits();
+        // More than the sockets between them hold.
+        let bytes = vec![7_u8; 16 << 20];
+        assert_eq!(socket.write(&bytes, &limits).ok(), Some(bytes.len()));
+        // Its end, so the other end's reading ends.
+        socket.close();
+        drop(socket);
+        assert_eq!(counted.join().expect("the other end"), bytes.len());
     }
 
     #[test]
