@@ -18,26 +18,13 @@ pub const LEGACY_TESTS_FILE: &str = "tests.toml";
 /// to rename it.
 pub const LEGACY_IDEA_FILE: &str = "spec.md";
 
-/// The code's file name inside a program folder.
-pub const CODE_FILE: &str = "main.s";
+/// The code's file name inside a program folder: the WebAssembly text lengua compiles an idea to.
+pub const CODE_FILE: &str = crate::wasm::CODE_FILE;
 
-/// The WebAssembly code's file name inside a program folder: during the pivot a folder holds
-/// main.s or main.wat, and the code file chooses the path (todo.md).
-pub const WASM_CODE_FILE: &str = "main.wat";
-
-/// Every code file a program folder may hold, in the order lengua looks for them.
-pub const CODE_FILES: [&str; 2] = [CODE_FILE, WASM_CODE_FILE];
-
-/// lengua's hash of the code file `name`, which holds `bytes`: main.s without lengua's line in
-/// it ([`crate::header::code_hash`]), main.wat as it is, since it has no such line.
-#[must_use]
-pub fn code_hash(name: &str, bytes: &[u8]) -> Sha256Hex {
-    if name == WASM_CODE_FILE {
-        Sha256Hex::of(bytes)
-    } else {
-        crate::header::code_hash(bytes)
-    }
-}
+/// The code file of the native lengua, which compiled an idea to assembly: lengua reads none. A
+/// folder that holds one is told that lengua compiles to main.wat since 0.2.0, and that the tag
+/// `native-final` keeps the native lengua.
+pub const NATIVE_CODE_FILE: &str = "main.s";
 
 /// Where the server keeps a copy of each idea.md it recorded, by hash, so later changes can be
 /// shown against them.
@@ -100,13 +87,11 @@ pub struct Snapshot {
     /// lengua's hash of idea.md, which leaves its trust record out
     /// ([`crate::trust::idea_hash`]), when it exists.
     pub idea: Option<Sha256Hex>,
-    /// lengua's hash of the code file ([`code_hash`]), when the folder holds one: main.s, or
-    /// main.wat when it holds no main.s.
+    /// The SHA-256 of main.wat, when the folder holds it.
     pub code: Option<Sha256Hex>,
-    /// Whether that code file is main.wat.
-    pub wasm: bool,
-    /// Whether the folder holds both main.s and main.wat, which no check takes.
-    pub both: bool,
+    /// Whether the folder holds the native lengua's main.s, which no check takes: only that it is
+    /// there is read.
+    pub native: bool,
     /// Whether lengua.lock exists and can be trusted.
     pub lock: LockStatus,
 }
@@ -134,13 +119,10 @@ impl Snapshot {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         };
-        let native = read(CODE_FILE)?.map(|bytes| code_hash(CODE_FILE, &bytes));
-        let wasm = read(WASM_CODE_FILE)?.map(|bytes| code_hash(WASM_CODE_FILE, &bytes));
         Ok(Self {
             idea: read(IDEA_FILE)?.map(|bytes| crate::trust::idea_hash(&bytes)),
-            both: native.is_some() && wasm.is_some(),
-            wasm: native.is_none() && wasm.is_some(),
-            code: native.or(wasm),
+            code: read(CODE_FILE)?.map(|bytes| Sha256Hex::of(&bytes)),
+            native: folder.file(NATIVE_CODE_FILE).exists(),
             lock: match lock::read(folder.path(), key) {
                 Ok(None) => LockStatus::Missing,
                 Ok(Some(lock)) => LockStatus::Valid(Box::new(lock)),
@@ -168,9 +150,9 @@ pub enum State {
     LockInvalid(LockError),
     /// The idea, tests included, was never recorded, or changed since.
     IdeaUnrecorded,
-    /// The idea is recorded; main.s doesn't exist.
+    /// The idea is recorded; main.wat doesn't exist.
     CodeMissing,
-    /// main.s hasn't been checked, or changed since.
+    /// main.wat hasn't been checked, or changed since.
     CodeUnchecked,
     /// The idea and the code both match the lock.
     Ready,
@@ -193,15 +175,10 @@ impl State {
         if lock.idea.sha256 != *idea {
             return Self::IdeaUnrecorded;
         }
-        // Both code files are one too many, which check says how to fix; a stamp is of the very
-        // code file it names, main.s or main.wat.
+        // main.s beside main.wat is one code file too many, which check says how to fix.
         match (&lock.code, &snapshot.code) {
             (_, None) => Self::CodeMissing,
-            (Some(stamp), Some(current))
-                if !snapshot.both
-                    && stamp.is_wasm() == snapshot.wasm
-                    && stamp.sha256 == *current =>
-            {
+            (Some(stamp), Some(current)) if !snapshot.native && stamp.sha256 == *current => {
                 Self::Ready
             }
             (_, Some(_)) => Self::CodeUnchecked,
@@ -224,13 +201,6 @@ impl State {
     /// The single next thing to do, as one sentence an agent can follow.
     #[must_use]
     pub fn next_step(&self, folder: &ProgramFolder) -> String {
-        self.next_step_in(folder, CODE_FILE)
-    }
-
-    /// [`Self::next_step`] for a folder whose code is `code`: main.s, or main.wat for an idea
-    /// that is an Attested Computation.
-    #[must_use]
-    pub fn next_step_in(&self, folder: &ProgramFolder, code: &str) -> String {
         match self {
             Self::NoIdea => format!(
                 "Next: write {}, its tests included, with the write-idea skill, then call check \
@@ -251,7 +221,7 @@ impl State {
                 "Next: compile {} into {} with the compile skill, then call check with path \
                  {folder}.",
                 folder.file(IDEA_FILE).display(),
-                folder.file(code).display()
+                folder.file(CODE_FILE).display()
             ),
             Self::CodeUnchecked | Self::Ready => {
                 format!("Next: call check with path {folder}.")
@@ -277,13 +247,11 @@ mod tests {
         Lock {
             code: Some(CodeStamp {
                 sha256: digest("code"),
-                executable_sha256: digest("executable"),
-                toolchain: "llvm-mc 22.1.8, ld.lld 22.1.8".into(),
+                module_sha256: digest("module"),
+                engine: "wasmtime 50.0.1".into(),
                 max_stack_bytes: 16,
                 unsafe_blocks: 0,
-                target: "linux-x86_64".into(),
                 features: Vec::new(),
-                emulator: None,
             }),
             ..recorded()
         }
@@ -294,44 +262,28 @@ mod tests {
         State::of(&Snapshot {
             idea,
             code,
-            wasm: false,
-            both: false,
+            native: false,
             lock,
         })
     }
 
-    /// A lock that stamps main.wat.
-    fn with_wasm_code() -> Lock {
-        let mut lock = with_code();
-        if let Some(stamp) = lock.code.as_mut() {
-            stamp.target = crate::lock::WASM_TARGET.into();
-            stamp.toolchain = "wasmtime 50.0.1".into();
-        }
-        lock
-    }
-
-    /// A stamp is of the code file it names, and a folder with both code files isn't ready.
+    /// A folder that holds main.s beside main.wat isn't ready, whatever its lock stamps.
     #[test]
-    fn a_stamp_is_of_its_own_code_file() {
-        let of = |wasm: bool, both: bool, lock: Lock| {
+    fn main_s_beside_main_wat_is_one_code_file_too_many() {
+        let of = |native: bool| {
             State::of(&Snapshot {
                 idea: Some(digest("idea")),
                 code: Some(digest("code")),
-                wasm,
-                both,
-                lock: LockStatus::Valid(Box::new(lock)),
+                native,
+                lock: LockStatus::Valid(Box::new(with_code())),
             })
         };
-        assert_eq!(of(true, false, with_wasm_code()), State::Ready);
-        assert_eq!(of(false, false, with_code()), State::Ready);
-        // main.wat's stamp doesn't stand for main.s's code, nor main.s's for main.wat's.
-        assert_eq!(of(false, false, with_wasm_code()), State::CodeUnchecked);
-        assert_eq!(of(true, false, with_code()), State::CodeUnchecked);
-        assert_eq!(of(false, true, with_code()), State::CodeUnchecked);
+        assert_eq!(of(false), State::Ready);
+        assert_eq!(of(true), State::CodeUnchecked);
         assert!(
             State::CodeMissing
-                .next_step_in(&add(), WASM_CODE_FILE)
-                .contains(&add().file(WASM_CODE_FILE).display().to_string())
+                .next_step(&add())
+                .contains(&add().file(CODE_FILE).display().to_string())
         );
     }
 
@@ -473,18 +425,18 @@ mod tests {
         assert_eq!(snapshot.idea, Some(digest("idea")));
         assert_eq!(snapshot.code, None);
         assert_eq!(snapshot.lock, LockStatus::Missing);
-        // main.wat is hashed as it is; with main.s beside it, the folder holds both.
-        let wat = "(module)\n# lengua: compiled from idea.md sha256:00 for linux-x86_64\n";
-        std::fs::write(program.file(WASM_CODE_FILE), wat).expect("write main.wat");
+        // main.wat is hashed as it is; main.s beside it is only seen to be there.
+        let wat = "(module)\n";
+        std::fs::write(program.file(CODE_FILE), wat).expect("write main.wat");
         let snapshot = Snapshot::read(&program, None).expect("read the folder");
         assert_eq!(snapshot.code, Some(digest(wat)));
-        assert!(snapshot.wasm && !snapshot.both);
-        std::fs::write(program.file(CODE_FILE), "_start:\n").expect("write main.s");
+        assert!(!snapshot.native);
+        std::fs::write(program.file(NATIVE_CODE_FILE), "_start:\n").expect("write main.s");
         let snapshot = Snapshot::read(&program, None).expect("read the folder");
-        assert_eq!(snapshot.code, Some(digest("_start:\n")));
-        assert!(!snapshot.wasm && snapshot.both);
-        std::fs::remove_file(program.file(CODE_FILE)).expect("remove main.s");
-        std::fs::remove_file(program.file(WASM_CODE_FILE)).expect("remove main.wat");
+        assert_eq!(snapshot.code, Some(digest(wat)));
+        assert!(snapshot.native);
+        std::fs::remove_file(program.file(NATIVE_CODE_FILE)).expect("remove main.s");
+        std::fs::remove_file(program.file(CODE_FILE)).expect("remove main.wat");
         // lengua's hash of idea.md leaves out its trust record.
         let idea = "---\ntitle: add\n---\n# Purpose\n";
         let at = "2026-11-06T23:00:00Z";

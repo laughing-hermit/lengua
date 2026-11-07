@@ -1190,7 +1190,7 @@ pub const DELIVERY: &str = "(delivery)";
 /// formula.
 pub const UNSAFE: &str = "(unsafe)";
 
-pub use crate::edge::PIPE_WRITE;
+pub use crate::runner::PIPE_WRITE;
 
 /// The most text lengths one proof lays out past where it starts, more than its time reaches: a
 /// text is proven up to the length the idea gives it, shortest first, as far as the proof's time

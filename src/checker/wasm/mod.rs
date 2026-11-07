@@ -7,8 +7,8 @@
 //! ([`flow`]); every value that becomes an address, every access and every buffer a call borrows
 //! ([`memory`]); the Power of 10's other rules ([`rules`]); that every computer computes the
 //! same bits ([`determinism`]); and, for an idea with a `- Secret:` line, that no secret decides
-//! how the program runs ([`secret`]). Violations are the native checker's [`Rule`]s and
-//! [`Violation`]s, reported against main.wat's lines: `rule 4 (small functions) main.wat:12: …`.
+//! how the program runs ([`secret`]). Violations are [`Rule`]s and [`Violation`]s, reported
+//! against main.wat's lines: `rule 4 (small functions) main.wat:12: …`.
 //! What the rules can't settle is left to the proof, as an [`Obligation`].
 
 pub mod determinism;

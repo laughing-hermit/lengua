@@ -10,9 +10,11 @@
 //! An idea that lengua compiles to WebAssembly is an OKF Attested Computation (OKF v0.2 §10):
 //! `type: Attested Computation`, with `runtime: webassembly`, `computation: main.wat`, the
 //! `parameters` a run fills (each with lengua's key `from`, where its value comes from), lengua's
-//! `run` as its `executor` and lengua's `check` as its `attester`. An idea compiled to main.s is
-//! `type: lengua/program-idea` and has none of those keys. OKF's other keys, and any key lengua
-//! doesn't know, are kept and never refused.
+//! `run` as its `executor` and lengua's `check` as its `attester`. An idea of the native lengua,
+//! `type: lengua/program-idea`, which it compiled to main.s, still parses and has none of those
+//! keys, so that `check` can say lengua compiles to main.wat since 0.2.0 and that the tag
+//! `native-final` keeps the native lengua. OKF's other keys, and any key lengua doesn't know, are
+//! kept and never refused.
 
 use std::fmt;
 
@@ -21,7 +23,8 @@ use serde_json::Value;
 
 use crate::trust::Block;
 
-/// The OKF `type` of an idea that lengua compiles to main.s.
+/// The OKF `type` of an idea of the native lengua, which compiled it to main.s: still read, so
+/// that `check` can say what became of it.
 pub const IDEA_TYPE: &str = "lengua/program-idea";
 
 /// The `type` lengua's ideas declared when the file was called `spec.md`: still read, so a renamed
@@ -43,7 +46,7 @@ pub const EXECUTOR: &str = "https://github.com/laughing-hermit/lengua/blob/main/
 /// `check` attests a run, a URL, as OKF §6.2 asks of `attester.resource`.
 pub const ATTESTER: &str = "https://github.com/laughing-hermit/lengua/blob/main/docs/check.md";
 
-/// The keys only an Attested Computation has, which an idea compiled to main.s is refused for.
+/// The keys only an Attested Computation has, which an idea of the native lengua is refused for.
 const ATTESTED_KEYS: [&str; 4] = ["runtime", "computation", "executor", "attester"];
 
 /// A parameter as an Attested Computation writes it, for the problems to show.
@@ -67,12 +70,11 @@ pub struct Idea {
     pub behaviors: Vec<Behavior>,
     /// What the program may use beyond its output, as the idea names it.
     pub uses: Vec<Use>,
-    /// The system calls that allows on this target, worked out from `uses`, the network and the
-    /// output every program has.
+    /// The system calls those words allow, worked out from `uses`, the network and the output
+    /// every program has: the vocabulary a test's random bytes and clock readings are checked in.
     pub syscalls: Vec<Syscall>,
-    /// The edge's operations the same words allow: what a program in the edge form may call.
-    pub ops: Vec<crate::edge::Op>,
-    /// How many threads the program may run at once, when the idea allows more than one.
+    /// How many threads the idea asks for, when it has a `- Threads:` line, which `check` refuses:
+    /// a WebAssembly program runs as one thread.
     pub threads: Option<u32>,
     /// The backtick values in `# Purpose`, in order of first appearance: the ranges of the
     /// program's inputs, which generated tests draw from.
@@ -91,12 +93,12 @@ pub struct Idea {
     /// parts, the graph's edges where they lead to other ideas.
     pub links: Vec<Link>,
     /// What its frontmatter says as an Attested Computation, the form of an idea that lengua
-    /// compiles to WebAssembly; `None` for an idea compiled to main.s.
+    /// compiles to WebAssembly; `None` for an idea of the native lengua, which `check` refuses.
     pub attested: Option<Attested>,
 }
 
-/// What an Attested Computation's frontmatter says beyond a native idea's (OKF v0.2 §10): how
-/// lengua runs the computation, `main.wat`, and what a run returns for its check.
+/// What an Attested Computation's frontmatter says beyond the native lengua's ideas (OKF v0.2
+/// §10): how lengua runs the computation, `main.wat`, and what a run returns for its check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attested {
     /// `runtime`: `webassembly`, which says what the parameters mean.
@@ -276,15 +278,15 @@ impl Part {
 #[must_use]
 pub fn folder_of_link(link: &str) -> String {
     let trimmed = link.trim().trim_end_matches('/');
-    let trimmed = std::iter::once(crate::state::IDEA_FILE)
-        .chain(crate::state::CODE_FILES)
+    let trimmed = [crate::state::IDEA_FILE, crate::state::CODE_FILE]
+        .into_iter()
         .find_map(|file| trimmed.strip_suffix(file)?.strip_suffix('/'))
         .unwrap_or(trimmed);
     trimmed.trim_end_matches('/').to_owned()
 }
 
 /// The most clients a server may take at once: a table of this many connections is a few
-/// pages of `.bss`, and `poll` goes through all of them on every wake.
+/// pages of linear memory, and `poll_oneoff` goes through all of them on every wake.
 pub const MAX_AT_ONCE: u32 = 4096;
 
 /// What an idea lets a program do on the network: plain TCP to the places it names, and a port
@@ -947,8 +949,8 @@ pub fn parse(text: &str) -> Result<Idea, Vec<Problem>> {
             Some(1),
             format!(
                 "idea.md must start with YAML frontmatter: a line with ---, then `type: \
-                 {ATTESTED_TYPE}` (or `type: {IDEA_TYPE}` for an idea compiled to main.s), \
-                 `title: <name>` and `description: <one sentence>`, then a line with ---"
+                 {ATTESTED_TYPE}`, `title: <name>` and `description: <one sentence>`, then a \
+                 line with ---"
             ),
         );
         return Err(parser.into_problems());
@@ -1177,7 +1179,7 @@ struct Parser {
     names: Vec<(String, usize)>,
     /// The `- Secret:` line's line and the sources on it that read, once it's read.
     secrets: Option<(usize, Vec<Source>)>,
-    /// Whether the idea is one that lengua compiles to main.s, whose checker follows no secret.
+    /// Whether the idea is of the native lengua's type, which has no secrets to follow.
     native: bool,
 }
 
@@ -1338,15 +1340,14 @@ impl Parser {
                 keys.line("type").or(Some(1)),
                 format!(
                     "the frontmatter says `type: {other}`; a lengua idea is `type: \
-                     {ATTESTED_TYPE}`, which lengua compiles to main.wat, or `type: {IDEA_TYPE}`, \
-                     compiled to main.s"
+                     {ATTESTED_TYPE}`, which lengua compiles to main.wat"
                 ),
             ),
             None => self.problem(
                 Some(1),
                 format!(
-                    "the frontmatter has no `type`; add `type: {ATTESTED_TYPE}` for an idea that \
-                     lengua compiles to main.wat, or `type: {IDEA_TYPE}` for one compiled to main.s"
+                    "the frontmatter has no `type`; add `type: {ATTESTED_TYPE}`, the type of an \
+                     idea that lengua compiles to main.wat"
                 ),
             ),
         }
@@ -1383,7 +1384,7 @@ impl Parser {
         title.map(|title| (title, description))
     }
 
-    /// An idea compiled to main.s has none of an Attested Computation's own keys.
+    /// An idea of the native lengua has none of an Attested Computation's own keys.
     fn native_keys(&mut self, keys: &Keys, kind: &str) {
         self.native = true;
         for key in ATTESTED_KEYS {
@@ -1392,8 +1393,8 @@ impl Parser {
                     Some(line),
                     format!(
                         "`{key}` is a key of an Attested Computation, and this idea is `type: \
-                         {kind}`: write `type: {ATTESTED_TYPE}` to compile it to main.wat, or \
-                         remove `{key}`"
+                         {kind}`, the native lengua's: write `type: {ATTESTED_TYPE}`, the type \
+                         of an idea that lengua compiles to main.wat"
                     ),
                 );
             }
@@ -1411,7 +1412,7 @@ impl Parser {
         );
         self.exact(
             keys,
-            ("computation", crate::state::WASM_CODE_FILE),
+            ("computation", crate::state::CODE_FILE),
             front.computation.as_ref(),
             "the computation is main.wat, the code file beside idea.md",
         );
@@ -1421,7 +1422,7 @@ impl Parser {
         self.status(keys, front.status.as_ref());
         self.attested = Some(Attested {
             runtime: RUNTIME.to_owned(),
-            computation: crate::state::WASM_CODE_FILE.to_owned(),
+            computation: crate::state::CODE_FILE.to_owned(),
             parameters,
             receipt,
         });
@@ -2741,7 +2742,7 @@ impl Parser {
 
     /// The `- Secret:` line's sources, each one the idea lets the program read: with the
     /// `- Uses:` word it needs, but an argument, which needs none, and standard input, which the
-    /// terminal reads too. An idea compiled to main.s has none: its checker follows no secret.
+    /// terminal reads too. An idea of the native lengua has none.
     fn secrets_used(&mut self, uses: &[Use]) -> Vec<Source> {
         let Some((line, secrets)) = self.secrets.take() else {
             return Vec::new();
@@ -2750,8 +2751,7 @@ impl Parser {
             self.problem(
                 Some(line),
                 "`- Secret:` is for an idea that lengua compiles to main.wat, `type: Attested \
-                 Computation`. lengua does not follow secrets in main.s. Change the type, or \
-                 remove the line",
+                 Computation`: change the type",
             );
         }
         for source in &secrets {
@@ -2802,7 +2802,6 @@ impl Parser {
         }
         let uses = self.uses.take().unwrap_or_default();
         let syscalls = self.syscalls_for(&uses);
-        let ops = crate::edge::ops_for(&uses, &self.network, self.threads);
         self.check_network();
         self.sources_used(&uses);
         let secrets = self.secrets_used(&uses);
@@ -2817,7 +2816,6 @@ impl Parser {
                 behaviors: self.behaviors,
                 uses,
                 syscalls,
-                ops,
                 threads: self.threads,
                 purpose_values: self.purpose_values,
                 network: self.network,
@@ -3416,7 +3414,7 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         );
         assert_eq!(idea.parts[0].folder(), "../sort");
         assert_eq!(folder_of_link("../sort/"), "../sort");
-        assert_eq!(folder_of_link("../sort/main.s"), "../sort");
+        assert_eq!(folder_of_link("../sort/main.wat"), "../sort");
         for link in [
             "/home/me/sort/idea.md",
             "https://example.com/idea.md",
@@ -4627,7 +4625,7 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         assert!(parse(&native).is_ok());
     }
 
-    /// An idea compiled to main.s has none of an Attested Computation's own keys, and each is
+    /// An idea of the native lengua has none of an Attested Computation's own keys, and each is
     /// refused with the type that has it.
     #[test]
     fn a_native_idea_has_no_computation_keys() {
@@ -4636,8 +4634,8 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
             problems(&native),
             [
                 "line 4: `runtime` is a key of an Attested Computation, and this idea is `type: \
-                 lengua/program-idea`: write `type: Attested Computation` to compile it to \
-                 main.wat, or remove `runtime`"
+                 lengua/program-idea`, the native lengua's: write `type: Attested Computation`, \
+                 the type of an idea that lengua compiles to main.wat"
             ]
         );
         for key in [

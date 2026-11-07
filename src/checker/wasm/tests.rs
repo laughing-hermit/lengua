@@ -186,9 +186,9 @@ fn the_template_passes_every_rule() {
     assert!(report.unsafe_blocks.is_empty());
 }
 
-/// Rule 4's limit, the native dialect's 60 instructions at three operators each, is above what
-/// the template needs: its functions take 81, 108 and 100 operators where the native template's
-/// take 39, 40 and 48 instructions, 2.1 to 2.7 operators an instruction.
+/// Rule 4's limit, the native lengua's 60 instructions a function at three operators each, is
+/// above what the template needs: its functions take 81, 108 and 100 operators where the native
+/// lengua's template took 39, 40 and 48 instructions, 2.1 to 2.7 operators an instruction.
 #[test]
 fn rule_4s_limit_is_calibrated_on_the_template() {
     let built = build(TEMPLATE).expect("it builds");
@@ -229,11 +229,8 @@ fn reports_name_main_wat_s_lines() {
         violation.in_file(FILE),
         "rule 4 (small functions) main.wat:12: $main has 200 operators. Fix: split it."
     );
-    // The native checker's reports keep naming main.s.
-    assert_eq!(
-        violation.to_string(),
-        "rule 4 (small functions) main.s:12: $main has 200 operators. Fix: split it."
-    );
+    // Shown on its own, it names main.wat's line too.
+    assert_eq!(violation.to_string(), violation.in_file(FILE));
     let memory = Violation {
         rule: Rule::Immutability,
         line: None,

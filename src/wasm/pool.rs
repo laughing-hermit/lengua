@@ -457,8 +457,8 @@ impl Running {
         self.port
     }
 
-    /// What became of each connection lengua made for it, in order, once it serves: as a native
-    /// server's, said before it takes a client. Empty for a program that doesn't serve.
+    /// What became of each connection lengua made for it, in order, once it serves: said before
+    /// it takes a client. Empty for a program that doesn't serve.
     #[must_use]
     pub fn connections(&self) -> &[crate::connect::Made] {
         &self.connections

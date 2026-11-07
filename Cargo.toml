@@ -5,7 +5,7 @@ edition = "2024"
 # Wasmtime 50's own floor (crates.io, 2026-10-29); CI's Rust, in scripts/ci/setup.sh, is above it.
 rust-version = "1.97"
 license = "Apache-2.0"
-description = "MCP server for lengua: idea-driven programming in checked x86-64 assembly"
+description = "MCP server for lengua: idea-driven programming in checked WebAssembly"
 publish = false
 
 [workspace]
@@ -29,28 +29,23 @@ path = "src/bin/lengua-spawn.rs"
 [dependencies]
 # A WebAssembly program's folder: every path resolved beneath it, with no unsafe code.
 cap-std = "=4.0.3"
-# The calls that need unsafe code, each in a safe function (this crate forbids unsafe code): on a
-# Unix, the signal a file's size limit sends; on Windows, a process's times and peak memory, which
-# `lengua-mcp measure` reads.
-lengua-os = { path = "crates/lengua-os" }
 getrandom = "0.4"
 hmac = "0.13"
-iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "instr_info", "intel"] }
-# The calls that need unsafe code, each in a safe function (this crate forbids unsafe code): on
-# Unix the signals, on Windows the CPU's caches.
+# The calls that need unsafe code, each in a safe function (this crate forbids unsafe code): on a
+# Unix, the signal a file's size limit sends; on Windows, a process's times and peak memory, which
+# `lengua-mcp measure` reads, and the CPU's caches.
 lengua-os = { path = "crates/lengua-os" }
-object = { version = "0.40", default-features = false, features = ["std", "read_core", "elf"] }
 rand = { version = "0.10", default-features = false, features = ["chacha"] }
 rmcp = { version = "3.8.0", features = ["transport-io"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-rustix = { version = "1", features = ["net", "process", "termios", "thread"] }
+rustix = { version = "1", features = ["process", "thread"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde-saphyr = "2.0"
 serde_json = "1"
 sha2 = "0.11"
 tempfile = "3"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 toml = "1.1"
 unicode-normalization = "0.1"
@@ -65,23 +60,14 @@ wasmparser = { version = "=0.261.0", default-features = false, features = ["std"
 wast = { version = "=261.0.0", default-features = false, features = ["wasm-module"] }
 webpki-roots = "1"
 
-# What only some systems have: the kernel's confinement and counters are Linux's, and the Unix
-# calls are Unix's (the nix crate is empty elsewhere), `getrusage` among them, which `lengua-mcp
-# measure` reads a child's times and peak memory with.
+# The Unix calls (the nix crate is empty elsewhere): `getrusage`, which `lengua-mcp measure` reads
+# a child's times and peak memory with, and the signals it and the prover's watch send.
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", default-features = false, features = ["process", "resource", "signal"] }
 
+# Linux's counters of a program's cache misses, which `lengua-mcp measure` reads.
 [target.'cfg(target_os = "linux")'.dependencies]
-landlock = "0.4.7"
-# The broker opens each path beneath a program's folder (openat2) and hands descriptors back.
-rustix = { version = "1", features = ["fs"] }
-nix = { version = "0.31", default-features = false, features = ["process", "resource", "signal"] }
 perf-event2 = "0.7.4"
-seccompiler = "0.5"
-
-# Linux only: the terminal tests give a program a pseudo-terminal for standard input.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-rustix = { version = "1", features = ["fs", "pty", "termios"] }
 
 [dev-dependencies]
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }

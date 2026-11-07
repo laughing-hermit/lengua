@@ -12,10 +12,9 @@ use wasmparser::{BlockType, CompositeInnerType, ExternalKind, Operator, ValType}
 
 use super::model::{FIRST_ADDRESS, Function, Kind, Module, Named, Region, to_usize};
 use crate::checker::{Rule, Violation};
-use crate::edge::Allowance;
 use crate::wasm::Policy;
 use crate::wasm::text::{Built, LIBRARY_FUNCTIONS, RESERVED};
-use crate::wasm::wasi;
+use crate::wasm::wasi::{self, Allowance};
 
 /// What an idea needs to say for a program to call `host`, in words.
 #[must_use]
@@ -30,7 +29,6 @@ pub fn needs(host: &wasi::Function) -> String {
             Allowance::AtOnce => {
                 Some("`up to N clients at once` in its `- Network:` line".to_owned())
             }
-            Allowance::Threads => Some("a `- Threads:` line".to_owned()),
         })
         .collect::<Vec<_>>()
         .join(" or ")

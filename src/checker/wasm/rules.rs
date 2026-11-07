@@ -14,8 +14,9 @@ use crate::checker::{Rule, Violation};
 use crate::idea::ASSERTION_EXIT_CODE;
 use crate::wasm::wasi::Bytes;
 
-/// The most operators a function may have, its final `end` aside: the native dialect's 60
-/// instructions, at about three operators to an instruction, as `main-template.wat` measures.
+/// The most operators a function may have, its final `end` aside: the native lengua's 60
+/// instructions a function, at about three operators to an instruction, as `main-template.wat`
+/// measures.
 pub const MAX_OPERATORS: usize = 180;
 
 /// The fewest assertions per function, on average.

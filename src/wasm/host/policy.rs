@@ -3,9 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::edge::Allowance;
 use crate::idea::{Network, Use};
-use crate::wasm::wasi::Function;
+use crate::wasm::wasi::{Allowance, Function};
 
 /// What a program may reach beyond its output and its exit.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,8 +74,6 @@ impl Policy {
             Allowance::Network => self.network(),
             Allowance::Listens => self.listens,
             Allowance::AtOnce => self.at_once,
-            // A WebAssembly program has no threads.
-            Allowance::Threads => false,
         }
     }
 

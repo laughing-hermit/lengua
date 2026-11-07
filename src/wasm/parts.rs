@@ -1,7 +1,6 @@
 //! main.wat's own functions as its text writes them, for what it takes from the parts its idea
 //! builds on (`- Builds on:`): a function taken from a part is marked `;; from: <part>` on a line
-//! above its `(func`, and is the part's own function word for word, as a main.s function marked
-//! `# from:` is its part's.
+//! above its `(func`, and is the part's own function word for word.
 
 /// One of main.wat's own functions, as its text writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]

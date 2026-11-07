@@ -1,29 +1,20 @@
-//! Runs a built program the way tests and `run` do: stdin given up front and then closed, an
-//! empty environment, a working folder of its own, a time limit, an output limit, and a count
-//! of the instructions it executed.
-//!
-//! What a run is, its job and limits, how it ended, what it produced and the network it may use,
-//! is the same on every system, and is here. How it is started and confined is each system's own
-//! ([`crate::os`]): on Linux the kernel's (Landlock, seccomp, resource limits, the CPU's
-//! counters); elsewhere, until macOS and Windows get theirs, a run says it can't start.
+//! What a run of a program is, the same on every system: its limits, how it ended and what it
+//! produced. lengua's WebAssembly host runs a program ([`crate::wasm`]): standard input given up
+//! front and then closed, an empty environment, a working folder of its own, a time limit, an
+//! output limit, and in a test a count of the WebAssembly operations it executed.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io;
-use std::path::Path;
 use std::time::Duration;
 
-use crate::connect::{Made, Reach};
-use crate::platform::Allowed;
-use crate::supply::Supply;
-
-pub use crate::os::{Started, attached, launch, start};
-
-/// The command-line flag that starts the binary as a launcher.
-pub const LAUNCH_FLAG: &str = "--launch";
+use crate::connect::Made;
 
 /// The most bytes a file may hold when tests run: the write that crosses it is cut short and the
 /// next fails with `EFBIG`, as on every target.
 pub const TEST_FILE_LIMIT: u64 = 64 * 1024 * 1024;
+
+/// What one pipe write holds, which one read of standard input returns whole: past it, input
+/// arrives in pieces, which only a program that reads with fill takes right however they fall.
+pub const PIPE_WRITE: usize = 4096;
 
 /// The most files, connections and folders a program holds open at once, the same on every
 /// target: within macOS's `OPEN_MAX` of 10,240, which macOS's own default of 256 may be raised
@@ -136,100 +127,19 @@ impl Default for Limits {
     }
 }
 
-/// What to run, with what, and where.
-#[derive(Debug, Clone, Copy)]
-pub struct Job<'a> {
-    /// The executable.
-    pub program: &'a Path,
-    /// Its command-line arguments.
-    pub args: &'a [String],
-    /// Its standard input, closed after these bytes.
-    pub stdin: &'a [u8],
-    /// The pieces its standard input is written in, by length, each once the program has read
-    /// the last; empty, it's written whole.
-    pub stdin_pieces: &'a [usize],
-    /// A file to be its standard input instead, read by the program itself, however large.
-    pub stdin_file: Option<&'a Path>,
-    /// Files put in its fresh working folder before it starts, by name relative to the folder.
-    pub files: &'a BTreeMap<String, String>,
-    /// Empty folders put in its fresh working folder before it starts.
-    pub folders: &'a BTreeSet<String>,
-    /// Its environment variables, by name: no others reach it.
-    pub env: &'a BTreeMap<String, String>,
-    /// A folder to run in instead of a fresh one; the program may read and write inside it.
-    pub folder: Option<&'a Path>,
-    /// The system calls it may make; any other stops it.
-    pub syscalls: &'a [Allowed],
-    /// Random bytes and clock readings the test gives it in place of the kernel's.
-    pub supply: Option<&'a Supply>,
-    /// The network it may use; none at all when `None`.
-    pub net: Option<&'a Net>,
-    /// Whether QEMU's user mode runs it, for another CPU: then the kernel sees QEMU's own
-    /// system calls rather than the program's, so it can't hold the program to `syscalls`, and
-    /// the CPU's counters would count QEMU's instructions, not the program's, so none are taken.
-    /// Landlock and the limits still hold, and lengua's broker still serves it.
-    pub emulated: bool,
-    /// Whether each folder listing comes turned round, last entry first, as a test's second run
-    /// has it, to find a result that depends on the order a file system lists in.
-    pub reversed: bool,
-    /// Whether its standard output is a pipe nobody reads, as after `prog | head -1` has read its
-    /// line: every write to it fails with `EPIPE`, never a signal, since SIGPIPE stays ignored.
-    pub stdout_closed: bool,
-    /// What lengua's broker does for the program, when it serves it over descriptor 4,352
-    /// ([`crate::edge::CHANNEL`]), as it does a program that links the channel's code: its names,
-    /// and in a test its clock and random bytes, go through the broker, which does only what the
-    /// permit, from the program's idea, says. A program with a broker keeps no raw call that
-    /// makes or finds a path.
-    pub channel: Option<crate::broker::Permit>,
-}
-
-impl<'a> Job<'a> {
-    /// A job with no files, in a fresh folder.
-    #[must_use]
-    pub fn new(
-        program: &'a Path,
-        args: &'a [String],
-        stdin: &'a [u8],
-        syscalls: &'a [Allowed],
-    ) -> Self {
-        static NO_FILES: BTreeMap<String, String> = BTreeMap::new();
-        static NO_FOLDERS: BTreeSet<String> = BTreeSet::new();
-        Self {
-            program,
-            args,
-            stdin,
-            stdin_pieces: &[],
-            files: &NO_FILES,
-            folders: &NO_FOLDERS,
-            env: &NO_FILES,
-            folder: None,
-            syscalls,
-            supply: None,
-            net: None,
-            stdin_file: None,
-            emulated: false,
-            reversed: false,
-            stdout_closed: false,
-            channel: None,
-        }
-    }
-}
-
 /// How a run ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum End {
     /// The program exited with this code.
     Exited(i32),
-    /// A signal killed the program.
-    Signaled(i32),
     /// It ran past the time limit and was killed.
     TimedOut,
     /// It printed past the output limit and was killed.
     OutputTooLarge,
     /// lengua stopped it while it was still running, as a server is at the end of its test.
     Stopped,
-    /// A WebAssembly program trapped: the engine stopped it at an instruction that can't go on,
-    /// on this line of main.wat when lengua knows it.
+    /// The program trapped: the engine stopped it at an instruction that can't go on, on this
+    /// line of main.wat when lengua knows it.
     Trapped(Trap, Option<usize>),
 }
 
@@ -272,12 +182,11 @@ impl Trap {
 }
 
 impl End {
-    /// A short description, such as "exit code 3" or "killed by SIGSEGV".
+    /// A short description, such as "exit code 3" or "trapped at main.wat line 12: …".
     #[must_use]
     pub fn describe(self, limits: Limits) -> String {
         match self {
             Self::Exited(code) => format!("exit code {code}"),
-            Self::Signaled(signal) => format!("killed by {}", signal_name(signal)),
             Self::TimedOut => format!("still running after {:?}, so it was killed", limits.timeout),
             Self::OutputTooLarge => format!(
                 "printed more than {} bytes, so it was killed",
@@ -292,22 +201,6 @@ impl End {
     }
 }
 
-/// A signal's name, and what it most likely means for a lengua program.
-#[must_use]
-pub fn signal_name(signal: i32) -> String {
-    match signal {
-        4 => "SIGILL (an instruction this CPU can't run)".into(),
-        6 => "SIGABRT".into(),
-        7 => "SIGBUS (a bad memory access)".into(),
-        8 => "SIGFPE (division by zero or overflow in div)".into(),
-        9 => "SIGKILL".into(),
-        11 => "SIGSEGV (memory it may not touch)".into(),
-        13 => "SIGPIPE".into(),
-        31 => "SIGSYS (a system call its idea doesn't allow)".into(),
-        other => format!("signal {other}"),
-    }
-}
-
 /// What a run produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Run {
@@ -317,85 +210,24 @@ pub struct Run {
     pub stderr: Vec<u8>,
     /// How it ended.
     pub end: End,
-    /// User-space instructions it executed, when the CPU's counters are available.
+    /// The WebAssembly operations it executed, when the engine counted them, as it does for a
+    /// test's runs.
     pub instructions: Option<u64>,
-    /// CPU cycles spent in its own code, when available.
-    pub cycles: Option<u64>,
-    /// CPU time in nanoseconds over all its threads, including what the kernel did for it when
-    /// the system allows measuring that, when available.
-    pub cpu_time_ns: Option<u64>,
-    /// Time on the clock from its start to its end, in nanoseconds: what threads shorten.
+    /// Time on the clock from its start to its end, in nanoseconds.
     pub wall_time_ns: u64,
     /// Every file in its fresh working folder afterwards, by name relative to the folder, or why
     /// they couldn't be read. Empty when it ran in a folder of the user's.
     pub files: Result<BTreeMap<String, Vec<u8>>, String>,
     /// Every folder in it afterwards, by name relative to it, empty ones included.
     pub folders: BTreeSet<String>,
-    /// Why lengua's broker stopped serving the program, if it did, such as a message from the
-    /// program that isn't of the protocol or a channel that failed; for a WebAssembly program,
-    /// why lengua's host couldn't run it as asked, such as a module it couldn't start.
+    /// Why lengua's host couldn't run the program as asked, such as a module it couldn't start.
     pub supplied: Option<String>,
     /// How many random bytes the program asked for, when the test supplied them.
     pub random_asked: Option<usize>,
     /// What became of each connection lengua made for it, in order.
     pub connections: Vec<Made>,
-    /// Whether it listed a folder, which its edge tells lengua's broker once, in a test.
+    /// Whether it listed a folder, which a test's second run then lists turned round.
     pub listed: bool,
-}
-
-/// The network a run may use. The program itself holds none: lengua makes its connections and
-/// binds its listener, and hands them over.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Net {
-    /// The connections lengua makes for the program before it starts and hands it, in order,
-    /// as descriptors 4, 5 and on.
-    pub connections: Vec<Reach>,
-    /// The port lengua listens on for the program and hands it as file descriptor 3, or 0 for
-    /// any free one; `None` for a program that doesn't serve.
-    pub listen: Option<u16>,
-    /// Whether that port is open to other computers: lengua listens on every address of this
-    /// computer instead of the loopback.
-    pub serve_anywhere: bool,
-}
-
-impl Net {
-    /// Whether the program uses the network at all.
-    #[must_use]
-    pub fn is_used(&self) -> bool {
-        !self.connections.is_empty() || self.listen.is_some()
-    }
-
-    /// The launcher's argument: `none`, or `connections=2` and `listen=0` (`listen_any=8080`
-    /// for every address), joined by `;`. The launcher needs only how many connections it gets,
-    /// not where they go.
-    pub(crate) fn encode(&self) -> String {
-        let mut parts = Vec::new();
-        if !self.connections.is_empty() {
-            parts.push(format!("connections={}", self.connections.len()));
-        }
-        if let Some(port) = self.listen {
-            let listen = if self.serve_anywhere {
-                "listen_any"
-            } else {
-                "listen"
-            };
-            parts.push(format!("{listen}={port}"));
-        }
-        if parts.is_empty() {
-            "none".into()
-        } else {
-            parts.join(";")
-        }
-    }
-}
-
-/// Runs `job` through `launcher` (this server's own binary) until it ends.
-///
-/// # Errors
-///
-/// Fails when the program can't be started.
-pub async fn run(launcher: &Path, job: Job<'_>, limits: Limits) -> io::Result<Run> {
-    start(launcher, job, limits).await?.wait().await
 }
 
 #[cfg(test)]

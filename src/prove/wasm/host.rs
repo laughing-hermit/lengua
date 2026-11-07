@@ -818,7 +818,7 @@ impl Call<'_> {
                 }
                 match first {
                     Some((buffer, length)) => {
-                        let most = u64::try_from(crate::edge::PIPE_WRITE).unwrap_or(u64::MAX);
+                        let most = u64::try_from(crate::runner::PIPE_WRITE).unwrap_or(u64::MAX);
                         self.read_world(0, buffer, length.min(most))?
                     }
                     None => 0,

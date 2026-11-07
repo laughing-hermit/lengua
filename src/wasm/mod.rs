@@ -3,10 +3,8 @@
 //! lengua's own WASI host ([`host`]), identically on Linux, macOS and Windows, on x86-64 and
 //! ARM64. Tests run in a pool of reused workers ([`pool`]), each a child process of this binary
 //! ([`worker`]) that the server talks to in length-prefixed JSON ([`job`]); a run from a shell
-//! runs in place ([`runner::run_here`]). How a run went is the runner's own [`crate::runner::Run`],
-//! so everything that compares results compares a WebAssembly program's as a native one's.
-//!
-//! During the pivot the native path (`main.s`) stays beside this one, chosen by the code file.
+//! runs in place ([`runner::run_here`]). How a run went is a [`crate::runner::Run`], which
+//! everything that compares results reads.
 
 pub mod engine;
 pub mod host;

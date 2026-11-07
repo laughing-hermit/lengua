@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::io::{IsTerminal as _, Read as _, Write as _};
 
 use super::{Fail, Stop};
-use crate::edge::PIPE_WRITE;
+use crate::runner::PIPE_WRITE;
 use crate::wasm::wasi::errno;
 
 /// Standard input.

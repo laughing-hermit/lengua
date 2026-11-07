@@ -1,15 +1,13 @@
 //! WASI preview 1 as lengua's host gives it: the module's name, the numbers and layouts of the
-//! interface, and the function table, the shape of the native edge's [`crate::edge::Op`]. Each
-//! function has its signature, what an idea names to allow it, the buffers it borrows from the
-//! program's memory, and the errors it gives, a subset of lengua's closed set in WASI's own
-//! numbering.
+//! interface, and the function table. Each function has its signature, what an idea names to
+//! allow it ([`Allowance`]), the buffers it borrows from the program's memory, and the errors it
+//! gives, a subset of lengua's closed set in WASI's own numbering.
 //!
 //! Every function of preview 1 is in the table, so a module built by a C, C++ or Rust toolchain
 //! links whatever it imports: one lengua doesn't give answers `NOSYS`, one the idea doesn't allow
 //! answers `NOTCAPABLE`, and the few such toolchains call at startup answer harmlessly instead
 //! (an empty environment, no folder, zeros for random bytes).
 
-use crate::edge::Allowance;
 use crate::idea::Use;
 
 /// The module WASI preview 1's functions are imported from.
@@ -251,6 +249,21 @@ pub struct Lend {
     pub bytes: Bytes,
     /// Whether the function writes into it; otherwise it only reads it.
     pub written: bool,
+}
+
+/// What an idea names to allow a function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Allowance {
+    /// Every program may call it.
+    Always,
+    /// A program that names this capability.
+    Use(Use),
+    /// A program on the network at all, with connections or serving.
+    Network,
+    /// A program that serves: lengua gives it a listening socket.
+    Listens,
+    /// A server of several clients at once.
+    AtOnce,
 }
 
 /// What a function does when the program's idea doesn't allow it.

@@ -1,7 +1,7 @@
 //! Running a WebAssembly module: the part in this process, which a worker does for each job and
 //! a run from a shell does in place, and the parts around it, the working folder prepared and
-//! read back and how a job went turned into the runner's [`Run`], so everything that compares
-//! results compares a WebAssembly program's as it does a native one's.
+//! read back and how a job went turned into a [`Run`], which everything that compares results
+//! reads.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -71,7 +71,7 @@ pub fn make_room() -> Result<(), String> {
     Ok(())
 }
 
-/// The most files read back from a working folder after a run, as for a native program.
+/// The most files read back from a working folder after a run.
 const MAX_FILES_BACK: usize = 256;
 
 /// The most bytes read back from a working folder after a run.
@@ -418,8 +418,6 @@ pub fn run_of(done: Done, left: Left, line: impl Fn(u64) -> Option<usize>) -> Ru
         stderr: job::unhex(&done.stderr).unwrap_or_default(),
         end,
         instructions,
-        cycles: None,
-        cpu_time_ns: None,
         wall_time_ns: done.wall_time_ns,
         files,
         folders,
