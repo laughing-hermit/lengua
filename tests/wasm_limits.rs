@@ -1,5 +1,5 @@
 //! The limits and the promises of lengua's WebAssembly runtime, through its pool of workers as a
-//! test runs a program, on every system: time, output and memory; an empty environment and
+//! test runs a program, on every system: time, output, memory and a table; an empty environment and
 //! standard input that ends; no descriptor but the ones a program is given; every system's names;
 //! a file's limit and the files' total; nothing past the working folder, through a link or `..`;
 //! folders listed in order; the test's supplies; sleeps that end at once; connections, made and
@@ -14,7 +14,9 @@ use lengua::connect::Reach;
 use lengua::runner::{End, Limits, Run};
 use lengua::supply::{Supply, Time};
 use lengua::wasm::engine::Setup;
+use lengua::wasm::host::limits::TABLE_ELEMENTS;
 use lengua::wasm::job::{self, Job, Request};
+use lengua::wasm::runner::UNSTARTED;
 use lengua::wasm::{Policy, Pool, Program, Spec};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -135,6 +137,46 @@ async fn memory_grows_only_as_far_as_its_module_declares() {
         exited(&run(&unbounded, Spec::new(&[], &[], none), Limits::default()).await),
         1
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_table_holds_no_more_entries_than_lengua_allows() {
+    let table = |entries: usize| {
+        format!(
+            r#"(module {EXIT} (memory (export "memory") 1) (table {entries} funcref)
+  (func (export "_start") (call $exit (i32.const 0))))"#
+        )
+    };
+    let none = Policy::default();
+    // As many as lengua allows: the program runs.
+    let most = table(TABLE_ELEMENTS);
+    let ran = run(&most, Spec::new(&[], &[], none), Limits::default()).await;
+    assert_eq!(exited(&ran), 0);
+    // One more, which the worker would hold in its own memory: the program never starts, and
+    // the run says why.
+    let more = table(TABLE_ELEMENTS + 1);
+    let refused = run(&more, Spec::new(&[], &[], none), Limits::default()).await;
+    assert_eq!(exited(&refused), UNSTARTED);
+    assert!(
+        refused
+            .supplied
+            .as_deref()
+            .is_some_and(|problem| problem.contains("table")),
+        "{:?}",
+        refused.supplied
+    );
+    // A table that grows: to lengua's limit, then no further, with -1, as memory.grow gives.
+    let below = TABLE_ELEMENTS - 1;
+    let grows = format!(
+        r#"(module {EXIT} (memory (export "memory") 1) (table 1 funcref)
+  (func (export "_start")
+    (local $first i32)
+    (local.set $first (table.grow 0 (ref.null func) (i32.const {below})))
+    (call $exit (i32.add (i32.mul (local.get $first) (i32.const 10))
+      (i32.eq (table.grow 0 (ref.null func) (i32.const 1)) (i32.const -1))))))"#
+    );
+    let ran = run(&grows, Spec::new(&[], &[], none), Limits::default()).await;
+    assert_eq!(exited(&ran), 11);
 }
 
 #[tokio::test(flavor = "multi_thread")]

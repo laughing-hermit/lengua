@@ -115,7 +115,9 @@ Each can be reversed.
   (Windows on ARM64 is the engine's third tier), its portable interpreter (Pulley) runs instead,
   and the gap is published. The pinned version is Wasmtime 50.0.1. Reference types stay on in
   the engine, as today's C, C++ and Rust compilers encode their modules with them (which the
-  comparison of point 4 runs); the dialect's rules refuse tables in `main.wat`.
+  comparison of point 4 runs); the dialect's rules refuse tables in `main.wat`. A module's one
+  table holds at most 1,048,576 entries, whatever it declares or grows to, so no module takes
+  the worker's memory through a table.
 - **The host's answers** follow the compile skill's host.md: a name that would leave the working
   folder gives `NOTCAPABLE`, a link on the way `ACCES`; closing a standard stream needs files or
   the network in the idea. The terminal's two non-WASI imports (raw mode, window size) wait for
