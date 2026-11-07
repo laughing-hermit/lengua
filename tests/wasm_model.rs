@@ -537,7 +537,7 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
             let listens = idea.network.listens.is_some();
             match lengua::prove::agrees_wasm(&built, policy, &samples(&suite), listens, deadline) {
                 Ok(None) => {}
-                Ok(Some(lengua::prove::Verdict::NotProven(why))) if template => {
+                Ok(Some(lengua::prove::Verdict::NotProven(why))) | Err(why) if template => {
                     not_modelled.push(format!("{shown}: {why}"));
                 }
                 other => failures.push(format!("{shown}: the model {other:?}")),
@@ -589,7 +589,9 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
             if let Ended::NotModelled(why) = &model.end
                 && template
             {
-                not_modelled.push(format!("{shown}, {}: {why}", test.name));
+                // A test's name holds its input, which can be a mebibyte long.
+                let name: String = test.name.chars().take(80).collect();
+                not_modelled.push(format!("{shown}, {name}…: {why}"));
                 continue;
             }
             let found = differences(&engine, &model);
