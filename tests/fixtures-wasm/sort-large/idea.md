@@ -45,7 +45,23 @@ exits with code 3. If the program cannot write its output, it exits with code 2.
 | `string(0, 1048576, "abcdefghijklmnopqrstuvwxyz\n")` | 10 |
 | `string(0, 64, "abcAB \n\t~é")` | 300 |
 
-## B2: Exits with code 2 when it cannot write its output
+## B2: Rejects input of too many lines
+- Given standard input that contains `\n` `4194305` times
+- When the program runs
+- Then it prints `error: more than 4194304 lines` and a newline to standard error
+- And it exits with code `4`
+
+### For any input of too many lines
+- Given standard input that contains `\n` `4194304` times then `{line}`
+- When the program runs
+- Then it prints `error: more than 4194304 lines` and a newline to standard error
+- And it exits with code `4`
+
+| line | runs |
+|---|---|
+| `string(1, 1048576, "a\n")` | 10 |
+
+## B3: Exits with code 2 when it cannot write its output
 - Given standard input that contains `pear\napple\n`
 - And standard output is closed
 - When the program runs
