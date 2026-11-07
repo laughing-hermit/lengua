@@ -25,6 +25,9 @@ cap-std = "=4.0.3"
 getrandom = "0.4"
 hmac = "0.13"
 iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "instr_info", "intel"] }
+# The calls that need unsafe code, each in a safe function (this crate forbids unsafe code): on
+# Unix the signals, on Windows the CPU's caches.
+lengua-os = { path = "crates/lengua-os" }
 object = { version = "0.40", default-features = false, features = ["std", "read_core", "elf"] }
 rand = { version = "0.10", default-features = false, features = ["chacha"] }
 rmcp = { version = "3.8.0", features = ["transport-io"] }
@@ -56,8 +59,6 @@ webpki-roots = "1"
 # and 4 of the roadmap.
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", default-features = false, features = ["process", "signal"] }
-# The calls that need unsafe code, each in a safe function (this crate forbids unsafe code).
-lengua-os = { path = "crates/lengua-os" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.7"
