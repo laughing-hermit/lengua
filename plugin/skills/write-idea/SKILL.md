@@ -147,7 +147,21 @@ by one concrete example in its steps, and its generated tests try that rule with
   or `- Uses: nothing`. lengua programs can't start processes or handle signals, and their memory
   is fixed by the idea's limits. lengua holds the program to this line when it runs, so it's a promise the user can rely
   on, and it means the same on every kind of computer. `# Constraints` holds only `- Uses:`,
-  `- Network:`, `- Threads:` and `- Builds on:` lines; anything else goes in Purpose.
+  `- Network:`, `- Threads:`, `- Secret:` and `- Builds on:` lines; anything else goes in
+  Purpose.
+- **Secret inputs:** when the user says an input is secret, or the program compares or
+  transforms data that is, such as a key or a token, name it under `# Constraints` with
+  ``- Secret: …``: `standard input`, ``a file `key.txt` ``, ``the environment variable `TOKEN` ``
+  or ``argument `2` ``, several on one line, as in
+  ``- Secret: standard input and the environment variable `TOKEN` ``. Each but an argument needs
+  its word in `- Uses:` too. Only an Attested Computation has the line, and `check` then refuses
+  `main.wat` when a value computed from one of these decides a branch, a `select`, an address in
+  memory, a length, how many times a loop runs, a division or a float operation, or reaches a
+  host call as anything but the bytes it writes out. The secret's length isn't secret: lengths,
+  counts and the places of things stay free to decide. Behaviors don't change: say in Purpose
+  what the program does, and that no byte of the secret decides how it runs. This is a rule
+  `check` holds the WebAssembly to, like a type; it says nothing of the machine code the engine
+  makes from it, so don't present it to the user as protection against an attacker.
 - **Network:** plain TCP, to the places the idea names, and nothing else. A program never opens
   a connection itself: lengua makes each one its idea names before the program starts and hands
   it over, so it's the same on every kind of computer. Choose the places yourself, without
