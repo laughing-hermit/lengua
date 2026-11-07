@@ -435,7 +435,10 @@ async fn each_file_and_folder_made_counts_against_the_files_total() {
     let ran = run(&text, spec, Limits::default()).await;
     assert_eq!(exited(&ran), 22);
     assert!(ran.files.expect("its files").is_empty());
-    assert_eq!(ran.folders, BTreeSet::from(["a".to_owned(), "b".to_owned()]));
+    assert_eq!(
+        ran.folders,
+        BTreeSet::from(["a".to_owned(), "b".to_owned()])
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
