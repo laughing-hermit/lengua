@@ -1,11 +1,14 @@
 //! The WebAssembly model on its own: WebAssembly's integer, float and SIMD128 semantics, each trap
 //! at its line of main.wat, lengua's library, the host's calls, what the model refuses to run, a
-//! branch, a division, a load and counts of bits the input decides, `$fill` read as a whole, and
-//! where a read loop is; then, with the solvers, the echo and greet fixtures proven for every
-//! input, add for numbers of up to three digits (for every input in a slow ignored test), and a
-//! planted bug in each found, the traps naming their lines; cat-stream, the stream template, and
-//! lines and count in SIMD128 proven for every length by induction, a planted bug in each found;
-//! cat for every length its idea allows; the hypotenuse in doubles and the vector template.
+//! branch, a division, a load and counts of bits the input decides, `$fill` read as a whole,
+//! where a read loop is, and what an induction's step can't take there: a read before the loop's
+//! head, and a time round that changes the working folder. Then, with the solvers, the echo and
+//! greet fixtures proven for every input, add for numbers of up to three digits (for every input
+//! in a slow ignored test), and a planted bug in each found, the traps naming their lines;
+//! cat-stream, the stream template, and lines in SIMD128 proven for every length by induction, a
+//! planted bug in each found, and the bytes the two programs the step can't take drop found;
+//! count in SIMD128 proven by length, as the flag it asserts is any value at the step's head; cat
+//! for every length its idea allows; the hypotenuse in doubles and the vector template.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -1756,25 +1759,33 @@ const COUNT_AT_64: [(&str, &str); 3] = [
     ),
 ];
 
-/// count, whose words in a buffer-full depend on whether the one before ended inside a word, and
-/// whose lanes past the input's end its bitmask masks off: the step reads two buffer-fulls and
-/// checks the second's counts after the first's last byte, whatever the program keeps of it, so
-/// `wc -lw` in SIMD128 is proven for every length.
+/// count, whose words in a buffer-full depend on whether the one before ended inside a word,
+/// carries that from one buffer-full to the next as a flag, which its `$count_piece` asserts is 0
+/// or 1. The induction's step makes the flag any value at the read loop's head, and from there
+/// the assertion fails, so the step doesn't hold and `wc -lw` in SIMD128 is proven by length, as
+/// far as a proof's time goes: here every text of up to a buffer-full and a byte, the flag
+/// carried from the first piece to the second. The native count keeps its flag in a register it
+/// never asserts.
 #[test]
-fn proves_a_vector_word_count_for_every_length_by_induction() {
+fn proves_a_vector_word_count_by_length_as_its_flag_is_asserted() {
     if !solvers_installed() {
         return;
     }
     let (blocks, policy) = blocks_of("count");
     let built = build(&edited_fixture("count", &COUNT_AT_64)).expect("count builds");
-    let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(1200));
+    let mut block = blocks[0].clone();
+    for (_, generator) in &mut block.vars {
+        if let Generator::Str { max, .. } = generator {
+            *max = 65;
+        }
+    }
+    let verdict = prove_wasm(&built, policy, &block, &stream_budget(1200));
     assert!(
         matches!(
             verdict,
             Verdict::Proven {
                 bound: None,
-                induction: Some(64),
-                lookback: 1,
+                induction: None,
                 ..
             }
         ),
