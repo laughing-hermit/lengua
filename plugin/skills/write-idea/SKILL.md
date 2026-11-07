@@ -154,7 +154,8 @@ by one concrete example in its steps, and its generated tests try that rule with
   ``- Secret: …``: `standard input`, ``a file `key.txt` ``, ``the environment variable `TOKEN` ``
   or ``argument `2` ``, several on one line, as in
   ``- Secret: standard input and the environment variable `TOKEN` ``. Each but an argument needs
-  its word in `- Uses:` too. Only an Attested Computation has the line, and `check` then refuses
+  its word in `- Uses:` too: `standard input` (or `the terminal`, which reads standard input),
+  `files` or `the environment`. Only an Attested Computation has the line, and `check` then refuses
   `main.wat` when a value computed from one of these decides a branch, a `select`, an address in
   memory, a length, how many times a loop runs, a division or a float operation, or reaches a
   host call as anything but the bytes it writes out. The secret's length isn't secret: lengths,
