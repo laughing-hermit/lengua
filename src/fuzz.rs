@@ -243,6 +243,16 @@ fn readers() -> Vec<Reader> {
                 if let Ok(idea) = crate::idea::parse(&text) {
                     let _ = crate::testfile::check(&idea);
                 }
+                // lengua's entry in `verified`, written and taken away, leaves the idea's hash.
+                let hash = crate::trust::idea_hash(text.as_bytes());
+                let at = "2026-11-06T23:00:00Z";
+                let code = crate::hash::Sha256Hex::of(b"code");
+                let entry = crate::trust::Verified::new(at, hash.clone(), code);
+                let written = crate::trust::with_lengua_verified(&text, &entry);
+                assert_eq!(crate::trust::idea_hash(written.as_bytes()), hash);
+                if let Some(removed) = crate::trust::without_lengua_verified(&written) {
+                    assert_eq!(crate::trust::idea_hash(removed.as_bytes()), hash);
+                }
             }),
         ),
         (

@@ -21,7 +21,8 @@ const BODY: &str = " lengua: compiled from idea.md sha256:";
 /// What lengua's line in main.s says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
-    /// SHA-256 of the idea.md the code was compiled from.
+    /// lengua's hash of the idea.md the code was compiled from, which leaves its trust record out
+    /// ([`crate::trust::idea_hash`]).
     pub idea: String,
     /// The target it was compiled for, such as `linux-x86_64`.
     pub target: String,
