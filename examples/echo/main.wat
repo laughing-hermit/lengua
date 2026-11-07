@@ -1,7 +1,7 @@
 ;; echo: a server that sends each line back to the client that sent it, one client at a time, in
-;; the WebAssembly dialect 1 (references/power-of-10-webassembly.md), with the compile skill's
-;; server-template.wat's idioms: one loop that never ends takes each connection with sock_accept
-;; on the listener that lengua binds and hands over as descriptor 4. lengua's library gives
+;; the WebAssembly dialect 1 (references/power-of-10-webassembly.md), after the compile skill's
+;; server-template.wat: one loop that never ends takes each connection with sock_accept on the
+;; listener that lengua binds and hands over as descriptor 4, and lengua's library gives
 ;; $assert_fail, $fill and $write_all.
 (module
   (import "wasi_snapshot_preview1" "sock_accept"
