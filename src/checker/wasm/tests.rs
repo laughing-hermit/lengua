@@ -633,7 +633,8 @@ fn rule_8_names_every_constant() {
     assert_violation(
         &report,
         Rule::Constants,
-        line_of(&bound, "(i32.const 64))"),
+        // The planted use, not the declaration of $args.size, which holds the same text.
+        line_of(&bound, "(i32.gt_u (local.get $size) (i32.const 64))"),
         "the bound 64 is a bare number",
     );
     let size = with(
