@@ -180,7 +180,9 @@ records `dialect = "webassembly 1"`.
 Every address has an owner, a region, and every access stays inside it. `check` follows each value
 through each function: a region's address (from `global.get $x`), that address plus a number, a
 length, a plain number, or a value it doesn't follow (one loaded from memory). What the rules
-can't settle, the proof checks on every run it covers.
+can't settle, the proof checks on every run it covers: that a division never traps, and that an
+access stays inside the program's memory. The proof follows no region, so that such an access
+stays inside its own region is tested, not proven, and `check`'s memory line lists them.
 
 - **M1, owners.** An address is never made from a plain number or loaded from memory: only from a
   region's global, plus offsets. Regions start at 1024 or above (lower addresses are lengua's),

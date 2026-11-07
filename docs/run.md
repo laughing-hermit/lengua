@@ -14,7 +14,8 @@ lengua-mcp run <folder> [arguments…]
 `lengua-mcp` is lengua's MCP server, which the lengua plugin installs. It runs a folder that
 lengua's `check` took to done on this computer: `lengua.lock`, signed with this user's key,
 records `idea.md` and `main.wat` as they are, and `check` built `main.wat`, held it to every rule
-of lengua's WebAssembly dialect and ran every test. Given such a folder, it:
+of lengua's WebAssembly dialect and ran every test, and none of its proofs found inputs where
+`main.wat` is wrong. Given such a folder, it:
 
 1. builds `main.wat` into a standard WebAssembly module, with lengua's small library merged in,
    and runs it only when the module is byte for byte the one `check` tested, so a module that
