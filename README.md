@@ -249,6 +249,14 @@ code, and creates the lock.
 
 ## Against C, C++ and Rust
 
+Since the pivot to WebAssembly, `cargo bench --bench against_rust_and_c` is the gate of
+[todo.md](todo.md)'s point 4: on each of the five runners, lengua's WebAssembly program for each
+of 14 workloads runs against C, C++ and Rust compiled to WebAssembly and run the same way, and
+against their native builds, in alternating runs decided by a one-sided Mann-Whitney U test.
+Each runner writes its own BENCHMARKS-<target>.md from its run's results, and
+[KNOWN_BEHIND](KNOWN_BEHIND) names the rows where lengua isn't ahead yet, a list that may only
+shrink. No runner has run the gate yet. What follows is the native product's, before the pivot.
+
 [BENCHMARKS.md](BENCHMARKS.md) measures lengua programs against the same programs in C, C++ and
 Rust, built with every optimization for this CPU (`cargo bench --bench against_rust_and_c`
 measures again). On the owner's computer, an AMD Ryzen measured on 2026-11-02 before everything moved
@@ -305,7 +313,7 @@ The roadmap in [todo.md](todo.md) closes these gaps and gates speed on both targ
 cargo test
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo bench --bench against_rust_and_c   # rewrites BENCHMARKS.md
+cargo bench --bench against_rust_and_c   # the gate: writes BENCHMARKS-<target>.md
 cargo test --release -- --ignored        # the slow proof of examples/add
 ```
 
