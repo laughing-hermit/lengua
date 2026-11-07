@@ -2459,7 +2459,9 @@ impl Witness {
 
 /// A proof's line for what a real run of the inputs it found came to, `ran`, in the words of
 /// `file`, the code: whether the code is wrong on them, `described`, and whether it is. Where the
-/// run passed, the model was wrong about them, and about what it said the run broke, `broken`.
+/// run passed, the model was wrong about them, and about what it said the run broke, `broken`,
+/// unless the run reads random bytes or the clock, `kernel_values`, which a real run can't be
+/// given: then the line says what the model found, a trap and its line too.
 fn settled(
     file: &str,
     described: &str,
@@ -2480,15 +2482,25 @@ fn settled(
             true,
         ),
         // A real run draws its own random bytes and reads its own clock, so it can't replay
-        // what the proof found.
-        Ok(None) if kernel_values => (
-            format!(
-                "tested, not proven: with {described}, the prover found random bytes or a clock \
-                 reading for which {file}'s output breaks the test, which a real run can't \
-                 replay; check how {file} turns them into output"
+        // what the proof found: a trap there, the model's, is named with its line.
+        Ok(None) if kernel_values => match broken {
+            Some(problem) => (
+                format!(
+                    "tested, not proven: with {described}, the prover found random bytes or a \
+                     clock reading for which {file} traps ({problem}), which a real run can't \
+                     replay; check how {file} uses them there"
+                ),
+                false,
             ),
-            false,
-        ),
+            None => (
+                format!(
+                    "tested, not proven: with {described}, the prover found random bytes or a \
+                     clock reading for which {file}'s output breaks the test, which a real run \
+                     can't replay; check how {file} turns them into output"
+                ),
+                false,
+            ),
+        },
         Ok(None) => match broken {
             Some(problem) => (
                 format!(
@@ -3395,5 +3407,29 @@ mod tests {
         );
         // A first line that's neither is the layout check's to explain.
         assert_eq!(code_for_another_cpu("_start:\n", &native), None);
+    }
+
+    /// A real run of what a proof found settles it: a run that fails confirms it; one that
+    /// passes, though it can't be given the random bytes or clock reading the proof found, leaves
+    /// the line saying what the model found there, a trap with its line or output that breaks the
+    /// test; and one that passes on the very inputs says the model was wrong.
+    #[test]
+    fn a_real_run_settles_what_a_proof_found() {
+        let trap = "main.wat line 12: it reached memory outside its own";
+        let failed = Ok(Some("the program was trapped at main.wat line 12".to_owned()));
+        let (line, wrong) = settled(WASM_CODE_FILE, "n = 3", Some(trap), failed, true);
+        assert!(wrong, "{line}");
+        let (line, wrong) = settled(WASM_CODE_FILE, "n = 3", Some(trap), Ok(None), true);
+        assert!(!wrong, "{line}");
+        assert!(
+            line.contains(&format!("main.wat traps ({trap}), which a real run")),
+            "{line}"
+        );
+        let (line, wrong) = settled(WASM_CODE_FILE, "n = 3", None, Ok(None), true);
+        assert!(!wrong, "{line}");
+        assert!(line.contains("main.wat's output breaks"), "{line}");
+        let (line, wrong) = settled(WASM_CODE_FILE, "n = 3", Some(trap), Ok(None), false);
+        assert!(!wrong, "{line}");
+        assert!(line.ends_with("and a real run didn't"), "{line}");
     }
 }
