@@ -60,7 +60,7 @@ exits with code 3. The test of a write that fails gives it `1` to `64` bytes.
 
 | text | runs |
 |---|---|
-| `string(1, 64, "abc019")` | 20 |
+| `string(1, 64, "abc0123456789")` | 20 |
 
 # Constraints
 - Uses: standard input

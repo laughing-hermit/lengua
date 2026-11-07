@@ -51,7 +51,7 @@ on TCP port 8080 of this computer. More clients wait for their turn.
 
 | a | b |
 |---|---|
-| `string(0, 64, "abcxyz AZ")` | `string(0, 64, "abcxyz AZ")` |
+| `string(0, 64, "abcdxyz AZ")` | `string(0, 64, "abcdxyz AZ")` |
 
 ## B3: Answers clients at once
 - Given a client that sends `first` and a newline

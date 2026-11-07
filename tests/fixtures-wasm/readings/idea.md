@@ -5,7 +5,7 @@ description: Reads the clock that only moves forward a given number of times and
 runtime: webassembly
 computation: main.wat
 parameters:
-  - { name: count, type: integer, required: true, from: argument 1 }
+  - { name: n, type: integer, required: true, from: argument 1 }
 executor:
   resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
   receipt: [stdout, stderr, exit]
@@ -30,14 +30,14 @@ code 3. If the program cannot write its output, it exits with code 2.
 - Then it prints `5` and a newline
 - And it exits with code `0`
 
-### For any `count`
-- Given the argument `{count}`
+### For any `n`
+- Given the argument `{n}`
 - And the clock at `{t}`
 - When the program runs
-- Then it prints `{count}` and a newline
+- Then it prints `{n}` and a newline
 - And it exits with code `0`
 
-| count | t | runs |
+| n | t | runs |
 |---|---|---|
 | `int(1, 1000)` | `int(0, 4102444799)` | 40 |
 

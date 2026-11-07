@@ -41,7 +41,7 @@ file, it exits with code 3. If the program cannot write its output, it exits wit
 
 | a | b | c | runs |
 |---|---|---|---|
-| `string(0, 1048576, "ab\n")` | `string(0, 65536, "xyz")` | `string(0, 255, "q")` | 30 |
+| `string(0, 1048576, "abehlo\n")` | `string(0, 65536, "dlorw!xyz")` | `string(0, 255, "q")` | 30 |
 
 ## B2: Prints zeros for an empty folder
 - Given no arguments
@@ -63,7 +63,7 @@ file, it exits with code 3. If the program cannot write its output, it exits wit
 
 | a | runs |
 |---|---|
-| `string(0, 255, "q")` | 20 |
+| `string(0, 255, "ehloq")` | 20 |
 
 # Constraints
 - Uses: files
