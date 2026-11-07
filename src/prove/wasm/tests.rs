@@ -1149,7 +1149,10 @@ fn with_edits(source: &str, edits: &[(&str, &str)]) -> String {
 /// loop of the program's own fd_read, don't.
 #[test]
 fn a_read_loop_is_found_where_a_program_reads_its_input_whole() {
-    let streams = module(&fixture("cat-stream", "main.wat"), blocks_of("cat-stream").1);
+    let streams = module(
+        &fixture("cat-stream", "main.wat"),
+        blocks_of("cat-stream").1,
+    );
     assert!(streams.reads_whole());
     let head = streams.read_loop_head();
     assert!(head.is_ok(), "{head:?}");

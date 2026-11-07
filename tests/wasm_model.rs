@@ -1093,8 +1093,12 @@ fn float_probes(kind: Kind, rng: &mut ChaCha8Rng) -> Vec<Vec<Probe>> {
             (Kind::F64, "f64.promote_f32")
         };
         unary.push((other, format!("({resize} {value})")));
-        for (to, sign) in [(Kind::I32, "s"), (Kind::I32, "u"), (Kind::I64, "s"), (Kind::I64, "u")]
-        {
+        for (to, sign) in [
+            (Kind::I32, "s"),
+            (Kind::I32, "u"),
+            (Kind::I64, "s"),
+            (Kind::I64, "u"),
+        ] {
             let to_name = to.name();
             unary.push((to, format!("({to_name}.trunc_sat_{name}_{sign} {value})")));
         }
@@ -1213,7 +1217,10 @@ fn vector_probes(rng: &mut ChaCha8Rng) -> Vec<Vec<Probe>> {
         }
     }
     for (a, b) in &pairs {
-        binary.push((Kind::V128, format!("(v128.bitselect {a} {b} {})", values[2])));
+        binary.push((
+            Kind::V128,
+            format!("(v128.bitselect {a} {b} {})", values[2]),
+        ));
         binary.push((Kind::V128, format!("(i8x16.swizzle {a} {b})")));
         let picks: Vec<String> = (0..16)
             .map(|_| rng.random_range(0..32_u32).to_string())
@@ -1299,8 +1306,9 @@ async fn each_float_and_vector_operator_does_what_the_engine_does() {
         for chunk in probes.chunks(600) {
             let text = probing(chunk);
             let program = Program::of_text(&text).unwrap_or_else(|problem| panic!("{problem}"));
+            let spec = Spec::new(&[], &[], Policy::default());
             let engine = pool
-                .run(&program, Spec::new(&[], &[], Policy::default()), Limits::default())
+                .run(&program, spec, Limits::default())
                 .await
                 .expect("the engine runs it");
             let module = Module::new(program.built(), Policy::default()).expect("the model");

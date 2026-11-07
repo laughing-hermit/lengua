@@ -254,7 +254,11 @@ pub(super) fn operate(pool: &mut Pool, operation: Float, a: Term, b: Term) -> Te
             truth(pool, holds)
         }
         Float::Le | Float::Ge => {
-            let (low, high) = if operation == Float::Le { (a, b) } else { (b, a) };
+            let (low, high) = if operation == Float::Le {
+                (a, b)
+            } else {
+                (b, a)
+            };
             let less = test(pool, FloatTest::Less, low, high);
             let equal = test(pool, FloatTest::Equal, low, high);
             let holds = pool.bool_or(less, equal);
