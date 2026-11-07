@@ -13,9 +13,10 @@ name: ci
 # - A dispatch picks the targets and the mode: compile (clippy and the tests built), test (the
 #   suite), ignored (the slow ignored tests, optionally one folder's check), golden (the checker's
 #   and the prover's recordings of every program, made at two commits and compared), bench (lengua
-#   against C, C++ and Rust, and against an earlier commit's programs) or release (the archive). A
-#   test run also has a job on x86-64 Linux with QEMU's user mode, so the ARM64 cells run there
-#   too, as on a developer's x86-64 computer.
+#   against C, C++ and Rust, and against an earlier commit's programs) or release (each runner's
+#   archive, built there, then installed and checked on a clean runner of the same system and
+#   CPU). A test run also has a job on x86-64 Linux with QEMU's user mode, so the ARM64 cells run
+#   there too, as on a developer's x86-64 computer.
 # - `filter` matches test *names* only (libtest's filters, after `--`). To run a test *file*, name
 #   it in `test_files` (`lib` is the library's own tests): each becomes `--test <name>`. A run with
 #   a filter or files that matched no test fails, so a gate cannot pass by running nothing.
@@ -43,7 +44,7 @@ on:
         type: string
         default: "all"
       mode:
-        description: "compile, test, ignored, golden, bench or release (golden, bench and release: linux-x86_64 and linux-aarch64 so far)"
+        description: "compile, test, ignored, golden, bench or release (golden and bench: linux-x86_64 and linux-aarch64 so far; release: all five)"
         type: choice
         options:
           - compile
@@ -146,10 +147,10 @@ jobs:
             include=$(jq -c --arg t ",$TARGETS," \
               '[.[] | . as $e | select($t | contains("," + $e.target + ","))]' <<< "$listed")
           fi
-          # The benchmarks, the goldens and the release archive exist for linux-x86_64 and
-          # linux-aarch64 so far.
+          # The benchmarks and the goldens exist for linux-x86_64 and linux-aarch64 so far; the
+          # release archive, for all five.
           case "$MODE" in
-            bench|release) include=$(jq -c '[.[] | select(.target | startswith("linux-"))]' <<< "$include") ;;
+            bench) include=$(jq -c '[.[] | select(.target | startswith("linux-"))]' <<< "$include") ;;
           esac
           # A job's checkout is shallow unless it must read another commit (a bench against one).
           depth=1
@@ -274,9 +275,11 @@ jobs:
       - name: Rust
         run: bash scripts/ci/setup.sh ${{ matrix.base }} rust
 
-      # The tools are kept between runs: the solvers, and LLVM where it is installed by hand.
+      # The tools are kept between runs: the solvers, and LLVM where it is installed by hand. A
+      # release needs neither: the archive brings its own solvers, which scripts/release.sh
+      # fetches as tools.tsv pins them.
       - uses: actions/cache@v4
-        if: ${{ matrix.mode != 'compile' }}
+        if: ${{ matrix.mode != 'compile' && matrix.mode != 'release' }}
         with:
           path: |
             ~/solvers
@@ -285,11 +288,11 @@ jobs:
           key: tools-${{ matrix.base }}-${{ hashFiles('scripts/ci/tools.tsv', 'scripts/ci/setup.sh') }}
 
       - name: LLVM
-        if: ${{ matrix.mode != 'compile' }}
+        if: ${{ matrix.mode != 'compile' && matrix.mode != 'release' }}
         run: bash scripts/ci/setup.sh ${{ matrix.base }} llvm
 
       - name: z3 and cvc5, pinned by checksum
-        if: ${{ matrix.mode != 'compile' }}
+        if: ${{ matrix.mode != 'compile' && matrix.mode != 'release' }}
         run: bash scripts/ci/setup.sh ${{ matrix.base }} solvers
 
       - name: QEMU's user mode, for the other CPU's programs
@@ -309,9 +312,10 @@ jobs:
           key: ci-${{ matrix.base }}-${{ hashFiles('Cargo.lock', 'scripts/ci/setup.sh') }}
           restore-keys: ci-${{ matrix.base }}-
 
-      # --keep-going: every target's errors in one run, not the first target's alone.
+      # --keep-going: every target's errors in one run, not the first target's alone. A release
+      # is built from a commit whose suite already ran.
       - name: Clippy
-        if: ${{ matrix.mode != 'golden' }}
+        if: ${{ matrix.mode != 'golden' && matrix.mode != 'release' }}
         run: cargo clippy --release --all-targets --locked --workspace --keep-going -- -D warnings
 
       # Built first, so that the time a test run may take (stall_seconds) is the tests' and not the
@@ -398,9 +402,55 @@ jobs:
           sudo apt-get install -y -q time
           cargo bench --locked --bench against_rust_and_c 2>&1 | tee bench.log
 
+      # This runner's archive (scripts/release.sh), and the release check built beside it, to run
+      # where the archive is installed, on a runner that builds nothing.
       - name: The release archive
+        id: release
         if: ${{ matrix.mode == 'release' }}
-        run: scripts/release.sh
+        run: |
+          bash scripts/release.sh ${{ matrix.base }}
+          echo "version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_OUTPUT"
+
+      - name: The release check, built
+        if: ${{ matrix.mode == 'release' }}
+        run: |
+          cargo test --release --locked --test release_check --no-run --message-format=json > release-check.json
+          # The test binary's path, from the artifact message that names it (Windows's with its
+          # backslashes escaped).
+          built=$(grep '"name":"release_check"' release-check.json | grep -o '"executable":"[^"]*"' \
+            | head -n 1 | sed 's/^"executable":"//; s/"$//; s/\\\\/\\/g') || true
+          if [ -z "$built" ]; then
+            echo "cargo built no release check" >&2
+            exit 1
+          fi
+          mkdir -p dist/check
+          case "${{ matrix.base }}" in
+            windows-*) cp "$(cygpath -u "$built")" dist/check/release-check.exe ;;
+            *) cp "$built" dist/check/release-check ;;
+          esac
+
+      # The archive, named with its version, system and CPU; it is kept nowhere else.
+      - name: Keep the archive
+        if: ${{ matrix.mode == 'release' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lengua-${{ steps.release.outputs.version }}-${{ matrix.target }}
+          path: |
+            dist/lengua-*.tar.gz
+            dist/lengua-*.zip
+            dist/lengua-*.sha256
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Keep the release check
+        if: ${{ matrix.mode == 'release' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-check-${{ matrix.target }}
+          path: dist/check/
+          retention-days: 7
+          if-no-files-found: error
 
       # A green run says what it did not cover: libtest hides what a passing test prints, so a
       # test that skips itself notes why (lengua::skiplog) and the notes are counted here.
@@ -424,8 +474,6 @@ jobs:
             BENCHMARKS-aarch64.md
             target/release/lengua-mcp
             target/release/lengua-mcp.exe
-            dist/*.tar.gz
-            dist/*.sha256
           retention-days: 7
           if-no-files-found: ignore
 
@@ -460,10 +508,104 @@ jobs:
           VIEW: ${{ inputs.golden_view }}
         run: bash scripts/ci/golden-diff.sh "$VIEW" golden/base golden/head | tee -a "$GITHUB_STEP_SUMMARY"
 
+  # Each runner's release archive installed on a clean runner of its own system and CPU, as a
+  # user installs it: nothing of lengua's set up first (no checkout, no Rust, no solvers), the
+  # archive checked against its SHA-256 and unpacked in a fresh folder, installed by its own
+  # install script (Windows PowerShell's on Windows), then lengua-mcp doctor, and the release
+  # check, tests/release_check.rs built beside the archive, through a plain MCP client.
+  install:
+    name: install (${{ matrix.target }})
+    needs: [plan, test]
+    if: ${{ always() && inputs.mode == 'release' && needs.test.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: The archive and the release check
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*-${{ matrix.target }}"
+          path: downloaded
+          merge-multiple: true
+
+      - name: Unpacked in a fresh folder
+        run: |
+          temp="$RUNNER_TEMP"
+          if [ "$RUNNER_OS" = Windows ]; then temp=$(cygpath -u "$RUNNER_TEMP"); fi
+          cd downloaded
+          ls -l
+          archive=$(ls lengua-*.tar.gz lengua-*.zip 2> /dev/null | head -n 1) || true
+          if [ -z "$archive" ]; then
+            echo "no archive was downloaded" >&2
+            exit 1
+          fi
+          if command -v sha256sum > /dev/null; then
+            sha256sum -c "$archive.sha256"
+          else
+            shasum -a 256 -c "$archive.sha256"
+          fi
+          mkdir -p "$temp/unpacked"
+          case "$archive" in
+            *.zip)
+              powershell -NoProfile -Command "Expand-Archive -LiteralPath '$(cygpath -w "$PWD/$archive")' -DestinationPath '$(cygpath -w "$temp/unpacked")'"
+              ;;
+            *) tar -C "$temp/unpacked" -xzf "$archive" ;;
+          esac
+          name=${archive%.tar.gz}
+          name=${name%.zip}
+          echo "UNPACKED=$temp/unpacked/$name" >> "$GITHUB_ENV"
+          echo "INSTALLED=$temp/installed/lengua" >> "$GITHUB_ENV"
+          ls -la "$temp/unpacked/$name"
+
+      # The install script ends with lengua-mcp doctor, whose exit code it keeps.
+      - name: Installed with its install script
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$UNPACKED/install.ps1")" \
+              -Prefix "$(cygpath -w "$(dirname "$INSTALLED")")"
+          else
+            "$UNPACKED/install.sh" --prefix="$(dirname "$INSTALLED")"
+          fi
+
+      - name: lengua-mcp doctor
+        run: |
+          exe=""
+          if [ "$RUNNER_OS" = Windows ]; then exe=".exe"; fi
+          "$INSTALLED/server/lengua-mcp$exe" doctor
+
+      - name: The release check, through a plain MCP client
+        run: |
+          exe=""
+          plugin="$INSTALLED"
+          if [ "$RUNNER_OS" = Windows ]; then
+            exe=".exe"
+            plugin=$(cygpath -w "$INSTALLED")
+          fi
+          check="downloaded/release-check$exe"
+          chmod +x "$check"
+          LENGUA_RELEASE="$plugin" "$check" --ignored --exact the_archive_works_as_a_user_gets_it \
+            --nocapture 2>&1 | tee release-check.log
+          # It ran, rather than noting it had no archive.
+          grep -q "^release check: ${{ matrix.target }} passed" release-check.log
+
+      - name: Keep the release check's log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-log-${{ matrix.target }}-${{ github.run_number }}
+          path: release-check.log
+          retention-days: 7
+          if-no-files-found: ignore
+
   # One check that says whether the whole run passed.
   gate:
     name: gate
-    needs: [plan, format, test, golden-diff]
+    needs: [plan, format, test, golden-diff, install]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -472,10 +614,13 @@ jobs:
         env:
           RESULTS: ${{ needs.plan.result }} ${{ needs.format.result }} ${{ needs.test.result }}
           GOLDEN_DIFF: ${{ needs.golden-diff.result }}
+          INSTALL: ${{ needs.install.result }}
         run: |
-          echo "plan, format, test: $RESULTS; golden diff: $GOLDEN_DIFF"
+          echo "plan, format, test: $RESULTS; golden diff: $GOLDEN_DIFF; install: $INSTALL"
           for result in $RESULTS; do
             [ "$result" = success ] || exit 1
           done
           # It runs in the golden mode only.
           [ "$GOLDEN_DIFF" = success ] || [ "$GOLDEN_DIFF" = skipped ] || exit 1
+          # It runs in the release mode only.
+          [ "$INSTALL" = success ] || [ "$INSTALL" = skipped ] || exit 1
