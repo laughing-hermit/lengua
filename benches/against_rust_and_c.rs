@@ -1,1167 +1,1929 @@
-//! Measures lengua programs against the same programs written in C, C++ and Rust, on this
-//! machine, and writes BENCHMARKS.md: `cargo bench --bench against_rust_and_c`.
+//! The gate: lengua's programs against the same programs in C, C++ and Rust, on the runner it
+//! runs on (todo.md's finish line, point 4): `cargo bench --bench against_rust_and_c`.
 //!
-//! Every version of a program gets the same arguments, input and files, must give the same output,
-//! and is measured the same way: user-space instructions and cycles and CPU time from the CPU's
-//! counters, started at the program's own exec, plus wall-clock time, peak memory and file size.
-//! C, C++ and Rust are built with every optimization for this CPU, and linked the way they ship.
+//! A workload has lengua's program, a folder of tests/fixtures-wasm that the bench takes from its
+//! idea to done as an agent does, and six other versions from benches/programs/<workload>: C,
+//! C++ and Rust compiled to WebAssembly by scripts/ci/bench-wasm.sh (once, on linux-x86_64, for
+//! every runner), and the same three built natively here with this system's own compilers. Every
+//! version gets the same arguments, input and files and must give the same output, which is
+//! checked before anything is measured. Each runs as people run it, in a process of its own,
+//! measured by `lengua-mcp measure`: lengua's through `lengua-mcp run`, with every check it
+//! makes; the other modules in lengua's host, in the same engine with the same cache; the native
+//! builds as a shell starts them.
+//!
+//! The runs alternate: a round runs every version once, in an order shuffled from round to round.
+//! On each row, lengua against one other version, `lengua::gate` decides CPU and wall time with
+//! a one-sided Mann-Whitney U test, adding runs until both decide, and peak memory and size as
+//! measured. Everything the run measured goes to target/bench/results-<target>.json; the report,
+//! BENCHMARKS-<target>.md, is written from that file alone; the lines of KNOWN_BEHIND the run
+//! passes with go to target/bench/KNOWN_BEHIND-<target>.txt. The bench fails where the run and
+//! KNOWN_BEHIND disagree, and where a version can't be measured.
+//!
+//! What the environment can say:
+//! - `LENGUA_BENCH_WASM`: the folder of the WebAssembly builds, target/bench-wasm when unset;
+//! - `LENGUA_BENCH_ONLY`: the workloads to measure, between commas, instead of every one;
+//! - `LENGUA_BENCH_ROW_SECONDS`: the longest a workload's rows run, 600 seconds when unset;
+//! - `LENGUA_BENCH_AGAINST`: a commit whose lengua programs are measured against today's;
+//! - `LENGUA_BENCH_REPORT`: a results file, from a run's artifacts, to write the report from,
+//!   measuring nothing.
 
-// Linux's alone so far: the counters, the shell and the timing it uses are Linux's, and round 5 of
-// the roadmap in todo.md makes it run on every system.
-#[cfg(target_os = "linux")]
-mod linux {
-    use std::fmt::Write as _;
-    use std::io::Write as _;
-    use std::path::{Path, PathBuf};
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
+#[path = "../tests/common/mod.rs"]
+mod common;
 
-    use lengua::platform::{CpuFeatures, Machine, Profile};
-    use lengua::toolchain::Toolchain;
-    use perf_event::events::{
-        Cache, CacheId, CacheOp, CacheResult, Event, Hardware, Raw, Software,
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
+use std::net::{Ipv4Addr, TcpListener};
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode, Stdio};
+use std::time::{Duration, Instant};
+
+use common::{Program, Protocol, Session};
+use lengua::gate::{self, Found, KnownBehind, Measure, Verdict};
+use lengua::hash::Sha256Hex;
+use lengua::measure::Measures;
+use serde::{Deserialize, Serialize};
+
+/// The rounds after each version's checked run that aren't counted either: the system's cache of
+/// the files, and the engine's of each module compiled, are warm when the counted rounds begin.
+const WARM_UP: usize = 2;
+
+/// The runs of each version with the CPU's counters attached, apart from the counted ones.
+const COUNTER_RUNS: usize = 5;
+
+/// The large workloads' input: 64 MiB, so that the work outweighs starting and ending a process.
+const LARGE: usize = 64 * 1024 * 1024;
+
+/// The input of the workloads whose lengua program takes it whole: 1 MiB, the most it takes.
+const MEBIBYTE: usize = 1024 * 1024;
+
+/// How many small files the files workload reads.
+const FILES: usize = 4096;
+
+/// The most bytes in each of them.
+const FILE_BYTES: usize = 4096;
+
+/// The port lengua's server listens on, as its idea says, which every server version is given.
+const PORT: u16 = 8080;
+
+/// How many clients the server has at once.
+const CLIENTS: usize = 64;
+
+/// How many requests each client sends, one at a time.
+const REQUESTS: usize = 1000;
+
+/// The other versions' languages, by the gate's names, and their source files in
+/// benches/programs/<workload>: each is built natively, and compiled to `<language>.wasm`.
+const LANGUAGES: [(&str, &str); 3] = [("c", "main.c"), ("cpp", "main.cpp"), ("rust", "main.rs")];
+
+/// The other versions built natively, by the gate's names.
+const NATIVE: [&str; 3] = ["c", "cpp", "rust"];
+
+/// Each workload's lengua program: its folder in tests/fixtures-wasm.
+const PROGRAMS: [(&str, &str); 14] = [
+    ("empty", "empty"),
+    ("add", "add"),
+    ("hypotenuse", "hypotenuse"),
+    ("upcase", "upcase"),
+    ("upcase-stdin", "upcase-stdin"),
+    ("shout", "shout"),
+    ("wc", "count"),
+    ("histogram", "histogram"),
+    ("crc32c", "crc32c"),
+    ("sort", "sort-large"),
+    ("tally", "tally"),
+    ("server", "shout-server"),
+    ("files", "files"),
+    ("readings", "readings"),
+];
+
+/// lengua's program for workload `name`: its folder in tests/fixtures-wasm.
+fn program_of(name: &str) -> &'static str {
+    PROGRAMS
+        .iter()
+        .find(|(workload, _)| *workload == name)
+        .map_or("", |(_, program)| *program)
+}
+
+/// One workload: what every version of it runs on.
+struct Workload {
+    /// Its name, as the gate and KNOWN_BEHIND know it, and its folder in benches/programs.
+    name: &'static str,
+    /// What it does, for the report.
+    about: &'static str,
+    /// Its arguments.
+    args: Vec<String>,
+    /// Its standard input, when it reads one.
+    stdin: Option<Vec<u8>>,
+    /// The files of its working folder, by name.
+    files: Vec<(String, Vec<u8>)>,
+    /// The file it writes, when its output is a file and not standard output.
+    output_file: Option<&'static str>,
+    /// Whether it is a server, measured under load.
+    server: bool,
+}
+
+impl Workload {
+    /// The workload `name`, with no arguments, input or files yet.
+    fn new(name: &'static str, about: &'static str) -> Self {
+        Self {
+            name,
+            about,
+            args: Vec::new(),
+            stdin: None,
+            files: Vec::new(),
+            output_file: None,
+            server: false,
+        }
+    }
+}
+
+/// `words` as owned strings.
+fn strings(words: &[&str]) -> Vec<String> {
+    words.iter().map(|word| (*word).to_owned()).collect()
+}
+
+/// The workload `name`, its input made from fixed seeds: the same bytes on every run.
+fn workload(name: &str) -> Option<Workload> {
+    let workload = match name {
+        "empty" => Workload::new(
+            "empty",
+            "Starts and exits with code 0: all of it is starting and ending a process, which no \
+             program avoids, the floor under every workload that starts one.",
+        ),
+        "add" => Workload {
+            args: strings(&["123456789", "-987654"]),
+            ..Workload::new(
+                "add",
+                "Parses two whole numbers from its arguments and prints their sum: almost all of \
+                 it is starting up and exiting.",
+            )
+        },
+        "hypotenuse" => Workload {
+            args: strings(&["123456.789", "98765.432"]),
+            ..Workload::new(
+                "hypotenuse",
+                "Prints the hypotenuse of two decimal sides from its arguments, rounded to three \
+                 decimals: a square root, and almost all of it starting up and exiting.",
+            )
+        },
+        "upcase" => Workload {
+            args: strings(&["in.txt", "out.txt"]),
+            files: vec![("in.txt".to_owned(), text(MEBIBYTE))],
+            output_file: Some("out.txt"),
+            ..Workload::new(
+                "upcase",
+                "Copies a 1 MiB text file to another with its ASCII letters in capitals: a file \
+                 opened, read, made and written, and one pass over the bytes.",
+            )
+        },
+        "upcase-stdin" => Workload {
+            stdin: Some(text(LARGE)),
+            ..Workload::new(
+                "upcase-stdin",
+                "Copies 64 MiB of standard input to standard output with its ASCII letters in \
+                 capitals, a piece at a time.",
+            )
+        },
+        "shout" => Workload {
+            stdin: Some(text(MEBIBYTE)),
+            ..Workload::new(
+                "shout",
+                "Reads 1 MiB of standard input whole, then prints it with its ASCII letters in \
+                 capitals.",
+            )
+        },
+        "wc" => Workload {
+            stdin: Some(text(LARGE)),
+            ..Workload::new(
+                "wc",
+                "Counts the lines and words of 64 MiB of standard input, as `wc -lw` does.",
+            )
+        },
+        "histogram" => Workload {
+            stdin: Some(text(LARGE)),
+            ..Workload::new(
+                "histogram",
+                "Counts each byte value of 64 MiB of standard input.",
+            )
+        },
+        "crc32c" => Workload {
+            stdin: Some(text(LARGE)),
+            ..Workload::new(
+                "crc32c",
+                "The CRC-32C of 64 MiB of standard input. Natively, C, C++ and Rust use the \
+                 CPU's CRC instruction; WebAssembly has none, so every module takes eight bytes \
+                 a step through eight tables.",
+            )
+        },
+        "sort" => Workload {
+            stdin: Some(text(LARGE)),
+            ..Workload::new(
+                "sort",
+                "Sorts the lines of 64 MiB of standard input in byte order, as `LC_ALL=C sort` \
+                 does.",
+            )
+        },
+        "tally" => Workload {
+            stdin: Some(prose(LARGE)),
+            ..Workload::new(
+                "tally",
+                "Counts each different word of 64 MiB of standard input, 4,096 different words \
+                 from common to rare, and prints them from the most frequent.",
+            )
+        },
+        "server" => Workload {
+            args: vec![PORT.to_string()],
+            server: true,
+            ..Workload::new(
+                "server",
+                "A server: 64 clients at once each send 1,000 lines of 64 bytes, one at a time, \
+                 and each line comes back in capitals before the next goes. Its wall time is \
+                 from the first connection to the last answer.",
+            )
+        },
+        "files" => Workload {
+            files: small_files(),
+            ..Workload::new(
+                "files",
+                "Reads each of the 4,096 small files of its folder, of 1 to 4,096 bytes, to its \
+                 end, and prints how many files and bytes it read.",
+            )
+        },
+        "readings" => Workload {
+            args: strings(&["1000000"]),
+            ..Workload::new(
+                "readings",
+                "Reads the clock that only goes forward a million times.",
+            )
+        },
+        _ => return None,
     };
-    use perf_event::{Builder, Counter, ReadFormat};
+    Some(workload)
+}
 
-    /// Runs per version, after warming up; the report gives each measure's median.
-    const RUNS: usize = 41;
-    const WARM_UP: usize = 3;
+/// The next state of a xorshift generator, from a state that isn't 0.
+fn next(mut state: u64) -> u64 {
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    state
+}
 
-    /// Where a core's cycles go while it waits, which the report gives for each large workload from a
-    /// second pass of runs, so they don't share the CPU's counters with the first: cycles the front
-    /// end gave the core nothing to do, cycles the back end couldn't take more, the share of those
-    /// spent waiting on memory, misses in the L1 data cache, and branches mispredicted. The same
-    /// events on both CPUs, Linux's generic ones, which on ARM64 the kernel counts with the Arm
-    /// architecture's common events (STALL_FRONTEND, STALL_BACKEND, L1D_CACHE_REFILL, BR_MIS_PRED);
-    /// waiting on memory is Arm's STALL_BACKEND_MEM alone, as no generic event names it. A CPU that
-    /// doesn't count one shows a dash.
-    const STALLS: [(&str, Stall); 5] = [
-        (
-            "front-end stall cycles",
-            Stall::Generic(Hardware::STALLED_CYCLES_FRONTEND),
-        ),
-        (
-            "back-end stall cycles",
-            Stall::Generic(Hardware::STALLED_CYCLES_BACKEND),
-        ),
-        ("back-end stalls on memory", Stall::Arm(0x4005)),
-        ("L1 data misses", Stall::L1dMisses),
-        (
-            "mispredicted branches",
-            Stall::Generic(Hardware::BRANCH_MISSES),
-        ),
+/// Text like what people write: letters in both cases, digits, punctuation, newlines and some
+/// letters beyond ASCII, from a fixed seed, cut at a whole character to at most `bytes`.
+fn text(bytes: usize) -> Vec<u8> {
+    const WORDS: [&str; 12] = [
+        "lengua", "Assembly", "proves", "every", "input", "café", "fast", "Rust", "C", "42",
+        "naïve", "x86-64",
     ];
-
-    /// One of [`STALLS`]' events.
-    #[derive(Clone, Copy)]
-    enum Stall {
-        /// One of Linux's generic hardware events.
-        Generic(Hardware),
-        /// Reads that missed the L1 data cache, Linux's generic cache event.
-        L1dMisses,
-        /// An Arm common event's number, counted on ARM64 alone.
-        Arm(u64),
+    let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut text = Vec::with_capacity(bytes + 16);
+    while text.len() < bytes {
+        state = next(state);
+        let word = WORDS[usize::try_from(state % 12).unwrap_or(0)];
+        text.extend_from_slice(word.as_bytes());
+        text.push(match state >> 60 {
+            0 => b'\n',
+            1 => b',',
+            2 => b'.',
+            _ => b' ',
+        });
     }
-    const STALL_RUNS: usize = 11;
+    // Whole characters only: cut at a byte below 0x80.
+    let mut end = bytes;
+    while end > 0 && text[end - 1] >= 0x80 {
+        end -= 1;
+    }
+    text.truncate(end);
+    text
+}
 
-    /// The flags each compiler gets: everything for speed on this CPU.
-    const RUSTC_FLAGS: [&str; 12] = [
-        "--edition",
-        "2024",
-        "-C",
-        "opt-level=3",
-        "-C",
-        "target-cpu=native",
-        "-C",
-        "codegen-units=1",
-        "-C",
-        "lto=fat",
-        "-C",
-        "panic=abort",
+/// Words between spaces and newlines, for the tally: 4,096 different words of one to three
+/// syllables, a few common and most rare, as in prose, from a fixed seed, `bytes` of them.
+fn prose(bytes: usize) -> Vec<u8> {
+    const SYLLABLES: [&str; 16] = [
+        "ka", "lo", "mi", "ne", "su", "ta", "ri", "po", "an", "el", "is", "or", "un", "ve", "zu",
+        "qi",
     ];
-    const GCC_FLAGS: [&str; 4] = ["-O3", "-march=native", "-flto", "-s"];
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut text = Vec::with_capacity(bytes + 16);
+    while text.len() < bytes {
+        state = next(state);
+        // A word's number has from 0 to 12 bits, each count of bits as likely, so the small
+        // numbers are common and most of the 4,096 rare. Its digits in base 16 are its syllables.
+        let bits = state % 13;
+        let mut number = (state >> 16) & ((1_u64 << bits) - 1);
+        loop {
+            let syllable = SYLLABLES[usize::try_from(number % 16).unwrap_or(0)];
+            text.extend_from_slice(syllable.as_bytes());
+            number /= 16;
+            if number == 0 {
+                break;
+            }
+        }
+        text.push(if state >> 60 == 0 { b'\n' } else { b' ' });
+    }
+    text.truncate(bytes);
+    text
+}
 
-    /// The large workloads' input: 64 MiB, so the work outweighs starting and ending a process.
-    const LARGE: usize = 64 * 1024 * 1024;
+/// The files workload's folder: 4,096 files of 1 to 4,096 bytes of text.
+fn small_files() -> Vec<(String, Vec<u8>)> {
+    let source = text(FILES * FILE_BYTES);
+    let room = source.len() - FILE_BYTES;
+    let mut state: u64 = 0x5851_f42d_4c95_7f2d;
+    let mut at = 0;
+    let mut files = Vec::with_capacity(FILES);
+    for number in 0..FILES {
+        state = next(state);
+        let size = 1 + usize::try_from(state).unwrap_or(0) % FILE_BYTES;
+        let start = at % room;
+        at += size;
+        let contents = source[start..start + size].to_vec();
+        files.push((format!("file-{number:04}.txt"), contents));
+    }
+    files
+}
 
-    /// One program and what to run it on.
-    struct Workload {
-        name: &'static str,
-        about: &'static str,
-        /// lengua's versions: a label and a main.s, from the repository root.
-        lengua: &'static [(&'static str, &'static str)],
-        /// lengua's AArch64 versions, measured on an ARM64 computer; none where lengua's AArch64
-        /// code doesn't do it yet.
-        lengua_aarch64: &'static [(&'static str, &'static str)],
-        /// What the workload says on an ARM64 computer, where its versions differ; empty for the
-        /// same as `about`.
-        about_aarch64: &'static str,
-        /// Versions in other languages: a label and a source file in benches/programs/<name>/.
-        others: &'static [(&'static str, &'static str)],
-        args: Vec<String>,
-        stdin: Vec<u8>,
-        files: Vec<(&'static str, Vec<u8>)>,
-        /// The file it writes, when its output is a file.
-        output_file: Option<&'static str>,
+/// Whether `byte` is whitespace, as wc and the tally take it: a space, a tab, a newline, a
+/// vertical tab, a form feed or a carriage return.
+fn whitespace(byte: &u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
+}
+
+/// The output every version of `workload` must give, worked out here: what it prints, or what
+/// it writes in its file. A server's answers are checked as they come.
+fn expected(workload: &Workload) -> Vec<u8> {
+    let input = workload.stdin.as_deref().unwrap_or_default();
+    match workload.name {
+        "add" => b"122469135\n".to_vec(),
+        // fixed(sqrt(a * a + b * b), 3), as the idea computes it, from sides in thousandths.
+        "hypotenuse" => {
+            let (a, b) = (123_456_789.0_f64 / 1000.0, 98_765_432.0_f64 / 1000.0);
+            let thousandths = ((a * a + b * b).sqrt() * 1000.0).round_ties_even() as i64;
+            format!("{}.{:03}\n", thousandths / 1000, thousandths % 1000).into_bytes()
+        }
+        "upcase" => {
+            let file = workload.files.first();
+            file.map(|(_, contents)| contents.to_ascii_uppercase())
+                .unwrap_or_default()
+        }
+        "upcase-stdin" | "shout" => input.to_ascii_uppercase(),
+        "wc" => {
+            let lines = input.iter().filter(|byte| **byte == b'\n').count();
+            let words = input.split(whitespace).filter(|word| !word.is_empty());
+            format!("{lines} {}\n", words.count()).into_bytes()
+        }
+        "histogram" => {
+            let mut counts = [0_u64; 256];
+            for byte in input {
+                counts[usize::from(*byte)] += 1;
+            }
+            let mut out = String::new();
+            for (value, count) in counts.iter().enumerate().filter(|(_, count)| **count > 0) {
+                let _ = writeln!(out, "{value} {count}");
+            }
+            out.into_bytes()
+        }
+        "crc32c" => format!("{}\n", crc32c(input)).into_bytes(),
+        "sort" => sorted_lines(input),
+        "tally" => tally(input),
+        "files" => {
+            let bytes: usize = workload.files.iter().map(|file| file.1.len()).sum();
+            format!("{} {bytes}\n", workload.files.len()).into_bytes()
+        }
+        "readings" => b"1000000\n".to_vec(),
+        // empty prints nothing, and a server's answers are checked as they come.
+        _ => Vec::new(),
+    }
+}
+
+/// The CRC-32C of `bytes`, a byte at a time through a table.
+fn crc32c(bytes: &[u8]) -> u32 {
+    let mut table = [0_u32; 256];
+    for (index, entry) in (0_u32..).zip(table.iter_mut()) {
+        let mut crc = index;
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0x82F6_3B78 & 0_u32.wrapping_sub(crc & 1));
+        }
+        *entry = crc;
+    }
+    let mut crc = !0_u32;
+    for byte in bytes {
+        crc = table[usize::from((crc as u8) ^ *byte)] ^ (crc >> 8);
+    }
+    !crc
+}
+
+/// The lines of `input` in byte order, each with a newline, as `LC_ALL=C sort` prints them: a
+/// last line without a newline is a line too.
+fn sorted_lines(input: &[u8]) -> Vec<u8> {
+    let mut lines: Vec<&[u8]> = input.split(|byte| *byte == b'\n').collect();
+    // What follows the last newline is a line only when it isn't empty.
+    if lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    lines.sort_unstable();
+    let mut out = Vec::with_capacity(input.len() + 1);
+    for line in lines {
+        out.extend_from_slice(line);
+        out.push(b'\n');
+    }
+    out
+}
+
+/// The tally of `input`'s words: a line for each different word, its count, a space and the
+/// word, the most frequent first and words of the same count in byte order.
+fn tally(input: &[u8]) -> Vec<u8> {
+    let mut counts: HashMap<&[u8], u64> = HashMap::new();
+    for word in input.split(whitespace).filter(|word| !word.is_empty()) {
+        *counts.entry(word).or_default() += 1;
+    }
+    let mut words: Vec<(&[u8], u64)> = counts.into_iter().collect();
+    words.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let mut out = Vec::new();
+    for (word, count) in words {
+        out.extend_from_slice(count.to_string().as_bytes());
+        out.push(b' ');
+        out.extend_from_slice(word);
+        out.push(b'\n');
+    }
+    out
+}
+
+/// The words after `label` on the line of `idea` that starts with it, such as its `- Uses:`
+/// line's, or nothing.
+fn constraint(idea: &str, label: &str) -> String {
+    let line = idea.lines().find_map(|line| line.strip_prefix(label));
+    line.map(|words| words.trim().to_owned()).unwrap_or_default()
+}
+
+/// `error`, after what it happened to.
+fn failed(what: impl std::fmt::Display, error: impl std::fmt::Display) -> String {
+    format!("{what}: {error}")
+}
+
+/// A workload ready to run: its folder, its input and the output to check.
+struct Prepared {
+    /// Its arguments.
+    args: Vec<String>,
+    /// The folder every version runs in, which holds the workload's files and nothing else.
+    folder: PathBuf,
+    /// The file its standard input comes from, beside the folder.
+    stdin: Option<PathBuf>,
+    /// Where a checked run's standard output goes, beside the folder.
+    stdout: PathBuf,
+    /// Where each run's standard error goes.
+    stderr: PathBuf,
+    /// The file of the folder it writes, when its output is a file.
+    output_file: Option<&'static str>,
+    /// The output every version must give: its SHA-256, its length and its first bytes.
+    expected: (Sha256Hex, usize, String),
+    /// What a module of another toolchain may reach: the words of lengua's program's idea's
+    /// `- Uses:` line.
+    uses: String,
+    /// Its idea's `- Network:` line, after the colon.
+    network: String,
+    /// Whether it is a server.
+    server: bool,
+}
+
+/// Writes `workload`'s files and input into `place`, and works out the output to check, with
+/// what a module may reach from `idea`, lengua's program's.
+fn prepare(workload: Workload, place: &Path, idea: &str) -> Result<Prepared, String> {
+    let folder = place.join("folder");
+    std::fs::create_dir_all(&folder).map_err(|error| failed(folder.display(), error))?;
+    for (name, contents) in &workload.files {
+        let file = folder.join(name);
+        std::fs::write(&file, contents).map_err(|error| failed(file.display(), error))?;
+    }
+    let output = expected(&workload);
+    let head = String::from_utf8_lossy(&output[..output.len().min(80)]).into_owned();
+    let stdin = match &workload.stdin {
+        Some(bytes) => {
+            let file = place.join("stdin");
+            std::fs::write(&file, bytes).map_err(|error| failed(file.display(), error))?;
+            Some(file)
+        }
+        None => None,
+    };
+    Ok(Prepared {
+        args: workload.args,
+        folder,
+        stdin,
+        stdout: place.join("stdout"),
+        stderr: place.join("stderr"),
+        output_file: workload.output_file,
+        expected: (Sha256Hex::of(&output), output.len(), head),
+        uses: constraint(idea, "- Uses:"),
+        network: constraint(idea, "- Network:"),
+        server: workload.server,
+    })
+}
+
+/// One version of a workload, ready to run.
+#[derive(Debug, Clone)]
+struct Version {
+    /// `lengua`, or the other version's name in the gate.
+    name: String,
+    /// What runs: lengua's checked program folder, a module, or an executable.
+    program: PathBuf,
+    /// How it was made, for the report.
+    made: String,
+}
+
+/// A version of a workload as the bench made it: ready to run, or why it isn't.
+struct Made {
+    /// Its name: `lengua`, or the other version's in the gate.
+    name: String,
+    /// The version, or why it couldn't be made.
+    version: Result<Version, String>,
+}
+
+/// What measures every run: lengua-mcp's `measure`, with the data folder whose key signs
+/// lengua's locks and whose cache keeps every module compiled, lengua's and the others' alike.
+struct Runner {
+    /// lengua-mcp, as Cargo built it for the bench.
+    lengua: PathBuf,
+    /// The data folder.
+    data_dir: PathBuf,
+}
+
+impl Runner {
+    /// One run of `version` on `prepared`, measured, with its standard output kept in
+    /// `prepared.stdout` when `keep` and the CPU's counters attached when `counters`.
+    ///
+    /// # Errors
+    ///
+    /// When it can't be measured, ends other than with exit code 0, or a server answers wrong.
+    fn run(
+        &self,
+        prepared: &Prepared,
+        version: &Version,
+        keep: bool,
+        counters: bool,
+    ) -> Result<Measures, String> {
+        if prepared.server {
+            wait_for_port();
+        }
+        let mut command = Command::new(&self.lengua);
+        command
+            .arg("--data-dir")
+            .arg(&self.data_dir)
+            .arg("measure")
+            .arg("--in")
+            .arg(&prepared.folder)
+            .arg("--stderr")
+            .arg(&prepared.stderr);
+        if keep {
+            command.arg("--stdout").arg(&prepared.stdout);
+        }
+        if let Some(stdin) = &prepared.stdin {
+            command.arg("--stdin").arg(stdin);
+        }
+        if !prepared.uses.is_empty() {
+            command.arg("--uses").arg(&prepared.uses);
+        }
+        if !prepared.network.is_empty() {
+            command.arg("--network").arg(&prepared.network);
+        }
+        if prepared.server {
+            let load = [
+                ("--serve", PORT.to_string()),
+                ("--clients", CLIENTS.to_string()),
+                ("--requests", REQUESTS.to_string()),
+            ];
+            for (option, value) in load {
+                command.arg(option).arg(value);
+            }
+        }
+        if counters {
+            command.arg("--counters");
+        }
+        command.arg(&version.program).arg("--");
+        command.args(&prepared.args).stdin(Stdio::null());
+        let name = &version.name;
+        let output = command
+            .output()
+            .map_err(|error| format!("{name}: lengua-mcp didn't start: {error}"))?;
+        let said = || std::fs::read_to_string(&prepared.stderr).unwrap_or_default();
+        if !output.status.success() {
+            let (measure, said) = (String::from_utf8_lossy(&output.stderr), said());
+            let (measure, said) = (measure.trim(), said.trim());
+            return Err(format!("{name}: measure failed: {measure} {said}"));
+        }
+        let measures: Measures = serde_json::from_slice(&output.stdout)
+            .map_err(|error| format!("{name}: measure's output: {error}"))?;
+        if prepared.server {
+            if let Some(problem) = &measures.problem {
+                return Err(format!("{name}: {problem}"));
+            }
+            let (answered, asked) = (measures.answered.unwrap_or(0), CLIENTS * REQUESTS);
+            if answered != asked as u64 {
+                return Err(format!("{name} answered {answered} of {asked} requests"));
+            }
+        } else if measures.exit != Some(0) {
+            let (exit, said) = (measures.exit, said());
+            let said = said.trim();
+            return Err(format!("{name} ended with {exit:?}, not 0: {said}"));
+        }
+        Ok(measures)
+    }
+}
+
+/// Waits until the server's port is free, as a server just stopped can hold it a moment.
+fn wait_for_port() {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while TcpListener::bind((Ipv4Addr::LOCALHOST, PORT)).is_err() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Runs `version` once with its output kept, and checks that it is the output every version
+/// must give: gives the size of what ran.
+fn check(runner: &Runner, prepared: &Prepared, version: &Version) -> Result<u64, String> {
+    if let Some(name) = prepared.output_file {
+        let _ = std::fs::remove_file(prepared.folder.join(name));
+    }
+    let measures = runner.run(prepared, version, true, false)?;
+    if prepared.server {
+        return Ok(measures.size);
+    }
+    let file = match prepared.output_file {
+        Some(name) => prepared.folder.join(name),
+        None => prepared.stdout.clone(),
+    };
+    let name = &version.name;
+    let output = std::fs::read(&file).map_err(|error| failed(file.display(), error))?;
+    let (sha, length, head) = &prepared.expected;
+    if Sha256Hex::of(&output) != *sha {
+        let got = String::from_utf8_lossy(&output[..output.len().min(80)]);
+        let gave = output.len();
+        return Err(format!(
+            "{name} gave {gave} bytes beginning {got:?}, not the {length} bytes every version \
+             must give, beginning {head:?}"
+        ));
+    }
+    Ok(measures.size)
+}
+
+/// One version's runs as the results keep them, and what it is.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Measured {
+    /// `lengua`, or the other version's name.
+    name: String,
+    /// How it was made.
+    made: String,
+    /// The size of what ran, in bytes.
+    size: u64,
+    /// Each counted run's CPU time, in user space and the kernel, in nanoseconds.
+    cpu_ns: Vec<u64>,
+    /// Each counted run's wall time, in nanoseconds.
+    wall_ns: Vec<u64>,
+    /// Each counted run's peak resident memory, in bytes, where the system said.
+    peak_bytes: Vec<u64>,
+    /// The medians of the CPU's counts of its reads that missed the L1 data cache, the last-level
+    /// cache and the data TLB, where the system counts them.
+    misses: [Option<f64>; 3],
+    /// Why it wasn't measured, or not to the end, if it wasn't.
+    problem: Option<String>,
+}
+
+impl Measured {
+    /// Keeps one counted run's measures.
+    fn push(&mut self, measures: &Measures) {
+        self.cpu_ns.push(measures.cpu_ns());
+        self.wall_ns.push(measures.wall_ns);
+        if let Some(peak) = measures.peak_bytes {
+            self.peak_bytes.push(peak);
+        }
+    }
+}
+
+/// `values` as floats, for the statistics.
+fn floats(values: &[u64]) -> Vec<f64> {
+    values.iter().map(|value| *value as f64).collect()
+}
+
+/// The gate's verdict at a look on lengua's values against the other version's, over the runs
+/// both have, and its p.
+fn tested(lengua: &[u64], other: &[u64]) -> (Verdict, f64) {
+    let runs = lengua.len().min(other.len());
+    gate::tested_verdict(
+        &floats(&lengua[..runs]),
+        &floats(&other[..runs]),
+        gate::LOOK_ALPHA,
+    )
+}
+
+/// Whether the gate is done with a row: it has the most runs, or it is at a look and both of
+/// its tests decide.
+fn decided(lengua: &Measured, other: &Measured) -> bool {
+    let runs = other.cpu_ns.len();
+    if runs >= gate::MAX_RUNS {
+        return true;
+    }
+    if !gate::looks_at(runs) {
+        return false;
+    }
+    let cpu = tested(&lengua.cpu_ns, &other.cpu_ns).0;
+    let wall = tested(&lengua.wall_ns, &other.wall_ns).0;
+    cpu != Verdict::Undecided && wall != Verdict::Undecided
+}
+
+/// The order a round runs `count` versions in, shuffled from the round's number `round`, so that
+/// no version always runs after another and finds the caches as that one left them.
+fn order(round: usize, count: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..count).collect();
+    let seed = (round as u64 + 1).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64 ^ seed;
+    for at in (1..count).rev() {
+        state = next(state);
+        order.swap(at, usize::try_from(state % (at as u64 + 1)).unwrap_or(0));
+    }
+    order
+}
+
+/// Runs the `versions` of `prepared` that are ready in rounds, keeping each one's counted runs
+/// in `measured`, in the same order: the first version is lengua's, and each other is a row with
+/// it. Each version's output is checked first, and [`WARM_UP`] rounds go uncounted; then every
+/// round runs lengua and each version whose row is still open, in an order shuffled from round
+/// to round. A row closes when the gate decides both of its tests at a look, or at the most runs;
+/// every row closes once `seconds` have gone by.
+fn rounds(
+    runner: &Runner,
+    prepared: &Prepared,
+    versions: &[Option<Version>],
+    measured: &mut [Measured],
+    seconds: u64,
+) {
+    for (version, one) in versions.iter().zip(measured.iter_mut()) {
+        if let Some(version) = version {
+            match check(runner, prepared, version) {
+                Ok(size) => one.size = size,
+                Err(problem) => one.problem = Some(problem),
+            }
+        }
+    }
+    let mut open: Vec<bool> = measured.iter().map(|one| one.problem.is_none()).collect();
+    let limit = Duration::from_secs(seconds);
+    let mut started = Instant::now();
+    let mut round = 0;
+    while open.first() == Some(&true) && open.iter().skip(1).any(|row| *row) {
+        let counted = round >= WARM_UP;
+        if round == WARM_UP {
+            started = Instant::now();
+        }
+        if counted && started.elapsed() >= limit {
+            break;
+        }
+        let running: Vec<usize> = (0..versions.len()).filter(|at| open[*at]).collect();
+        for at in order(round, running.len()) {
+            let index = running[at];
+            let Some(version) = &versions[index] else {
+                continue;
+            };
+            match runner.run(prepared, version, false, false) {
+                Ok(measures) if counted => measured[index].push(&measures),
+                Ok(_) => {}
+                Err(problem) => {
+                    measured[index].problem = Some(problem);
+                    open[index] = false;
+                }
+            }
+        }
+        if counted && let Some((lengua, others)) = measured.split_first() {
+            for (row, other) in open.iter_mut().skip(1).zip(others) {
+                if *row && decided(lengua, other) {
+                    *row = false;
+                }
+            }
+        }
+        round += 1;
+    }
+}
+
+/// The medians of the CPU's counts of `version`'s reads that missed the L1 data cache, the
+/// last-level cache and the data TLB, over [`COUNTER_RUNS`] runs of their own, on Linux, the one
+/// system whose counters lengua reads.
+fn misses(runner: &Runner, prepared: &Prepared, version: &Version) -> [Option<f64>; 3] {
+    let mut counted: [Vec<f64>; 3] = Default::default();
+    if cfg!(target_os = "linux") {
+        for _ in 0..COUNTER_RUNS {
+            let Ok(measures) = runner.run(prepared, version, false, true) else {
+                continue;
+            };
+            let counts = [
+                measures.l1d_misses,
+                measures.llc_misses,
+                measures.dtlb_misses,
+            ];
+            for (all, count) in counted.iter_mut().zip(counts) {
+                all.extend(count.map(|count| count as f64));
+            }
+        }
+    }
+    counted.map(|all| gate::median(&all))
+}
+
+/// What the gate found on a row's measure.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Decided {
+    /// `ahead`, `behind` or `undecided`.
+    verdict: String,
+    /// lengua's median, or its value.
+    lengua: Option<f64>,
+    /// The other version's.
+    other: Option<f64>,
+    /// The test's p-value, for CPU and wall time.
+    p: Option<f64>,
+}
+
+impl Decided {
+    /// A measure the run didn't decide.
+    fn undecided() -> Self {
+        Self {
+            verdict: Verdict::Undecided.name().to_owned(),
+            ..Self::default()
+        }
     }
 
-    /// One built version of a workload.
-    struct Version {
-        label: String,
-        executable: PathBuf,
-        lengua: bool,
+    /// A measure taken as measured: lengua's value against the other's.
+    fn measured(lengua: f64, other: f64) -> Self {
+        Self {
+            verdict: gate::measured_verdict(lengua, other).name().to_owned(),
+            lengua: Some(lengua),
+            other: Some(other),
+            p: None,
+        }
     }
 
-    /// The medians of one version's runs.
-    #[derive(Debug, Default)]
-    struct Measures {
-        /// [`STALLS`]' counts, where they were recorded.
-        stalls: Vec<Option<u64>>,
-        instructions: Option<u64>,
-        cycles: Option<u64>,
-        cpu_time: Option<Duration>,
-        wall_time: Duration,
-        peak_kib: Option<u64>,
-        size: u64,
+    /// A measure the test decides, over the first `runs` values of each.
+    fn tested(lengua: &[u64], other: &[u64], runs: usize) -> Self {
+        let (verdict, p) = tested(&lengua[..runs], &other[..runs]);
+        Self {
+            verdict: verdict.name().to_owned(),
+            lengua: gate::median(&floats(&lengua[..runs])),
+            other: gate::median(&floats(&other[..runs])),
+            p: Some(p),
+        }
     }
+}
 
-    /// Text like what people shout: letters in both cases, digits, punctuation, newlines and some
-    /// non-ASCII letters, from a fixed seed.
-    fn text(bytes: usize) -> Vec<u8> {
-        const WORDS: [&str; 12] = [
-            "lengua", "Assembly", "proves", "every", "input", "café", "fast", "Rust", "C", "42",
-            "naïve", "x86-64",
+/// A row: lengua against one other version of a workload, on each measure.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Row {
+    /// The other version's name.
+    versus: String,
+    /// The runs of each version its tests took.
+    runs: usize,
+    /// What the gate found on CPU time, wall time, peak memory and size, in that order.
+    measures: Vec<Decided>,
+    /// Why the row wasn't measured, if it wasn't.
+    problem: Option<String>,
+}
+
+/// The row of `other` against `lengua`, over the runs both have: CPU and wall time decided by
+/// the test at a look's level, peak memory by the median of each one's peaks, and size as it is.
+fn row(lengua: &Measured, other: &Measured) -> Row {
+    let runs = lengua.cpu_ns.len().min(other.cpu_ns.len());
+    let problem = other.problem.clone().or_else(|| lengua.problem.clone());
+    if problem.is_some() || runs == 0 {
+        return Row {
+            versus: other.name.clone(),
+            runs,
+            measures: vec![Decided::undecided(); Measure::ALL.len()],
+            problem: problem.or_else(|| Some("no runs were counted".to_owned())),
+        };
+    }
+    let peak = |measured: &Measured| {
+        let peaks = &measured.peak_bytes;
+        gate::median(&floats(&peaks[..runs.min(peaks.len())]))
+    };
+    let memory = match (peak(lengua), peak(other)) {
+        (Some(ours), Some(theirs)) => Decided::measured(ours, theirs),
+        _ => Decided::undecided(),
+    };
+    Row {
+        versus: other.name.clone(),
+        runs,
+        measures: vec![
+            Decided::tested(&lengua.cpu_ns, &other.cpu_ns, runs),
+            Decided::tested(&lengua.wall_ns, &other.wall_ns, runs),
+            memory,
+            Decided::measured(lengua.size as f64, other.size as f64),
+        ],
+        problem: None,
+    }
+}
+
+/// The rows of a workload's `versions`, lengua's first: one for each other version.
+fn rows_of(versions: &[Measured]) -> Vec<Row> {
+    match versions.split_first() {
+        Some((lengua, others)) => others.iter().map(|other| row(lengua, other)).collect(),
+        None => Vec::new(),
+    }
+}
+
+/// What the run found on one workload.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Outcome {
+    /// The workload's name.
+    name: String,
+    /// lengua's program, in the repository.
+    program: String,
+    /// What it does.
+    about: String,
+    /// How long its rounds took, in seconds.
+    seconds: f64,
+    /// Each version's runs, lengua's first.
+    versions: Vec<Measured>,
+    /// Each row, in the order of the versions.
+    rows: Vec<Row>,
+}
+
+/// lengua's programs today against the same programs at an earlier commit.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Against {
+    /// The commit.
+    commit: String,
+    /// Each workload's: today's lengua program and then's, and one row, then's.
+    workloads: Vec<Outcome>,
+}
+
+/// Everything a run measured and found, as target/bench/results-<target>.json keeps it: the
+/// report is written from it alone.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Results {
+    /// The runner, as scripts/ci/targets.json names it.
+    target: String,
+    /// The commit measured.
+    commit: String,
+    /// Where the run is.
+    run: String,
+    /// The CPU, as the system names it.
+    cpu: String,
+    /// How many threads it runs at once.
+    cores: usize,
+    /// The WebAssembly engine.
+    engine: String,
+    /// Each other version's compilers and flags, by its name.
+    toolchains: BTreeMap<String, String>,
+    /// The counts of runs at which the gate looks at a row.
+    looks: Vec<usize>,
+    /// The level each row's measure is decided at, over all its looks.
+    alpha: f64,
+    /// The level of each look.
+    look_alpha: f64,
+    /// The most runs of each version of a workload.
+    max_runs: usize,
+    /// The longest a workload's rows ran, in seconds.
+    row_seconds: u64,
+    /// The rounds after each version's checked run that weren't counted.
+    warm_up: usize,
+    /// Whether the run measured every workload of the gate.
+    every_workload: bool,
+    /// Each workload's outcome.
+    workloads: Vec<Outcome>,
+    /// lengua's programs against an earlier commit's, when the run was asked for it.
+    against: Option<Against>,
+    /// Where the run and KNOWN_BEHIND disagree.
+    ratchet: Vec<String>,
+}
+
+/// What measuring every workload shares.
+struct Context {
+    /// The repository.
+    root: PathBuf,
+    /// The folder the bench writes in, target/bench.
+    out: PathBuf,
+    /// The folder the native versions are built in.
+    build: PathBuf,
+    /// What runs and measures each run.
+    runner: Runner,
+    /// The folder of the WebAssembly builds.
+    wasm: PathBuf,
+    /// The longest a workload's rows run, in seconds.
+    seconds: u64,
+}
+
+/// lengua's programs, each checked from its idea to done, or why it isn't, by workload.
+type Checked = BTreeMap<&'static str, Result<Program, String>>;
+
+/// The compiler of `language` on this system: GCC on Linux, Apple's clang on macOS, LLVM's clang
+/// on Windows, and rustc everywhere.
+fn compiler(language: &str) -> &'static str {
+    match (language, std::env::consts::OS) {
+        ("rust", _) => "rustc",
+        ("c", "linux") => "gcc",
+        ("cpp", "linux") => "g++",
+        ("c", "macos") => "cc",
+        ("cpp", "macos") => "c++",
+        ("c", _) => "clang",
+        _ => "clang++",
+    }
+}
+
+/// The sets of flags to build `language`'s native version with, in the order to try them, each
+/// with the libraries to link after the source: for speed on this CPU, as the system's
+/// developers build. Where the compiler doesn't take the CPU's own name, a CPU flag that every
+/// runner of its kind takes (AArch64's CRC instructions or x86-64's SSE4.2, which crc32c's
+/// native versions need), and last, without link-time optimization.
+fn flag_sets(language: &str) -> Vec<(Vec<&'static str>, Vec<&'static str>)> {
+    if language == "rust" {
+        let mut flags = vec![
+            "--edition",
+            "2024",
+            "-C",
+            "opt-level=3",
+            "-C",
+            "target-cpu=native",
+            "-C",
+            "codegen-units=1",
+            "-C",
+            "lto=fat",
+            "-C",
+            "panic=abort",
         ];
-        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
-        let mut text = Vec::with_capacity(bytes + 16);
-        while text.len() < bytes {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            let word = WORDS[usize::try_from(state % 12).unwrap_or(0)];
-            text.extend_from_slice(word.as_bytes());
-            text.push(match state >> 60 {
-                0 => b'\n',
-                1 => b',',
-                2 => b'.',
-                _ => b' ',
-            });
+        if cfg!(target_os = "linux") {
+            flags.extend(["-C", "strip=symbols"]);
         }
-        // Whole characters only: cut at a byte below 0x80.
-        let mut end = bytes;
-        while end > 0 && text[end - 1] >= 0x80 {
-            end -= 1;
-        }
-        text.truncate(end);
-        text
+        return vec![(flags, Vec::new())];
     }
-
-    fn workloads() -> Vec<Workload> {
-        let mebibyte = text(1_048_576);
-        let large = text(LARGE);
-        vec![
-            Workload {
-                name: "add",
-                about: "Parses two numbers from its arguments and prints their sum: almost all of \
-                    it is starting up and exiting.",
-                lengua: &[("lengua", "examples/add/main.s")],
-                lengua_aarch64: &[("lengua", "tests/fixtures/linux-aarch64/add/main.s")],
-                about_aarch64: "",
-                others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
-                args: vec!["123456789".into(), "-987654".into()],
-                stdin: Vec::new(),
-                files: Vec::new(),
-                output_file: None,
-            },
-            Workload {
-                name: "hypotenuse",
-                about: "Prints the hypotenuse of two decimal sides given as arguments, with three \
-                    decimals: each side divided into a double, a square root, and the result \
-                    rounded to thousandths. Like add, it's mostly starting up and exiting: here \
-                    C and C++ load the math library too.",
-                lengua: &[("lengua", "examples/hypotenuse/main.s")],
-                lengua_aarch64: &[("lengua", "tests/fixtures/linux-aarch64/hypotenuse/main.s")],
-                about_aarch64: "",
-                others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
-                args: vec!["123456.789".into(), "98765.432".into()],
-                stdin: Vec::new(),
-                files: Vec::new(),
-                output_file: None,
-            },
-            Workload {
-                name: "upcase",
-                about: "Copies a 1 MiB text file to another with its ASCII letters capitalized: \
-                    file reads and writes, and one pass over the bytes. lengua's versions are \
-                    the example, 16 bytes at a time, and the same program 64 bytes at a time \
-                    with AVX-512.",
-                lengua: &[
-                    ("lengua", "examples/upcase/main.s"),
-                    ("lengua, AVX-512", "benches/programs/upcase/avx512.s"),
-                ],
-                lengua_aarch64: &[
-                    ("lengua", "tests/fixtures/linux-aarch64/upcase/main.s"),
-                    ("lengua, NEON", "benches/programs/upcase/neon.s"),
-                ],
-                about_aarch64: "Copies a 1 MiB text file to another with its ASCII letters \
-                            capitalized: file reads and writes, and one pass over the bytes. \
-                            lengua's versions are the file program, a byte at a time with no \
-                            branch, and the same program 16 bytes at a time with NEON.",
-                others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
-                args: vec!["in.txt".into(), "out.txt".into()],
-                stdin: Vec::new(),
-                files: vec![("in.txt", mebibyte.clone())],
-                output_file: Some("out.txt"),
-            },
-            Workload {
-                name: "shout",
-                about: "Capitalizes 1 MiB of standard input to standard output. lengua's versions \
-                    are the fork-join template, 16 bytes at a time on 16 threads, and the same \
-                    program 64 bytes at a time with AVX-512, on 16 threads and on one; Rust is \
-                    shown both plain and with scoped threads split the same way.",
-                lengua: &[
-                    ("lengua", "plugin/skills/compile/assets/parallel-template.s"),
-                    ("lengua, AVX-512", "benches/programs/shout/avx512.s"),
-                    (
-                        "lengua, AVX-512, one thread",
-                        "benches/programs/shout/avx512-one.s",
-                    ),
-                ],
-                lengua_aarch64: &[(
-                    "lengua, NEON, one thread",
-                    "benches/programs/shout/neon-one.s",
-                )],
-                about_aarch64: "Capitalizes 1 MiB of standard input to standard output. lengua's \
-                            version takes 16 bytes a step with NEON on one thread, since \
-                            threads on AArch64 come later; Rust is shown both plain and with \
-                            scoped threads.",
-                others: &[
-                    ("Rust", "main.rs"),
-                    ("Rust, threads", "threads.rs"),
-                    ("C", "main.c"),
-                    ("C++", "main.cpp"),
-                ],
-                args: Vec::new(),
-                stdin: mebibyte,
-                files: Vec::new(),
-                output_file: None,
-            },
-            Workload {
-                name: "wc",
-                about: "Counts the lines and words of 64 MiB on standard input, as `wc -lw` does. \
-                    C, C++ and Rust compare each byte with the one before it, which compilers \
-                    can vectorize. lengua's versions take 16 bytes a step with SSE2, which \
-                    every x86-64 computer has: the skill's example, and the count example, \
-                    which Claude Code wrote through lengua from a plain request in an \
-                    interactive session; and, where the CPU has AVX-512, 64 bytes a step with \
-                    masks, the skill's AVX-512 tier and count as Claude Code first wrote it.",
-                lengua: &[
-                    ("lengua", "plugin/skills/compile/assets/fast/wc/main.s"),
-                    (
-                        "lengua, AVX-512",
-                        "plugin/skills/compile/assets/fast/wc-avx512/main.s",
-                    ),
-                    ("lengua, count", "examples/count/main.s"),
-                    ("lengua, count, AVX-512", "benches/programs/count/avx512.s"),
-                ],
-                lengua_aarch64: &[
-                    (
-                        "lengua",
-                        "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
-                    ),
-                    (
-                        "lengua with SVE",
-                        "plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s",
-                    ),
-                ],
-                about_aarch64: "Counts the lines and words of 64 MiB on standard input, as `wc -lw` \
-                            does. C, C++ and Rust compare each byte with the one before it, \
-                            which compilers can vectorize. lengua's versions take 16 bytes a \
-                            step with NEON, each step masked to the bytes left, and with SVE a \
-                            vector a step, as long as the CPU makes it, each step's lanes the \
-                            bytes left from whilelo.",
-                others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
-                args: Vec::new(),
-                stdin: large.clone(),
-                files: Vec::new(),
-                output_file: None,
-            },
-            Workload {
-                name: "histogram",
-                about: "Counts each byte value of 64 MiB on standard input. Every version spreads \
-                    neighboring bytes over four tables.",
-                lengua: &[(
-                    "lengua",
-                    "plugin/skills/compile/assets/fast/histogram/main.s",
-                )],
-                lengua_aarch64: &[(
-                    "lengua",
-                    "plugin/skills/compile/assets/linux-aarch64/fast/histogram/main.s",
-                )],
-                about_aarch64: "Counts each byte value of 64 MiB on standard input. C, C++ and \
-                            Rust spread neighboring bytes over four tables; lengua's takes \
-                            eight bytes a step, one into each of eight tables, four bytes' \
-                            loads, adds and stores together.",
-                others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
-                args: Vec::new(),
-                stdin: large.clone(),
-                files: Vec::new(),
-                output_file: None,
-            },
-            Workload {
-                name: "crc32c",
-                about: "The CRC-32C of 64 MiB on standard input. C, C++ and Rust use the CPU's \
-                    `crc32` instruction 8 bytes at a time, one chain that waits on itself; \
-                    lengua's version runs three chains side by side and joins them with \
-                    carry-less multiplies.",
-                lengua: &[(
-                    "lengua",
-                    "plugin/skills/compile/assets/fast/crc32c-pclmul/main.s",
-                )],
-                lengua_aarch64: &[(
-                    "lengua",
-                    "plugin/skills/compile/assets/linux-aarch64/fast/crc32c-crc/main.s",
-                )],
-                about_aarch64: "The CRC-32C of 64 MiB on standard input. C, C++ and Rust use the \
-                            CPU's crc32cx instruction 8 bytes at a time in one chain, which an \
-                            Arm core runs at one a cycle; lengua's runs that chain over half of \
-                            each 32 KiB block while carry-less multiplies (pmull) fold the other \
-                            half on the vector units, and joins the two.",
-                others: &[("Rust", "main.rs"), ("C", "main.c"), ("C++", "main.cpp")],
-                args: Vec::new(),
-                stdin: large,
-                files: Vec::new(),
-                output_file: None,
-            },
-        ]
-    }
-
-    fn root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-    }
-
-    fn first_line(program: &str, args: &[&str]) -> String {
-        Command::new(program)
-            .args(args)
-            .output()
-            .ok()
-            .and_then(|output| {
-                String::from_utf8(output.stdout)
-                    .ok()?
-                    .lines()
-                    .next()
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| format!("{program} (version unknown)"))
-    }
-
-    fn compile(program: &str, args: &[&str], source: &Path, output: &Path) {
-        // C and C++ link the math library, which a program that takes square roots needs.
-        let libraries: &[&str] = if program == "rustc" { &[] } else { &["-lm"] };
-        let status = Command::new(program)
-            .args(args)
-            .arg("-o")
-            .arg(output)
-            .arg(source)
-            .args(libraries)
-            .status()
-            .unwrap_or_else(|error| panic!("{program} didn't run: {error}"));
-        assert!(status.success(), "{program} failed on {}", source.display());
-    }
-
-    /// Whether this computer is an ARM64 one, whose lengua versions are the AArch64 ones.
-    const ARM64: bool = cfg!(target_arch = "aarch64");
-
-    /// The profile lengua's versions are built for here.
-    const PROFILE: Profile = if ARM64 {
-        Profile::LinuxAarch64
-    } else {
-        Profile::LinuxX86_64
+    let cpus: &[&str] = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", _) => &["-mcpu=native", "-mcpu=apple-m1"],
+        (_, "aarch64") => &["-march=native", "-mcpu=native", "-march=armv8-a+crc"],
+        _ => &["-march=native", "-msse4.2"],
     };
+    let (fast, libraries): (&[&str], &[&str]) = match std::env::consts::OS {
+        "linux" => (&["-O3", "-flto", "-s"], &["-lm"]),
+        "macos" => (&["-O3", "-flto", "-Wl,-x"], &[]),
+        _ => (&["-O3", "-flto", "-fuse-ld=lld"], &["-lws2_32"]),
+    };
+    let plain: &[&str] = &["-O3"];
+    let mut sets = Vec::new();
+    for flags in [fast, plain] {
+        for cpu in cpus {
+            let mut set = flags.to_vec();
+            set.push(*cpu);
+            sets.push((set, libraries.to_vec()));
+        }
+    }
+    sets
+}
 
-    /// lengua's versions of `workload` for this computer's CPU.
-    fn lengua_versions(workload: &Workload) -> &'static [(&'static str, &'static str)] {
-        if ARM64 {
-            workload.lengua_aarch64
+/// The first line `program` prints with `args`, or that it says nothing.
+fn first_line(program: &str, args: &[&str]) -> String {
+    let Ok(output) = Command::new(program).args(args).output() else {
+        return format!("{program}, which doesn't start here");
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.lines().next().map(str::to_owned);
+    line.unwrap_or_else(|| format!("{program}, whose version it doesn't say"))
+}
+
+/// Builds `source` into `executable` with `compiler`, trying each of `language`'s sets of flags
+/// in turn: gives the flags that built it, or what the compiler said of the last.
+fn build(
+    compiler: &str,
+    language: &str,
+    source: &Path,
+    executable: &Path,
+) -> Result<String, String> {
+    let mut said = String::new();
+    for (flags, libraries) in flag_sets(language) {
+        let mut command = Command::new(compiler);
+        command.args(&flags).arg("-o").arg(executable);
+        command.arg(source).args(&libraries);
+        let output = command.output().map_err(|error| failed(compiler, error))?;
+        if output.status.success() {
+            let used: Vec<&str> = flags.iter().chain(&libraries).copied().collect();
+            return Ok(used.join(" "));
+        }
+        said = String::from_utf8_lossy(&output.stderr).into_owned();
+    }
+    let (source, said) = (source.display(), said.trim());
+    Err(format!("{compiler} couldn't build {source}: {said}"))
+}
+
+/// The native version of workload `name` in `language`, from `file`, built in `folder` with
+/// this system's compiler, whose version `toolchains` keeps.
+fn native(
+    root: &Path,
+    name: &str,
+    (language, file): (&str, &str),
+    folder: &Path,
+    toolchains: &mut BTreeMap<String, String>,
+) -> Result<Version, String> {
+    let compiler = compiler(language);
+    let source = root.join("benches").join("programs").join(name).join(file);
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let executable = folder.join(format!("{name}-{language}{suffix}"));
+    let flags = build(compiler, language, &source, &executable)?;
+    let version = first_line(compiler, &["--version"]);
+    let made = format!("{version}; {compiler} {flags}");
+    toolchains
+        .entry(language.to_owned())
+        .or_insert_with(|| made.clone());
+    Ok(Version {
+        name: language.to_owned(),
+        program: executable,
+        made,
+    })
+}
+
+/// The WebAssembly builds of workload `name`, from `folder`, as bench-wasm.sh made them.
+fn modules(folder: &Path, name: &str, toolchains: &BTreeMap<String, String>) -> Vec<Made> {
+    let mut made = Vec::new();
+    for (language, _) in LANGUAGES {
+        let version = format!("{language}-wasm");
+        let module = folder.join(name).join(format!("{language}.wasm"));
+        let ready = if module.is_file() {
+            Ok(Version {
+                name: version.clone(),
+                program: module,
+                made: toolchains.get(&version).cloned().unwrap_or_default(),
+            })
         } else {
-            workload.lengua
-        }
+            Err(format!(
+                "no module {}: scripts/ci/bench-wasm.sh builds it, in the folder that \
+                 LENGUA_BENCH_WASM names",
+                module.display()
+            ))
+        };
+        made.push(Made {
+            name: version,
+            version: ready,
+        });
     }
+    made
+}
 
-    /// Whether this CPU can run a lengua version built from `source`: an SVE version runs only on
-    /// a CPU with SVE, and an AVX-512 one only on a CPU with AVX-512BW (GitHub's x86-64 runners
-    /// are a mixed pool, about half without).
-    fn runs_here(source: &str, features: &CpuFeatures) -> bool {
-        !((source.contains("-sve/") && features.sve == 0)
-            || (source.contains("avx512") && !features.avx512bw))
-    }
-
-    /// Assembles and links lengua's version `number` of `workload` from the file `source`, into
-    /// `folder` under names that begin with `stem`.
-    async fn build_lengua(
-        workload: &Workload,
-        number: usize,
-        label: &str,
-        source: &Path,
-        stem: &str,
-        toolchain: &Toolchain,
-        folder: &Path,
-    ) -> Version {
-        let (object, executable) = (
-            folder.join(format!("{}-{stem}-{number}.o", workload.name)),
-            folder.join(format!("{}-{stem}-{number}", workload.name)),
-        );
-        toolchain
-            .assemble(PROFILE, source, &object)
-            .await
-            .expect("assemble a lengua version");
-        toolchain
-            .link(PROFILE, &object, &executable)
-            .await
-            .expect("link a lengua version");
-        Version {
-            label: label.to_owned(),
-            executable,
-            lengua: true,
-        }
-    }
-
-    async fn build(workload: &Workload, toolchain: &Toolchain, folder: &Path) -> Vec<Version> {
-        let mut versions = Vec::new();
-        let features = Machine::detect().features;
-        for (number, (label, source)) in lengua_versions(workload).iter().enumerate() {
-            if !runs_here(source, &features) {
-                continue;
-            }
-            versions.push(
-                build_lengua(
-                    workload,
-                    number,
-                    label,
-                    &root().join(source),
-                    "lengua",
-                    toolchain,
-                    folder,
-                )
-                .await,
-            );
-        }
-        for (label, file) in workload.others {
-            let source = root()
-                .join("benches/programs")
-                .join(workload.name)
-                .join(file);
-            let executable = folder.join(format!("{}-{}", workload.name, file.replace('.', "-")));
-            if file.ends_with(".rs") {
-                compile("rustc", &RUSTC_FLAGS, &source, &executable);
-            } else if file.ends_with(".cpp") {
-                compile("g++", &GCC_FLAGS, &source, &executable);
-            } else {
-                compile("gcc", &GCC_FLAGS, &source, &executable);
-            }
-            versions.push(Version {
-                label: (*label).to_owned(),
-                executable,
-                lengua: false,
-            });
-        }
-        versions
-    }
-
-    /// A counter on `pid` and every thread it starts, from its next exec.
-    fn attach<E: Event>(event: E, pid: i32, with_kernel: bool) -> Option<Counter> {
-        let mut builder = Builder::new(event);
-        builder
-            .observe_pid(pid)
-            .inherit(true)
-            .enable_on_exec(true)
-            .exclude_kernel(!with_kernel)
-            .read_format(ReadFormat::TOTAL_TIME_ENABLED | ReadFormat::TOTAL_TIME_RUNNING);
-        builder.build().ok()
-    }
-
-    /// A counter of `stall` for process `pid`, where this CPU counts it.
-    fn attach_stall(stall: Stall, pid: i32) -> Option<Counter> {
-        match stall {
-            Stall::Generic(event) => attach(event, pid, false),
-            Stall::L1dMisses => attach(
-                Cache {
-                    which: CacheId::L1D,
-                    operation: CacheOp::READ,
-                    result: CacheResult::MISS,
-                },
-                pid,
-                false,
+/// lengua's version `name` of workload `program`, from its checked folder, or why there is
+/// none; `commit` says where its files are from, when not from today's.
+fn lengua_made(
+    name: &str,
+    checked: Option<&Result<Program, String>>,
+    program: &str,
+    commit: &str,
+) -> Made {
+    let at = if commit.is_empty() {
+        String::new()
+    } else {
+        format!(" at {commit}")
+    };
+    let (release, engine) = (env!("CARGO_PKG_VERSION"), lengua::wasm::ENGINE);
+    let version = match checked {
+        Some(Ok(checked)) => Ok(Version {
+            name: name.to_owned(),
+            program: checked.path().to_path_buf(),
+            made: format!(
+                "lengua-mcp {release} run, {engine}, tests/fixtures-wasm/{program}{at}"
             ),
-            Stall::Arm(code) => ARM64.then(|| attach(Raw::new(code), pid, false)).flatten(),
-        }
+        }),
+        Some(Err(problem)) => Err(format!("lengua's program{at} isn't done: {problem}")),
+        None => Err(format!("lengua's program{at} wasn't checked")),
+    };
+    Made {
+        name: name.to_owned(),
+        version,
     }
+}
 
-    fn exact(counter: &mut Counter) -> Option<u64> {
-        let data = counter.read_full().ok()?;
-        (data.time_running() == data.time_enabled()).then(|| data.count())
-    }
-
-    /// One run's measures and output.
-    struct Sample {
-        /// [`STALLS`]' counts, when the run counted those instead.
-        stalls: Vec<Option<u64>>,
-        instructions: Option<u64>,
-        cycles: Option<u64>,
-        cpu_time: Option<Duration>,
-        wall_time: Duration,
-        stdout: Vec<u8>,
-        status: Option<i32>,
-    }
-
-    /// Runs `version` once in `folder`. A shell waits on a pipe so the counters can be attached
-    /// before it execs the program; they count from that exec on.
-    fn run(version: &Version, workload: &Workload, folder: &Path, stalls: &[Stall]) -> Sample {
-        let go = folder.join("go");
-        if !go.exists() {
-            let made = Command::new("mkfifo").arg(&go).status().expect("mkfifo");
-            assert!(made.success(), "mkfifo failed");
-        }
-        let mut child = Command::new("/bin/sh")
-            .arg("-c")
-            .arg(r#"read _ < "$LENGUA_GO" && exec "$0" "$@""#)
-            .arg(&version.executable)
-            .args(&workload.args)
-            .env_clear()
-            .env("LENGUA_GO", &go)
-            .current_dir(folder)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("start the shell");
-        let pid = i32::try_from(child.id()).expect("a process id");
-        let mut counters: Vec<Option<Counter>> = if stalls.is_empty() {
-            vec![
-                attach(Hardware::INSTRUCTIONS, pid, false),
-                attach(Hardware::CPU_CYCLES, pid, false),
-                attach(Software::TASK_CLOCK, pid, true)
-                    .or_else(|| attach(Software::TASK_CLOCK, pid, false)),
-            ]
-        } else {
-            stalls
-                .iter()
-                .map(|stall| attach_stall(*stall, pid))
-                .collect()
+/// Measures the `made` versions of `prepared` that are ready, lengua's first, and gives each
+/// one's runs in the same order, with how long their rounds took: a version that isn't ready
+/// gets only why, and when lengua's isn't, no version runs.
+fn measure_versions(
+    context: &Context,
+    prepared: &Prepared,
+    made: Vec<Made>,
+) -> (Vec<Measured>, f64) {
+    let mut measured = Vec::new();
+    let mut versions = Vec::new();
+    for made in made {
+        let mut one = Measured {
+            name: made.name,
+            ..Measured::default()
         };
-        let mut input = child.stdin.take().expect("its input");
-        let bytes = workload.stdin.clone();
-        let writer = std::thread::spawn(move || {
-            let _ = input.write_all(&bytes);
+        match made.version {
+            Ok(version) => {
+                one.made.clone_from(&version.made);
+                versions.push(Some(version));
+            }
+            Err(problem) => {
+                one.problem = Some(problem);
+                versions.push(None);
+            }
+        }
+        measured.push(one);
+    }
+    let started = Instant::now();
+    if versions.first().is_some_and(Option::is_some) {
+        let runner = &context.runner;
+        rounds(runner, prepared, &versions, &mut measured, context.seconds);
+    }
+    let seconds = started.elapsed().as_secs_f64();
+    for (version, one) in versions.iter().zip(&mut measured) {
+        if let Some(version) = version
+            && one.problem.is_none()
+        {
+            one.misses = misses(&context.runner, prepared, version);
+        }
+    }
+    (measured, seconds)
+}
+
+/// Measures the `made` versions of workload `name` on its input, made in a folder of its own.
+fn outcome_of(context: &Context, name: &str, made: Vec<Made>) -> Outcome {
+    let workload = workload(name).expect("each of the gate's workloads has its input here");
+    let program = format!("tests/fixtures-wasm/{}", program_of(name));
+    let idea = std::fs::read_to_string(context.root.join(&program).join("idea.md"));
+    let mut outcome = Outcome {
+        name: name.to_owned(),
+        program,
+        about: workload.about.to_owned(),
+        ..Outcome::default()
+    };
+    let place = tempfile::tempdir_in(&context.out).expect("a folder for the workload");
+    match prepare(workload, place.path(), &idea.unwrap_or_default()) {
+        Ok(prepared) => {
+            let (versions, seconds) = measure_versions(context, &prepared, made);
+            outcome.versions = versions;
+            outcome.seconds = seconds;
+        }
+        Err(problem) => {
+            for made in made {
+                outcome.versions.push(Measured {
+                    name: made.name,
+                    problem: Some(problem.clone()),
+                    ..Measured::default()
+                });
+            }
+        }
+    }
+    outcome.rows = rows_of(&outcome.versions);
+    outcome
+}
+
+/// Measures workload `name` on this runner: lengua's program, `checked`, against the WebAssembly
+/// builds and the native versions, built here.
+fn measure_workload(
+    context: &Context,
+    name: &str,
+    checked: Option<&Result<Program, String>>,
+    toolchains: &mut BTreeMap<String, String>,
+) -> Outcome {
+    let mut made = vec![lengua_made("lengua", checked, program_of(name), "")];
+    made.extend(modules(&context.wasm, name, toolchains));
+    for language in LANGUAGES {
+        let version = native(&context.root, name, language, &context.build, toolchains);
+        made.push(Made {
+            name: language.0.to_owned(),
+            version,
         });
-        // Opening the pipe waits for the shell to read it.
-        let mut signal = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&go)
-            .expect("open the pipe");
-        let started = Instant::now();
-        signal.write_all(b"go\n").expect("signal the shell");
-        drop(signal);
-        let output = child.wait_with_output().expect("the program ends");
-        let wall_time = started.elapsed();
-        let _ = writer.join();
-        let counts: Vec<Option<u64>> = counters
-            .iter_mut()
-            .map(|counter| counter.as_mut().and_then(exact))
-            .collect();
-        let (instructions, cycles, cpu_time, stalls) = if stalls.is_empty() {
-            (counts[0], counts[1], counts[2], Vec::new())
-        } else {
-            (None, None, None, counts)
+    }
+    outcome_of(context, name, made)
+}
+
+/// lengua's programs today against the same programs at `commit`, each workload's two in rounds
+/// of their own: on that row, ahead is today's lower.
+fn measure_against(
+    context: &Context,
+    commit: &str,
+    names: &[&'static str],
+    (now, then): (&Checked, &Checked),
+) -> Against {
+    let mut workloads = Vec::new();
+    for name in names {
+        let program = program_of(name);
+        let made = vec![
+            lengua_made("lengua", now.get(name), program, ""),
+            lengua_made("then", then.get(name), program, commit),
+        ];
+        workloads.push(outcome_of(context, name, made));
+    }
+    Against {
+        commit: commit.to_owned(),
+        workloads,
+    }
+}
+
+/// lengua's program from `idea` and `code`, taken from the user's request to done in `session`
+/// as an agent takes it: its idea recorded, then its main.wat checked until its tests end. Gives
+/// its folder, which `run` then runs, or why it isn't done.
+async fn checked(session: &Session, idea: &str, code: &str) -> Result<Program, String> {
+    let program = Program::new();
+    program.write("idea.md", idea);
+    let recorded = session.record(&program).await;
+    if recorded["state"] != "write_code" {
+        return Err(format!("its idea wasn't recorded: {recorded}"));
+    }
+    program.write("main.wat", code);
+    let done = session.settle(&program).await;
+    if done["state"] != "done" {
+        return Err(format!("check didn't say done: {done}"));
+    }
+    Ok(program)
+}
+
+/// lengua's program in the repository's folder `path`, taken from its idea to done.
+async fn checked_here(session: &Session, root: &Path, path: &str) -> Result<Program, String> {
+    let read = |file: &str| {
+        let file = root.join(path).join(file);
+        std::fs::read_to_string(&file).map_err(|error| failed(file.display(), error))
+    };
+    checked(session, &read("idea.md")?, &read("main.wat")?).await
+}
+
+/// The file `path` of the repository as commit `commit` had it, if it had it.
+fn at_commit(root: &Path, commit: &str, path: &str) -> Option<String> {
+    let shown = Command::new("git")
+        .arg("show")
+        .arg(format!("{commit}:{path}"))
+        .current_dir(root)
+        .output()
+        .ok()?;
+    if !shown.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&shown.stdout).into_owned())
+}
+
+/// lengua's program in the folder `path` as commit `commit` had it, taken from its idea to done.
+async fn checked_at(
+    session: &Session,
+    root: &Path,
+    commit: &str,
+    path: &str,
+) -> Result<Program, String> {
+    let read = |file: &str| {
+        let shown = at_commit(root, commit, &format!("{path}/{file}"));
+        shown.ok_or_else(|| format!("{commit} has no {path}/{file}"))
+    };
+    checked(session, &read("idea.md")?, &read("main.wat")?).await
+}
+
+/// The value of the environment variable `name`, when it says something.
+fn setting(name: &str) -> Option<String> {
+    let value = std::env::var(name).ok()?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+/// The workloads to measure: those `LENGUA_BENCH_ONLY` names, or every one.
+fn chosen() -> Result<Vec<&'static str>, String> {
+    let Some(only) = setting("LENGUA_BENCH_ONLY") else {
+        return Ok(gate::WORKLOADS.to_vec());
+    };
+    let mut names = Vec::new();
+    let listed = only.split(',').map(str::trim);
+    for name in listed.filter(|name| !name.is_empty()) {
+        let Some(known) = gate::WORKLOADS.iter().find(|known| **known == name) else {
+            let all = gate::WORKLOADS.join(", ");
+            return Err(format!("LENGUA_BENCH_ONLY: {name:?} isn't one of {all}"));
         };
-        Sample {
-            stalls,
-            instructions,
-            cycles,
-            cpu_time: cpu_time.map(Duration::from_nanos),
-            wall_time,
-            stdout: output.stdout,
-            status: output.status.code(),
-        }
+        names.push(*known);
     }
+    Ok(names)
+}
 
-    /// Peak memory in KiB, from GNU time.
-    fn peak_kib(version: &Version, workload: &Workload, folder: &Path) -> Option<u64> {
-        let report = folder.join("peak");
-        let mut child = Command::new("/usr/bin/time")
-            .arg("-f")
-            .arg("%M")
-            .arg("-o")
-            .arg(&report)
-            .arg(&version.executable)
-            .args(&workload.args)
-            .env_clear()
-            .current_dir(folder)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        let mut input = child.stdin.take()?;
-        let bytes = workload.stdin.clone();
-        let writer = std::thread::spawn(move || {
-            let _ = input.write_all(&bytes);
-        });
-        child.wait().ok()?;
-        let _ = writer.join();
-        std::fs::read_to_string(&report).ok()?.trim().parse().ok()
-    }
-
-    fn median<T: Ord + Copy>(mut values: Vec<T>) -> Option<T> {
-        values.sort_unstable();
-        values.get(values.len() / 2).copied()
-    }
-
-    /// Runs `version` once, and fails if it didn't exit with 0 or printed something other than
-    /// `expected`.
-    fn checked_run(
-        version: &Version,
-        workload: &Workload,
-        folder: &Path,
-        expected: &[u8],
-    ) -> Sample {
-        let sample = run(version, workload, folder, &[]);
-        assert_eq!(
-            sample.status,
-            Some(0),
-            "{} {} failed",
-            workload.name,
-            version.label
-        );
-        let output = match workload.output_file {
-            Some(name) => std::fs::read(folder.join(name)).expect("the output file"),
-            None => sample.stdout.clone(),
-        };
-        assert!(
-            output == expected,
-            "{} {} printed something else",
-            workload.name,
-            version.label
-        );
-        sample
-    }
-
-    /// The medians of `samples`, with `peaks` and `stalls` as measured apart from them.
-    fn summarize(
-        version: &Version,
-        samples: &[Sample],
-        peaks: Vec<u64>,
-        stalls: Vec<Option<u64>>,
-    ) -> Measures {
-        Measures {
-            stalls,
-            instructions: median(samples.iter().filter_map(|s| s.instructions).collect()),
-            cycles: median(samples.iter().filter_map(|s| s.cycles).collect()),
-            cpu_time: median(samples.iter().filter_map(|s| s.cpu_time).collect()),
-            wall_time: median(samples.iter().map(|s| s.wall_time).collect()).unwrap_or_default(),
-            peak_kib: median(peaks),
-            size: std::fs::metadata(&version.executable).map_or(0, |metadata| metadata.len()),
-        }
-    }
-
-    fn measure(version: &Version, workload: &Workload, folder: &Path, expected: &[u8]) -> Measures {
-        for (name, contents) in &workload.files {
-            std::fs::write(folder.join(name), contents).expect("write an input file");
-        }
-        let mut samples = Vec::new();
-        for round in 0..WARM_UP + RUNS {
-            let sample = checked_run(version, workload, folder, expected);
-            if round >= WARM_UP {
-                samples.push(sample);
-            }
-        }
-        let peaks: Vec<u64> = (0..5)
-            .filter_map(|_| peak_kib(version, workload, folder))
-            .collect();
-        let stalls = if workload.stdin.len() >= LARGE {
-            let events: Vec<Stall> = STALLS.iter().map(|(_, stall)| *stall).collect();
-            let runs: Vec<Sample> = (0..STALL_RUNS)
-                .map(|_| run(version, workload, folder, &events))
-                .collect();
-            (0..events.len())
-                .map(|event| median(runs.iter().filter_map(|run| run.stalls[event]).collect()))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        summarize(version, &samples, peaks, stalls)
-    }
-
-    /// Two versions of a workload measured alternately in one run, and each round's ratios.
-    struct Pair {
-        first: Measures,
-        second: Measures,
-        /// Each round's wall time of the second ÷ the first, in order of size.
-        wall: Vec<f64>,
-        /// The same for CPU time, where both runs counted it.
-        cpu: Vec<f64>,
-    }
-
-    /// Measures `first` and `second` one after the other in every round, which of the two goes
-    /// first alternating from round to round, so that neither always finds the cache the other
-    /// warmed. What the report gives of a measure is the ratio of each round's pair, which the
-    /// machine's drift over the run doesn't move.
-    fn measure_pair(
-        first: &Version,
-        second: &Version,
-        workload: &Workload,
-        folder: &Path,
-        expected: &[u8],
-    ) -> Pair {
-        for (name, contents) in &workload.files {
-            std::fs::write(folder.join(name), contents).expect("write an input file");
-        }
-        let (mut firsts, mut seconds) = (Vec::new(), Vec::new());
-        let (mut wall, mut cpu) = (Vec::new(), Vec::new());
-        for round in 0..WARM_UP + RUNS {
-            let (a, b) = if round % 2 == 0 {
-                let a = checked_run(first, workload, folder, expected);
-                let b = checked_run(second, workload, folder, expected);
-                (a, b)
-            } else {
-                let b = checked_run(second, workload, folder, expected);
-                let a = checked_run(first, workload, folder, expected);
-                (a, b)
-            };
-            if round >= WARM_UP {
-                wall.push(b.wall_time.as_secs_f64() / a.wall_time.as_secs_f64());
-                if let (Some(then), Some(now)) = (a.cpu_time, b.cpu_time)
-                    && then > Duration::ZERO
-                {
-                    cpu.push(now.as_secs_f64() / then.as_secs_f64());
-                }
-                firsts.push(a);
-                seconds.push(b);
-            }
-        }
-        let peaks = |version: &Version| -> Vec<u64> {
-            (0..5)
-                .filter_map(|_| peak_kib(version, workload, folder))
-                .collect()
-        };
-        wall.sort_by(f64::total_cmp);
-        cpu.sort_by(f64::total_cmp);
-        Pair {
-            first: summarize(first, &firsts, peaks(first), Vec::new()),
-            second: summarize(second, &seconds, peaks(second), Vec::new()),
-            wall,
-            cpu,
-        }
-    }
-
-    /// The `part` quantile (0 to 1) of values in order of size.
-    fn quantile(sorted: &[f64], part: f64) -> Option<f64> {
-        let last = sorted.len().checked_sub(1)?;
-        sorted.get(((last as f64) * part).round() as usize).copied()
-    }
-
-    /// A ratio's median and, in brackets, its quartiles: whether it differs from 1 by more than
-    /// the runs' own spread shows in whether the brackets hold 1.
-    fn spread(sorted: &[f64]) -> String {
-        match (
-            quantile(sorted, 0.25),
-            quantile(sorted, 0.5),
-            quantile(sorted, 0.75),
-        ) {
-            (Some(low), Some(middle), Some(high)) => {
-                format!("{middle:.3}× ({low:.3}–{high:.3})")
-            }
-            _ => "–".to_owned(),
-        }
-    }
-
-    /// The commit whose lengua programs the report sets lengua's programs now against, when the
-    /// environment names one (`LENGUA_BENCH_AGAINST`).
-    fn against() -> Option<String> {
-        std::env::var("LENGUA_BENCH_AGAINST")
-            .ok()
-            .map(|sha| sha.trim().to_owned())
-            .filter(|sha| !sha.is_empty())
-    }
-
-    /// The file `source` as commit `sha` had it, written into `folder`; `None` if it had no such
-    /// file.
-    fn source_at(
-        sha: &str,
-        source: &str,
-        workload: &Workload,
-        number: usize,
-        folder: &Path,
-    ) -> Option<PathBuf> {
+/// The commit measured, and where the run is: from GitHub's variables in CI, else from git.
+fn provenance(root: &Path) -> (String, String) {
+    let commit = setting("GITHUB_SHA").unwrap_or_else(|| {
         let shown = Command::new("git")
-            .arg("show")
-            .arg(format!("{sha}:{source}"))
-            .current_dir(root())
-            .output()
-            .ok()?;
-        if !shown.status.success() {
-            return None;
+            .args(["rev-parse", "HEAD"])
+            .current_dir(root)
+            .output();
+        let text = shown.map(|shown| String::from_utf8_lossy(&shown.stdout).trim().to_owned());
+        text.unwrap_or_default()
+    });
+    let place = [
+        setting("GITHUB_SERVER_URL"),
+        setting("GITHUB_REPOSITORY"),
+        setting("GITHUB_RUN_ID"),
+    ];
+    let run = match place {
+        [Some(server), Some(repository), Some(id)] => {
+            format!("{server}/{repository}/actions/runs/{id}")
         }
-        let path = folder.join(format!("{}-then-{number}.s", workload.name));
-        std::fs::write(&path, &shown.stdout).ok()?;
-        Some(path)
-    }
-
-    /// The report's section that sets each lengua version of each workload now against the same
-    /// version as commit `sha` had it, both built here with this toolchain and run alternately.
-    async fn compare(sha: &str, toolchain: &Toolchain, folder: &Path) -> String {
-        let short = &sha[..sha.len().min(7)];
-        let mut section = format!(
-            "\n# lengua now against lengua at {short}\n\nEach lengua version of each workload \
-             above, as commit {short} had it and as it is now, both built with this toolchain \
-             and run one after the other in every round of {RUNS}, which goes first alternating. \
-             \"now ÷ then\" is the median of each round's ratio, with the quartiles of those \
-             ratios in brackets: a figure whose brackets hold 1 is level within the runs' own \
-             spread. Peak memory and file size are the medians' ratio.\n"
-        );
-        let features = Machine::detect().features;
-        for workload in workloads() {
-            let expected = expected_output(&workload);
-            for (number, (label, source)) in lengua_versions(&workload).iter().enumerate() {
-                if !runs_here(source, &features) {
-                    continue;
-                }
-                let Some(old) = source_at(sha, source, &workload, number, folder) else {
-                    let _ = writeln!(section, "\n- {} {label}: not in {short}", workload.name);
-                    continue;
-                };
-                eprintln!("{} {label} against {short}…", workload.name);
-                let then = build_lengua(
-                    &workload,
-                    number,
-                    &format!("{label} then"),
-                    &old,
-                    "then",
-                    toolchain,
-                    folder,
-                )
-                .await;
-                let now = build_lengua(
-                    &workload,
-                    number,
-                    label,
-                    &root().join(source),
-                    "now",
-                    toolchain,
-                    folder,
-                )
-                .await;
-                let work = folder.join(format!("{}-pair-{number}", workload.name));
-                std::fs::create_dir(&work).expect("a working folder");
-                let pair = measure_pair(&then, &now, &workload, &work, &expected);
-                let ratio_of = |then: Option<u64>, now: Option<u64>| match (then, now) {
-                    (Some(then), Some(now)) if then > 0 => {
-                        format!("{:.3}×", now as f64 / then as f64)
-                    }
-                    _ => "–".to_owned(),
-                };
-                let _ = write!(
-                    section,
-                    "\n## {} ({label})\n\n| | then | now | now ÷ then |\n|---|---|---|---|\n\
-                     | CPU time | {} | {} | {} |\n| wall time | {} | {} | {} |\n\
-                     | peak memory | {} | {} | {} |\n| file size | {} | {} | {} |\n",
-                    workload.name,
-                    pair.first.cpu_time.map_or_else(|| "–".to_owned(), micros),
-                    pair.second.cpu_time.map_or_else(|| "–".to_owned(), micros),
-                    spread(&pair.cpu),
-                    micros(pair.first.wall_time),
-                    micros(pair.second.wall_time),
-                    spread(&pair.wall),
-                    pair.first
-                        .peak_kib
-                        .map_or_else(|| "–".to_owned(), |kib| format!("{} KiB", thousands(kib))),
-                    pair.second
-                        .peak_kib
-                        .map_or_else(|| "–".to_owned(), |kib| format!("{} KiB", thousands(kib))),
-                    ratio_of(pair.first.peak_kib, pair.second.peak_kib),
-                    size(pair.first.size),
-                    size(pair.second.size),
-                    ratio_of(Some(pair.first.size), Some(pair.second.size)),
-                );
-            }
-        }
-        section
-    }
-
-    /// The output every version must give, computed here.
-    fn expected_output(workload: &Workload) -> Vec<u8> {
-        let space = |byte: &u8| matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r');
-        match workload.name {
-            "add" => b"122469135\n".to_vec(),
-            // fixed(sqrt(a * a + b * b), 3), as the idea computes it.
-            "hypotenuse" => {
-                let (a, b) = (123_456_789.0_f64 / 1000.0, 98_765_432.0_f64 / 1000.0);
-                #[allow(clippy::cast_possible_truncation)]
-                let thousandths = ((a * a + b * b).sqrt() * 1000.0).round_ties_even() as i64;
-                format!("{}.{:03}\n", thousandths / 1000, thousandths % 1000).into_bytes()
-            }
-            "wc" => {
-                let lines = workload.stdin.iter().filter(|byte| **byte == b'\n').count();
-                let words = workload
-                    .stdin
-                    .split(space)
-                    .filter(|word| !word.is_empty())
-                    .count();
-                format!("{lines} {words}\n").into_bytes()
-            }
-            "histogram" => {
-                let mut counts = [0_u64; 256];
-                for byte in &workload.stdin {
-                    counts[usize::from(*byte)] += 1;
-                }
-                let mut out = String::new();
-                for (value, count) in counts.iter().enumerate().filter(|(_, count)| **count > 0) {
-                    let _ = writeln!(out, "{value} {count}");
-                }
-                out.into_bytes()
-            }
-            "crc32c" => {
-                let mut crc: u32 = 0xFFFF_FFFF;
-                for byte in &workload.stdin {
-                    crc ^= u32::from(*byte);
-                    for _ in 0..8 {
-                        crc = (crc >> 1) ^ (0x82F6_3B78 & 0_u32.wrapping_sub(crc & 1));
-                    }
-                }
-                format!("{}\n", !crc).into_bytes()
-            }
-            _ => {
-                let input = workload
-                    .files
-                    .first()
-                    .map_or(&workload.stdin, |(_, contents)| contents);
-                input.to_ascii_uppercase()
-            }
-        }
-    }
-
-    fn thousands(value: u64) -> String {
-        let digits = value.to_string();
-        let mut out = String::new();
-        for (index, digit) in digits.chars().enumerate() {
-            if index > 0 && (digits.len() - index).is_multiple_of(3) {
-                out.push(',');
-            }
-            out.push(digit);
-        }
-        out
-    }
-
-    fn micros(duration: Duration) -> String {
-        format!("{:.0} µs", duration.as_secs_f64() * 1e6)
-    }
-
-    fn size(bytes: u64) -> String {
-        if bytes < 10 * 1024 {
-            format!("{} B", thousands(bytes))
-        } else {
-            format!("{:.0} KiB", bytes as f64 / 1024.0)
-        }
-    }
-
-    /// How many times more the best other version takes than the best lengua version.
-    fn ratio(lengua: &[Option<f64>], others: &[Option<f64>]) -> String {
-        let best = |values: &[Option<f64>]| {
-            values
-                .iter()
-                .flatten()
-                .copied()
-                .fold(f64::INFINITY, f64::min)
-        };
-        let (lengua, other) = (best(lengua), best(others));
-        if lengua > 0.0 && lengua.is_finite() && other.is_finite() {
-            format!("{:.1}×", other / lengua)
-        } else {
-            "–".into()
-        }
-    }
-
-    #[tokio::main]
-    pub async fn main() {
-        let toolchain = Toolchain::discover().await.expect("llvm-mc and ld.lld");
-        let machine = Machine::detect();
-        let folder = tempfile::tempdir().expect("a folder");
-        let mut report = String::from(if ARM64 {
-            "# lengua against C, C++ and Rust on ARM64\n\nMeasured on an ARM64 computer by `cargo \
-         bench --bench against_rust_and_c`, which writes this file. Every version"
-        } else {
-            "# lengua against C, C++ and Rust\n\nMeasured by `cargo bench --bench against_rust_and_c`, \
-         which writes this file. Every version"
-        });
-        report.push_str(
-            " of a program gets the same arguments, input and files and must give the same output. \
-         Instructions and cycles are user-space counts \
-         from the CPU's counters, starting at the program's own exec, so a dynamically linked \
-         program's loader counts; CPU time includes the kernel's work for it. Each figure is \
-         the median of ",
-        );
-        let _ = write!(
-            report,
-            "{RUNS} runs after {WARM_UP} to warm up; peak memory is the median of 5 runs of GNU \
-         time. \"Best other ÷ best lengua\" is how many times more the best C, C++ or Rust \
-         version takes than the best lengua version.\n\n\
-         - CPU: {} ({} cores)\n- lengua: `llvm-mc {}, ld.lld {}`\n- Rust: `{}`, `rustc {}`\n\
-         - C and C++: `{}`, `gcc {}` and `g++ {}`\n\
-         - C, C++ and Rust link the system's C library dynamically, as they ship by default; \
-         lengua's programs are static and use no library.\n",
-            machine.cpu_model.as_deref().unwrap_or("unknown"),
-            machine.cores,
-            toolchain.assembler.version,
-            toolchain.linker.version,
-            first_line("rustc", &["--version"]),
-            RUSTC_FLAGS.join(" "),
-            first_line("gcc", &["--version"]),
-            GCC_FLAGS.join(" "),
-            GCC_FLAGS.join(" "),
-        );
-        let _ = writeln!(
-            report,
-            "- Stall and event counts, for each large workload: Linux's generic events for front-end \
-         and back-end stall cycles, L1 data cache read misses and mispredicted branches{}, in user \
-         space, each the median of {STALL_RUNS} more runs; a dash where this CPU doesn't count \
-         one.",
-            if ARM64 {
-                " (the Arm architecture's common events STALL_FRONTEND, STALL_BACKEND, \
-             L1D_CACHE_REFILL and BR_MIS_PRED), and STALL_BACKEND_MEM for the stalls on memory"
-            } else {
-                ""
-            }
-        );
-        for workload in workloads() {
-            if lengua_versions(&workload).is_empty() {
-                let _ = write!(
-                    report,
-                    "\n## {}\n\nNot measured here: lengua's AArch64 code doesn't do it yet.\n",
-                    workload.name
-                );
-                continue;
-            }
-            eprintln!("{}…", workload.name);
-            let versions = build(&workload, &toolchain, folder.path()).await;
-            let expected = expected_output(&workload);
-            let mut measured = Vec::new();
-            for version in &versions {
-                let work = folder
-                    .path()
-                    .join(format!("{}-{}", workload.name, measured.len()));
-                std::fs::create_dir(&work).expect("a working folder");
-                measured.push(measure(version, &workload, &work, &expected));
-            }
-            let _ = write!(
-                report,
-                "\n## {}\n\n{}\n\n| | {} | best other ÷ best lengua |\n|---|{}---|\n",
-                workload.name,
-                if ARM64 && !workload.about_aarch64.is_empty() {
-                    workload.about_aarch64
-                } else {
-                    workload.about
-                },
-                versions
-                    .iter()
-                    .map(|version| version.label.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" | "),
-                "---|".repeat(versions.len())
-            );
-            let row = |name: &str,
-                       cell: &dyn Fn(&Measures) -> String,
-                       value: &dyn Fn(&Measures) -> Option<f64>| {
-                let cells: Vec<String> = measured.iter().map(cell).collect();
-                let (mut lengua, mut others) = (Vec::new(), Vec::new());
-                for (version, measures) in versions.iter().zip(&measured) {
-                    if version.lengua {
-                        lengua.push(value(measures));
-                    } else {
-                        others.push(value(measures));
-                    }
-                }
-                format!(
-                    "| {name} | {} | {} |\n",
-                    cells.join(" | "),
-                    ratio(&lengua, &others)
-                )
-            };
-            let missing = || "–".to_owned();
-            report.push_str(&row(
-                "instructions",
-                &|m| m.instructions.map_or_else(missing, thousands),
-                &|m| m.instructions.map(|value| value as f64),
-            ));
-            report.push_str(&row(
-                "cycles",
-                &|m| m.cycles.map_or_else(missing, thousands),
-                &|m| m.cycles.map(|value| value as f64),
-            ));
-            if measured.iter().any(|measures| !measures.stalls.is_empty()) {
-                for (event, (name, _)) in STALLS.iter().enumerate() {
-                    report.push_str(&row(
-                        name,
-                        &|m| {
-                            m.stalls
-                                .get(event)
-                                .copied()
-                                .flatten()
-                                .map_or_else(missing, thousands)
-                        },
-                        &|m| {
-                            m.stalls
-                                .get(event)
-                                .copied()
-                                .flatten()
-                                .map(|value| value as f64)
-                        },
-                    ));
-                }
-            }
-            report.push_str(&row(
-                "CPU time",
-                &|m| m.cpu_time.map_or_else(missing, micros),
-                &|m| m.cpu_time.map(|value| value.as_secs_f64()),
-            ));
-            report.push_str(&row("wall time", &|m| micros(m.wall_time), &|m| {
-                Some(m.wall_time.as_secs_f64())
-            }));
-            report.push_str(&row(
-                "peak memory",
-                &|m| {
-                    m.peak_kib
-                        .map_or_else(missing, |kib| format!("{} KiB", thousands(kib)))
-                },
-                &|m| m.peak_kib.map(|value| value as f64),
-            ));
-            report.push_str(&row("file size", &|m| size(m.size), &|m| {
-                Some(m.size as f64)
-            }));
-        }
-        // Where an earlier commit's lengua programs are named (LENGUA_BENCH_AGAINST), each is also
-        // measured against its version there, run alternately in this run.
-        if let Some(sha) = against() {
-            report.push_str(&compare(&sha, &toolchain, folder.path()).await);
-        }
-        let path = root().join(if ARM64 {
-            "BENCHMARKS-aarch64.md"
-        } else {
-            "BENCHMARKS.md"
-        });
-        std::fs::write(&path, &report).expect("write the benchmarks");
-        println!("{report}");
-        eprintln!("wrote {}", path.display());
-    }
+        _ => "a run outside CI".to_owned(),
+    };
+    (commit, run)
 }
 
-#[cfg(target_os = "linux")]
-fn main() {
-    linux::main();
+/// The CPU's model, as the system names it.
+fn cpu_model() -> String {
+    if let Some(model) = lengua::platform::Machine::detect().cpu_model {
+        return model;
+    }
+    if cfg!(target_os = "macos") {
+        return first_line("sysctl", &["-n", "machdep.cpu.brand_string"]);
+    }
+    setting("PROCESSOR_IDENTIFIER").unwrap_or_else(|| "a CPU the system doesn't name".to_owned())
 }
 
-#[cfg(not(target_os = "linux"))]
-fn main() {
-    eprintln!(
-        "the benchmark runs on Linux x86-64 and Linux ARM64 so far: round 5 of the roadmap in \
-         todo.md makes it run on all six"
+/// The WebAssembly builds' compilers and flags, from bench-wasm.sh's toolchains.tsv in `folder`.
+fn wasm_toolchains(folder: &Path) -> BTreeMap<String, String> {
+    let text = std::fs::read_to_string(folder.join("toolchains.tsv")).unwrap_or_default();
+    let mut toolchains = BTreeMap::new();
+    for line in text.lines() {
+        if let Some((name, rest)) = line.split_once('\t') {
+            toolchains.insert(name.to_owned(), rest.replace('\t', "; "));
+        }
+    }
+    toolchains
+}
+
+/// The verdict `name` names.
+fn verdict_named(name: &str) -> Verdict {
+    let decided = [Verdict::Ahead, Verdict::Behind];
+    let found = decided.into_iter().find(|verdict| verdict.name() == name);
+    found.unwrap_or(Verdict::Undecided)
+}
+
+/// What the run found on each row and measure of `results`, as the ratchet takes it.
+fn found(results: &Results) -> Vec<Found> {
+    let mut found = Vec::new();
+    for outcome in &results.workloads {
+        for row in &outcome.rows {
+            for (measure, decided) in Measure::ALL.into_iter().zip(&row.measures) {
+                found.push(Found {
+                    workload: outcome.name.clone(),
+                    versus: row.versus.clone(),
+                    measure,
+                    verdict: verdict_named(&decided.verdict),
+                });
+            }
+        }
+    }
+    found
+}
+
+/// The lines of KNOWN_BEHIND that `results`, which found `found`, pass with, and what they are.
+fn proposal(results: &Results, found: &[Found]) -> String {
+    let Results {
+        target,
+        commit,
+        run,
+        ..
+    } = results;
+    let mut text = format!(
+        "# The lines of KNOWN_BEHIND for {target} that the run passes with: a line for each row \
+         and measure\n# where lengua isn't ahead, with what the run found ({run}, at {commit}). \
+         They take the place\n# of KNOWN_BEHIND's lines for {target}.\n"
     );
+    if !results.every_workload {
+        let workloads = &results.workloads;
+        let measured: Vec<&str> = workloads.iter().map(|one| one.name.as_str()).collect();
+        let measured = measured.join(", ");
+        let _ = writeln!(text, "# Only these workloads were measured: {measured}.");
+    }
+    text.push_str(&gate::proposal(target, found));
+    text
+}
+
+/// A number to three figures.
+fn figures(value: f64) -> String {
+    if value >= 100.0 {
+        format!("{value:.0}")
+    } else if value >= 10.0 {
+        format!("{value:.1}")
+    } else {
+        format!("{value:.2}")
+    }
+}
+
+/// A time in nanoseconds, to three figures in the unit that suits it.
+fn duration(nanoseconds: f64) -> String {
+    let (value, unit) = if nanoseconds >= 1e9 {
+        (nanoseconds / 1e9, "s")
+    } else if nanoseconds >= 1e6 {
+        (nanoseconds / 1e6, "ms")
+    } else if nanoseconds >= 1e3 {
+        (nanoseconds / 1e3, "µs")
+    } else {
+        (nanoseconds, "ns")
+    };
+    format!("{} {unit}", figures(value))
+}
+
+/// A count of bytes, to three figures in the unit that suits it.
+fn bytes(count: f64) -> String {
+    if count >= 1_048_576.0 {
+        format!("{} MiB", figures(count / 1_048_576.0))
+    } else if count >= 1024.0 {
+        format!("{} KiB", figures(count / 1024.0))
+    } else {
+        format!("{count:.0} B")
+    }
+}
+
+/// A whole number with a comma between each three digits.
+fn thousands(value: f64) -> String {
+    let digits = format!("{value:.0}");
+    let mut out = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+/// A p-value, to two figures.
+fn p_value(p: f64) -> String {
+    if p < 0.001 {
+        format!("{p:.1e}")
+    } else {
+        format!("{p:.3}")
+    }
+}
+
+/// What the report shows where there is no number.
+fn dash() -> String {
+    "–".to_owned()
+}
+
+/// The median of `values`, shown by `show`, or a dash when there are none.
+fn median_shown(values: &[u64], show: fn(f64) -> String) -> String {
+    gate::median(&floats(values)).map_or_else(dash, show)
+}
+
+/// A verdict's mark in the gate's table.
+fn mark(verdict: &str) -> &'static str {
+    match verdict {
+        "ahead" => "✓",
+        "behind" => "✗",
+        _ => "?",
+    }
+}
+
+/// A row's marks in the gate's table: CPU time, wall time, peak memory and size, in that order.
+fn marks(row: Option<&Row>) -> String {
+    let Some(row) = row else {
+        return dash();
+    };
+    let measures = &row.measures;
+    let marks: Vec<&str> = measures.iter().map(|one| mark(&one.verdict)).collect();
+    marks.join(" ")
+}
+
+/// A row's measure as the report shows it: the verdict, lengua's value over the other's, and
+/// the test's p where a test decided it.
+fn cell(decided: &Decided) -> String {
+    let ratio = match (decided.lengua, decided.other) {
+        (Some(lengua), Some(other)) if other > 0.0 => format!(", {:.2}×", lengua / other),
+        _ => String::new(),
+    };
+    let p = decided.p.map(p_value);
+    let p = p.map_or_else(String::new, |p| format!(", p {p}"));
+    format!("{}{ratio}{p}", decided.verdict)
+}
+
+/// lengua's value over the best native build's on the measure at `at` of `outcome`, or a dash.
+fn gap(outcome: &Outcome, at: usize) -> String {
+    let mut best: Option<(f64, f64)> = None;
+    for row in &outcome.rows {
+        let Some(decided) = row.measures.get(at) else {
+            continue;
+        };
+        let (Some(lengua), Some(other)) = (decided.lengua, decided.other) else {
+            continue;
+        };
+        let native = NATIVE.contains(&row.versus.as_str());
+        if native && best.is_none_or(|(_, least)| other < least) {
+            best = Some((lengua, other));
+        }
+    }
+    match best {
+        Some((lengua, other)) if other > 0.0 => format!("{:.2}×", lengua / other),
+        _ => dash(),
+    }
+}
+
+/// The rows of a table of `outcomes`, a row and its measures to a line: each outcome's rows
+/// under its name.
+fn row_lines(out: &mut String, outcomes: &[Outcome]) {
+    out.push_str("| workload | against | runs | CPU time | wall time | peak memory | size |\n");
+    out.push_str("|---|---|---|---|---|---|---|\n");
+    for outcome in outcomes {
+        for row in &outcome.rows {
+            let cells: Vec<String> = row.measures.iter().map(cell).collect();
+            let (name, versus, runs) = (&outcome.name, &row.versus, row.runs);
+            let cells = cells.join(" | ");
+            let _ = writeln!(out, "| {name} | {versus} | {runs} | {cells} |");
+        }
+    }
+}
+
+/// A workload's section of the report: what it is, each version's medians, and each row.
+fn workload_section(out: &mut String, outcome: &Outcome) {
+    let (name, program, about) = (&outcome.name, &outcome.program, &outcome.about);
+    let seconds = outcome.seconds.round();
+    let _ = writeln!(out, "\n## {name}\n");
+    let _ = writeln!(out, "{about} lengua's program: {program}.\n");
+    let versions = &outcome.versions;
+    let names: Vec<&str> = versions.iter().map(|one| one.name.as_str()).collect();
+    let _ = writeln!(out, "| | {} |", names.join(" | "));
+    let _ = writeln!(out, "|---|{}", "---|".repeat(names.len()));
+    let lines: [(&str, fn(&Measured) -> String); 5] = [
+        ("counted runs", |one| one.cpu_ns.len().to_string()),
+        ("CPU time", |one| median_shown(&one.cpu_ns, duration)),
+        ("wall time", |one| median_shown(&one.wall_ns, duration)),
+        ("peak memory", |one| median_shown(&one.peak_bytes, bytes)),
+        ("size", |one| bytes(one.size as f64)),
+    ];
+    for (label, show) in lines {
+        let cells: Vec<String> = versions.iter().map(show).collect();
+        let _ = writeln!(out, "| {label} | {} |", cells.join(" | "));
+    }
+    let counters = ["L1 data misses", "last-level misses", "data TLB misses"];
+    for (at, label) in counters.iter().enumerate() {
+        let counts: Vec<Option<f64>> = versions.iter().map(|one| one.misses[at]).collect();
+        if counts.iter().all(Option::is_none) {
+            continue;
+        }
+        let cells: Vec<String> = counts
+            .iter()
+            .map(|count| count.map_or_else(dash, thousands))
+            .collect();
+        let _ = writeln!(out, "| {label} | {} |", cells.join(" | "));
+    }
+    let _ = writeln!(out, "\nIts rounds took {seconds} seconds.");
+    for measured in versions {
+        let (name, made) = (&measured.name, &measured.made);
+        if !made.is_empty() {
+            let _ = writeln!(out, "\n- {name}: {made}");
+        }
+        if let Some(problem) = &measured.problem {
+            let _ = writeln!(out, "\n- {name} wasn't measured to the end: {problem}");
+        }
+    }
+}
+
+/// BENCHMARKS-<target>.md, written from `results` alone: every number in it is the run's.
+fn report(results: &Results) -> String {
+    let Results {
+        target,
+        commit,
+        run,
+        cpu,
+        cores,
+        engine,
+        alpha,
+        look_alpha,
+        max_runs,
+        row_seconds,
+        warm_up,
+        ..
+    } = results;
+    let looks: Vec<String> = results.looks.iter().map(ToString::to_string).collect();
+    let looks = looks.join(", ");
+    let mut out = String::new();
+    let _ = writeln!(out, "# lengua against C, C++ and Rust on {target}\n");
+    let _ = writeln!(
+        out,
+        "Measured on {target} ({cpu}, {cores} threads at once) by `cargo bench --bench \
+         against_rust_and_c`, at commit {commit}, in {run}. Every number here is that run's: \
+         the bench writes this file from the run's results alone, \
+         target/bench/results-{target}.json in its artifacts.\n"
+    );
+    let _ = writeln!(
+        out,
+        "Every version of a workload gets the same arguments, input and files, and gives the \
+         same output, checked before anything is measured. Each runs as people run it, in a \
+         process of its own, measured by `lengua-mcp measure`: its CPU time (in user space and \
+         in the kernel) and its peak resident memory as the system counts them for the process, \
+         its wall time on the clock, and the size of what ran. lengua's program runs through \
+         `lengua-mcp run`, with every check it makes; C, C++ and Rust compiled to WebAssembly \
+         run in lengua's host, in the same engine ({engine}) with the same cache of compiled \
+         modules; their native builds, made on this runner, run as a shell starts them.\n"
+    );
+    let _ = writeln!(
+        out,
+        "The runs alternate: each round runs every version once, in an order shuffled from \
+         round to round, after each version's checked run and {warm_up} rounds that aren't \
+         counted. On each row, lengua against one other version, the gate decides CPU and wall \
+         time with a one-sided Mann-Whitney U test at p < {alpha}: it looks at the row after \
+         {looks} runs of each version, each look deciding at p < {look_alpha} ({alpha} split \
+         over the looks), until both of the row's tests decide, up to {max_runs} runs or \
+         {row_seconds} seconds. Peak memory, the median of the runs' peaks, and size are \
+         compared as measured. A measure the runs don't decide is undecided, never level, and \
+         KNOWN_BEHIND must name its row.\n"
+    );
+    let _ = writeln!(out, "The versions:\n");
+    let _ = writeln!(out, "- lengua: lengua-mcp, run in {engine}");
+    for (name, toolchain) in &results.toolchains {
+        let _ = writeln!(out, "- {name}: {toolchain}");
+    }
+    let _ = writeln!(out, "\n## The gate\n");
+    let _ = writeln!(
+        out,
+        "lengua against each version, on CPU time, wall time, peak memory and size, in that \
+         order: ✓ lengua is ahead, ✗ behind, ? undecided, – not measured.\n"
+    );
+    let _ = writeln!(out, "| workload | {} |", gate::VERSUS.join(" | "));
+    let _ = writeln!(out, "|---|{}", "---|".repeat(gate::VERSUS.len()));
+    for outcome in &results.workloads {
+        let row = |versus: &str| outcome.rows.iter().find(|one| one.versus == versus);
+        let cells = gate::VERSUS.map(|versus| marks(row(versus)));
+        let _ = writeln!(out, "| {} | {} |", outcome.name, cells.join(" | "));
+    }
+    if results.ratchet.is_empty() {
+        let _ = writeln!(out, "\nThe run agrees with KNOWN_BEHIND.");
+    } else {
+        let _ = writeln!(out, "\nWhere the run and KNOWN_BEHIND disagree:\n");
+        for problem in &results.ratchet {
+            let _ = writeln!(out, "- {problem}");
+        }
+    }
+    let _ = writeln!(out, "\n## The native gaps\n");
+    let _ = writeln!(
+        out,
+        "lengua's median over that of the best native build, C's, C++'s or Rust's, on each \
+         measure: above 1, lengua takes that many times as much.\n"
+    );
+    out.push_str("| workload | CPU time | wall time | peak memory | size |\n");
+    out.push_str("|---|---|---|---|---|\n");
+    let measures = Measure::ALL.len();
+    for outcome in &results.workloads {
+        let gaps: Vec<String> = (0..measures).map(|at| gap(outcome, at)).collect();
+        let _ = writeln!(out, "| {} | {} |", outcome.name, gaps.join(" | "));
+    }
+    let _ = writeln!(out, "\n## Every row\n");
+    let _ = writeln!(
+        out,
+        "Each measure's verdict, lengua's median over the other version's, and the test's p.\n"
+    );
+    row_lines(&mut out, &results.workloads);
+    for outcome in &results.workloads {
+        workload_section(&mut out, outcome);
+    }
+    if let Some(against) = &results.against {
+        let commit = &against.commit;
+        let _ = writeln!(out, "\n## lengua now against lengua at {commit}\n");
+        let _ = writeln!(
+            out,
+            "Each workload's lengua program as it is now and as commit {commit} had it, both \
+             checked and run here, in rounds as above: on the row `then`, ahead is today's \
+             lower.\n"
+        );
+        row_lines(&mut out, &against.workloads);
+        for outcome in &against.workloads {
+            for measured in &outcome.versions {
+                if let Some(problem) = &measured.problem {
+                    let (name, version) = (&outcome.name, &measured.name);
+                    let _ = writeln!(out, "\n- {name}, {version}: {problem}");
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Writes `results`' report, BENCHMARKS-<target>.md, at the repository's root `root`.
+fn write_report(root: &Path, results: &Results) -> Result<(), String> {
+    let path = root.join(format!("BENCHMARKS-{}.md", results.target));
+    std::fs::write(&path, report(results)).map_err(|error| failed(path.display(), error))?;
+    eprintln!("wrote {}", path.display());
+    Ok(())
+}
+
+/// Writes BENCHMARKS-<target>.md from the results file `file`, as a run's artifacts keep it.
+fn report_from(root: &Path, file: &Path) -> Result<(), String> {
+    let text = std::fs::read_to_string(file).map_err(|error| failed(file.display(), error))?;
+    let results: Results =
+        serde_json::from_str(&text).map_err(|error| failed(file.display(), error))?;
+    write_report(root, &results)
+}
+
+/// The gate on this runner: lengua's programs checked, every workload measured, the results,
+/// the report and the list that would pass written, and the run held to KNOWN_BEHIND. Gives
+/// whether it passed.
+async fn gate_run(root: &Path) -> Result<bool, String> {
+    let target = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    let names = chosen()?;
+    let seconds = match setting("LENGUA_BENCH_ROW_SECONDS") {
+        Some(text) => text
+            .parse::<u64>()
+            .map_err(|_| format!("LENGUA_BENCH_ROW_SECONDS is {text:?}, not seconds"))?,
+        None => gate::MAX_ROW.as_secs(),
+    };
+    let list = root.join("KNOWN_BEHIND");
+    let list = std::fs::read_to_string(&list).map_err(|error| failed(list.display(), error))?;
+    let known = KnownBehind::parse(&list).map_err(|problems| problems.join("\n"))?;
+    let out = root.join("target").join("bench");
+    std::fs::create_dir_all(&out).map_err(|error| failed(out.display(), error))?;
+    let wasm = setting("LENGUA_BENCH_WASM").map(PathBuf::from);
+    let wasm = wasm.unwrap_or_else(|| root.join("target").join("bench-wasm"));
+    let against = setting("LENGUA_BENCH_AGAINST");
+
+    // lengua's programs, each from its idea to done in one session, as an agent takes them: the
+    // session's data folder then holds the key their locks are signed with, and the engine's
+    // cache of compiled modules, which every module's runs share.
+    let session = Session::start(Protocol::Discover).await;
+    let (mut now, mut then) = (Checked::new(), Checked::new());
+    for &name in &names {
+        let path = format!("tests/fixtures-wasm/{}", program_of(name));
+        eprintln!("checking {path}");
+        now.insert(name, checked_here(&session, root, &path).await);
+        if let Some(commit) = &against {
+            then.insert(name, checked_at(&session, root, commit, &path).await);
+        }
+    }
+    let data_dir = session.data_dir.path().to_path_buf();
+    let _ = session.service.cancel().await;
+    let build = tempfile::tempdir_in(&out).map_err(|error| failed(out.display(), error))?;
+    let context = Context {
+        root: root.to_path_buf(),
+        out: out.clone(),
+        build: build.path().to_path_buf(),
+        runner: Runner {
+            lengua: PathBuf::from(env!("CARGO_BIN_EXE_lengua-mcp")),
+            data_dir,
+        },
+        wasm,
+        seconds,
+    };
+    let (commit, run) = provenance(root);
+    let mut results = Results {
+        target: target.clone(),
+        commit,
+        run,
+        cpu: cpu_model(),
+        cores: std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+        engine: lengua::wasm::ENGINE.to_owned(),
+        toolchains: wasm_toolchains(&context.wasm),
+        looks: gate::LOOKS.to_vec(),
+        alpha: gate::ALPHA,
+        look_alpha: gate::LOOK_ALPHA,
+        max_runs: gate::MAX_RUNS,
+        row_seconds: seconds,
+        warm_up: WARM_UP,
+        every_workload: names.len() == gate::WORKLOADS.len(),
+        ..Results::default()
+    };
+    for &name in &names {
+        eprintln!("measuring {name}");
+        let checked = now.get(name);
+        let outcome = measure_workload(&context, name, checked, &mut results.toolchains);
+        results.workloads.push(outcome);
+    }
+    if let Some(commit) = &against {
+        eprintln!("measuring lengua's programs against {commit}");
+        let workloads = (&now, &then);
+        results.against = Some(measure_against(&context, commit, &names, workloads));
+    }
+    let found = found(&results);
+    results.ratchet = if gate::TARGETS.contains(&target.as_str()) {
+        gate::ratchet(&known, &target, &found)
+    } else {
+        let alone = format!("{target} is no runner of the gate's");
+        vec![alone]
+    };
+    let json = serde_json::to_string(&results).map_err(|error| failed("the results", error))?;
+    let file = out.join(format!("results-{target}.json"));
+    std::fs::write(&file, json).map_err(|error| failed(file.display(), error))?;
+    write_report(root, &results)?;
+    let file = out.join(format!("KNOWN_BEHIND-{target}.txt"));
+    let lines = proposal(&results, &found);
+    std::fs::write(&file, lines).map_err(|error| failed(file.display(), error))?;
+    let mut failures = results.ratchet.clone();
+    for outcome in &results.workloads {
+        for measured in &outcome.versions {
+            if let Some(problem) = &measured.problem {
+                let (name, version) = (&outcome.name, &measured.name);
+                failures.push(format!("{name}, {version}: {problem}"));
+            }
+        }
+    }
+    for failure in &failures {
+        eprintln!("{failure}");
+    }
+    let verdict = if failures.is_empty() {
+        "passed"
+    } else {
+        "failed"
+    };
+    let count = failures.len();
+    eprintln!("the gate {verdict} on {target}, with {count} problems");
+    Ok(failures.is_empty())
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let ran = match setting("LENGUA_BENCH_REPORT") {
+        Some(file) => report_from(&root, Path::new(&file)).map(|()| true),
+        None => gate_run(&root).await,
+    };
+    match ran {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        Err(problem) => {
+            eprintln!("the bench couldn't run: {problem}");
+            ExitCode::FAILURE
+        }
+    }
 }

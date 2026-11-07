@@ -4,6 +4,11 @@
 //! and wall time by a one-sided Mann-Whitney U test at p < [`ALPHA`] over runs that alternate,
 //! peak memory and size as measured. A row the test can't decide is undecided, never level.
 //!
+//! The runs of a row grow until both its tests decide: the gate looks at them at each count of
+//! [`LOOKS`], up to [`MAX_RUNS`] or [`MAX_ROW`], and each look decides at [`LOOK_ALPHA`], ALPHA
+//! split over the looks, so that a row looked at again and again is still decided wrongly with a
+//! chance below ALPHA.
+//!
 //! `KNOWN_BEHIND`, a file at the repository's root, names the rows where lengua isn't ahead yet,
 //! and it may only shrink: a run that finds lengua not ahead on a row the list doesn't name, or
 //! ahead on one it names, fails ([`ratchet`]), and says the list that would pass ([`proposal`]).
@@ -12,14 +17,19 @@ use std::cmp::Ordering;
 use std::fmt::Write as _;
 use std::time::Duration;
 
-/// The level the gate decides at: a one-sided p below it.
+/// The level the gate decides a row's measure at: a one-sided p below it, over all its looks.
 pub const ALPHA: f64 = 0.01;
-
-/// The fewest runs of each version before the gate decides a row.
-pub const MIN_RUNS: usize = 20;
 
 /// The most runs of each version of a workload.
 pub const MAX_RUNS: usize = 2000;
+
+/// The counts of runs at which the gate looks at a row, deciding what it can: the first is the
+/// fewest runs it decides on, the last [`MAX_RUNS`].
+pub const LOOKS: [usize; 8] = [20, 40, 80, 160, 320, 640, 1280, MAX_RUNS];
+
+/// The level of each look: [`ALPHA`] split over the [`LOOKS`] (Bonferroni's bound), so that the
+/// chance that any look of a row decides wrongly is below ALPHA.
+pub const LOOK_ALPHA: f64 = ALPHA / LOOKS.len() as f64;
 
 /// The longest a workload's rows run.
 pub const MAX_ROW: Duration = Duration::from_secs(600);
@@ -122,16 +132,26 @@ impl Verdict {
 /// The complementary error function, to a fractional error below 1.2e-7 (Numerical Recipes'
 /// `erfcc`, a Chebyshev fit).
 fn erfc(x: f64) -> f64 {
+    // The fit's coefficients, from the power 0 of t to the power 9.
+    const COEFFICIENTS: [f64; 10] = [
+        -1.265_512_23,
+        1.000_023_68,
+        0.374_091_96,
+        0.096_784_18,
+        -0.186_288_06,
+        0.278_868_07,
+        -1.135_203_98,
+        1.488_515_87,
+        -0.822_152_23,
+        0.170_872_77,
+    ];
     let z = x.abs();
     let t = 1.0 / (1.0 + 0.5 * z);
-    let poly = -1.265_512_23
-        + t * (1.000_023_68
-            + t * (0.374_091_96
-                + t * (0.096_784_18
-                    + t * (-0.186_288_06
-                        + t * (0.278_868_07
-                            + t * (-1.135_203_98
-                                + t * (1.488_515_87 + t * (-0.822_152_23 + t * 0.170_872_77))))))));
+    // The polynomial in t, by Horner's rule from its highest power.
+    let poly = COEFFICIENTS
+        .iter()
+        .rev()
+        .fold(0.0, |sum, coefficient| sum * t + coefficient);
     let r = t * (-z * z + poly).exp();
     if x >= 0.0 { r } else { 2.0 - r }
 }
@@ -184,19 +204,26 @@ pub fn p_smaller(smaller: &[f64], larger: &[f64]) -> f64 {
     normal_cdf((u + 0.5 - mean) / variance.sqrt())
 }
 
-/// The gate's verdict on lengua's runs against another version's, for a measure the test decides,
-/// and the p-value of the side it decided, or the smaller of the two when it decided none.
+/// The gate's verdict on lengua's runs against another version's, for a measure the test decides
+/// at level `alpha`, and the p-value of the side it decided, or the smaller of the two when it
+/// decided none.
 #[must_use]
-pub fn tested_verdict(lengua: &[f64], other: &[f64]) -> (Verdict, f64) {
+pub fn tested_verdict(lengua: &[f64], other: &[f64], alpha: f64) -> (Verdict, f64) {
     let ahead = p_smaller(lengua, other);
-    if ahead < ALPHA {
+    if ahead < alpha {
         return (Verdict::Ahead, ahead);
     }
     let behind = p_smaller(other, lengua);
-    if behind < ALPHA {
+    if behind < alpha {
         return (Verdict::Behind, behind);
     }
     (Verdict::Undecided, ahead.min(behind))
+}
+
+/// Whether the gate looks at a row once it has `runs` runs of each version.
+#[must_use]
+pub fn looks_at(runs: usize) -> bool {
+    LOOKS.contains(&runs)
 }
 
 /// The gate's verdict on a measure taken as measured, lengua's against another version's: ahead
@@ -289,7 +316,7 @@ impl KnownBehind {
                 continue;
             };
             let known = |value: &str, names: &[&str]| value == "*" || names.contains(&value);
-            let measures: Vec<&str> = Measure::ALL.iter().map(|measure| measure.name()).collect();
+            let measures = Measure::ALL.map(Measure::name);
             for (value, names, what) in [
                 (*target, &TARGETS[..], "target"),
                 (*workload, &WORKLOADS[..], "workload"),
@@ -417,17 +444,35 @@ mod tests {
         let high = run_of(21, 40);
         assert!(p_smaller(&low, &high) < 1e-6, "{}", p_smaller(&low, &high));
         assert!(p_smaller(&high, &low) > 0.99);
-        assert_eq!(tested_verdict(&low, &high).0, Verdict::Ahead);
-        assert_eq!(tested_verdict(&high, &low).0, Verdict::Behind);
+        assert_eq!(tested_verdict(&low, &high, ALPHA).0, Verdict::Ahead);
+        assert_eq!(tested_verdict(&high, &low, ALPHA).0, Verdict::Behind);
+        // Twenty runs apart are enough for the first look, at its stricter level.
+        assert_eq!(tested_verdict(&low, &high, LOOK_ALPHA).0, Verdict::Ahead);
         // Interleaved: neither side is smaller.
         let odd: Vec<f64> = (0..20).map(|n| f64::from(2 * n + 1)).collect();
         let even: Vec<f64> = (0..20).map(|n| f64::from(2 * n + 2)).collect();
-        assert_eq!(tested_verdict(&odd, &even).0, Verdict::Undecided);
+        assert_eq!(tested_verdict(&odd, &even, ALPHA).0, Verdict::Undecided);
         // Every value the same: no evidence either way.
         let same = vec![5.0; 30];
         assert!((p_smaller(&same, &same) - 1.0).abs() < f64::EPSILON);
-        assert_eq!(tested_verdict(&same, &same).0, Verdict::Undecided);
+        assert_eq!(tested_verdict(&same, &same, ALPHA).0, Verdict::Undecided);
         assert!((p_smaller(&[], &low) - 1.0).abs() < f64::EPSILON);
+    }
+
+    /// The looks begin at twenty runs, end at the most, and split the level between them.
+    #[test]
+    fn the_gate_looks_at_counts_that_double_up_to_the_most() {
+        for runs in [20, 40, MAX_RUNS] {
+            assert!(looks_at(runs), "{runs}");
+        }
+        for runs in [0, 19, 21] {
+            assert!(!looks_at(runs), "{runs}");
+        }
+        assert!(LOOKS.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!((LOOK_ALPHA * 8.0 - ALPHA).abs() < 1e-12);
+        // 5 against 5 values apart (p about 0.0061) pass at ALPHA but not at a look's level.
+        let p = p_smaller(&run_of(1, 5), &run_of(6, 10));
+        assert!(p < ALPHA && p > LOOK_ALPHA, "{p}");
     }
 
     /// The approximation agrees with a value worked out by hand: U = 0 for 5 against 5 values
@@ -460,9 +505,10 @@ mod tests {
         .expect("a list");
         assert_eq!(known.rows.len(), 2);
         assert!(known.rows[1].every_row());
-        assert!(known.naming("linux-x86_64", "add", "c-wasm", Measure::Cpu).is_some());
-        assert!(known.naming("linux-x86_64", "add", "c-wasm", Measure::Wall).is_none());
-        assert!(known.naming("macos-aarch64", "sort", "rust", Measure::Size).is_some());
+        let cpu = known.naming("linux-x86_64", "add", "c-wasm", Measure::Cpu);
+        let wall = known.naming("linux-x86_64", "add", "c-wasm", Measure::Wall);
+        let size = known.naming("macos-aarch64", "sort", "rust", Measure::Size);
+        assert!(cpu.is_some() && wall.is_none() && size.is_some());
         let bad = KnownBehind::parse("linux-x86_64 add c-wasm\nlinux-riscv add c cpu\n")
             .expect_err("two bad lines");
         assert_eq!(bad.len(), 2, "{bad:?}");
@@ -490,8 +536,9 @@ mod tests {
                 .expect("a list");
         let problems = ratchet(&known, "linux-x86_64", &runs);
         assert_eq!(problems.len(), 2, "{problems:?}");
-        assert!(problems[0].contains("wall: lengua is undecided"), "{problems:?}");
-        assert!(problems[1].contains("size: lengua is ahead now"), "{problems:?}");
+        let undecided = problems[0].contains("wall: lengua is undecided");
+        let ahead = problems[1].contains("size: lengua is ahead now");
+        assert!(undecided && ahead, "{problems:?}");
         // The list the run proposes passes it.
         let proposed = KnownBehind::parse(&proposal("linux-x86_64", &runs)).expect("a list");
         assert!(ratchet(&proposed, "linux-x86_64", &runs).is_empty());
