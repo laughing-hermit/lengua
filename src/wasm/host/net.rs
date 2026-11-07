@@ -637,7 +637,9 @@ mod tests {
         while sent < bytes.len() {
             sent += socket.write(&bytes[sent..], &limits).expect("a write");
         }
+        // Its end, and the connection gone, so the server's reading ends however the end went.
         socket.close();
+        drop(socket);
         assert_eq!(counted.join().expect("the server"), bytes.len());
     }
 
