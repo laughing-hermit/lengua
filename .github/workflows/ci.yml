@@ -9,13 +9,16 @@ name: ci
 #
 # - A push to a branch runs the suite on all five (a branch named wip/... gets no push run: its
 #   author dispatches the run it wants, so work in progress doesn't cost a long suite per push).
-# - Every week it runs the suite and the slow ignored tests on all five.
+# - Every week it runs the suite, the slow ignored tests and the bench on all five.
 # - A dispatch picks the targets and the mode: compile (clippy and the tests built), test (the
 #   suite), ignored (the slow ignored tests, optionally one folder's check), golden (the checker's
-#   and the prover's recordings of every program, made at two commits and compared), bench (lengua
-#   against C, C++ and Rust, and against an earlier commit's programs) or release (the archive). A
-#   test run also has a job on x86-64 Linux with QEMU's user mode, so the ARM64 cells run there
-#   too, as on a developer's x86-64 computer.
+#   and the prover's recordings of every program, made at two commits and compared), bench (the
+#   gate: lengua against C, C++ and Rust compiled to WebAssembly and built natively, and against
+#   an earlier commit's programs) or release (the archive). A test run also has a job on x86-64
+#   Linux with QEMU's user mode, so the ARM64 cells run there too, as on a developer's x86-64
+#   computer.
+# - A bench's C, C++ and Rust are compiled to WebAssembly once, by the bench-wasm job on
+#   linux-x86_64, and every runner's bench measures those same modules.
 # - `filter` matches test *names* only (libtest's filters, after `--`). To run a test *file*, name
 #   it in `test_files` (`lib` is the library's own tests): each becomes `--test <name>`. A run with
 #   a filter or files that matched no test fails, so a gate cannot pass by running nothing.
@@ -43,7 +46,7 @@ on:
         type: string
         default: "all"
       mode:
-        description: "compile, test, ignored, golden, bench or release (golden, bench and release: linux-x86_64 and linux-aarch64 so far)"
+        description: "compile, test, ignored, golden, bench or release (golden and release: linux-x86_64 and linux-aarch64 so far; bench: all five)"
         type: choice
         options:
           - compile
@@ -119,6 +122,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      bench: ${{ steps.matrix.outputs.bench }}
     steps:
       - uses: actions/checkout@v4
 
@@ -132,10 +136,11 @@ jobs:
           BENCH_AGAINST: ${{ inputs.bench_against }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          # A push runs the suite, the weekly run the suite and the ignored tests, a dispatch what it asks.
+          # A push runs the suite, the weekly run the suite, the ignored tests and the bench, a
+          # dispatch what it asks.
           case "$EVENT" in
             push) modes='["test"]'; TARGETS=all; MODE=test ;;
-            schedule) modes='["test","ignored"]'; TARGETS=all; MODE=test ;;
+            schedule) modes='["test","ignored","bench"]'; TARGETS=all; MODE=test ;;
             *) modes="[\"$MODE\"]" ;;
           esac
           TARGETS="${TARGETS// /}"
@@ -146,10 +151,10 @@ jobs:
             include=$(jq -c --arg t ",$TARGETS," \
               '[.[] | . as $e | select($t | contains("," + $e.target + ","))]' <<< "$listed")
           fi
-          # The benchmarks, the goldens and the release archive exist for linux-x86_64 and
-          # linux-aarch64 so far.
+          # The goldens and the release archive exist for linux-x86_64 and linux-aarch64 so far;
+          # the bench runs on all five.
           case "$MODE" in
-            bench|release) include=$(jq -c '[.[] | select(.target | startswith("linux-"))]' <<< "$include") ;;
+            release) include=$(jq -c '[.[] | select(.target | startswith("linux-"))]' <<< "$include") ;;
           esac
           # A job's checkout is shallow unless it must read another commit (a bench against one).
           depth=1
@@ -183,6 +188,8 @@ jobs:
             exit 1
           fi
           echo "matrix={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
+          # Whether a bench runs, which needs the WebAssembly builds of C, C++ and Rust.
+          echo "bench=$(jq -r 'any(.[]; .mode == "bench")' <<< "$matrix")" >> "$GITHUB_OUTPUT"
 
   # Formatting is the same on every target, so it is checked once, beside the tests rather than in
   # front of them: a difference never hides a test result. When there is one, the patch that
@@ -238,9 +245,46 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # A bench's C, C++ and Rust compiled to WebAssembly once, with wasi-sdk (pinned in tools.tsv)
+  # and Rust's wasm32-wasip1 target, and kept for every runner's bench, which measures the same
+  # modules (scripts/ci/bench-wasm.sh). It runs only when a bench does.
+  bench-wasm:
+    name: bench-wasm
+    needs: plan
+    if: ${{ needs.plan.outputs.bench == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/wasi-sdk
+          key: wasi-sdk-${{ hashFiles('scripts/ci/tools.tsv') }}
+
+      - name: Rust, wasi-sdk and Rust's wasm32-wasip1 target
+        run: bash scripts/ci/setup.sh linux-x86_64 rust wasi
+
+      - name: The modules
+        run: bash scripts/ci/bench-wasm.sh target/bench-wasm
+
+      - name: Keep the modules
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-wasm-${{ github.run_number }}
+          path: target/bench-wasm
+          retention-days: 7
+          if-no-files-found: error
+
   test:
     name: ${{ matrix.mode }} (${{ matrix.target }})${{ matrix.label && format(' {0}', matrix.label) || '' }}
-    needs: plan
+    # A bench needs the WebAssembly builds; every other job only waits for bench-wasm to be
+    # skipped, and none runs when it failed.
+    needs: [plan, bench-wasm]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.bench-wasm.result != 'failure' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -390,13 +434,33 @@ jobs:
           path: target/golden/*.txt
           retention-days: 30
 
-      - name: Benchmarks against C, C++ and Rust
+      - name: The WebAssembly builds of C, C++ and Rust
+        if: ${{ matrix.mode == 'bench' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: bench-wasm-${{ github.run_number }}
+          path: ${{ runner.temp }}/bench-wasm
+
+      # The gate (benches/against_rust_and_c.rs): it fails where the run and KNOWN_BEHIND
+      # disagree, and writes BENCHMARKS-<target>.md from the run's results, which are kept below.
+      # Windows builds the native C and C++ with the image's LLVM clang.
+      - name: The gate against C, C++ and Rust
         if: ${{ matrix.mode == 'bench' }}
         env:
           LENGUA_BENCH_AGAINST: ${{ inputs.bench_against }}
+          LENGUA_BENCH_WASM: ${{ runner.temp }}/bench-wasm
         run: |
-          sudo apt-get install -y -q time
+          if [ -d "/c/Program Files/LLVM/bin" ]; then
+            export PATH="$PATH:/c/Program Files/LLVM/bin"
+          fi
           cargo bench --locked --bench against_rust_and_c 2>&1 | tee bench.log
+
+      - name: The report, in the summary
+        if: ${{ always() && matrix.mode == 'bench' }}
+        env:
+          REPORT: BENCHMARKS-${{ matrix.target }}.md
+        run: |
+          if [ -f "$REPORT" ]; then cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"; fi
 
       - name: The release archive
         if: ${{ matrix.mode == 'release' }}
@@ -420,8 +484,9 @@ jobs:
             skips.log
             stall.txt
             bench.log
-            BENCHMARKS.md
-            BENCHMARKS-aarch64.md
+            BENCHMARKS-*.md
+            target/bench/results-*.json
+            target/bench/KNOWN_BEHIND-*.txt
             target/release/lengua-mcp
             target/release/lengua-mcp.exe
             dist/*.tar.gz
@@ -463,7 +528,7 @@ jobs:
   # One check that says whether the whole run passed.
   gate:
     name: gate
-    needs: [plan, format, test, golden-diff]
+    needs: [plan, format, bench-wasm, test, golden-diff]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -472,10 +537,12 @@ jobs:
         env:
           RESULTS: ${{ needs.plan.result }} ${{ needs.format.result }} ${{ needs.test.result }}
           GOLDEN_DIFF: ${{ needs.golden-diff.result }}
+          BENCH_WASM: ${{ needs.bench-wasm.result }}
         run: |
-          echo "plan, format, test: $RESULTS; golden diff: $GOLDEN_DIFF"
+          echo "plan, format, test: $RESULTS; golden diff: $GOLDEN_DIFF; bench-wasm: $BENCH_WASM"
           for result in $RESULTS; do
             [ "$result" = success ] || exit 1
           done
-          # It runs in the golden mode only.
+          # It runs in the golden mode only, and bench-wasm when a bench runs.
           [ "$GOLDEN_DIFF" = success ] || [ "$GOLDEN_DIFF" = skipped ] || exit 1
+          [ "$BENCH_WASM" = success ] || [ "$BENCH_WASM" = skipped ] || exit 1
