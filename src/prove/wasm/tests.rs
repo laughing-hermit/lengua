@@ -185,6 +185,34 @@ fn integers_and_control_follow_webassemblys_semantics() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// A module with the memory MEMORY that exits with what growing it a page gives, plus one: 2
+/// where it grows, from its one page, and 0 where it doesn't.
+const GROWS: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  MEMORY
+  (func (export "_start")
+    (call $exit (i32.add (memory.grow (i32.const 1)) (i32.const 1)))))
+"#;
+
+/// The memory grows as far as the engine lets it: one the module keeps to itself to its maximum,
+/// or without one to the most a 32-bit memory has; one exported as `memory` to its maximum, or
+/// without one not at all.
+#[test]
+fn memory_grows_as_far_as_the_engine_lets_it() {
+    let memories = [
+        ("(memory 1)", 2),
+        ("(memory 1 3)", 2),
+        ("(memory 1 1)", 0),
+        ("(memory (export \"memory\") 1)", 0),
+        ("(memory (export \"memory\") 1 3)", 2),
+    ];
+    for (memory, exit) in memories {
+        let text = GROWS.replace("MEMORY", memory);
+        let done = ran(&text, Policy::default(), &Given::default());
+        assert_eq!(done.end, Ended::Exit(exit), "{memory}");
+    }
+}
+
 /// A module whose `_start` runs `body`, which is on line 4.
 fn starts(body: &str) -> String {
     format!(
