@@ -61,7 +61,7 @@ refused only where the secret reaches.
 | an operand of any float operator (`f32.`, `f64.`, `f32x4.`, `f64x2.`, and conversions to or from them) | integers |
 | an argument of a host call or of lengua's library: a descriptor, an address, a length, a flag, an exit code | public values only |
 | a buffer a host call reads: an iovec array (its addresses and lengths), a path, a wait | public values only |
-| `$fill` reading a secret input up to a stop byte, which it compares with every byte it reads | `$fill` with `(global.get $READ_TO_END)`, -1, and the end of the data found from its length |
+| `$fill` reading a secret input up to a stop byte, which it compares with the last byte of each read, so a secret byte decides whether it reads again and how many bytes it gives | `$fill` with `(global.get $READ_TO_END)`, -1, and the end of the data found from its length |
 
 What passes: arithmetic, `and`, `or`, `xor`, shifts and rotations by any amount, comparisons whose
 result is a value (`i32.eq`, `i32.lt_u`, `i32.eqz`), multiplication, the integer SIMD128

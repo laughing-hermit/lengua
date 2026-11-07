@@ -12,7 +12,7 @@
 //! - a secret argument of a host call or of lengua's library, or a secret in a buffer such a call
 //!   reads, but the data it writes out: the bytes `fd_write`, `sock_send` and `$write_all` send
 //!   may be secret, their descriptors, addresses and lengths may not; and `$fill` reading a
-//!   secret up to a stop byte, which it compares with each byte it reads.
+//!   secret up to a stop byte, which it compares with the last byte of each read.
 //!
 //! Masks made with arithmetic are what passes: `(i32.sub (i32.const 0) (local.get $bit))` is all
 //! ones for 1 and zero for 0, and `and`, `or` and `xor` with it choose between two values with no
@@ -395,8 +395,8 @@ impl Leak {
                     .to_owned(),
             ),
             Self::Stop => (
-                "`$fill` reads a secret here up to its stop byte, which it compares with each \
-                 byte it reads, so a secret decides where it stops"
+                "`$fill` reads a secret here up to its stop byte, which it compares with the \
+                 last byte of each read, so a secret decides where it stops"
                     .to_owned(),
                 "read to the end with the stop byte -1, `(global.get $READ_TO_END)`, and find \
                  where the data ends from its length"
@@ -1223,7 +1223,8 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
     }
 
     /// Follows the call of `$fill` at `at`: what it reads from a secret input is secret, but how
-    /// many bytes it read, unless it reads up to a stop byte, which it compares with each byte.
+    /// many bytes it read, unless it reads up to a stop byte, which it compares with the last
+    /// byte of each read.
     fn fill_call(&mut self, at: usize, state: &mut State) {
         let operands = self.operands(at);
         let read = self.secret_read(operands.first());
