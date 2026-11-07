@@ -778,6 +778,7 @@ mod tests {
         );
         assert_eq!(names(&["sub"], "../x"), Ok(vec!["x".to_owned()]));
         assert_eq!(names(&[], "../x"), Err(errno::NOTCAPABLE));
+        assert_eq!(names(&["sub"], "../../x"), Err(errno::NOTCAPABLE));
         assert_eq!(names(&[], "/etc/passwd"), Err(errno::NOTCAPABLE));
         assert_eq!(names(&[], "."), Ok(Vec::new()));
         assert_eq!(names(&[], ""), Err(errno::NOENT));

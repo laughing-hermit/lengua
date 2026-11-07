@@ -433,11 +433,12 @@ async fn nothing_past_the_working_folder_is_reached() {
     let outside = tempfile::tempdir().expect("a folder outside");
     std::fs::write(outside.path().join("secret.txt"), "no").expect("a file outside");
     let folder = tempfile::tempdir().expect("the working folder");
+    // A way out of the working folder, which the idea doesn't give: NOTCAPABLE.
     for name in ["../secret.txt", "a/../../secret.txt", "/secret.txt"] {
         let (text, spec) = in_folder(folder.path(), name, false);
         assert_eq!(
             exited(&run(&text, spec, Limits::default()).await),
-            2,
+            76,
             "{name}"
         );
     }
@@ -445,6 +446,7 @@ async fn nothing_past_the_working_folder_is_reached() {
         lengua::skiplog::note("this system doesn't let the test make a link");
         return;
     }
+    // A link, a name no program may use: ACCES.
     for name in ["away/secret.txt", "away"] {
         let (text, spec) = in_folder(folder.path(), name, false);
         assert_eq!(
