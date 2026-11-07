@@ -2215,10 +2215,19 @@ impl LenguaServer {
         if !unchanged {
             return Err(changed());
         }
-        // Proofs about this very build still hold; about any other, they're gone.
-        let proofs = lock
+        // Proofs about this very build still hold; about any other, they're gone. Code edited
+        // without changing its build, as by a comment, keeps them, but the lines its records
+        // name may have moved since: those records say so.
+        let edited = lock
+            .code
+            .as_ref()
+            .is_some_and(|checked| checked.sha256 != code.sha256);
+        let mut proofs = lock
             .proofs
             .filter(|proofs| proofs.executable_sha256 == code.executable_sha256);
+        if edited && let Some(kept) = &mut proofs {
+            lines_may_have_moved(kept, file);
+        }
         let lock = Lock {
             code: Some(code),
             proofs,
@@ -2523,6 +2532,22 @@ fn settled(
                 false,
             ),
         },
+    }
+}
+
+/// Notes on what `proofs` found wrong, or why they left a test unproven, once `file`, the code,
+/// is edited without changing its build, as by a comment: a record that names one of its lines
+/// says the lines may have moved since, once, and the others stay as they were.
+fn lines_may_have_moved(proofs: &mut ProofStamp, file: &str) {
+    let note = format!(
+        " ({file}'s lines as they were when the proof ran: an edit since left the build the \
+         same, but may have moved them)"
+    );
+    let names = [format!("{file} line "), format!("{file}:")];
+    for (_, found) in proofs.wrong.iter_mut().chain(proofs.unproven.iter_mut()) {
+        if names.iter().any(|name| found.contains(name.as_str())) && !found.ends_with(&note) {
+            found.push_str(&note);
+        }
     }
 }
 
@@ -3437,5 +3462,37 @@ mod tests {
         let (line, wrong) = settled(WASM_CODE_FILE, "n = 3", Some(trap), Ok(None), false);
         assert!(!wrong, "{line}");
         assert!(line.ends_with("and a real run didn't"), "{line}");
+    }
+
+    /// What a proof found, kept for main.wat edited without changing its module, says once that
+    /// the lines it names may have moved; a record that names no line stays as it was.
+    #[test]
+    fn a_record_kept_across_an_edit_says_its_lines_may_have_moved() {
+        let mut proofs = ProofStamp {
+            executable_sha256: Sha256Hex::of(b"module"),
+            proven: Vec::new(),
+            bounded: Vec::new(),
+            solvers: "z3 and cvc5".to_owned(),
+            wrong: vec![
+                ("B1".into(), "trapped at main.wat line 30".into()),
+                ("B2".into(), "it printed 3".into()),
+            ],
+            unproven: vec![("B3".into(), "main.wat line 94: a float".into())],
+        };
+        lines_may_have_moved(&mut proofs, WASM_CODE_FILE);
+        let once = proofs.clone();
+        lines_may_have_moved(&mut proofs, WASM_CODE_FILE);
+        assert_eq!(proofs, once);
+        let moved = " (main.wat's lines as they were when the proof ran: an edit since left the \
+                     build the same, but may have moved them)";
+        assert_eq!(
+            proofs.wrong[0].1,
+            format!("trapped at main.wat line 30{moved}")
+        );
+        assert_eq!(proofs.wrong[1].1, "it printed 3");
+        assert_eq!(
+            proofs.unproven[0].1,
+            format!("main.wat line 94: a float{moved}")
+        );
     }
 }
