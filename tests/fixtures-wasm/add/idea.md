@@ -8,10 +8,10 @@ parameters:
   - { name: a, type: integer, required: true, from: argument 1 }
   - { name: b, type: integer, required: true, from: argument 2 }
 executor:
-  resource: lengua run
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
   receipt: [stdout, stderr, exit]
 attester:
-  resource: lengua check
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 The program adds two whole numbers between `-1000000000` and `1000000000`.
