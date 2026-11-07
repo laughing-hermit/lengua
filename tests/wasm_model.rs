@@ -128,7 +128,11 @@ fn check(wat: &str, case: &Case) -> Result<(), String> {
         None => now(),
     };
     let given = Given {
-        args: case.args.iter().map(|arg| arg.as_bytes().to_vec()).collect(),
+        args: case
+            .args
+            .iter()
+            .map(|arg| arg.as_bytes().to_vec())
+            .collect(),
         env: case.env.clone(),
         stdin,
         files: files
@@ -361,7 +365,11 @@ impl<'a> Test<'a> {
     /// What the model is given for it.
     fn given(&self) -> Given {
         Given {
-            args: self.args.iter().map(|arg| arg.as_bytes().to_vec()).collect(),
+            args: self
+                .args
+                .iter()
+                .map(|arg| arg.as_bytes().to_vec())
+                .collect(),
             env: self.env.clone(),
             stdin: self.stdin.as_bytes().to_vec(),
             files: self
@@ -554,7 +562,10 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
             let model = match run(&module, &test.given()) {
                 Ok(model) => model,
                 Err(why) => {
-                    failures.push(format!("{shown}, {}: the model couldn't run: {why}", test.name));
+                    failures.push(format!(
+                        "{shown}, {}: the model couldn't run: {why}",
+                        test.name
+                    ));
                     continue;
                 }
             };
@@ -797,8 +808,7 @@ async fn a_wait_beside_the_listener_ends_in_the_model_as_on_the_engine() {
         assert!(
             alike,
             "{timeout} {flags}: the engine {:?}, the model {:?}",
-            engine.end,
-            model.end
+            engine.end, model.end
         );
     }
 }

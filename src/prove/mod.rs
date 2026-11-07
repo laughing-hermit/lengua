@@ -2647,9 +2647,11 @@ impl Program for wasm::Module {
         _state: State<wasm::Wasm>,
         _hook: std::rc::Rc<exec::induction::Hook>,
     ) -> Result<State<wasm::Wasm>, String> {
-        Err("the WebAssembly model takes no read loop's head yet: every length by induction is \
+        Err(
+            "the WebAssembly model takes no read loop's head yet: every length by induction is \
              the prover's third step"
-            .into())
+                .into(),
+        )
     }
 }
 
