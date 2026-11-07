@@ -203,11 +203,22 @@ fn show(bytes: &[u8]) -> String {
     }
 }
 
-/// How a run ended, naming the line of a failed assertion.
+/// How a run ended, naming the line of a failed assertion in main.s.
 #[must_use]
 pub fn explain_end(run: &Run, assertions: &BTreeMap<i64, usize>, limits: Limits) -> String {
+    explain_end_in(run, assertions, limits, NATIVE_CODE)
+}
+
+/// [`explain_end`] for a program whose code file is `code`: main.s, or main.wat.
+#[must_use]
+pub fn explain_end_in(
+    run: &Run,
+    assertions: &BTreeMap<i64, usize>,
+    limits: Limits,
+    code: &str,
+) -> String {
     match run.end {
-        End::Exited(code) if code == i32::from(ASSERTION_EXIT_CODE) => {
+        End::Exited(status) if status == i32::from(ASSERTION_EXIT_CODE) => {
             let none = BTreeMap::new();
             let no_folders = BTreeSet::new();
             let expected = Expected {
@@ -222,7 +233,7 @@ pub fn explain_end(run: &Run, assertions: &BTreeMap<i64, usize>, limits: Limits)
                 now: 0,
                 random_supplied: None,
                 serves: false,
-                code: NATIVE_CODE,
+                code,
             };
             compare(run, &expected, assertions).unwrap_or_else(|| run.end.describe(limits))
         }

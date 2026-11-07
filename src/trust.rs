@@ -176,6 +176,45 @@ pub fn without_lengua_verified(text: &str) -> Option<String> {
     Some(page.splice(block.start, block.end, &lines))
 }
 
+/// lengua's entries in `text`'s `verified`, as YAML reads the frontmatter, in order: each one
+/// whose `by` starts `lengua/` and that names an idea and a code by their `sha256:` hashes.
+/// `verified` may be a list or one mapping. An entry that doesn't read so is none of lengua's.
+#[must_use]
+pub fn lengua_entries(text: &str) -> Vec<Verified> {
+    /// The key lengua reads, as any YAML.
+    #[derive(Deserialize)]
+    struct Front {
+        /// The list of entries, or one.
+        verified: Option<serde_json::Value>,
+    }
+    let Some(page) = Page::of(text) else {
+        return Vec::new();
+    };
+    let yaml = page.lines[1..page.close].concat();
+    let Ok(front) = serde_saphyr::from_str::<Front>(&yaml) else {
+        return Vec::new();
+    };
+    let entries = match front.verified {
+        Some(serde_json::Value::Array(entries)) => entries,
+        Some(entry @ serde_json::Value::Object(_)) => vec![entry],
+        _ => Vec::new(),
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let field = |key: &str| entry.get(key).and_then(serde_json::Value::as_str);
+            let by = field("by").filter(|by| by.starts_with(LENGUA_PREFIX))?;
+            let hash = |key: &str| Sha256Hex::parse(field(key)?.strip_prefix("sha256:")?);
+            Some(Verified {
+                by: by.to_owned(),
+                at: field("at").unwrap_or_default().to_owned(),
+                idea: hash("idea")?,
+                code: hash("code")?,
+            })
+        })
+        .collect()
+}
+
 /// A page's lines, each with its ending, and its frontmatter's top-level keys.
 struct Page<'a> {
     /// The lines, each with its line ending.
@@ -1226,6 +1265,29 @@ mod tests {
         assert_eq!(without_lengua_verified(&others), None);
         assert_eq!(without_lengua_verified(IDEA), None);
         assert_eq!(without_lengua_verified("# Purpose\n"), None);
+    }
+
+    /// lengua's entries read back as they were written, in a list beside others or as a bare
+    /// mapping; an entry without both hashes, or someone else's, is none of lengua's.
+    #[test]
+    fn reads_lengua_s_entries_back() {
+        assert!(lengua_entries(IDEA).is_empty());
+        assert!(lengua_entries("# Purpose\n").is_empty());
+        let once = with_lengua_verified(IDEA, &lengua());
+        assert_eq!(lengua_entries(&once), [lengua()]);
+        let others = with(IDEA, &format!("verified:\n  - {ANA}\n"));
+        assert!(lengua_entries(&others).is_empty());
+        let both = with_lengua_verified(&others, &lengua());
+        assert_eq!(lengua_entries(&both), [lengua()]);
+        let bare = with(IDEA, &format!("verified: {}\n", lengua().item()));
+        assert_eq!(lengua_entries(&bare), [lengua()]);
+        let unhashed = with(
+            IDEA,
+            &format!("verified:\n  - {{ by: {ACTOR}, at: 2026-11-06T23:00:00Z }}\n"),
+        );
+        assert!(lengua_entries(&unhashed).is_empty());
+        let without = without_lengua_verified(&both).expect("lengua's entry was there");
+        assert!(lengua_entries(&without).is_empty());
     }
 
     /// A flow collection's comments each go on a line of their own, after the entry they follow,

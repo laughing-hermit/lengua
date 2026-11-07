@@ -519,6 +519,9 @@ pub struct Here<'a> {
     pub connections: &'a [job::Made],
     /// Where compiled modules are kept.
     pub cache: Option<&'a Path>,
+    /// The build the module comes from, when there is one: a trap is then placed on its line
+    /// of main.wat.
+    pub built: Option<&'a crate::wasm::text::Built>,
 }
 
 /// Runs the module `wasm` here, attached to this process's own streams, as `lengua-mcp run` does
@@ -618,7 +621,7 @@ fn run_on_this_thread(wasm: &[u8], here: &Here<'_>) -> io::Result<End> {
     let run = run_of(
         done(0, executed, Vec::new()),
         (Ok(BTreeMap::new()), BTreeSet::new()),
-        |_| None,
+        |offset| here.built.and_then(|built| built.line_at(offset)),
     );
     Ok(run.end)
 }
