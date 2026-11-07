@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use lengua::prove::wasm::{Ended, Given, Module, Ran, run};
 use lengua::runner::{End, Limits, Run, Trap};
-use lengua::supply::Supply;
+use lengua::supply::{Supply, Time};
 use lengua::testfile::{Case as Sample, Example, TestSuite};
 use lengua::wasm::job::unhex;
 use lengua::wasm::{Policy, Pool, Program, Spec};
@@ -717,5 +717,88 @@ async fn the_memory_grows_in_the_model_as_on_the_engine() {
         let model = run(&module, &Given::default()).expect("the model runs it");
         let found = differences(&engine, &model);
         assert!(found.is_empty(), "{memory}: {}", found.join("; "));
+    }
+}
+
+/// Waits with poll_oneoff on the listener, which no client calls, and on the time of day's
+/// clock, for TIMEOUT nanoseconds, or till that reading where FLAGS is 1; then exits with the
+/// first event's own word: 2, the clock's.
+const WAITS: &str = r#"(module
+  (import "wasi_snapshot_preview1" "poll_oneoff"
+    (func $poll (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    ;; A read on descriptor 4, the listener, with the word 1.
+    (i64.store (i32.const 1280) (i64.const 1))
+    (i32.store8 (i32.const 1288) (i32.const 1))
+    (i32.store (i32.const 1296) (i32.const 4))
+    ;; The time of day's clock, with the word 2.
+    (i64.store (i32.const 1328) (i64.const 2))
+    (i32.store8 (i32.const 1336) (i32.const 0))
+    (i32.store (i32.const 1344) (i32.const 0))
+    (i64.store (i32.const 1352) (i64.const TIMEOUT))
+    (i32.store16 (i32.const 1368) (i32.const FLAGS))
+    (drop (call $poll (i32.const 1280) (i32.const 1216) (i32.const 2) (i32.const 1064)))
+    (call $exit (i32.wrap_i64 (i64.load (i32.const 1216))))))
+"#;
+
+/// A wait on poll_oneoff beside the listener, which no client calls, ends in the model as on the
+/// engine, the test's clock at a second: a wait of a second, and a time the clock has passed,
+/// come, and the program exits with the clock's word; a wait of 5 seconds, past a test's time
+/// limit, and a time still to come on the test's clock never do, so the engine stops the run at
+/// the limit, and in the model the run waits for what doesn't come.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wait_beside_the_listener_ends_in_the_model_as_on_the_engine() {
+    let pool = Pool::new(launcher(), None);
+    let policy = Policy {
+        clock: true,
+        listens: true,
+        ..Policy::default()
+    };
+    let reading = Time {
+        seconds: 1,
+        nanoseconds: 0,
+    };
+    let supply = Supply {
+        random: None,
+        clock: vec![reading],
+    };
+    let given = Given {
+        clock: vec![(1, 0)],
+        listens: true,
+        ..Given::default()
+    };
+    let waits = [
+        ("1000000000", "0"),
+        ("500000000", "1"),
+        ("5000000000", "0"),
+        ("2000000000", "1"),
+    ];
+    for (timeout, flags) in waits {
+        let text = WAITS.replace("TIMEOUT", timeout).replace("FLAGS", flags);
+        let program = Program::of_text(&text).unwrap_or_else(|problem| panic!("{problem}"));
+        let spec = Spec {
+            supply: Some(&supply),
+            listen: Some((0, false)),
+            ..Spec::new(&[], &[], policy)
+        };
+        let engine = pool
+            .run(&program, spec, Limits::default())
+            .await
+            .expect("the engine runs it");
+        let module = Module::new(program.built(), policy).expect("the model");
+        let model = run(&module, &given).expect("the model runs it");
+        let alike = match (engine.end, &model.end) {
+            (End::Exited(code), Ended::Exit(exit)) => code == i32::from(*exit),
+            (End::TimedOut, Ended::Other(why)) => why.contains("poll_oneoff"),
+            _ => false,
+        };
+        assert!(
+            alike,
+            "{timeout} {flags}: the engine {:?}, the model {:?}",
+            engine.end,
+            model.end
+        );
     }
 }
