@@ -4,7 +4,9 @@
 
 use super::host::{self, Handle};
 use super::image::{Arity, Binary, Function, Module, NOWHERE, Op, Unary};
-use super::{Frame, Label, Wasm, fill, function_label, induction, memory, must_not};
+use super::{
+    Frame, Label, Wasm, fill, float, function_label, induction, memory, must_not, vector,
+};
 use crate::prove::exec::{End, MAX_STEPS, State, Step, TOO_LONG, unsupported};
 use crate::prove::term::{Pool, Term};
 
@@ -215,6 +217,28 @@ fn operate(
             }
             let result = binary(pool, *operation, a, b);
             state.core.stack.push(result);
+        }
+        Op::Float(operation) => {
+            let core = &mut state.core;
+            let b = pop(core)?;
+            let (a, b) = if float::binary(*operation) {
+                (pop(core)?, b)
+            } else {
+                (b, b)
+            };
+            let result = float::operate(pool, *operation, a, b);
+            core.stack.push(result);
+        }
+        Op::Vector(operation) => {
+            let core = &mut state.core;
+            let start = core
+                .stack
+                .len()
+                .checked_sub(vector::operands(operation))
+                .ok_or_else(malformed)?;
+            let operands: Vec<Term> = core.stack.drain(start..).collect();
+            let result = vector::operate(pool, operation, &operands).ok_or_else(malformed)?;
+            core.stack.push(result);
         }
         Op::Other(name) => {
             let what = format!("`{name}`, which the WebAssembly model doesn't follow yet");
@@ -462,9 +486,9 @@ fn call(
     // input can be cut.
     if module.fill == Some(index)
         && state.world.every_cut
-        && fill::whole(module, state, pool)?
+        && let Some(step) = fill::whole(module, state, pool)?
     {
-        return Ok(Step::Next);
+        return Ok(step);
     }
     module.enter(index);
     let core = &mut state.core;

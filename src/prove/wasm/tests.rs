@@ -1140,10 +1140,10 @@ fn with_edits(source: &str, edits: &[(&str, &str)]) -> String {
         .fold(source.to_owned(), |text, edit| edited(&text, *edit))
 }
 
-/// What reads its input whole, for every way it can be cut, and where the read loop is: a
-/// program that reads standard input only through `$fill` to its end does, and its loop's call
-/// of `$fill` is the head; one with no loop has none; a `$fill` that stops at a newline, a
-/// program on the network, and a loop of the program's own fd_read don't.
+/// What a proof reads whole, for every way its input can be cut, and where the read loop is: a
+/// program that reads standard input only through `$fill` does, its stop byte known, and its
+/// loop's call of `$fill` is the head; one with no loop has none; a program on the network, and a
+/// loop of the program's own fd_read, don't.
 #[test]
 fn a_read_loop_is_found_where_a_program_reads_its_input_whole() {
     let streams = module(&fixture("cat-stream", "main.wat"), blocks_of("cat-stream").1);
@@ -1155,10 +1155,11 @@ fn a_read_loop_is_found_where_a_program_reads_its_input_whole() {
     assert!(cat.reads_whole());
     let why = cat.read_loop_head().expect_err("cat has no read loop");
     assert!(why.contains("no loop"), "{why}");
-    // The vector template's `$fill` stops at a newline, which a cut changes.
+    // The vector template's `$fill` stops at a newline: every place it can stop is a run.
     let (_, shouts) = blocks_in(&asset("vector-template-wat-idea.md"));
     let shout = module(&asset("vector-template.wat"), shouts);
-    assert!(!shout.reads_whole());
+    assert!(shout.reads_whole());
+    assert!(shout.read_loop_head().is_err());
     // The echo server is on the network.
     let echo = module(&fixture("echo", "main.wat"), blocks_of("echo").1);
     assert!(!echo.reads_whole());
@@ -1317,4 +1318,341 @@ fn proves_one_whole_read_for_every_length_its_idea_allows() {
         ),
         "{verdict:?}"
     );
+}
+
+/// Checks of WebAssembly's floats in the model, each an i32 that is 1 when it gets them right:
+/// rounding to nearest, ties to even; every NaN an operation gives canonical, the positive quiet
+/// one with no payload, as lengua's engine makes it; `abs`, `neg` and `copysign` on the sign bit
+/// alone, a NaN's too; `min` and `max` with a NaN and with zeros of both signs; the roundings;
+/// the comparisons, a NaN unordered; the conversions both ways, `trunc_sat` saturating and 0 for
+/// a NaN; and a float's bits through memory.
+const FLOAT_CHECKS: &[&str] = &[
+    "(f64.eq (f64.add (f64.const 0.1) (f64.const 0.2)) (f64.const 0x1.3333333333334p-2))",
+    "(f32.eq (f32.mul (f32.const 3) (f32.const 0.5)) (f32.const 1.5))",
+    "(i64.eq (i64.reinterpret_f64 (f64.add (f64.const nan:0x4) (f64.const 1))) (i64.const \
+     0x7ff8000000000000))",
+    "(i64.eq (i64.reinterpret_f64 (f64.div (f64.const 0) (f64.const 0))) (i64.const \
+     0x7ff8000000000000))",
+    "(i32.eq (i32.reinterpret_f32 (f32.sqrt (f32.const -1))) (i32.const 0x7fc00000))",
+    "(i64.eq (i64.reinterpret_f64 (f64.neg (f64.const nan:0x4))) (i64.const \
+     0xfff0000000000004))",
+    "(i64.eq (i64.reinterpret_f64 (f64.abs (f64.const -nan))) (i64.const 0x7ff8000000000000))",
+    "(f64.eq (f64.copysign (f64.const 3) (f64.const -0)) (f64.const -3))",
+    "(i64.eq (i64.reinterpret_f64 (f64.min (f64.const 0) (f64.const -0))) (i64.const \
+     0x8000000000000000))",
+    "(i64.eq (i64.reinterpret_f64 (f64.max (f64.const -0) (f64.const 0))) (i64.const 0))",
+    "(i64.eq (i64.reinterpret_f64 (f64.min (f64.const 1) (f64.const nan))) (i64.const \
+     0x7ff8000000000000))",
+    "(f64.eq (f64.max (f64.const 1) (f64.const 2)) (f64.const 2))",
+    "(f32.eq (f32.min (f32.const -1) (f32.const 2)) (f32.const -1))",
+    "(f64.eq (f64.nearest (f64.const 2.5)) (f64.const 2))",
+    "(f64.eq (f64.nearest (f64.const 3.5)) (f64.const 4))",
+    "(i64.eq (i64.reinterpret_f64 (f64.nearest (f64.const -0.5))) (i64.const \
+     0x8000000000000000))",
+    "(f64.eq (f64.ceil (f64.const 1.2)) (f64.const 2))",
+    "(f64.eq (f64.floor (f64.const -1.2)) (f64.const -2))",
+    "(f64.eq (f64.trunc (f64.const -1.7)) (f64.const -1))",
+    "(f64.ne (f64.const nan) (f64.const nan))",
+    "(i32.eqz (f64.eq (f64.const nan) (f64.const nan)))",
+    "(f64.eq (f64.const 0) (f64.const -0))",
+    "(f64.lt (f64.const -1) (f64.const 0))",
+    "(i32.eqz (f64.lt (f64.const nan) (f64.const 0)))",
+    "(i32.eqz (f64.ge (f64.const nan) (f64.const 0)))",
+    "(f64.le (f64.const 1) (f64.const 1))",
+    "(f64.ge (f64.const 2) (f64.const 1))",
+    "(f64.gt (f64.const 2) (f64.const 1))",
+    "(f64.eq (f64.convert_i32_s (i32.const -1)) (f64.const -1))",
+    "(f64.eq (f64.convert_i32_u (i32.const -1)) (f64.const 4294967295))",
+    "(f64.eq (f64.convert_i64_u (i64.const -1)) (f64.const 18446744073709551616))",
+    "(f64.eq (f64.convert_i64_s (i64.const -9)) (f64.const -9))",
+    "(f32.eq (f32.convert_i64_s (i64.const 16777217)) (f32.const 16777216))",
+    "(f32.eq (f32.convert_i32_u (i32.const -1)) (f32.const 4294967296))",
+    "(f32.eq (f32.demote_f64 (f64.const 0.1)) (f32.const 0.1))",
+    "(i32.eq (i32.reinterpret_f32 (f32.demote_f64 (f64.const nan:0x4))) (i32.const \
+     0x7fc00000))",
+    "(f64.eq (f64.promote_f32 (f32.const 0.5)) (f64.const 0.5))",
+    "(i32.eq (i32.trunc_sat_f64_s (f64.const nan)) (i32.const 0))",
+    "(i32.eq (i32.trunc_sat_f64_s (f64.const 1e10)) (i32.const 2147483647))",
+    "(i32.eq (i32.trunc_sat_f64_s (f64.const -1e10)) (i32.const -2147483648))",
+    "(i32.eq (i32.trunc_sat_f64_s (f64.const -2.9)) (i32.const -2))",
+    "(i32.eq (i32.trunc_sat_f64_u (f64.const -2.9)) (i32.const 0))",
+    "(i32.eq (i32.trunc_sat_f64_u (f64.const 4294967296)) (i32.const -1))",
+    "(i32.eq (i32.trunc_sat_f64_u (f64.const 3e9)) (i32.const 3000000000))",
+    "(i64.eq (i64.trunc_sat_f64_u (f64.const 18446744073709551616)) (i64.const -1))",
+    "(i64.eq (i64.trunc_sat_f64_u (f64.const 9.3e18)) (i64.const 9300000000000000000))",
+    "(i64.eq (i64.trunc_sat_f32_s (f32.const -inf)) (i64.const -9223372036854775808))",
+    "(i64.eq (i64.trunc_sat_f64_s (f64.nearest (f64.const 1234.5))) (i64.const 1234))",
+    "(i32.eq (i32.reinterpret_f32 (f32.const 1)) (i32.const 0x3f800000))",
+    "(f64.store (i32.const 1024) (f64.const 1.5)) (f64.eq (f64.load (i32.const 1024)) \
+     (f64.const 1.5))",
+];
+
+/// Checks of SIMD128's operators in the model, each an i32 that is 1 when it gets them right:
+/// splats and lanes, a vector's bits through memory, the bitwise operators and tests, bitmasks,
+/// lane arithmetic, wrapping and saturating, the comparisons, shifts modulo the lane's width,
+/// and the shuffles.
+const VECTOR_CHECKS: &[&str] = &[
+    "(i32.eq (i8x16.extract_lane_u 3 (i8x16.splat (i32.const 0x1ff))) (i32.const 0xff))",
+    "(i32.eq (i8x16.extract_lane_s 3 (i8x16.splat (i32.const 0x1ff))) (i32.const -1))",
+    "(i32.eq (i16x8.extract_lane_u 7 (i16x8.splat (i32.const 0x18000))) (i32.const 0x8000))",
+    "(i64.eq (i64x2.extract_lane 1 (i64x2.splat (i64.const -3))) (i64.const -3))",
+    "(f64.eq (f64x2.extract_lane 1 (f64x2.splat (f64.const 1.5))) (f64.const 1.5))",
+    "(i32.eq (i32x4.extract_lane 2 (i32x4.replace_lane 2 (i32x4.splat (i32.const 0)) (i32.const \
+     7))) (i32.const 7))",
+    "(v128.store (i32.const 1024) (v128.const i32x4 1 2 3 4)) (i32.eq (i32.load offset=8 \
+     (i32.const 1024)) (i32.const 3))",
+    "(i64.store (i32.const 1024) (i64.const 0x0807060504030201)) (i32.eq (i8x16.extract_lane_u \
+     5 (v128.load (i32.const 1024))) (i32.const 6))",
+    "(i32.eq (i8x16.bitmask (i8x16.eq (v128.const i8x16 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 \
+     16) (i8x16.splat (i32.const 3)))) (i32.const 4))",
+    "(i32.eq (i16x8.bitmask (v128.const i16x8 -1 0 -1 0 0 0 0 -1)) (i32.const 0x85))",
+    "(i32.eq (i32x4.bitmask (v128.const i32x4 0 -1 0 -1)) (i32.const 10))",
+    "(i32.eq (i32x4.extract_lane 1 (i32x4.add (v128.const i32x4 1 2 3 4) (v128.const i32x4 10 \
+     20 30 40))) (i32.const 22))",
+    "(i32.eq (i8x16.extract_lane_u 0 (i8x16.sub (i8x16.splat (i32.const 1)) (i8x16.splat \
+     (i32.const 2)))) (i32.const 255))",
+    "(i32.eq (i16x8.extract_lane_u 0 (i16x8.mul (i16x8.splat (i32.const 300)) (i16x8.splat \
+     (i32.const 300)))) (i32.const 24464))",
+    "(i32.eq (i8x16.extract_lane_s 0 (i8x16.add_sat_s (i8x16.splat (i32.const 100)) \
+     (i8x16.splat (i32.const 100)))) (i32.const 127))",
+    "(i32.eq (i8x16.extract_lane_s 0 (i8x16.sub_sat_s (i8x16.splat (i32.const -100)) \
+     (i8x16.splat (i32.const 100)))) (i32.const -128))",
+    "(i32.eq (i8x16.extract_lane_u 0 (i8x16.add_sat_u (i8x16.splat (i32.const 200)) \
+     (i8x16.splat (i32.const 100)))) (i32.const 255))",
+    "(i32.eq (i8x16.extract_lane_u 0 (i8x16.sub_sat_u (i8x16.splat (i32.const 1)) \
+     (i8x16.splat (i32.const 2)))) (i32.const 0))",
+    "(i32.eq (i8x16.extract_lane_s 0 (i8x16.min_s (i8x16.splat (i32.const -1)) (i8x16.splat \
+     (i32.const 1)))) (i32.const -1))",
+    "(i32.eq (i8x16.extract_lane_u 0 (i8x16.min_u (i8x16.splat (i32.const -1)) (i8x16.splat \
+     (i32.const 1)))) (i32.const 1))",
+    "(i32.eq (i8x16.extract_lane_u 0 (i8x16.avgr_u (i8x16.splat (i32.const 255)) \
+     (i8x16.splat (i32.const 254)))) (i32.const 255))",
+    "(i32.eq (i8x16.extract_lane_s 0 (i8x16.abs (i8x16.splat (i32.const -128)))) (i32.const \
+     -128))",
+    "(i32.eq (i32x4.extract_lane 0 (i32x4.neg (i32x4.splat (i32.const 5)))) (i32.const -5))",
+    "(i32.eq (i8x16.bitmask (i8x16.lt_u (v128.const i8x16 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 \
+     15) (i8x16.splat (i32.const 4)))) (i32.const 15))",
+    "(i32.eq (i8x16.bitmask (i8x16.le_u (v128.const i8x16 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 \
+     15) (i8x16.splat (i32.const 4)))) (i32.const 31))",
+    "(i32.eq (i8x16.bitmask (i8x16.gt_s (v128.const i8x16 0 -1 2 -3 4 -5 6 -7 8 -9 10 -11 12 \
+     -13 14 -15) (i8x16.splat (i32.const 0)))) (i32.const 0x5554))",
+    "(i32.eq (i8x16.extract_lane_u 0 (i8x16.shl (i8x16.splat (i32.const 1)) (i32.const 9))) \
+     (i32.const 2))",
+    "(i32.eq (i8x16.extract_lane_s 0 (i8x16.shr_s (i8x16.splat (i32.const 0x80)) (i32.const \
+     7))) (i32.const -1))",
+    "(i32.eq (i8x16.extract_lane_u 0 (i8x16.shr_u (i8x16.splat (i32.const 0x80)) (i32.const \
+     7))) (i32.const 1))",
+    "(i32.eq (i32x4.extract_lane 3 (i32x4.shl (i32x4.splat (i32.const 1)) (i32.const 33))) \
+     (i32.const 2))",
+    "(v128.any_true (v128.const i64x2 0 1))",
+    "(i32.eqz (v128.any_true (v128.const i64x2 0 0)))",
+    "(i32.eqz (i32x4.all_true (v128.const i32x4 1 2 0 4)))",
+    "(i8x16.all_true (i8x16.splat (i32.const 1)))",
+    "(i32.eq (i32x4.extract_lane 0 (v128.bitselect (i32x4.splat (i32.const 0xff00ff00)) \
+     (i32x4.splat (i32.const 0x00ff00ff)) (i32x4.splat (i32.const 0xffff0000)))) (i32.const \
+     0xff0000ff))",
+    "(i32.eq (i32x4.extract_lane 0 (v128.andnot (i32x4.splat (i32.const 0xff)) (i32x4.splat \
+     (i32.const 0x0f)))) (i32.const 0xf0))",
+    "(i32.eq (i32x4.extract_lane 0 (v128.xor (v128.not (i32x4.splat (i32.const 0))) \
+     (i32x4.splat (i32.const 1)))) (i32.const -2))",
+    "(i32.eq (i8x16.extract_lane_u 5 (i8x16.shuffle 0 1 2 3 4 21 6 7 8 9 10 11 12 13 14 15 \
+     (i8x16.splat (i32.const 1)) (i8x16.splat (i32.const 2)))) (i32.const 2))",
+    "(i32.eq (i8x16.extract_lane_u 0 (i8x16.swizzle (v128.const i8x16 10 11 12 13 14 15 16 17 \
+     18 19 20 21 22 23 24 25) (v128.const i8x16 3 200 0 0 0 0 0 0 0 0 0 0 0 0 0 0))) \
+     (i32.const 13))",
+    "(i32.eq (i8x16.extract_lane_u 1 (i8x16.swizzle (v128.const i8x16 10 11 12 13 14 15 16 17 \
+     18 19 20 21 22 23 24 25) (v128.const i8x16 3 200 0 0 0 0 0 0 0 0 0 0 0 0 0 0))) \
+     (i32.const 0))",
+];
+
+#[test]
+fn floats_and_vectors_follow_webassemblys_semantics() {
+    let mut wrong = Vec::new();
+    for body in FLOAT_CHECKS.iter().chain(VECTOR_CHECKS) {
+        let text = exits_with("", body);
+        let done = ran(&text, Policy::default(), &Given::default());
+        if done.end != Ended::Exit(1) {
+            wrong.push(format!("{body}: {:?}", done.end));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// In a proof, `$fill` to a newline stops after any newline that has arrived, as a read can end
+/// there, or reads on to the end: a run each, the one that stops short noting where.
+#[test]
+fn a_fill_to_a_stop_byte_stops_wherever_a_read_can_end() {
+    let reads = Policy {
+        standard_input: true,
+        ..Policy::default()
+    };
+    let module = module(LINE, reads);
+    let mut pool = Pool::default();
+    let stdin = exec::bytes(&mut pool, b"ab\ncd\n");
+    let start = begin(&module, &mut pool, &[], &[], stdin).for_every_cut();
+    let runs = exec::explore(&module, start, &mut pool, &mut Anything, 8).expect("the runs");
+    let mut outputs: Vec<(Vec<u8>, Option<usize>)> = runs
+        .iter()
+        .map(|run| {
+            let out = run
+                .world
+                .stdout
+                .iter()
+                .filter_map(|byte| {
+                    pool.constant(*byte)
+                        .and_then(|value| u8::try_from(value).ok())
+                })
+                .collect();
+            (out, run.world.fill_cut)
+        })
+        .collect();
+    outputs.sort();
+    assert_eq!(
+        outputs,
+        [(b"ab\n".to_vec(), Some(3)), (b"ab\ncd\n".to_vec(), None)]
+    );
+}
+
+/// A file of a fixture with `edits` made.
+fn edited_fixture(name: &str, edits: &[(&str, &str)]) -> String {
+    with_edits(&fixture(name, "main.wat"), edits)
+}
+
+/// The line counter with a buffer of 64 bytes, four vectors of 16, so the base's every final
+/// piece goes by quickly: the model merges no loop's exits, so a piece's length is a path.
+const LINES_AT_64: [(&str, &str); 3] = [
+    (
+        "(global $buffer.size i32 (i32.const 4096))",
+        "(global $buffer.size i32 (i32.const 64))",
+    ),
+    (
+        "(global $CHUNKS i32 (i32.const 256))",
+        "(global $CHUNKS i32 (i32.const 4))",
+    ),
+    (
+        "(global $LAST_CHUNK i32 (i32.const 4080))",
+        "(global $LAST_CHUNK i32 (i32.const 48))",
+    ),
+];
+
+/// The line counter that keeps the last buffer-full's count alone.
+const COUNTS_THE_LAST_FULL_ALONE: (&str, &str) = (
+    "(i64.add (local.get $lines)\n                (i64.extend_i32_u (call $count_lines \
+     (local.get $got)))))",
+    "(i64.extend_i32_u (call $count_lines (local.get $got))))",
+);
+
+/// Induction over counts in WebAssembly: a line count kept in an i64 local, grown by each
+/// buffer-full's newlines, counted 16 bytes at a time with SIMD128's compare and bitmask, is
+/// proven for every length the idea allows; a count of the last buffer-full alone, which looks
+/// like the count so far only the first time round, has no induction.
+#[test]
+fn proves_a_vector_line_count_for_every_length_by_induction() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_of("lines");
+    let source = edited_fixture("lines", &LINES_AT_64);
+    let built = build(&source).expect("lines builds");
+    let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(900));
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(64),
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+    let last_only = edited(&source, COUNTS_THE_LAST_FULL_ALONE);
+    let built = build(&last_only).expect("it builds");
+    let module = Module::new(&built, policy).expect("the model");
+    let step = crate::prove::induction::step(&module, &blocks[0], &stream_budget(300));
+    assert!(step.is_err(), "{step:?}");
+}
+
+/// The word and line counter with a buffer of 64 bytes, as [`LINES_AT_64`].
+const COUNT_AT_64: [(&str, &str); 3] = [
+    (
+        "(global $buffer.size i32 (i32.const 65536))",
+        "(global $buffer.size i32 (i32.const 64))",
+    ),
+    (
+        "(global $CHUNKS i32 (i32.const 4096))",
+        "(global $CHUNKS i32 (i32.const 4))",
+    ),
+    (
+        "(global $LAST_CHUNK i32 (i32.const 65520))",
+        "(global $LAST_CHUNK i32 (i32.const 48))",
+    ),
+];
+
+/// count, whose words in a buffer-full depend on whether the one before ended inside a word, and
+/// whose lanes past the input's end its bitmask masks off: the step reads two buffer-fulls and
+/// checks the second's counts after the first's last byte, whatever the program keeps of it, so
+/// `wc -lw` in SIMD128 is proven for every length.
+#[test]
+fn proves_a_vector_word_count_for_every_length_by_induction() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_of("count");
+    let built = build(&edited_fixture("count", &COUNT_AT_64)).expect("count builds");
+    let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(1200));
+    assert!(
+        matches!(
+            verdict,
+            Verdict::Proven {
+                bound: None,
+                induction: Some(64),
+                lookback: 1,
+                ..
+            }
+        ),
+        "{verdict:?}"
+    );
+}
+
+/// The hypotenuse computes in doubles, which the model takes as the engine does, and every block
+/// of it is proven for every input in range: the whole sides and the decimal ones, the usage
+/// line, a side that isn't a number and one out of range.
+#[test]
+fn proves_the_hypotenuse_in_doubles() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_of("hypotenuse");
+    let built = build(&fixture("hypotenuse", "main.wat")).expect("hypotenuse builds");
+    for (number, block) in blocks.iter().enumerate() {
+        let verdict = prove_wasm(&built, policy, block, &stream_budget(900));
+        assert!(proven(&verdict), "hypotenuse's block {number}: {verdict:?}");
+    }
+}
+
+/// The vector template finds its line's newline 16 bytes at a time and capitalizes it 16 bytes
+/// at a time: every generated block of it is proven for every input in range, however its input
+/// arrives, its `$fill` stopping wherever a read can end after a newline.
+#[test]
+fn proves_the_vector_templates_behaviors() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_in(&asset("vector-template-wat-idea.md"));
+    let built = build(&asset("vector-template.wat")).expect("the template builds");
+    for (number, block) in blocks.iter().enumerate() {
+        let verdict = prove_wasm(&built, policy, block, &stream_budget(900));
+        assert!(
+            matches!(
+                verdict,
+                Verdict::Proven {
+                    bound: None,
+                    cut_any_way: true,
+                    ..
+                }
+            ),
+            "the vector template's block {number}: {verdict:?}"
+        );
+    }
 }

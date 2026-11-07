@@ -54,10 +54,11 @@ const SIGN: &str = ";; The sign, for a value below zero.\n    (if (i64.lt_s (loc
 /// add's sum.
 const SUM: &str = "(i64.add (local.get $a) (i64.load (global.get $number)))";
 
-/// The sum through a 64-bit float and back, on one line: exact for every sum add's idea allows,
-/// and an operator the WebAssembly model doesn't follow.
-const FLOAT_SUM: &str = "(i64.trunc_sat_f64_s (f64.convert_i64_s (i64.add (local.get $a) \
-                         (i64.load (global.get $number)))))";
+/// The sum through a lane of 64-bit floats and back, on one line: exact for every sum add's idea
+/// allows, and an operator the WebAssembly model doesn't follow, a float lane's arithmetic.
+const FLOAT_SUM: &str = "(i64.trunc_sat_f64_s (f64x2.extract_lane 0 (f64x2.add (f64x2.splat \
+                         (f64.convert_i64_s (local.get $a))) (f64x2.splat (f64.convert_i64_s \
+                         (i64.load (global.get $number)))))))";
 
 /// How long the sessions and the attester that prove give the proofs: far more than add's numbers
 /// of up to three digits need on any runner.
@@ -652,9 +653,9 @@ async fn a_planted_wrong_constant_is_a_counterexample_through_check() {
     assert_eq!(said.lines().last(), Some("not attested"), "{said}");
 }
 
-/// A program the WebAssembly model refuses, here for the float add's sum goes through, passes its
-/// tests, and its proof stays tested, not proven, with the model's reason on its line of
-/// main.wat; the lock records no proof.
+/// A program the WebAssembly model refuses, here for the float lanes add's sum goes through,
+/// passes its tests, and its proof stays tested, not proven, with the model's reason on its line
+/// of main.wat; the lock records no proof.
 #[tokio::test]
 async fn a_program_the_model_refuses_stays_tested_not_proven() {
     let session = Session::proving_for(Protocol::Discover, 60).await;
@@ -663,9 +664,9 @@ async fn a_program_the_model_refuses_stays_tested_not_proven() {
     program.write("main.wat", &floats);
     let done = session.settle(&program).await;
     assert_eq!(done["state"], "done", "{done}");
-    let line = line_of(&floats, "(f64.convert_i64_s");
+    let line = line_of(&floats, "(f64x2.add");
     let refused = format!(
-        "generated B1: tested, not proven: main.wat line {line}: `F64ConvertI64S`, which the \
+        "generated B1: tested, not proven: main.wat line {line}: `F64x2Add`, which the \
          WebAssembly model doesn't follow yet"
     );
     assert_eq!(done["proofs"][0], refused, "{done}");
