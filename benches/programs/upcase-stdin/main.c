@@ -14,10 +14,11 @@ int main(void) {
         if (got == 0) {
             return 0;
         }
+        /* Every byte is stored, a letter or not, so the compiler can vectorize the loop: a store
+           under a condition would need masked stores, which WebAssembly has none of. */
         for (bench_ssize i = 0; i < got; i++) {
-            if (buffer[i] >= 'a' && buffer[i] <= 'z') {
-                buffer[i] -= 'a' - 'A';
-            }
+            unsigned char c = buffer[i];
+            buffer[i] = c >= 'a' && c <= 'z' ? (unsigned char)(c - ('a' - 'A')) : c;
         }
         if (bench_write_all(1, buffer, (size_t)got) != 0) {
             return 4;

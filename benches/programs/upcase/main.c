@@ -24,10 +24,11 @@ int main(int argc, char **argv) {
         fprintf(stderr, "upcase: %s is larger than 1048576 bytes\n", argv[1]);
         return 3;
     }
+    /* Every byte is stored, a letter or not, so the compiler can vectorize the loop: a store
+       under a condition would need masked stores, which WebAssembly has none of. */
     for (size_t i = 0; i < length; i++) {
-        if (buffer[i] >= 'a' && buffer[i] <= 'z') {
-            buffer[i] -= 'a' - 'A';
-        }
+        unsigned char c = buffer[i];
+        buffer[i] = c >= 'a' && c <= 'z' ? (unsigned char)(c - ('a' - 'A')) : c;
     }
     FILE *output = fopen(argv[2], "wb");
     if (output == NULL || fwrite(buffer, 1, length, output) != length || fclose(output) != 0) {

@@ -24,10 +24,11 @@ int main(void) {
         fputs("shout: the input is longer than 1048576 bytes\n", stderr);
         return 1;
     }
+    /* Every byte is stored, a letter or not, so the compiler can vectorize the loop: a store
+       under a condition would need masked stores, which WebAssembly has none of. */
     for (size_t i = 0; i < length; i++) {
-        if (buffer[i] >= 'a' && buffer[i] <= 'z') {
-            buffer[i] -= 'a' - 'A';
-        }
+        unsigned char c = buffer[i];
+        buffer[i] = c >= 'a' && c <= 'z' ? (unsigned char)(c - ('a' - 'A')) : c;
     }
     return bench_write_all(1, buffer, length) == 0 ? 0 : 2;
 }
