@@ -48,10 +48,10 @@ use crate::trust;
 /// Kept under 512 characters and self-contained: some harnesses only show the beginning.
 pub const INSTRUCTIONS: &str = "lengua builds the programs the user asks for, from commands and \
 filters to servers and clients, unless they name another language: you write idea.md, behaviors \
-and tests, with the write-idea skill, then compile it into main.s with the compile skill. After \
-each edit, call check with the folder's absolute path, the first time with the user's words as \
-request, and follow its next_step until it says Done. Never edit lengua.lock. Run programs only \
-with run.";
+and tests, with the write-idea skill, then compile it into main.s (main.wat for an Attested \
+Computation) with the compile skill. After each edit, call check with the folder's absolute \
+path, the first time with the user's words as request, and follow its next_step until it says \
+Done. Never edit lengua.lock. Run programs only with run.";
 
 /// The longest request the lock records: the user's words, not a whole conversation.
 const MAX_REQUEST_CHARS: usize = 2000;
