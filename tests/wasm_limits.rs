@@ -11,7 +11,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use lengua::connect::Reach;
-use lengua::runner::{End, Limits, Run};
+use lengua::runner::{End, Limits, OPEN_FILES, Run};
 use lengua::supply::{Supply, Time};
 use lengua::wasm::engine::Setup;
 use lengua::wasm::host::limits::TABLE_ELEMENTS;
@@ -539,6 +539,52 @@ async fn a_test_supplies_the_clock_and_random_bytes() {
     let ran = run(&text, spec, Limits::default()).await;
     assert_eq!(exited(&ran), 42);
     assert_eq!(ran.random_asked, Some(1));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_takes_only_as_many_subscriptions_and_buffers_as_a_system_would() {
+    let poll = r#"(import "wasi_snapshot_preview1" "poll_oneoff"
+    (func $poll (param i32 i32 i32 i32) (result i32)))"#;
+    // `count` subscriptions of zeros at 0, each a wait of no time on the time of day, and their
+    // events at 512 KiB.
+    let polls = |count: u64| {
+        format!(
+            r#"(module {poll} {EXIT} (memory (export "memory") 16)
+  (func (export "_start")
+    (call $exit (call $poll (i32.const 0) (i32.const 524288) (i32.const {count})
+      (i32.const 1000000)))))"#
+        )
+    };
+    let clock = Policy {
+        clock: true,
+        ..Policy::default()
+    };
+    // A read and a write for each descriptor a program may hold: every wait ends at once.
+    let most = polls(2 * OPEN_FILES);
+    let ran = run(&most, Spec::new(&[], &[], clock), Limits::default()).await;
+    assert_eq!(exited(&ran), 0);
+    // One more is INVAL, before lengua keeps any of them.
+    let more = polls(2 * OPEN_FILES + 1);
+    let ran = run(&more, Spec::new(&[], &[], clock), Limits::default()).await;
+    assert_eq!(exited(&ran), 28);
+    // As many buffers as every system's writev takes, all empty, and one more.
+    let writes = |count: u32| {
+        module(
+            &[WRITE, EXIT],
+            &format!(
+                r#"(func (export "_start")
+    (call $exit (call $fd_write (i32.const 1) (i32.const 0) (i32.const {count})
+      (i32.const 16384))))"#
+            ),
+        )
+    };
+    let none = Policy::default();
+    let most = writes(1024);
+    let ran = run(&most, Spec::new(&[], &[], none), Limits::default()).await;
+    assert_eq!(exited(&ran), 0);
+    let more = writes(1025);
+    let ran = run(&more, Spec::new(&[], &[], none), Limits::default()).await;
+    assert_eq!(exited(&ran), 28);
 }
 
 #[tokio::test(flavor = "multi_thread")]

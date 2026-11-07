@@ -10,6 +10,11 @@ use super::fds::Descriptor;
 use super::{Fail, Host, memory};
 use crate::wasm::wasi::{errno, event, size};
 
+/// The most subscriptions one call takes: a wait to read and one to write on each descriptor a
+/// program may hold, as a system's `poll` takes no more than the descriptors a process may hold.
+/// lengua keeps what it reads of each while the call waits, so a call can't make it keep more.
+const MOST: u64 = 2 * crate::runner::OPEN_FILES;
+
 /// What one subscription waits for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Wanted {
@@ -99,8 +104,8 @@ fn until(host: &Host, wanted: Wanted, started: Instant) -> Result<Duration, u16>
 ///
 /// # Errors
 ///
-/// `INVAL` for no subscriptions or one of a kind WASI doesn't have, a buffer outside memory, and
-/// a stop at the deadline.
+/// `INVAL` for no subscriptions, more than a read and a write for each descriptor a program may
+/// hold, or one of a kind WASI doesn't have; a buffer outside memory, and a stop at the deadline.
 pub fn poll_oneoff(
     host: &mut Host,
     memory: &mut [u8],
@@ -110,7 +115,7 @@ pub fn poll_oneoff(
     out: u32,
 ) -> Result<(), Fail> {
     memory::check(memory, out, 4)?;
-    if count == 0 {
+    if count == 0 || u64::from(count) > MOST {
         return Err(Fail::Errno(errno::INVAL));
     }
     let outside = Fail::Stop(super::Stop::OutsideMemory);
