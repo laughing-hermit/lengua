@@ -427,7 +427,8 @@ async fn a_failing_test_is_reported_as_native_ones_are() {
     program.write("main.wat", &asserted);
     let failed = session.settle(&program).await;
     assert_eq!(failed["state"], "tests_failed", "{failed}");
-    let line = line_of(&asserted, "(i32.const 9)");
+    // The planted assertion's own line: `(i32.const 9)` alone is first `$NINE`'s.
+    let line = line_of(&asserted, "(call $assert_fail (i32.const 9))");
     assert!(
         any_line(
             &failed["problems"],
