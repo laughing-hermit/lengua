@@ -236,8 +236,10 @@ A server's listener is descriptor 4, and lengua numbers each connection it accep
 - **Read what has come** with one `sock_recv` an event, never in a loop of its own: a client that
   holds the rest of its request must not stop the others. Keep each slot's line and its length
   in regions, and answer once the request is whole, by its newline, blank line or length.
-- **Answer and close**: `sock_send`, then `fd_close`, then free the slot. Test each call's error
-  number, even where every path goes on the same way.
+- **Answer and close**: `sock_send` until the whole answer has gone, then `fd_close`, then free
+  the slot. A send takes what goes at once, which may be only the first part of a buffer: bound
+  the count it wrote, and send the rest, as `$finish` does once `$shift` has moved the rest to the
+  line's start. Test each call's error number, even where every path goes on the same way.
 
 ## What the build and the checker refuse
 

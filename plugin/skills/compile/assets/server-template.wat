@@ -3,7 +3,8 @@
 ;; (references/power-of-10-webassembly.md): one loop that never ends waits with poll_oneoff on
 ;; every client's connection and, while a slot is free, on the listener that lengua binds and
 ;; hands over as descriptor 4. It takes each new connection with sock_accept, reads what has come
-;; with sock_recv, and sends a line back with sock_send once it is whole.
+;; with sock_recv, and sends a line back with sock_send once it is whole, in as many sends as it
+;; takes.
 (module
   (import "wasi_snapshot_preview1" "poll_oneoff"
     (func $poll_oneoff (param i32 i32 i32 i32) (result i32)))
@@ -67,7 +68,7 @@
   ;; What one sock_recv brought, and each slot's line so far, LINE_MAX bytes a slot.
   (global $chunk i32 (i32.const 2048))  ;; shared: receive reads into it, append copies it out
   (global $chunk.size i32 (i32.const 1024))
-  (global $lines i32 (i32.const 3072))  ;; shared: append writes the lines, finish sends them
+  (global $lines i32 (i32.const 3072))  ;; shared: append and shift write lines, finish sends them
   (global $lines.size i32 (i32.const 8192))
 
   ;; Waits, for as long as it runs, on every client's connection and, while a slot is free, on
@@ -256,31 +257,49 @@
         (br_if $byte (local.get $left)))))
 
   ;; Sends slot $slot's line back on its connection, closes the connection, and frees the slot for
-  ;; the next client.
+  ;; the next client. A send takes what goes at once, which may be only the first part of the
+  ;; line: shift then moves the rest to the line's start, and the next send takes it on.
   (func $finish (param $slot i32)
     (local $err i32)
     (local $fd i32)
     (local $len i32)
+    (local $went i32)
+    (local $left i32)
     (if (i32.ge_u (local.get $slot) (global.get $CLIENTS))
       (then (call $assert_fail (i32.const 14)) unreachable))
     (local.set $fd
       (i32.load (i32.add (global.get $fds) (i32.mul (local.get $slot) (global.get $WORD)))))
     (local.set $len
       (i32.load (i32.add (global.get $lengths) (i32.mul (local.get $slot) (global.get $WORD)))))
-    (if (i32.gt_u (local.get $len) (global.get $LINE_MAX))
-      (then (call $assert_fail (i32.const 15)) unreachable))
     (block $close
-      ;; A client that sent nothing gets nothing back.
-      (br_if $close (i32.eqz (local.get $len)))
-      (i32.store (global.get $iovec)
-        (i32.add (global.get $lines) (i32.mul (local.get $slot) (global.get $LINE_MAX))))
-      (i32.store offset=4 (global.get $iovec) (local.get $len))
-      ;; A line of at most 1024 bytes goes in one send on a new connection; whatever the send
-      ;; takes, the connection closes after it, as the native template's one write does.
-      (local.set $err
-        (call $sock_send (local.get $fd) (global.get $iovec) (global.get $ONE_BUFFER)
-          (global.get $NO_FLAGS) (global.get $sent)))
-      (br_if $close (local.get $err)))
+      ;; Each send takes at least one of the LINE_MAX bytes a line holds at most.
+      (local.set $left (global.get $LINE_MAX))
+      (loop $send  ;; bound: 1024
+        ;; What is left of the line, bounded each time round, as the loop changes it.
+        (if (i32.gt_u (local.get $len) (global.get $LINE_MAX))
+          (then (call $assert_fail (i32.const 15)) unreachable))
+        ;; A client that sent nothing gets nothing back.
+        (br_if $close (i32.eqz (local.get $len)))
+        ;; The buffer starts where the slot's line does, as the rules check where a buffer
+        ;; starts apart from how long it is.
+        (i32.store (global.get $iovec)
+          (i32.add (global.get $lines) (i32.mul (local.get $slot) (global.get $LINE_MAX))))
+        (i32.store offset=4 (global.get $iovec) (local.get $len))
+        (local.set $err
+          (call $sock_send (local.get $fd) (global.get $iovec) (global.get $ONE_BUFFER)
+            (global.get $NO_FLAGS) (global.get $sent)))
+        (br_if $close (local.get $err))
+        ;; The bound of the count the send wrote first, as receive bounds its count.
+        (local.set $went (i32.load (global.get $sent)))
+        (if (i32.gt_u (local.get $went) (local.get $len))
+          (then (call $assert_fail (i32.const 16)) unreachable))
+        ;; The whole line has gone; or nothing has, and a send that takes nothing never ends.
+        (br_if $close (i32.eq (local.get $went) (local.get $len)))
+        (br_if $close (i32.eqz (local.get $went)))
+        (call $shift (local.get $slot) (local.get $went) (local.get $len))
+        (local.set $len (i32.sub (local.get $len) (local.get $went)))
+        (local.set $left (i32.sub (local.get $left) (i32.const 1)))
+        (br_if $send (local.get $left))))
     (block $closed
       (local.set $err (call $fd_close (local.get $fd)))
       ;; A connection that doesn't close is lengua's to drop: the slot is free all the same.
@@ -288,4 +307,38 @@
     (i32.store (i32.add (global.get $fds) (i32.mul (local.get $slot) (global.get $WORD)))
       (global.get $FREE))
     (i32.store (i32.add (global.get $lengths) (i32.mul (local.get $slot) (global.get $WORD)))
-      (i32.const 0))))
+      (i32.const 0)))
+
+  ;; Moves the bytes from $from to $len of slot $slot's line to the line's start, one at a time,
+  ;; each place checked: finish gives what a send left of the line.
+  (func $shift (param $slot i32) (param $from i32) (param $len i32)
+    (local $base i32)
+    (local $k i32)
+    (local $i i32)
+    (local $src i32)
+    (local $dst i32)
+    (local $left i32)
+    (if (i32.ge_u (local.get $slot) (global.get $CLIENTS))
+      (then (call $assert_fail (i32.const 17)) unreachable))
+    (if (i32.gt_u (local.get $len) (global.get $LINE_MAX))
+      (then (call $assert_fail (i32.const 18)) unreachable))
+    (if (i32.gt_u (local.get $from) (local.get $len))
+      (then (call $assert_fail (i32.const 19)) unreachable))
+    (local.set $base (i32.mul (local.get $slot) (global.get $LINE_MAX)))
+    (block $done
+      (local.set $left (global.get $LINE_MAX))
+      (loop $byte  ;; bound: 1024
+        ;; The place in the line of the next byte to move.
+        (local.set $i (i32.add (local.get $from) (local.get $k)))
+        (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+        (local.set $src (i32.add (local.get $base) (local.get $i)))
+        (local.set $dst (i32.add (local.get $base) (local.get $k)))
+        (if (i32.ge_u (local.get $src) (global.get $lines.size))
+          (then (call $assert_fail (i32.const 20)) unreachable))
+        (if (i32.ge_u (local.get $dst) (global.get $lines.size))
+          (then (call $assert_fail (i32.const 21)) unreachable))
+        (i32.store8 (i32.add (global.get $lines) (local.get $dst))
+          (i32.load8_u (i32.add (global.get $lines) (local.get $src))))
+        (local.set $k (i32.add (local.get $k) (i32.const 1)))
+        (local.set $left (i32.sub (local.get $left) (i32.const 1)))
+        (br_if $byte (local.get $left))))))
