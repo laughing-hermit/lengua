@@ -74,7 +74,11 @@ $cpu = switch ($native) {
 }
 $computer = "windows-$cpu"
 if ($computer -ne $target) {
-    [Console]::Error.WriteLine("This archive is lengua for $(Get-Described $target), and this computer is $(Get-Described $computer): use the archive for $computer, if lengua is built for it (linux-x86_64, linux-aarch64, macos-aarch64, windows-x86_64 or windows-aarch64).")
+    if ($computer -in 'windows-x86_64', 'windows-aarch64') {
+        [Console]::Error.WriteLine("This archive is lengua for $(Get-Described $target), and this computer is $(Get-Described $computer): use the archive for $computer, with its install.ps1.")
+    } else {
+        [Console]::Error.WriteLine("This archive is lengua for $(Get-Described $target), and this computer is $(Get-Described $computer), which lengua isn't built for: it is built for linux-x86_64, linux-aarch64, macos-aarch64, windows-x86_64 and windows-aarch64.")
+    }
     exit 1
 }
 
