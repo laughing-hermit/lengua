@@ -18,10 +18,15 @@
 //! features, or by a rule, which names what it found on main.wat's line. Any attempt that isn't
 //! refused is a bug in lengua to fix before anything else. Nothing here needs more than this
 //! crate, so every attempt runs on every computer.
+//!
+//! And the ways to let a secret decide how a program runs, each a change to secret-equal, whose
+//! idea names standard input as secret: a branch, a `select` or an early exit on what it
+//! compared, an address, a division, a float, a length, a copy or an exit code made from it,
+//! and a read up to a stop byte. The secret rule refuses each.
 
 use lengua::checker::Rule;
 use lengua::checker::wasm::{Context, check};
-use lengua::idea::{Network, constraints};
+use lengua::idea::{Network, Source, constraints};
 use lengua::wasm::text::build;
 
 /// The WebAssembly main template, which most attempts change.
@@ -697,6 +702,161 @@ fn a_loop_that_runs_forever_must_take_connections() {
         violation.rule == Rule::Loops && violation.in_file("main.wat").contains("`sock_accept`")
     });
     assert!(found, "not refused: {:#?}", report.lines());
+}
+
+/// secret-equal, whose idea names standard input as secret: the program the secret attempts
+/// change.
+const SECRET_EQUAL: &str = include_str!("fixtures-wasm/secret-equal/main.wat");
+
+/// Where secret-equal has made its answer's mask, and its newline: the secret attempts put their
+/// code after it.
+const ANSWERED: &str = "          (i32.store8 offset=4 (global.get $out) (global.get $NEWLINE))\n";
+
+/// A way to let a secret decide how secret-equal runs: what it tries, its change, and what the
+/// secret rule's report line says.
+type SecretAttempt = (&'static str, Edit, &'static str);
+
+/// The ways to let a secret decide, each with what the secret rule says of it.
+const SECRET_ATTEMPTS: &[SecretAttempt] = &[
+    (
+        "a branch on the differences",
+        (
+            "          (local.set $mask\n            (i32.sub (i32.const 0) (i32.eqz (call \
+             $differ (local.get $half)))))\n",
+            "          (if (i32.eqz (call $differ (local.get $half)))\n            (then \
+             (local.set $mask (global.get $ALL_ONES))))\n",
+        ),
+        "the condition of this `if` is computed from a secret",
+    ),
+    (
+        "a select on the differences",
+        (
+            "            (i32.sub (i32.const 0) (i32.eqz (call $differ (local.get $half)))))\n",
+            "            (select (global.get $ALL_ONES) (i32.const 0) (i32.eqz (call $differ \
+             (local.get $half)))))\n",
+        ),
+        "the condition of this `select` is computed from a secret",
+    ),
+    (
+        "an early exit when a byte differs",
+        (
+            "        (local.set $i (i32.add (local.get $i) (i32.const 1)))\n",
+            "        (br_if $done (local.get $bits))\n        (local.set $i (i32.add (local.get \
+             $i) (i32.const 1)))\n",
+        ),
+        "this `br_if` repeats or leaves the loop on line",
+    ),
+    (
+        "an address made from the answer",
+        (
+            ANSWERED,
+            "          (i32.store8 offset=4 (global.get $out) (global.get $NEWLINE))\n          \
+             (drop (i32.load8_u (i32.add (global.get $text) (i32.and (local.get $mask) \
+             (global.get $ODD)))))\n",
+        ),
+        "the address of this `i32.load8_u` is computed from a secret",
+    ),
+    (
+        "a division by the answer",
+        (
+            ANSWERED,
+            "          (i32.store8 offset=4 (global.get $out) (global.get $NEWLINE))\n          \
+             (drop (i32.div_u (global.get $MAX_HALF) (i32.or (local.get $mask) (global.get \
+             $ODD))))\n",
+        ),
+        "an operand of this `i32.div_u` is computed from a secret",
+    ),
+    (
+        "a float made from the answer",
+        (
+            ANSWERED,
+            "          (i32.store8 offset=4 (global.get $out) (global.get $NEWLINE))\n          \
+             (drop (f64.convert_i32_u (local.get $mask)))\n",
+        ),
+        "an operand of this `f64.convert_i32_u` is computed from a secret",
+    ),
+    (
+        "a copy as long as the answer says",
+        (
+            ANSWERED,
+            "          (i32.store8 offset=4 (global.get $out) (global.get $NEWLINE))\n          \
+             (memory.copy (global.get $out) (global.get $text) (i32.and (local.get $mask) \
+             (global.get $ODD)))\n",
+        ),
+        "the length of this `memory.copy` is computed from a secret",
+    ),
+    (
+        "an answer written as long as it says",
+        (
+            "(call $write_all (global.get $STDOUT) (global.get $out) (global.get $out.size))",
+            "(call $write_all (global.get $STDOUT) (global.get $out) (i32.sub (global.get \
+             $out.size) (i32.and (local.get $mask) (global.get $ODD))))",
+        ),
+        "argument 3 of this call of $write_all is computed from a secret",
+    ),
+    (
+        "an exit code made from the answer",
+        (
+            "(call $proc_exit (global.get $EXIT_OK))",
+            "(call $proc_exit (i32.and (local.get $mask) (global.get $ODD)))",
+        ),
+        "argument 1 of this call of $proc_exit is computed from a secret",
+    ),
+    (
+        "a read up to a newline",
+        (
+            "              (global.get $READ_TO_END)))",
+            "              (global.get $NEWLINE)))",
+        ),
+        "`$fill` reads a secret here up to its stop byte",
+    ),
+];
+
+/// secret-equal passes every rule, the secret rule's too, and each way to let its secret decide
+/// how it runs is refused by the secret rule; without its `- Secret:` line, nothing is.
+#[test]
+fn every_way_to_let_a_secret_decide_is_refused() {
+    let (uses, network) = constraints(&["standard input"], "").expect("secret-equal's idea");
+    let report_of = |text: &str, secrets: &[Source]| {
+        let built = build(text).unwrap_or_else(|problem| panic!("it builds: {problem}"));
+        check(
+            text,
+            &built,
+            &Context {
+                uses: &uses,
+                network: &network,
+                secrets,
+            },
+        )
+    };
+    let secret = [Source::StandardInput];
+    let report = report_of(SECRET_EQUAL, &secret);
+    assert!(report.passed(), "{:#?}", report.lines());
+    for (name, (from, to), needle) in SECRET_ATTEMPTS {
+        assert!(
+            SECRET_EQUAL.contains(from),
+            "{name}: {from:?} isn't in secret-equal"
+        );
+        let text = SECRET_EQUAL.replacen(from, to, 1);
+        let report = report_of(&text, &secret);
+        let found = report.violations.iter().any(|violation| {
+            violation.rule == Rule::Secrets && violation.in_file("main.wat").contains(needle)
+        });
+        assert!(
+            found,
+            "{name}: no secret violation with {needle:?} in {:#?}",
+            report.lines()
+        );
+        let public = report_of(&text, &[]);
+        assert!(
+            public
+                .violations
+                .iter()
+                .all(|violation| violation.rule != Rule::Secrets),
+            "{name}: {:#?}",
+            public.lines()
+        );
+    }
 }
 
 /// The template the attempts change passes, so each refusal is the attempt's.
