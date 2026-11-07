@@ -152,7 +152,9 @@ async fn add_goes_from_its_request_to_done_and_runs() {
         // The lock stamps main.wat as it is, its module and the engine, in format 6, and no
         // proof.
         let lock = program.read("lengua.lock").expect("the lock");
-        let module = lengua::wasm::text::build(CODE).expect("main.wat builds").wasm;
+        let module = lengua::wasm::text::build(CODE)
+            .expect("main.wat builds")
+            .wasm;
         assert!(
             lock.contains("version = 6\ndialect = \"webassembly 1\"\n"),
             "{lock}"
@@ -168,7 +170,8 @@ async fn add_goes_from_its_request_to_done_and_runs() {
         );
         assert!(lock.contains("unsafe_blocks = 0\n"), "{lock}");
         assert!(
-            lock.contains("target = \"webassembly\"\nfeatures = [") && lock.contains("\"bulk-memory\""),
+            lock.contains("target = \"webassembly\"\nfeatures = [")
+                && lock.contains("\"bulk-memory\""),
             "{lock}"
         );
         assert!(!lock.contains("[proofs]"), "{lock}");
@@ -191,7 +194,9 @@ async fn add_goes_from_its_request_to_done_and_runs() {
         assert_eq!(program.read("idea.md").as_deref(), Some(idea.as_str()));
 
         // run runs it on the user's inputs, in a worker of its own.
-        let sum = session.call_ok("run", with_args(&program, &["2", "3"])).await;
+        let sum = session
+            .call_ok("run", with_args(&program, &["2", "3"]))
+            .await;
         assert_eq!(sum["stdout"], "5\n", "{sum}");
         assert_eq!(sum["exit_code"], 0, "{sum}");
         assert_eq!(sum["ended"], "exit code 0", "{sum}");
@@ -232,8 +237,15 @@ async fn a_shell_runs_and_attests_the_checked_program() {
     assert_eq!(said.lines().last(), Some("attested"), "{said}");
     assert!(said.contains("tests: passed all 202 test runs"), "{said}");
     assert!(said.contains("main.wat: follows every rule"), "{said}");
-    assert!(said.contains(&format!("verified: {}", trust::ACTOR)), "{said}");
-    assert_eq!(program.read("lengua.lock"), lock, "the attester wrote nothing");
+    assert!(
+        said.contains(&format!("verified: {}", trust::ACTOR)),
+        "{said}"
+    );
+    assert_eq!(
+        program.read("lengua.lock"),
+        lock,
+        "the attester wrote nothing"
+    );
 
     // Edited, main.wat isn't the code lengua's entry names, and run refuses it.
     program.write("main.wat", &format!("{CODE};; edited\n"));
@@ -372,7 +384,9 @@ async fn a_broken_rule_is_reported_on_its_line() {
     assert!(
         any_line(
             &report["problems"],
-            &format!("rule 8 (named constants) main.wat:{line}: the exit status is the bare number 0")
+            &format!(
+                "rule 8 (named constants) main.wat:{line}: the exit status is the bare number 0"
+            )
         ),
         "{report}"
     );

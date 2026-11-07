@@ -268,7 +268,8 @@ mod tests {
 
     #[test]
     fn a_copy_laid_out_otherwise_reads_the_same() {
-        let copy = "(module (func $parse   (param i32)\n\n (result i32) (; why ;) (local.get 0) ) )";
+        let copy =
+            "(module (func $parse   (param i32)\n\n (result i32) (; why ;) (local.get 0) ) )";
         assert_eq!(functions(copy)[0].body, functions(TEXT)[0].body);
         let changed = "(module (func $parse (param i32) (result i32) (local.get 1)))";
         assert_ne!(functions(changed)[0].body, functions(TEXT)[0].body);

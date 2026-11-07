@@ -798,12 +798,7 @@ impl LenguaServer {
                 timeout: BACKGROUND_LIMIT,
                 ..Limits::default()
             };
-            return Ok(Json(ended_report(
-                &result,
-                &entry.assertions,
-                limits,
-                entry.code,
-            )));
+            return Ok(Json(ended_report(&result, &entry.assertions, limits, entry.code)));
         }
         // An Attested Computation's code is main.wat, which runs as WebAssembly.
         if wat::attested_folder(&folder)? {
