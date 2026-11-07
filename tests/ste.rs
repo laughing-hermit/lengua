@@ -5,7 +5,12 @@
 use std::path::{Path, PathBuf};
 
 /// The folders that hold idea files, from the repository's root.
-const FOLDERS: [&str; 3] = ["examples", "tests/fixtures", "plugin/skills"];
+const FOLDERS: [&str; 4] = [
+    "examples",
+    "tests/fixtures",
+    "tests/fixtures-wasm",
+    "plugin/skills",
+];
 
 /// Every idea file under `folder`, in order: each `idea.md`, each `*-idea.md`, and the write-idea
 /// skill's `idea-template.md`.

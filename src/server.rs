@@ -34,6 +34,7 @@ use crate::testdiff;
 use crate::testfile::{self, TestSuite};
 use crate::testrun;
 use crate::toolchain::Toolchain;
+use crate::trust;
 
 /// Server-wide guidance sent to every client at startup.
 ///
@@ -906,7 +907,7 @@ impl LenguaServer {
             Recording::Unchanged => {}
         }
         self.held.lock().await.remove(folder.path());
-        let idea_hash = Sha256Hex::of(idea_text.as_bytes());
+        let idea_hash = trust::idea_hash(idea_text.as_bytes());
 
         // main.s, checked against the rules, then tested and proven in the background.
         let Some(code) = read_optional(folder, CODE_FILE)? else {
@@ -1076,7 +1077,7 @@ impl LenguaServer {
                  words that ask for the program or the change."
             ));
         }
-        let current = Sha256Hex::of(text.as_bytes());
+        let current = trust::idea_hash(text.as_bytes());
         let _writing = self.lock_writes.lock().await;
         let key = Key::load_or_create(&self.data_dir).map_err(|error| error.to_string())?;
         let previous = match lock::read(folder.path(), Some(&key)) {
@@ -1956,11 +1957,11 @@ impl LenguaServer {
         let kept = |hash: &Sha256Hex| {
             std::fs::read_to_string(stamped_copy(self.data_dir.path(), hash))
                 .ok()
-                .filter(|text| Sha256Hex::of(text.as_bytes()) == *hash)
+                .filter(|text| trust::idea_hash(text.as_bytes()) == *hash)
         };
         let unseen = "the first version isn't on this machine to compare";
         let idea = match std::fs::read_to_string(folder.file(IDEA_FILE)) {
-            Ok(now) if Sha256Hex::of(now.as_bytes()) != lock.request.idea => {
+            Ok(now) if trust::idea_hash(now.as_bytes()) != lock.request.idea => {
                 Some(kept(&lock.request.idea).map_or_else(
                     || format!("{IDEA_FILE} changed; {unseen}"),
                     |before| testdiff::line_diff(&before, &now),
@@ -2005,7 +2006,7 @@ impl LenguaServer {
             .flatten()
             .ok_or_else(changed)?;
         let unchanged = lock.idea.sha256 == *idea
-            && Sha256Hex::of(read_idea(folder)?.as_bytes()) == *idea
+            && trust::idea_hash(read_idea(folder)?.as_bytes()) == *idea
             && header::code_hash(read_code(folder)?.as_bytes()) == code.sha256;
         if !unchanged {
             return Err(changed());
@@ -2778,7 +2779,7 @@ fn violation_lines(report: &checker::Report) -> Vec<String> {
 fn write_stamped_copy(data_dir: &DataDir, file: &Sha256Hex, text: &str) -> Result<(), String> {
     use std::io::Write as _;
     let path = stamped_copy(data_dir.path(), file);
-    if std::fs::read(&path).is_ok_and(|kept| Sha256Hex::of(&kept) == *file) {
+    if std::fs::read(&path).is_ok_and(|kept| trust::idea_hash(&kept) == *file) {
         return Ok(());
     }
     let failed = |error: std::io::Error| {
