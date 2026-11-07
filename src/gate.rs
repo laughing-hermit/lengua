@@ -11,7 +11,9 @@
 //!
 //! `KNOWN_BEHIND`, a file at the repository's root, names the rows where lengua isn't ahead yet,
 //! and it may only shrink: a run that finds lengua not ahead on a row the list doesn't name, or
-//! ahead on one it names, fails ([`ratchet`]), and says the list that would pass ([`proposal`]).
+//! ahead on one it names, fails ([`ratchet`]), and says the list that would pass ([`proposal`]);
+//! and a change to the list that names a row the list before it didn't fails the run too
+//! ([`grown`]), as the bench holds each change in the list's history to the list it replaced.
 
 use std::cmp::Ordering;
 use std::fmt::Write as _;
@@ -278,6 +280,22 @@ pub struct Listed {
 }
 
 impl Listed {
+    /// The row on line `line` that `row`, the line without its reason, writes: four fields, or
+    /// none.
+    fn of(line: usize, row: &str) -> Option<Self> {
+        let fields: Vec<&str> = row.split_whitespace().collect();
+        let [target, workload, versus, measure] = fields.as_slice() else {
+            return None;
+        };
+        Some(Self {
+            target: (*target).to_owned(),
+            workload: (*workload).to_owned(),
+            versus: (*versus).to_owned(),
+            measure: (*measure).to_owned(),
+            line,
+        })
+    }
+
     /// Whether it names the row and measure given.
     #[must_use]
     pub fn names(&self, target: &str, workload: &str, versus: &str, measure: Measure) -> bool {
@@ -318,8 +336,7 @@ impl KnownBehind {
             if row.is_empty() {
                 continue;
             }
-            let fields: Vec<&str> = row.split_whitespace().collect();
-            let [target, workload, versus, measure] = fields.as_slice() else {
+            let Some(listed) = Listed::of(number, row) else {
                 problems.push(format!(
                     "KNOWN_BEHIND line {number}: a row is a target, a workload, a version and a \
                      measure, each a name or *, not {row:?}"
@@ -329,10 +346,10 @@ impl KnownBehind {
             let known = |value: &str, names: &[&str]| value == "*" || names.contains(&value);
             let measures = Measure::ALL.map(Measure::name);
             for (value, names, what) in [
-                (*target, &TARGETS[..], "target"),
-                (*workload, &WORKLOADS[..], "workload"),
-                (*versus, &VERSUS[..], "version"),
-                (*measure, measures.as_slice(), "measure"),
+                (listed.target.as_str(), &TARGETS[..], "target"),
+                (listed.workload.as_str(), &WORKLOADS[..], "workload"),
+                (listed.versus.as_str(), &VERSUS[..], "version"),
+                (listed.measure.as_str(), measures.as_slice(), "measure"),
             ] {
                 if !known(value, names) {
                     problems.push(format!(
@@ -341,19 +358,27 @@ impl KnownBehind {
                     ));
                 }
             }
-            rows.push(Listed {
-                target: (*target).to_owned(),
-                workload: (*workload).to_owned(),
-                versus: (*versus).to_owned(),
-                measure: (*measure).to_owned(),
-                line: number,
-            });
+            rows.push(listed);
         }
         if problems.is_empty() {
             Ok(Self { rows })
         } else {
             Err(problems)
         }
+    }
+
+    /// The rows of `text`, a list as an earlier commit had it, read as [`KnownBehind::parse`]
+    /// reads them but with no line refused: a name the gate no longer has names no row, and a
+    /// line that isn't four fields is no row.
+    #[must_use]
+    pub fn read(text: &str) -> Self {
+        let rows = (1..)
+            .zip(text.lines())
+            .filter_map(|(number, line)| {
+                Listed::of(number, line.split_once('#').map_or(line, |(row, _)| row))
+            })
+            .collect();
+        Self { rows }
     }
 
     /// The first line that names the row and measure given.
@@ -419,6 +444,46 @@ pub fn ratchet(known: &KnownBehind, target: &str, found: &[Found]) -> Vec<String
         }
     }
     problems
+}
+
+/// Where `after`, KNOWN_BEHIND as a change left it, names a row and measure that `before`, the
+/// list the change replaced, doesn't name: the list may only shrink, by lines taken out or made
+/// narrower, as a line that names every row of a runner is when the runner's own list takes its
+/// place. `existed` says of each name, of a runner, a workload, a version or a measure, whether
+/// the gate had it before the change: a row the gate didn't have, new with the change, isn't held
+/// to the list before it. Empty when the list didn't grow.
+#[must_use]
+pub fn grown(
+    before: &KnownBehind,
+    after: &KnownBehind,
+    existed: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    let mut grown = Vec::new();
+    let measures: Vec<Measure> = Measure::ALL
+        .into_iter()
+        .filter(|measure| existed(measure.name()))
+        .collect();
+    for target in TARGETS.into_iter().filter(|name| existed(name)) {
+        for workload in WORKLOADS.into_iter().filter(|name| existed(name)) {
+            for versus in VERSUS.into_iter().filter(|name| existed(name)) {
+                for &measure in &measures {
+                    let Some(listed) = after.naming(target, workload, versus, measure) else {
+                        continue;
+                    };
+                    if before.naming(target, workload, versus, measure).is_none() {
+                        grown.push(format!(
+                            "{target} {workload} {versus} {}: KNOWN_BEHIND line {} names the \
+                             row, which the list before it didn't: the list may only shrink, so \
+                             make lengua's program or its engine faster instead",
+                            measure.name(),
+                            listed.line
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    grown
 }
 
 /// The lines of KNOWN_BEHIND that `found`, a run's verdicts on `target`, would pass with: a line
@@ -578,6 +643,38 @@ mod tests {
         assert!(problems[0].contains("names every row"), "{problems:?}");
         // Another target's lines say nothing of this one's.
         assert_eq!(ratchet(&every, "macos-aarch64", &runs).len(), 2);
+    }
+
+    /// A change may take lines out of the list and make a line narrower, as a runner's own list
+    /// does in place of its line that names every row, but not name a row the list before it
+    /// didn't, unless the row is new to the gate.
+    #[test]
+    fn the_list_may_only_shrink() {
+        let list = |text: &str| KnownBehind::parse(text).expect("a list");
+        let every = list("linux-x86_64 * * *\nmacos-aarch64 * * *\n");
+        let narrowed = list("linux-x86_64 add c-wasm cpu\nlinux-x86_64 sort * *\n");
+        let all = |_: &str| true;
+        assert!(grown(&every, &narrowed, all).is_empty());
+        let fewer = list("linux-x86_64 sort * *\n");
+        assert!(grown(&narrowed, &fewer, all).is_empty());
+        let wider = list("linux-x86_64 add c-wasm *\nlinux-x86_64 sort * *\n");
+        let problems = grown(&narrowed, &wider, all);
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        assert!(problems[0].starts_with("linux-x86_64 add c-wasm wall:"), "{problems:?}");
+        assert!(problems[0].contains("line 1"), "{problems:?}");
+        let elsewhere = list("linux-x86_64 sort * *\nwindows-x86_64 add rust size\n");
+        assert_eq!(grown(&narrowed, &elsewhere, all).len(), 1);
+        // A workload the gate didn't have before starts with the lines it needs.
+        let new = |name: &str| name != "sort";
+        let before = list("linux-x86_64 add c-wasm cpu\n");
+        assert!(grown(&before, &narrowed, new).is_empty());
+        assert_eq!(grown(&before, &narrowed, all).len(), 24);
+        // An earlier list is read with no line refused: a name the gate no longer has names no
+        // row.
+        let text = "linux-x86_64 grep c cpu  # gone\nlinux-x86_64 add c-wasm cpu\n";
+        let old = KnownBehind::read(text);
+        assert_eq!(old.rows.len(), 2);
+        assert!(grown(&old, &list("linux-x86_64 add c-wasm cpu\n"), all).is_empty());
     }
 
     /// The repository's own KNOWN_BEHIND is a list the gate reads.

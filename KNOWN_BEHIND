@@ -12,7 +12,10 @@
 # The list may only shrink. `cargo bench --bench against_rust_and_c` fails on a runner when it finds
 # lengua behind or undecided on a row the list doesn't name, or ahead on a row it names, and it
 # writes target/bench/KNOWN_BEHIND-<runner>.txt, the rows that would pass, into the run's
-# artifacts. A row the gate can't decide is undecided, never level, and stays here.
+# artifacts. A row the gate can't decide is undecided, never level, and stays here. The bench also
+# fails when a change to this file, anywhere in the history it measures, named a row the list
+# before the change didn't: lines may be taken out or made narrower, never added or widened,
+# except for a runner, a workload, a version or a measure the gate didn't have before.
 #
 # No runner has been measured yet, so every row of each is named. Each runner's first gate run
 # then fails wherever lengua is ahead, and its KNOWN_BEHIND-<runner>.txt takes that runner's line's

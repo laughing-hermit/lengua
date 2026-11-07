@@ -133,7 +133,6 @@ jobs:
           TARGETS: ${{ inputs.targets }}
           GOLDEN_BASE: ${{ inputs.golden_base }}
           GOLDEN_BASE_RUN: ${{ inputs.golden_base_run }}
-          BENCH_AGAINST: ${{ inputs.bench_against }}
           GH_TOKEN: ${{ github.token }}
         run: |
           # A push runs the suite, the weekly run the suite, the ignored tests and the bench, a
@@ -156,11 +155,11 @@ jobs:
           case "$MODE" in
             release) include=$(jq -c '[.[] | select(.target | startswith("linux-"))]' <<< "$include") ;;
           esac
-          # A job's checkout is shallow unless it must read another commit (a bench against one).
-          depth=1
-          if [ "$MODE" = bench ] && [ -n "$BENCH_AGAINST" ]; then depth=0; fi
-          matrix=$(jq -c --argjson modes "$modes" --argjson depth "$depth" \
-            '[.[] as $t | $modes[] as $m | $t + {mode: $m, base: $t.target, qemu: false, ref: "", label: "", depth: $depth}]' <<< "$include")
+          # A job's checkout is shallow unless it must read other commits: a bench holds each change
+          # to KNOWN_BEHIND in the history to the list before it (the list may only shrink), and
+          # reads any commit it is measured against. The weekly run's bench leg too.
+          matrix=$(jq -c --argjson modes "$modes" \
+            '[.[] as $t | $modes[] as $m | $t + {mode: $m, base: $t.target, qemu: false, ref: "", label: "", depth: (if $m == "bench" then 0 else 1 end)}]' <<< "$include")
           if [ "$MODE" = golden ]; then
             # The goldens: the dispatched ref and, unless an earlier run's are reused, the base,
             # each recorded on its own runner so that the two legs run at once. The recordings are

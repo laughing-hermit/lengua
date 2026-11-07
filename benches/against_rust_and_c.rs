@@ -17,7 +17,9 @@
 //! measured. Everything the run measured goes to target/bench/results-<target>.json; the report,
 //! BENCHMARKS-<target>.md, is written from that file alone; the lines of KNOWN_BEHIND the run
 //! passes with go to target/bench/KNOWN_BEHIND-<target>.txt. The bench fails where the run and
-//! KNOWN_BEHIND disagree, and where a version can't be measured.
+//! KNOWN_BEHIND disagree, where a change in KNOWN_BEHIND's history named a row the list before it
+//! didn't (the list may only shrink, so the bench reads the repository's whole history), and
+//! where a version can't be measured.
 //!
 //! What the environment can say:
 //! - `LENGUA_BENCH_WASM`: the folder of the WebAssembly builds, target/bench-wasm when unset;
@@ -1025,6 +1027,9 @@ struct Results {
     against: Option<Against>,
     /// Where the run and KNOWN_BEHIND disagree.
     ratchet: Vec<String>,
+    /// Where KNOWN_BEHIND grew in the history of the commit measured, which it may not.
+    #[serde(default)]
+    grown: Vec<String>,
 }
 
 /// What measuring every workload shares.
@@ -1375,18 +1380,68 @@ async fn checked_here(session: &Session, root: &Path, path: &str) -> Result<Prog
     checked(session, &read("idea.md")?, &read("main.wat")?).await
 }
 
-/// The file `path` of the repository as commit `commit` had it, if it had it.
-fn at_commit(root: &Path, commit: &str, path: &str) -> Option<String> {
-    let shown = Command::new("git")
-        .arg("show")
-        .arg(format!("{commit}:{path}"))
+/// What git prints when it runs with `args` in the repository `root`, or nothing when it fails.
+fn git(root: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .args(args)
         .current_dir(root)
         .output()
         .ok()?;
-    if !shown.status.success() {
-        return None;
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    output.status.success().then_some(text)
+}
+
+/// The file `path` of the repository as commit `commit` had it, if it had it.
+fn at_commit(root: &Path, commit: &str, path: &str) -> Option<String> {
+    git(root, &["show", &format!("{commit}:{path}")])
+}
+
+/// Where `after`, KNOWN_BEHIND as a change left it, names a row that `before`, the list the
+/// change replaced, didn't, with the names the gate had before the change: those `code`, its
+/// src/gate.rs then, quotes.
+fn grown_by(before: &str, after: &str, code: &str) -> Vec<String> {
+    let existed = |name: &str| code.contains(&format!("\"{name}\""));
+    gate::grown(&KnownBehind::read(before), &KnownBehind::read(after), existed)
+}
+
+/// Where KNOWN_BEHIND grew, which it may not: each change to the list on the first parents of
+/// the commit measured, held to the list it replaced, and the list as it is now, `now`, held to
+/// HEAD's. A clone without the history can't be checked, which fails the run.
+fn grown_in_history(root: &Path, now: &str) -> Vec<String> {
+    let shallow = git(root, &["rev-parse", "--is-shallow-repository"]);
+    if shallow.as_deref().map(str::trim) != Some("false") {
+        let problem = "KNOWN_BEHIND's history can't be read: the bench needs git and the whole \
+                       history, not a shallow clone";
+        return vec![problem.to_owned()];
     }
-    Some(String::from_utf8_lossy(&shown.stdout).into_owned())
+    let log = ["log", "--first-parent", "--format=%H", "--", "KNOWN_BEHIND"];
+    let Some(changes) = git(root, &log) else {
+        return vec!["git can't list the changes to KNOWN_BEHIND".to_owned()];
+    };
+    let mut grown = Vec::new();
+    if let Some(head) = at_commit(root, "HEAD", "KNOWN_BEHIND")
+        && head != now
+    {
+        let code = at_commit(root, "HEAD", "src/gate.rs").unwrap_or_default();
+        for problem in grown_by(&head, now, &code) {
+            grown.push(format!("not committed: {problem}"));
+        }
+    }
+    // Each commit's hash, newest first.
+    for commit in changes.split_whitespace() {
+        let parent = format!("{commit}^");
+        let before = at_commit(root, &parent, "KNOWN_BEHIND");
+        let after = at_commit(root, commit, "KNOWN_BEHIND");
+        // The commit that made the list, or one that took it away, replaced no list.
+        let (Some(before), Some(after)) = (before, after) else {
+            continue;
+        };
+        let code = at_commit(root, &parent, "src/gate.rs").unwrap_or_default();
+        for problem in grown_by(&before, &after, &code) {
+            grown.push(format!("{commit}: {problem}"));
+        }
+    }
+    grown
 }
 
 /// lengua's program in the folder `path` as commit `commit` had it, taken from its idea to done.
@@ -1795,6 +1850,12 @@ fn report(results: &Results) -> String {
             let _ = writeln!(out, "- {problem}");
         }
     }
+    if !results.grown.is_empty() {
+        let _ = writeln!(out, "\nWhere KNOWN_BEHIND grew, which it may not:\n");
+        for problem in &results.grown {
+            let _ = writeln!(out, "- {problem}");
+        }
+    }
     let _ = writeln!(out, "\n## The native gaps\n");
     let _ = writeln!(
         out,
@@ -1870,6 +1931,11 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
     let list = root.join("KNOWN_BEHIND");
     let list = std::fs::read_to_string(&list).map_err(|error| failed(list.display(), error))?;
     let known = KnownBehind::parse(&list).map_err(|problems| problems.join("\n"))?;
+    // The list may only shrink: each change to it, held to the list it replaced, said at once.
+    let grown = grown_in_history(root, &list);
+    for problem in &grown {
+        eprintln!("{problem}");
+    }
     let out = root.join("target").join("bench");
     std::fs::create_dir_all(&out).map_err(|error| failed(out.display(), error))?;
     let wasm = setting("LENGUA_BENCH_WASM").map(PathBuf::from);
@@ -1923,6 +1989,7 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
         row_seconds: seconds,
         warm_up: WARM_UP,
         every_workload: names.len() == gate::WORKLOADS.len(),
+        grown,
         ..Results::default()
     };
     for &name in &names {
@@ -1951,6 +2018,7 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
     let lines = proposal(&results, &found);
     std::fs::write(&file, lines).map_err(|error| failed(file.display(), error))?;
     let mut failures = results.ratchet.clone();
+    failures.extend(results.grown.iter().cloned());
     for outcome in &results.workloads {
         for measured in &outcome.versions {
             if let Some(problem) = &measured.problem {
