@@ -45,7 +45,7 @@
   (global $environ i32 (i32.const 2064))
   (global $environ.size i32 (i32.const 64))
   ;; The variables' text, each NAME=value ended by a NUL.
-  (global $environment i32 (i32.const 2304))  ;; shared: main has the host fill it; is_key reads it
+  (global $environment i32 (i32.const 2304))  ;; shared: main has the host fill it; others read it
   (global $environment.size i32 (i32.const 1024))
   ;; The greeting: "Hello, ", the name, and "!" with a newline.
   (global $out i32 (i32.const 3328))
@@ -59,6 +59,7 @@
     (local $size i32)
     (local $index i32)
     (local $start i32)
+    (local $next i32)
     (local $end i32)
     (local $length i32)
     (local $left i32)
@@ -87,6 +88,9 @@
                   (i32.add (global.get $environ)
                     (i32.mul (local.get $index) (global.get $POINTER))))
                 (global.get $environment)))
+            ;; environ_get points each variable at its place in the text it wrote.
+            (if (i32.ge_u (local.get $start) (local.get $size))
+              (then (call $assert_fail (i32.const 3)) unreachable))
             (br_if $found (call $is_key (local.get $start) (local.get $size)))
             (local.set $index (i32.add (local.get $index) (i32.const 1)))
             (local.set $left (i32.sub (local.get $left) (i32.const 1)))
@@ -94,13 +98,14 @@
           (br $usage))
         ;; The variable ends where the next one starts, or where the text does.
         (local.set $end (local.get $size))
-        (if (i32.lt_u (i32.add (local.get $index) (i32.const 1)) (local.get $count))
+        (local.set $next (i32.add (local.get $index) (i32.const 1)))
+        (if (i32.lt_u (local.get $next) (local.get $count))
           (then
             (local.set $end
               (i32.sub
-                (i32.load offset=4
+                (i32.load
                   (i32.add (global.get $environ)
-                    (i32.mul (local.get $index) (global.get $POINTER))))
+                    (i32.mul (local.get $next) (global.get $POINTER))))
                 (global.get $environment)))))
         ;; The name: the variable less its key and its NUL.
         (local.set $length
@@ -108,20 +113,9 @@
             (i32.add (global.get $KEY_LENGTH) (global.get $NUL_LENGTH))))
         (br_if $usage (i32.eqz (local.get $length)))
         (br_if $usage (i32.gt_u (local.get $length) (global.get $MAX_NAME)))
-        ;; "Hello, ", the name, and "!" with a newline.
-        (memory.copy (global.get $out) (global.get $hello) (global.get $hello.rosize))
-        (memory.copy
-          (i32.add (global.get $out) (global.get $hello.rosize))
-          (i32.add (i32.add (global.get $environment) (local.get $start)) (global.get $KEY_LENGTH))
-          (local.get $length))
-        (memory.copy
-          (i32.add (i32.add (global.get $out) (global.get $hello.rosize)) (local.get $length))
-          (global.get $bang)
-          (global.get $bang.rosize))
         (br_if $write_failed
-          (call $write_all (global.get $STDOUT) (global.get $out)
-            (i32.add (i32.add (global.get $hello.rosize) (local.get $length))
-              (global.get $bang.rosize))))
+          (call $write_greeting (i32.add (local.get $start) (global.get $KEY_LENGTH))
+            (local.get $length)))
         (call $proc_exit (global.get $EXIT_OK))
         unreachable)
       (br_if $write_failed
@@ -135,6 +129,7 @@
   ;; NAME=: 1 if it does, else 0.
   (func $is_key (param $start i32) (param $size i32) (result i32)
     (local $i i32)
+    (local $at i32)
     (local $same i32)
     (local $left i32)
     (local.set $same (i32.const 1))
@@ -145,15 +140,47 @@
       (br_if $compared (i32.eqz (local.get $same)))
       (local.set $left (global.get $KEY_LENGTH))
       (loop $byte  ;; bound: 5
-        (if (i32.ge_u (i32.add (local.get $start) (local.get $i)) (global.get $environment.size))
-          (then (call $assert_fail (i32.const 3)) unreachable))
+        ;; Byte $i of the variable, at $at of the text, and of the key: each place checked.
+        (local.set $at (i32.add (local.get $start) (local.get $i)))
+        (if (i32.ge_u (local.get $at) (global.get $environment.size))
+          (then (call $assert_fail (i32.const 4)) unreachable))
+        (if (i32.ge_u (local.get $i) (global.get $key.rosize))
+          (then (call $assert_fail (i32.const 5)) unreachable))
         (if (i32.ne
-              (i32.load8_u
-                (i32.add (global.get $environment) (i32.add (local.get $start) (local.get $i))))
+              (i32.load8_u (i32.add (global.get $environment) (local.get $at)))
               (i32.load8_u (i32.add (global.get $key) (local.get $i))))
           (then (local.set $same (i32.const 0))))
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
         (local.set $left (i32.sub (local.get $left) (i32.const 1)))
         (br_if $byte (local.get $left))))
     (local.get $same))
+
+  ;; Writes "Hello, ", the $length bytes of the name at byte $from of $environment, one at a time,
+  ;; each place checked, and "!" with a newline to standard output: main gives where the name
+  ;; starts. Gives 0, or an error number.
+  (func $write_greeting (param $from i32) (param $length i32) (result i32)  ;; returns: result
+    (local $k i32)
+    (local $at i32)
+    (local $left i32)
+    (if (i32.gt_u (local.get $length) (global.get $MAX_NAME))
+      (then (call $assert_fail (i32.const 6)) unreachable))
+    (memory.copy (global.get $out) (global.get $hello) (global.get $hello.rosize))
+    (block $copied
+      (local.set $left (global.get $MAX_NAME))
+      (loop $byte  ;; bound: 8
+        (br_if $copied (i32.ge_u (local.get $k) (local.get $length)))
+        (local.set $at (i32.add (local.get $from) (local.get $k)))
+        (if (i32.ge_u (local.get $at) (global.get $environment.size))
+          (then (call $assert_fail (i32.const 7)) unreachable))
+        (i32.store8 (i32.add (i32.add (global.get $out) (global.get $hello.rosize)) (local.get $k))
+          (i32.load8_u (i32.add (global.get $environment) (local.get $at))))
+        (local.set $k (i32.add (local.get $k) (i32.const 1)))
+        (local.set $left (i32.sub (local.get $left) (i32.const 1)))
+        (br_if $byte (local.get $left))))
+    (memory.copy
+      (i32.add (i32.add (global.get $out) (global.get $hello.rosize)) (local.get $length))
+      (global.get $bang)
+      (global.get $bang.rosize))
+    (call $write_all (global.get $STDOUT) (global.get $out)
+      (i32.add (i32.add (global.get $hello.rosize) (local.get $length)) (global.get $bang.rosize))))
 )

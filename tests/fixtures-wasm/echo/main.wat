@@ -6,7 +6,6 @@
   (import "wasi_snapshot_preview1" "sock_accept"
     (func $sock_accept (param i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_close" (func $fd_close (param i32) (result i32)))
-  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
   (memory (export "memory") 1 1)
 
   ;; Descriptors.
@@ -39,11 +38,15 @@
           (call $fill (local.get $fd) (global.get $line) (global.get $line.size) (global.get $NEWLINE)))
         ;; A read that fails leaves nothing to send back.
         (br_if $answered (i32.lt_s (local.get $got) (i32.const 0)))
+        ;; $fill reads at most the room it's lent. The bound of the count it gives first, which
+        ;; makes it a number the rules follow.
+        (if (i32.gt_u (local.get $got) (global.get $line.size))
+          (then (call $assert_fail (i32.const 2)) unreachable))
         (local.set $err (call $write_all (local.get $fd) (global.get $line) (local.get $got)))
         ;; A client that went away gets nothing more.
         (br_if $answered (local.get $err)))
       (local.set $err (call $fd_close (local.get $fd)))
       (if (local.get $err)
-        (then (call $assert_fail (i32.const 2)) unreachable))
+        (then (call $assert_fail (i32.const 3)) unreachable))
       (br $serve)))
 )
