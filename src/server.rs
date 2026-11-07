@@ -2838,6 +2838,29 @@ mod tests {
         assert_eq!(info.instructions.as_deref(), Some(INSTRUCTIONS));
     }
 
+    /// lengua's entry in `verified` is no change to the idea: recording the idea again finds the
+    /// lock as it was, and any other change is recorded.
+    #[tokio::test]
+    async fn the_trust_record_is_no_change_to_record() {
+        let data = tempfile::tempdir().expect("a data folder");
+        let program = tempfile::tempdir().expect("a program folder");
+        let server = LenguaServer::new(DataDir::new(data.path().to_path_buf()));
+        let path = program.path().to_str().expect("UTF-8 path");
+        let folder = ProgramFolder::new(path).expect("absolute path");
+        let idea = include_str!("../tests/fixtures-wasm/add/idea.md");
+        let first = server.record(&folder, idea, Some("an adder")).await;
+        assert!(matches!(first, Ok(Recording::Recorded)));
+        let hash = trust::idea_hash(idea.as_bytes());
+        let entry = trust::Verified::new("2026-11-06T23:00:00Z", hash, Sha256Hex::of(b"code"));
+        let verified = trust::with_lengua_verified(idea, &entry);
+        assert_ne!(verified, idea);
+        let again = server.record(&folder, &verified, None).await;
+        assert!(matches!(again, Ok(Recording::Unchanged)));
+        let changed = verified.replace("title: add", "title: sum");
+        let edited = server.record(&folder, &changed, None).await;
+        assert!(matches!(edited, Ok(Recording::Recorded)));
+    }
+
     #[test]
     fn a_check_may_name_the_folder_or_its_idea() {
         // An absolute path on this system.
