@@ -49,7 +49,7 @@ whitespace of each kind.
 | text | runs |
 |---|---|
 | `string(0, 1048576, "abcdefghijklmnopqrstuvwxyz0123456789 \n")` | 300 |
-| `string(0, 1048576, "x. \t\n\r")` | 300 |
+| `string(0, 1048576, "x. \t\n\r")` | 300 |
 
 ## B2: Separates words at any run of whitespace
 - Given standard input that contains `a\t\tb   \rc`
@@ -65,7 +65,7 @@ whitespace of each kind.
 
 | text | runs |
 |---|---|
-| `string(0, 1048576, "abc \t\r")` | 300 |
+| `string(0, 1048576, "abc \t\r")` | 300 |
 
 ## B3: Counts zero lines and zero words in empty input
 - Given empty standard input
