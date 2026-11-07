@@ -1,7 +1,8 @@
 //! The WebAssembly model on its own: WebAssembly's integer semantics, each trap at its line of
-//! main.wat, lengua's library, the host's calls, and a branch, a division and a load the input
-//! decides; then, with the solvers, the add, echo and greet fixtures proven for every input and a
-//! planted bug in each found, the traps naming their lines.
+//! main.wat, lengua's library, the host's calls, what the model refuses to run, and a branch, a
+//! division, a load and counts of bits the input decides; then, with the solvers, the echo and
+//! greet fixtures proven for every input, add for numbers of up to three digits (for every input
+//! in a slow ignored test), and a planted bug in each found, the traps naming their lines.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -735,6 +736,46 @@ fn what_the_input_decides_splits_runs_and_holds_them_to_their_traps() {
     );
 }
 
+/// What `operator`, a count of bits, gives on `value`, `bits` wide, as WebAssembly has it.
+fn bits_counted(operator: &str, value: u64, bits: u32) -> u32 {
+    match operator {
+        "clz" => value.leading_zeros() - (64 - bits),
+        "ctz" => value.trailing_zeros().min(bits),
+        _ => value.count_ones(),
+    }
+}
+
+/// The counts of bits on a value the input decides, whose terms a proof takes, rather than on a
+/// known value, which the model counts at once: each gives what its operator does, at both
+/// widths, on bytes at the bottom of the value and at its top.
+#[test]
+fn counts_of_bits_follow_a_value_the_input_decides() {
+    let byte = "(i32.load8_u (i32.const 2048))";
+    for operator in ["clz", "ctz", "popcnt"] {
+        for (bits, shift) in [(32, 0), (32, 24), (64, 0), (64, 56)] {
+            let expression = if bits == 32 {
+                format!("(i32.{operator} (i32.shl {byte} (i32.const {shift})))")
+            } else {
+                format!(
+                    "(i32.wrap_i64 (i64.{operator} (i64.shl (i64.extend_i32_u {byte}) \
+                     (i64.const {shift}))))"
+                )
+            };
+            let text = reads_a_byte(&format!("(call $exit {expression})"));
+            let (pool, runs) = runs_on_a_byte(&text);
+            assert_eq!(runs.len(), 1, "{expression}");
+            for value in [0_u8, 1, 2, 0x10, 0x5a, 0x80, 0xff] {
+                let wanted = bits_counted(operator, u64::from(value) << shift, bits);
+                assert_eq!(
+                    exit_for(&pool, &runs[0], u128::from(value)),
+                    Some(u128::from(wanted)),
+                    "{expression} of {value:#x}"
+                );
+            }
+        }
+    }
+}
+
 /// A folder's listing in each of a test's two orders, as a proof takes both.
 #[test]
 fn a_listing_is_taken_in_both_orders() {
@@ -836,7 +877,7 @@ fn proven(verdict: &Verdict) -> bool {
 }
 
 /// add's first block over the shapes of every sign and of up to three digits: the whole range,
-/// to 10^9, is a longer proof of the same code.
+/// to 10^9, is a longer proof, which `proves_add_for_every_pair_of_inputs` makes.
 fn sums() -> Generated {
     let (blocks, _) = blocks_of("add");
     let mut sums = blocks[0].clone();
@@ -871,8 +912,11 @@ fn trap(verdict: &Verdict) -> String {
     }
 }
 
+/// Every block of greet and the echo server, for every input; add for every sign and for numbers
+/// of up to three digits, which takes its code's every path but the longer numbers' rounds of
+/// its loops.
 #[test]
-fn proves_add_echo_and_greet_for_every_input() {
+fn proves_greet_and_echo_and_add_to_three_digits() {
     if !solvers_installed() {
         return;
     }
@@ -890,6 +934,21 @@ fn proves_add_echo_and_greet_for_every_input() {
     let built = build(&fixture("echo", "main.wat")).expect("echo builds");
     let verdict = prove_wasm(&built, policy, &blocks[0], &budget(900, true));
     assert!(proven(&verdict), "echo: {verdict:?}");
+}
+
+/// add's first block as its idea has it: every pair of numbers from -10^9 to 10^9, all of
+/// `$parse_i64`'s digits and `$write_i64`'s scales. Slow, as the native add's is, so the slow
+/// ignored tests run it: `cargo test --release -- --ignored`.
+#[test]
+#[ignore = "slow: proves 4×10^18 pairs of inputs"]
+fn proves_add_for_every_pair_of_inputs() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_of("add");
+    let built = build(&fixture("add", "main.wat")).expect("add builds");
+    let verdict = prove_wasm(&built, policy, &blocks[0], &budget(3600, false));
+    assert!(proven(&verdict), "add: {verdict:?}");
 }
 
 /// add's sign, which a wrong constant makes zero's too.
