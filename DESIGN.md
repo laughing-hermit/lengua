@@ -116,8 +116,11 @@ five targets, with its SHA-256 beside it, so installing needs no Rust toolchain 
 The archive is the plugin, ready to load: the skills and the manifests (on Windows naming
 `lengua-mcp.exe`); `server/lengua-mcp`, built with none of the shell's `RUSTFLAGS` and on Windows
 with the C runtime linked in; `solvers/` with the z3 and cvc5 that `scripts/ci/tools.tsv` pins for
-the target, checked by SHA-256; `LICENSE` and `licenses/`, with each solver's licences and every
-Rust crate compiled into the server with its licence and the licence files it ships; `TARGET`;
+the target, checked by SHA-256; `LICENSE` and `licenses/`, with each solver's licences (cvc5's
+with those of the parts its release build links in, each fetched from the commit cvc5's build
+takes the part from and checked against its git object id, and on Linux the Ubuntu copyright
+files of the system libraries it holds), every Rust crate compiled into the server with its
+licence and the licence files it ships, and a `README.md` that lists them all; `TARGET`;
 and `install.sh` or `install.ps1`. The prover, and `lengua-mcp doctor`, look for each solver in
 the `solvers` folder beside the server's own folder first, then on PATH. The install script
 refuses another system or CPU (on Linux, a glibc older than 2.39 too), copies the plugin into a

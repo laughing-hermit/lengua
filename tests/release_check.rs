@@ -108,7 +108,8 @@ fn manifest(plugin: &Path, name: &str) -> Value {
 
 /// What the archive ships, in `plugin`: its target, which must be this computer's; the
 /// manifests, at this check's version, which start the server; both skills; both solvers, each
-/// with its licences; and lengua's licence and the crates'. Gives the server.
+/// with its licences, cvc5's with those of the parts it links in; and lengua's licence and the
+/// crates'. Gives the server.
 fn shipped(plugin: &Path) -> PathBuf {
     let exe = std::env::consts::EXE_SUFFIX;
     let target = std::fs::read_to_string(plugin.join("TARGET"))
@@ -155,6 +156,21 @@ fn shipped(plugin: &Path) -> PathBuf {
             "{solver}'s licences aren't in {}",
             licences.display()
         );
+    }
+    let mut parts = vec![
+        "cvc5/AUTHORS",
+        "cvc5/cadical/LICENSE",
+        "cvc5/symfpu/LICENSE-BSD",
+        "cvc5/libpoly/LICENCE",
+    ];
+    if cfg!(target_os = "linux") {
+        parts.extend(["cvc5/ubuntu/libc6/copyright", "cvc5/ubuntu/LGPL-2.1"]);
+    }
+    if cfg!(windows) {
+        parts.push("cvc5/mingw-w64/COPYING.MinGW-w64-runtime.txt");
+    }
+    for part in parts {
+        assert!(licences.join(part).is_file(), "{part} isn't in the archive");
     }
     for file in ["LICENSE", "licenses/README.md"] {
         assert!(plugin.join(file).is_file(), "{file} isn't in the archive");
