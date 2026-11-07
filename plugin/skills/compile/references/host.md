@@ -10,12 +10,12 @@ import (rule 3 of [the WebAssembly dialect](power-of-10-webassembly.md)).
 | The idea says | The program may import |
 |---|---|
 | (always) | `args_get`, `args_sizes_get`, `fd_write` (to descriptors 1 and 2), `fd_fdstat_get`, `proc_exit`, `sched_yield` |
-| `- Uses: standard input` | `fd_read` (descriptor 0) |
+| `- Uses: standard input` | `fd_read` (descriptor 0), `poll_oneoff` (a wait to read it) |
 | `- Uses: the environment` | `environ_get`, `environ_sizes_get` |
 | `- Uses: files` | `fd_prestat_get`, `fd_prestat_dir_name` (descriptor 3), `path_open`, `fd_read`, `fd_write`, `fd_seek`, `fd_tell`, `fd_close`, `fd_filestat_get`, `path_filestat_get`, `fd_readdir`, `path_create_directory`, `path_remove_directory`, `path_unlink_file`, `path_rename` |
 | `- Uses: the clock` | `clock_time_get`, `clock_res_get`, `poll_oneoff` (clock waits) |
 | `- Uses: random bytes` | `random_get` |
-| `- Network: …` | `sock_accept` (descriptor 4), `sock_recv`, `sock_send`, `sock_shutdown`, `poll_oneoff` (waits on descriptors) |
+| `- Network: …` | `sock_recv`, `sock_send`, `sock_shutdown`, and `fd_read`, `fd_write` and `fd_close` on a connection, `poll_oneoff` (waits on descriptors); and with `listens on …`, `sock_accept` (descriptor 4) |
 
 ## Descriptors
 
