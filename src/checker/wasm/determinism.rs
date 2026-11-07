@@ -174,8 +174,8 @@ pub fn check(
                 violation(
                     line,
                     format!("`{name}` divides by a value nothing checks isn't zero, which traps"),
-                    "check the divisor first, `(br_if $bad (i32.eqz (local.get $d)))`, or divide by \
-                     a named constant that isn't zero"
+                    "check the divisor first, `(br_if $bad (i32.eqz (local.get $d)))`, or divide \
+                     by a named constant that isn't zero"
                         .to_owned(),
                 );
                 continue;
