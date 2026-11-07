@@ -11,6 +11,7 @@
 pub mod engine;
 pub mod host;
 pub mod job;
+pub mod parts;
 pub mod pool;
 pub mod runner;
 pub mod text;

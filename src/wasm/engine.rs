@@ -31,6 +31,56 @@ pub const FEATURES: WasmFeatures = WasmFeatures::FLOATS
     .union(WasmFeatures::BULK_MEMORY)
     .union(WasmFeatures::SIMD);
 
+/// The engine's version, as Cargo.toml pins it.
+pub const ENGINE_VERSION: &str = "50.0.1";
+
+/// The engine and its version, as lengua.lock records what runs a module.
+pub const ENGINE: &str = "wasmtime 50.0.1";
+
+/// The features [`FEATURES`] turns on beyond WebAssembly 1.0, which has floats, each by the
+/// name its proposal has, in the order WebAssembly 2.0 lists them.
+pub const OPTIONAL_FEATURES: [&str; 7] = [
+    "sign-extension",
+    "saturating-float-to-int",
+    "mutable-global",
+    "multi-value",
+    "reference-types",
+    "bulk-memory",
+    "simd",
+];
+
+/// The feature [`OPTIONAL_FEATURES`] names at `at`.
+fn optional_feature(at: usize) -> WasmFeatures {
+    match at {
+        0 => WasmFeatures::SIGN_EXTENSION,
+        1 => WasmFeatures::SATURATING_FLOAT_TO_INT,
+        2 => WasmFeatures::MUTABLE_GLOBAL,
+        3 => WasmFeatures::MULTI_VALUE,
+        4 => WasmFeatures::REFERENCE_TYPES,
+        5 => WasmFeatures::BULK_MEMORY,
+        _ => WasmFeatures::SIMD,
+    }
+}
+
+/// The names of the features of [`OPTIONAL_FEATURES`] that the module `wasm` uses: each one the
+/// validator refuses the module without, the others on.
+#[must_use]
+pub fn features_used(wasm: &[u8]) -> Vec<String> {
+    (0..OPTIONAL_FEATURES.len())
+        .filter(|&left_out| {
+            let without = (0..OPTIONAL_FEATURES.len())
+                .filter(|&at| at != left_out)
+                .fold(WasmFeatures::FLOATS, |features, at| {
+                    features.union(optional_feature(at))
+                });
+            wasmparser::Validator::new_with_features(without)
+                .validate_all(wasm)
+                .is_err()
+        })
+        .map(|used| OPTIONAL_FEATURES[used].to_owned())
+        .collect()
+}
+
 /// How often the engine's epoch moves on, which is how often a running program's deadline and
 /// stop are looked at.
 pub const TICK: Duration = Duration::from_millis(10);
@@ -229,6 +279,46 @@ mod tests {
             let built = crate::wasm::text::build(refused);
             assert!(built.is_err(), "{refused} was taken");
         }
+    }
+
+    /// lengua names the engine that Cargo.toml pins.
+    #[test]
+    fn the_engine_is_the_one_cargo_pins() {
+        assert_eq!(ENGINE, format!("wasmtime {ENGINE_VERSION}"));
+        let manifest = include_str!("../../Cargo.toml");
+        assert!(
+            manifest.contains(&format!("wasmtime = {{ version = \"={ENGINE_VERSION}\"")),
+            "Cargo.toml pins another wasmtime than {ENGINE_VERSION}"
+        );
+    }
+
+    /// A module uses the features it can't be validated without, and no others.
+    #[test]
+    fn a_module_uses_the_features_it_needs() {
+        let used = |text: &str| {
+            let built = crate::wasm::text::build(text).unwrap_or_else(|problem| panic!("{problem}"));
+            features_used(&built.wasm)
+        };
+        assert!(used("(module (func))").is_empty());
+        let simd = "(module (func (result v128) (v128.const i32x4 1 2 3 4)))";
+        assert_eq!(used(simd), ["simd"]);
+        let bulk = "(module (memory 1) (func (memory.fill (i32.const 0) (i32.const 0) (i32.const \
+                    8))))";
+        assert_eq!(used(bulk), ["bulk-memory"]);
+        let values = "(module (func (result i32 i32) (i32.const 1) (i32.const 2)))";
+        assert_eq!(used(values), ["multi-value"]);
+        let sign = "(module (func (result i32) (i32.extend8_s (i32.const 255))))";
+        assert_eq!(used(sign), ["sign-extension"]);
+        let saturating = "(module (func (result i32) (i32.trunc_sat_f32_s (f32.const 3.5))))";
+        assert_eq!(used(saturating), ["saturating-float-to-int"]);
+        // lengua's $assert_fail copies its message with memory.init.
+        let asserts = "(module (memory (export \"memory\") 1) (func (export \"_start\") (call \
+                       $assert_fail (i32.const 1))))";
+        assert!(
+            used(asserts).iter().any(|name| name == "bulk-memory"),
+            "{:?}",
+            used(asserts)
+        );
     }
 
     #[test]
