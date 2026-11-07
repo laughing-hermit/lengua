@@ -49,7 +49,7 @@ program cannot write its output, it exits with code 3.
 
 | home |
 |---|
-| `string(1, 8, "/adehmo")` |
+| `string(1, 9, "/adehmo")` |
 
 ## B3: Shows the usage line for a name that is too long
 - Given the environment variable `NAME` with the value `a` `9` times
