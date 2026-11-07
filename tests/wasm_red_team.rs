@@ -293,6 +293,28 @@ const ATTEMPTS: &[Attempt] = &[
         ),
     },
     Attempt {
+        name: "an address a loop passes back to itself as its parameter",
+        edits: &[
+            (
+                "    (local $n i64)\n    (block $write_failed",
+                "    (local $n i64)\n    (local $left i32)\n    (local $p i32)\n    (block \
+                 $write_failed",
+            ),
+            (
+                "          (call $proc_exit (global.get $EXIT_OK))\n",
+                "          (global.get $number)\n          (local.set $left (global.get \
+                 $ARGC_EXPECTED))\n          (loop $poke (param i32) (result i32)  ;; \
+                 bound: 2\n            (local.set $p)\n            (i32.store8 (local.get $p) \
+                 (global.get $MINUS))\n            (global.get $usage)\n            \
+                 (local.set $left (i32.sub (local.get $left) (i32.const 1)))\n            \
+                 (br_if $poke (local.get $left)))\n          (drop)\n          (call $proc_exit \
+                 (global.get $EXIT_OK))\n",
+            ),
+        ],
+        module: None,
+        refusal: Refusal::Rule(Rule::Immutability, "writes to $usage, a read-only region"),
+    },
+    Attempt {
         name: "lengua's addresses below 1024, through a plain number",
         edits: &[(
             "    (local.set $magnitude (local.get $value))\n",
