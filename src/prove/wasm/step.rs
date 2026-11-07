@@ -4,7 +4,7 @@
 
 use super::host::{self, Handle};
 use super::image::{Arity, Binary, Function, Module, NOWHERE, Op, Unary};
-use super::{Frame, Label, MAX_DEPTH, Wasm, function_label, memory, must_not};
+use super::{Frame, Label, Wasm, function_label, memory, must_not};
 use crate::prove::exec::{End, MAX_STEPS, State, Step, TOO_LONG, unsupported};
 use crate::prove::term::{Pool, Term};
 
@@ -434,11 +434,12 @@ fn branch_table(
 }
 
 /// A call of the function `index`: lengua's host for an import, else a new call with its
-/// parameters off the stack and its other locals zero.
+/// parameters off the stack and its other locals zero. The stack holds it: the module's deepest
+/// calls fit in the engine's, or the model wouldn't run it.
 ///
 /// # Errors
 ///
-/// A trap past [`MAX_DEPTH`], and how a host call ends the run.
+/// How a host call ends the run.
 fn call(
     module: &Module,
     state: &mut State<Wasm>,
@@ -449,13 +450,6 @@ fn call(
     let callee = module.function(index).ok_or_else(malformed)?;
     if let Some(function) = callee.import {
         return host::call(module, state, pool, function, at);
-    }
-    if state.core.frames.len() >= MAX_DEPTH {
-        return Err(state.core.trap(
-            module,
-            at,
-            "its calls went deeper than the stack holds",
-        ));
     }
     module.enter(index);
     let core = &mut state.core;

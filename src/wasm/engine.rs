@@ -35,6 +35,11 @@ pub const FEATURES: WasmFeatures = WasmFeatures::FLOATS
 /// stop are looked at.
 pub const TICK: Duration = Duration::from_millis(10);
 
+/// The most of its thread's stack a program's WebAssembly calls may take, in bytes: past it, a
+/// call traps. It is Wasmtime's own default, set here so that it holds whatever the default
+/// becomes, as the prover's model holds a program's deepest calls to it.
+pub const MAX_WASM_STACK: usize = 512 * 1024;
+
 /// What a configuration of the engine is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Setup {
@@ -78,6 +83,7 @@ pub fn config(setup: Setup, cache: Option<&Path>) -> Result<Config, String> {
     config.parallel_compilation(true);
     config.consume_fuel(setup.counts());
     config.epoch_interruption(setup.interrupts());
+    config.max_wasm_stack(MAX_WASM_STACK);
     if let Some(folder) = cache {
         let mut settings = CacheConfig::new();
         settings.with_directory(folder);

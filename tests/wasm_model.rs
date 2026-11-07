@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use lengua::prove::wasm::{Ended, Given, Module, Ran, run};
-use lengua::runner::{End, Limits, Run};
+use lengua::runner::{End, Limits, Run, Trap};
 use lengua::supply::Supply;
 use lengua::testfile::{Case as Sample, Example, TestSuite};
 use lengua::wasm::job::unhex;
@@ -629,4 +629,58 @@ async fn the_model_refuses_what_the_engine_doesnt_start() {
         let model = Module::new(program.built(), policy);
         assert!(model.is_err(), "the model took it: {text}");
     }
+}
+
+/// The start of a module whose `_start` calls `$deep` with DEPTH, its locals still to come.
+const DEEP: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    (drop (call $deep (i32.const DEPTH)))
+    (call $exit (i32.const 0)))
+  (func $deep (param $n i32) (result i64)
+    (local $sum i64)"#;
+
+/// A module whose `$deep` calls itself `depth` times, each call keeping `values` values of 64
+/// bits across the next.
+fn recursing(depth: u32, values: u32) -> String {
+    let mut locals = String::new();
+    let mut loads = String::new();
+    let mut sums = String::new();
+    for value in 0..values {
+        let offset = value * 8;
+        locals.push_str(&format!("\n    (local $v{value} i64)"));
+        loads.push_str(&format!(
+            "\n    (local.set $v{value} (i64.load offset={offset} (i32.const 1024)))"
+        ));
+        sums.push_str(&format!(
+            "\n    (local.set $sum (i64.add (local.get $sum) (local.get $v{value})))"
+        ));
+    }
+    let call = "\n    (if (local.get $n)\n      (then (local.set $sum\n        (call $deep \
+                (i32.sub (local.get $n) (i32.const 1))))))";
+    let start = DEEP.replace("DEPTH", &depth.to_string());
+    format!("{start}{locals}{loads}{call}{sums}\n    (local.get $sum)))\n")
+}
+
+/// A recursion of 1001 calls, fewer than the 1024 the model once let a run make, each keeping
+/// 128 values of 64 bits across the next, 1 KiB: the engine's stack, 512 KiB, runs out, and the
+/// model refuses the module, as it refuses every recursion.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_model_refuses_a_recursion_the_engines_stack_runs_out_on() {
+    let pool = Pool::new(launcher(), None);
+    let text = recursing(1000, 128);
+    let program = Program::of_text(&text).unwrap_or_else(|problem| panic!("{problem}"));
+    let spec = Spec::new(&[], &[], Policy::default());
+    let engine = pool
+        .run(&program, spec, Limits::default())
+        .await
+        .expect("the engine runs it");
+    assert!(
+        matches!(engine.end, End::Trapped(Trap::StackOverflow, _)),
+        "{:?}",
+        engine.end
+    );
+    let model = Module::new(program.built(), Policy::default());
+    assert!(model.is_err(), "the model took it");
 }
