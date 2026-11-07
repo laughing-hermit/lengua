@@ -506,8 +506,9 @@ struct Reading {
 fn stop_is_known(stop: Option<&Op>, mutable: &[bool]) -> bool {
     match stop {
         Some(Op::Const { width: 32, .. }) => true,
-        Some(Op::GlobalGet(index)) => usize::try_from(*index)
-            .is_ok_and(|index| mutable.get(index) == Some(&false)),
+        Some(Op::GlobalGet(index)) => {
+            usize::try_from(*index).is_ok_and(|index| mutable.get(index) == Some(&false))
+        }
         _ => false,
     }
 }
