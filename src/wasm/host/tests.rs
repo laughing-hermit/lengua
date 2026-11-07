@@ -541,7 +541,7 @@ fn path_open_holds_every_name_to_every_systems_rules() {
         ("CON", CREATE, write, errno::INVAL),
         ("a:b", CREATE, write, errno::INVAL),
         ("REPORT~1.TXT", CREATE, write, errno::INVAL),
-        ("../outside", CREATE, write, errno::ACCES),
+        ("../outside", CREATE, write, errno::NOTCAPABLE),
         ("readme.txt/inside", 0, read, errno::NOTDIR),
         ("nowhere/x", CREATE, write, errno::NOENT),
         ("sub", 0, write, errno::ISDIR),
@@ -705,7 +705,7 @@ fn folders_are_made_renamed_and_removed_only_when_empty() {
     (if (i32.ne (call $rmdir (i32.const 3) (i32.const 110) (i32.const 1)) (i32.const 10))
       (then (call $exit (i32.const 1))))
     (drop (call $close (i32.load (i32.const 0))))
-    (call $exit (call $rmdir (i32.const 3) (i32.const 110) (i32.const 1)))))"#,
+    (call $exit (call $rmdir (i32.const 3) (i32.const 110) (i32.const 1))))"#,
     );
     let (folder, dir) = folder_of(&[]);
     let executed = run(
