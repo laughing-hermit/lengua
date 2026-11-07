@@ -1,4 +1,11 @@
-//! The lengua MCP server: tool definitions and server instructions.
+//! The lengua MCP server: tool definitions and server instructions. The code file chooses the
+//! path: main.s, checked, built and run natively here, or main.wat, the code of an idea that is
+//! an Attested Computation, checked and run as WebAssembly the same way on every system
+//! ([`wat`]).
+
+mod wat;
+
+pub use self::wat::{Attestation, attest};
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -28,7 +35,7 @@ use crate::prove;
 use crate::runner::{self, End, Job, Limits, Net, Started};
 use crate::state::{
     CODE_FILE, IDEA_FILE, LEGACY_IDEA_FILE, LEGACY_TESTS_FILE, ProgramFolder, Snapshot, State,
-    stamped_copy,
+    WASM_CODE_FILE, stamped_copy,
 };
 use crate::testdiff;
 use crate::testfile::{self, TestSuite};
@@ -121,23 +128,73 @@ pub struct LenguaServer {
     /// The user's words given with an idea that still had problems, by program folder: recorded
     /// once the idea is clean, so they're asked for once.
     held: Arc<tokio::sync::Mutex<BTreeMap<PathBuf, String>>>,
+    /// The workers that run main.wat's tests, made when a program first needs them.
+    workers: Arc<Workers>,
+}
+
+/// A server's pool of WebAssembly workers, made at its first use: its launcher is this binary,
+/// and it keeps compiled modules in the data folder's cache.
+#[derive(Default)]
+struct Workers(std::sync::OnceLock<crate::wasm::Pool>);
+
+impl std::fmt::Debug for Workers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Workers")
+            .field("made", &self.0.get().is_some())
+            .finish()
+    }
 }
 
 /// A server `run` started in the background.
 struct Background {
-    started: Started,
-    /// The build folder of the executable it started from.
-    _build: Arc<tempfile::TempDir>,
+    /// The program, still serving.
+    server: Serving,
     /// Which start this is, so an old timer never stops a newer one.
     id: u64,
     assertions: BTreeMap<i64, usize>,
+    /// The code file its assertions' lines are in.
+    code: &'static str,
+}
+
+/// A program serving in the background, native or WebAssembly.
+enum Serving {
+    /// A native program, and the build folder of the executable it started from.
+    Native(Box<Started>, Arc<tempfile::TempDir>),
+    /// A WebAssembly program, in a worker of its own, and its module.
+    Wasm(Box<crate::wasm::Running>, Arc<crate::wasm::Program>),
+}
+
+impl Serving {
+    /// The loopback port it serves on.
+    fn port(&self) -> Option<u16> {
+        match self {
+            Self::Native(started, _) => started.port(),
+            Self::Wasm(running, _) => running.port(),
+        }
+    }
+
+    /// Stops it, and says how it went.
+    async fn stop(self) -> std::io::Result<runner::Run> {
+        match self {
+            Self::Native(started, build) => {
+                let stopped = started.stop().await;
+                drop(build);
+                stopped
+            }
+            Self::Wasm(running, module) => {
+                let stopped = running.stop().await;
+                drop(module);
+                stopped
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for Background {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Background")
             .field("id", &self.id)
-            .field("port", &self.started.port())
+            .field("port", &self.server.port())
             .finish_non_exhaustive()
     }
 }
@@ -147,9 +204,11 @@ const BACKGROUND_LIMIT: Duration = Duration::from_secs(600);
 
 /// The tests and then the proof of one version of a program, in the background.
 struct Checking {
-    /// idea.md and main.s, by hash.
+    /// idea.md and the code file, by lengua's hashes.
     files: [Sha256Hex; 2],
-    /// The executable built from main.s, by hash.
+    /// The code file: main.s, or main.wat.
+    code: &'static str,
+    /// The executable built from main.s, or the module built from main.wat, by hash.
     executable: Sha256Hex,
     /// Set once the files change, which stops the proof.
     cancel: Arc<AtomicBool>,
@@ -206,8 +265,9 @@ struct Passed {
     performance: Vec<String>,
     /// The first example as it ran.
     shown: Option<String>,
-    /// lengua's line for main.s, written once the job ends without the proof finding it wrong.
-    header: Header,
+    /// lengua's line for main.s, written once the job ends without the proof finding it wrong;
+    /// main.wat has none.
+    header: Option<Header>,
     /// QEMU, when it ran the tests for the target's CPU.
     under: Option<String>,
 }
@@ -305,7 +365,21 @@ impl LenguaServer {
             background: Arc::default(),
             checks: Arc::default(),
             held: Arc::default(),
+            workers: Arc::default(),
         }
+    }
+
+    /// The server's pool of WebAssembly workers, one for the session, made at its first use.
+    fn pool(&self) -> crate::wasm::Pool {
+        self.workers
+            .0
+            .get_or_init(|| {
+                crate::wasm::Pool::new(
+                    PathBuf::clone(&self.launcher),
+                    Some(crate::wasm::engine::cache_folder(&self.data_dir)),
+                )
+            })
+            .clone()
     }
 }
 
@@ -336,8 +410,9 @@ pub struct CheckReport {
     /// Every problem to fix before going on, each saying where it is and how to fix it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<String>,
-    /// The machine main.s runs on, while main.s isn't written yet: its cores, which an idea's
-    /// threads may use, and the CPU extensions main.s may use.
+    /// The machine the code runs on, while it isn't written yet: for main.s, its cores, which an
+    /// idea's threads may use, and the CPU extensions main.s may use; for main.wat, the engine
+    /// that compiles it for this CPU, and the WebAssembly features the engine has on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
     /// What the tests found, once they pass.
@@ -495,13 +570,15 @@ impl ConnectionReport {
     }
 }
 
-/// What `run` reports about a program that has ended.
+/// What `run` reports about a program that has ended: its failed assertion on its line of
+/// `code`, main.s or main.wat.
 fn ended_report(
     result: &runner::Run,
     assertions: &BTreeMap<i64, usize>,
     limits: Limits,
+    code: &str,
 ) -> RunReport {
-    let mut ended = testrun::explain_end(result, assertions, limits);
+    let mut ended = testrun::explain_end_in(result, assertions, limits, code);
     // A broker that stopped serving the program left it without names, clock or random bytes: the
     // report says why.
     if let Some(problem) = &result.supplied
@@ -541,36 +618,49 @@ impl LenguaServer {
         build: Arc<tempfile::TempDir>,
         assertions: BTreeMap<i64, usize>,
     ) -> Result<RunReport, String> {
-        static STARTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let mut background = self.background.lock().await;
-        if let Some(entry) = background.get(folder.path()) {
-            return Err(format!(
-                "{folder} is already serving on 127.0.0.1:{}; call run with stop: true first",
-                entry.started.port().unwrap_or(0)
-            ));
-        }
-        let limits = Limits {
-            timeout: BACKGROUND_LIMIT,
-            max_file_size: None,
-            ..Limits::default()
-        };
-        let started = runner::start(&self.launcher, job, limits)
+        already_serving(&background, folder)?;
+        let started = runner::start(&self.launcher, job, background_limits())
             .await
             .map_err(|error| format!("couldn't start the server: {error}"))?;
-        let address = format!("127.0.0.1:{}", started.port().unwrap_or(0));
         let connections = started
             .connections()
             .iter()
             .map(ConnectionReport::of)
             .collect();
+        let server = Serving::Native(Box::new(started), build);
+        Ok(self.keep_serving(
+            &mut background,
+            folder,
+            server,
+            (assertions, CODE_FILE),
+            connections,
+        ))
+    }
+
+    /// Keeps `server`, which `run` started for `folder` and which serves now, among the
+    /// background ones until `run` stops it, ten minutes pass, or the session ends; `run`'s
+    /// reply says where it serves and what became of its connections. `assertions` are its
+    /// assertions' lines in its code file.
+    fn keep_serving(
+        &self,
+        background: &mut BTreeMap<PathBuf, Background>,
+        folder: &ProgramFolder,
+        server: Serving,
+        assertions: (BTreeMap<i64, usize>, &'static str),
+        connections: Vec<ConnectionReport>,
+    ) -> RunReport {
+        static STARTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let address = format!("127.0.0.1:{}", server.port().unwrap_or(0));
         let id = STARTS.fetch_add(1, Ordering::Relaxed);
+        let (assertions, code) = assertions;
         background.insert(
             folder.path().to_path_buf(),
             Background {
-                started,
-                _build: build,
+                server,
                 id,
                 assertions,
+                code,
             },
         );
         let (servers, key) = (Arc::clone(&self.background), folder.path().to_path_buf());
@@ -581,10 +671,10 @@ impl LenguaServer {
                 && let Some(entry) = servers.remove(&key)
             {
                 drop(servers);
-                let _ = entry.started.stop().await;
+                let _ = entry.server.stop().await;
             }
         });
-        Ok(RunReport {
+        RunReport {
             stdout: String::new(),
             stderr: String::new(),
             exit_code: None,
@@ -600,7 +690,30 @@ impl LenguaServer {
             serving: Some(address),
             emulated: None,
             connections,
-        })
+        }
+    }
+}
+
+/// The limits of a server `run` leaves serving: ten minutes, and no file's size held.
+fn background_limits() -> Limits {
+    Limits {
+        timeout: BACKGROUND_LIMIT,
+        max_file_size: None,
+        ..Limits::default()
+    }
+}
+
+/// Why `run` can't start a server for `folder`, when one is serving for it already.
+fn already_serving(
+    background: &BTreeMap<PathBuf, Background>,
+    folder: &ProgramFolder,
+) -> Result<(), String> {
+    match background.get(folder.path()) {
+        Some(entry) => Err(format!(
+            "{folder} is already serving on 127.0.0.1:{}; call run with stop: true first",
+            entry.server.port().unwrap_or(0)
+        )),
+        None => Ok(()),
     }
 }
 
@@ -612,11 +725,12 @@ impl LenguaServer {
         description = "Checks the lengua program in <path> stage by stage, records each stage in \
             lengua.lock, and stops at the first that needs work: it checks idea.md, the source \
             of truth, and the tests in it, and records it with the user's words that asked for \
-            it; checks main.s against lengua's rules; runs every test with fresh random inputs; \
-            and proves the program for every input it can. It keeps the index.md and log.md of \
+            it; checks the code, main.s or for an Attested Computation main.wat, against \
+            lengua's rules; runs every test with fresh random inputs; and proves the program for \
+            every input it can. It keeps the index.md and log.md of \
             the folder's bundle, the graph of program folders, and says how the graph stands. \
             Call it after every edit to idea.md \
-            or main.s. It replies within about 40 seconds; the tests and the proof go on in the \
+            or the code. It replies within about 40 seconds; the tests and the proof go on in the \
             background, so while it says testing or proving, call it again to wait. path: \
             absolute path of the program folder; request: the user's words that \
             asked for this program or this change, quoted exactly and never made up, needed the \
@@ -644,9 +758,10 @@ impl LenguaServer {
         name = "run",
         title = "Run program",
         description = "Runs the checked program in <path> with args and stdin. It runs only \
-            when lengua.lock shows that idea.md and main.s are exactly the versions that were \
-            recorded and checked, and a fresh build of main.s is byte for byte the \
-            executable check tested. The program gets an empty environment, 10 seconds and \
+            when lengua.lock shows that idea.md and its code, main.s or main.wat, are exactly the \
+            versions that were recorded and checked, and a fresh build of the code is byte for \
+            byte the executable or module check tested. The program gets an empty environment, \
+            10 seconds and \
             8 MiB of output, and lengua lets it use only what its idea names, reach only the \
             places it names, through connections lengua makes for it before it starts, and touch \
             files only inside its working folder: \
@@ -674,7 +789,7 @@ impl LenguaServer {
                 ));
             };
             let result = entry
-                .started
+                .server
                 .stop()
                 .await
                 .map_err(|error| format!("couldn't stop the program: {error}"))?;
@@ -682,7 +797,16 @@ impl LenguaServer {
                 timeout: BACKGROUND_LIMIT,
                 ..Limits::default()
             };
-            return Ok(Json(ended_report(&result, &entry.assertions, limits)));
+            return Ok(Json(ended_report(
+                &result,
+                &entry.assertions,
+                limits,
+                entry.code,
+            )));
+        }
+        // An Attested Computation's code is main.wat, which runs as WebAssembly.
+        if wat::attested_folder(&folder)? {
+            return self.run_wasm(&folder, &params).await.map(Json);
         }
         let Runnable {
             built,
@@ -753,7 +877,7 @@ impl LenguaServer {
         let result = runner::run(&self.launcher, job, limits)
             .await
             .map_err(|error| format!("couldn't run the program: {error}"))?;
-        let mut report = ended_report(&result, &assertions, limits);
+        let mut report = ended_report(&result, &assertions, limits, CODE_FILE);
         report.emulated = emulator.map(|emulator| {
             format!(
                 "ran under {}: Landlock held it to its files and network as on any run, but the \
@@ -764,6 +888,14 @@ impl LenguaServer {
         });
         Ok(Json(report))
     }
+}
+
+/// What `check`'s idea stage came to.
+enum IdeaStage {
+    /// The idea parses, its tests check, its parts are there, and the lock records it.
+    Recorded(Box<(Idea, TestSuite)>),
+    /// The reply that stops there: the idea's problems, or the words it needs first.
+    Stops(Box<CheckReport>),
 }
 
 /// What recording idea.md came to.
@@ -821,8 +953,24 @@ impl LenguaServer {
     ) -> Result<CheckReport, String> {
         let began = Instant::now();
         let machine = Machine::detect();
+        // The idea's type chooses the path. An Attested Computation is compiled to main.wat,
+        // which needs no LLVM, no Linux kernel and no CPU target: it is checked the same way on
+        // every system.
+        let idea_text = read_optional(folder, IDEA_FILE)?;
+        if let Some(text) = idea_text.as_deref().filter(|text| wat::attested(text)) {
+            return self
+                .check_wasm(folder, params, events, (began, &machine), text)
+                .await;
+        }
         let toolchain = Toolchain::discover().await;
         if let Some(blocked) = machine_blocker(&machine, toolchain.as_ref().err()) {
+            // A new folder where lengua builds no main.s starts as a WebAssembly program.
+            if idea_text.is_none() && read_optional(folder, LEGACY_IDEA_FILE)?.is_none() {
+                return Ok(CheckReport {
+                    machine: Some(wat::machine_line(&machine)),
+                    ..CheckReport::new("write_idea", State::NoIdea.next_step(folder))
+                });
+            }
             return Ok(CheckReport::new("blocked", blocked));
         }
         let target = session_target(&machine)?;
@@ -831,7 +979,7 @@ impl LenguaServer {
 
         // idea.md, tests included: recorded with the user's words once it parses and its tests
         // check.
-        let Some(idea_text) = read_optional(folder, IDEA_FILE)? else {
+        let Some(idea_text) = idea_text else {
             if read_optional(folder, LEGACY_IDEA_FILE)?.is_some() {
                 return Ok(CheckReport {
                     machine: Some(machine_line()),
@@ -850,64 +998,25 @@ impl LenguaServer {
                 ..CheckReport::new("write_idea", State::NoIdea.next_step(folder))
             });
         };
-        let request = match params.request.as_deref().map(str::trim) {
-            Some(words) if !words.is_empty() => Some(words.to_owned()),
-            _ => self.held.lock().await.get(folder.path()).cloned(),
+        let (idea, suite) = match self
+            .idea_stage(folder, params, events, &idea_text, CODE_FILE)
+            .await?
+        {
+            IdeaStage::Recorded(recorded) => *recorded,
+            IdeaStage::Stops(report) => return Ok(*report),
         };
-        let fix_idea = || {
-            format!(
-                "Next: fix {folder}/{IDEA_FILE} with the write-idea skill, then call check with \
-                 path {folder}."
-            )
-        };
-        let problems = if read_optional(folder, LEGACY_TESTS_FILE)?.is_some() {
-            Err(vec![format!(
-                "{LEGACY_TESTS_FILE}: the tests live in {IDEA_FILE} now. Make each behavior's \
-                 steps say what its [[example]] said, write its [[generated]] tables as its \
-                 generated tests, a `###` section of the same steps with a table of their vars \
-                 and runs, as the write-idea skill shows, then delete {LEGACY_TESTS_FILE}."
-            )])
-        } else {
-            match idea::parse(&idea_text) {
-                Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
-                Ok(idea) => match testfile::check(&idea) {
-                    Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
-                    Ok(suite) => {
-                        let missing = missing_parts(folder, &idea);
-                        // A cycle of `- Builds on:` links blocks the programs in it, and only
-                        // them.
-                        if !missing.is_empty() {
-                            Err(missing)
-                        } else if let Some(cycle) = graph::builds_on_cycle(folder.path()) {
-                            Err(vec![cycle])
-                        } else {
-                            Ok((idea, suite))
-                        }
-                    }
-                },
-            }
-        };
-        let (idea, suite) = match problems {
-            Ok(parsed) => parsed,
-            Err(problems) => {
-                if let Some(words) = &request {
-                    self.held
-                        .lock()
-                        .await
-                        .insert(folder.path().to_path_buf(), words.clone());
-                }
-                return Ok(CheckReport::problems("idea_problems", problems, fix_idea()));
-            }
-        };
-        match self.record(folder, &idea_text, request.as_deref()).await? {
-            Recording::Needs(next_step) => {
-                return Ok(CheckReport::new("needs_request", next_step));
-            }
-            Recording::Recorded => events.push(graph::Event::Recorded),
-            Recording::Unchanged => {}
-        }
-        self.held.lock().await.remove(folder.path());
         let idea_hash = trust::idea_hash(idea_text.as_bytes());
+        // A native idea's code is main.s: main.wat beside it is another path's.
+        if let Some(problem) = wat::code_file_problem(folder, false) {
+            return Ok(CheckReport::problems(
+                "code_problems",
+                vec![problem],
+                format!(
+                    "Next: keep the code file {IDEA_FILE}'s type asks for, then call check with \
+                     path {folder}."
+                ),
+            ));
+        }
 
         // main.s, checked against the rules, then tested and proven in the background.
         let Some(code) = read_optional(folder, CODE_FILE)? else {
@@ -1029,6 +1138,85 @@ impl LenguaServer {
             events.push(graph::Event::ProvenWrong);
         }
         Ok(report)
+    }
+
+    /// `check`'s idea stage, the same for both code files: idea.md, tests included, recorded
+    /// with the user's words once it parses, its tests check and its parts are there, each a
+    /// program with its own idea.md and `code`, main.s or main.wat, of which only main.wat's
+    /// idea has no threads.
+    async fn idea_stage(
+        &self,
+        folder: &ProgramFolder,
+        params: &CheckParams,
+        events: &mut Vec<graph::Event>,
+        idea_text: &str,
+        code: &str,
+    ) -> Result<IdeaStage, String> {
+        let request = match params.request.as_deref().map(str::trim) {
+            Some(words) if !words.is_empty() => Some(words.to_owned()),
+            _ => self.held.lock().await.get(folder.path()).cloned(),
+        };
+        let fix_idea = || {
+            format!(
+                "Next: fix {folder}/{IDEA_FILE} with the write-idea skill, then call check with \
+                 path {folder}."
+            )
+        };
+        let problems = if read_optional(folder, LEGACY_TESTS_FILE)?.is_some() {
+            Err(vec![format!(
+                "{LEGACY_TESTS_FILE}: the tests live in {IDEA_FILE} now. Make each behavior's \
+                 steps say what its [[example]] said, write its [[generated]] tables as its \
+                 generated tests, a `###` section of the same steps with a table of their vars \
+                 and runs, as the write-idea skill shows, then delete {LEGACY_TESTS_FILE}."
+            )])
+        } else {
+            match idea::parse(idea_text) {
+                Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
+                Ok(idea) => match testfile::check(&idea) {
+                    Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
+                    Ok(suite) => {
+                        let threads = (code == WASM_CODE_FILE)
+                            .then(|| wat::threads_problem(idea_text, &idea))
+                            .flatten();
+                        let missing = missing_parts(folder, &idea, code);
+                        // A cycle of `- Builds on:` links blocks the programs in it, and only
+                        // them.
+                        if let Some(threads) = threads {
+                            Err(vec![threads])
+                        } else if !missing.is_empty() {
+                            Err(missing)
+                        } else if let Some(cycle) = graph::builds_on_cycle(folder.path()) {
+                            Err(vec![cycle])
+                        } else {
+                            Ok((idea, suite))
+                        }
+                    }
+                },
+            }
+        };
+        let (idea, suite) = match problems {
+            Ok(parsed) => parsed,
+            Err(problems) => {
+                if let Some(words) = &request {
+                    self.held
+                        .lock()
+                        .await
+                        .insert(folder.path().to_path_buf(), words.clone());
+                }
+                let report = CheckReport::problems("idea_problems", problems, fix_idea());
+                return Ok(IdeaStage::Stops(Box::new(report)));
+            }
+        };
+        match self.record(folder, idea_text, request.as_deref()).await? {
+            Recording::Needs(next_step) => {
+                let report = CheckReport::new("needs_request", next_step);
+                return Ok(IdeaStage::Stops(Box::new(report)));
+            }
+            Recording::Recorded => events.push(graph::Event::Recorded),
+            Recording::Unchanged => {}
+        }
+        self.held.lock().await.remove(folder.path());
+        Ok(IdeaStage::Recorded(Box::new((idea, suite))))
     }
 
     /// The reply's lines about the graph of program folders that `folder` belongs to, once the
@@ -1217,6 +1405,7 @@ impl LenguaServer {
             .collect();
         let checking = Arc::new(Checking {
             files,
+            code: CODE_FILE,
             executable: Sha256Hex::of(&code.built.bytes),
             cancel: Arc::default(),
             found: std::sync::Mutex::new(Found {
@@ -1319,7 +1508,7 @@ impl LenguaServer {
                     .collect(),
                 performance: outcome.costs.iter().map(cost_line).collect(),
                 shown: outcome.shown,
-                header,
+                header: Some(header),
                 under: code.emulator.as_ref().map(|emulator| emulator.name.clone()),
             });
         }
@@ -1350,10 +1539,18 @@ impl LenguaServer {
 
     /// Writes lengua's line into main.s once `checking` has ended with its tests passed and no
     /// input the proof found wrong, provided main.s is still the code it checked and its line
-    /// says something else. The code's hash leaves the line out, so the lock still holds.
+    /// says something else. The code's hash leaves the line out, so the lock still holds. For
+    /// main.wat, which has no such line, lengua's entry goes in idea.md's `verified` instead.
     async fn write_header(&self, folder: &ProgramFolder, checking: &Checking) {
+        if checking.code == WASM_CODE_FILE {
+            self.write_verified(folder, checking).await;
+            return;
+        }
         let header = match checking.found.lock() {
-            Ok(found) if !found.wrong => found.passed.as_ref().map(|passed| passed.header.clone()),
+            Ok(found) if !found.wrong => found
+                .passed
+                .as_ref()
+                .and_then(|passed| passed.header.clone()),
             _ => None,
         };
         let Some(header) = header else {
@@ -1799,6 +1996,7 @@ impl LenguaServer {
     /// What `check` replies about a checking job.
     fn checking_report(&self, folder: &ProgramFolder, checking: &Checking) -> CheckReport {
         let stage = *checking.stage.borrow();
+        let code = checking.code;
         let Ok(found) = checking.found.lock() else {
             return CheckReport::new("testing", again(folder));
         };
@@ -1808,8 +2006,8 @@ impl LenguaServer {
                 "tests_failed",
                 found.failures.clone(),
                 format!(
-                    "Next: decide from {IDEA_FILE} whether {CODE_FILE} or the test is wrong, fix \
-                     {CODE_FILE} with the compile skill or the test in {IDEA_FILE} with the \
+                    "Next: decide from {IDEA_FILE} whether {code} or the test is wrong, fix \
+                     {code} with the compile skill or the test in {IDEA_FILE} with the \
                      write-idea skill, then call check with path {folder}. Boundary values run \
                      first every time; the other generated inputs are new on every check."
                 ),
@@ -1823,9 +2021,13 @@ impl LenguaServer {
         };
         checking.green_told.store(true, Ordering::Relaxed);
         let mut tests = vec![format!(
-            "{CODE_FILE} follows every rule and passed all {} test runs",
+            "{code} follows every rule and passed all {} test runs",
             passed.runs
         )];
+        // main.wat has no proofs until lengua's WebAssembly prover.
+        if code == WASM_CODE_FILE {
+            tests.push(wat::NOT_PROVEN.to_owned());
+        }
         if let Some(emulator) = &passed.under {
             tests[0].push_str(&format!(" under {emulator}"));
             tests.push(format!(
@@ -1848,8 +2050,8 @@ impl LenguaServer {
                         .map(BlockProof::line)
                         .collect(),
                     format!(
-                        "Next: fix {folder}/{CODE_FILE} with the compile skill so it handles \
-                         those inputs, then call check with path {folder}."
+                        "Next: fix {folder}/{code} with the compile skill so it handles those \
+                         inputs, then call check with path {folder}."
                     ),
                 )
             };
@@ -1896,10 +2098,23 @@ impl LenguaServer {
         } else {
             ""
         };
+        let (memory, proven) = if code == WASM_CODE_FILE {
+            (
+                wat::memory_line(),
+                "and that it is tested, not proven: the proofs of main.wat come with lengua's \
+                 WebAssembly prover. idea.md's verified list now holds lengua's entry for this \
+                 idea and this main.wat.",
+            )
+        } else {
+            (
+                memory_line(&found.proofs),
+                "and what's proven, memory included.",
+            )
+        };
         CheckReport {
             tests,
             proofs,
-            memory: Some(memory_line(&found.proofs)),
+            memory: Some(memory),
             example: passed.shown.clone(),
             performance: passed.performance.clone(),
             changes,
@@ -1908,9 +2123,9 @@ impl LenguaServer {
                 "done",
                 format!(
                     "Done: tell the user where the program is, what its idea promises, that it \
-                     passed every test, and what's proven, memory included.{running}{shown} run \
-                     runs it on their own inputs here; give them the shell command, followed by \
-                     its arguments, for their own terminal, scripts and services."
+                     passed every test, {proven}{running}{shown} run runs it on their own inputs \
+                     here; give them the shell command, followed by its arguments, for their own \
+                     terminal, scripts and services."
                 ),
             )
         }
@@ -1962,6 +2177,8 @@ impl LenguaServer {
         let unseen = "the first version isn't on this machine to compare";
         let idea = match std::fs::read_to_string(folder.file(IDEA_FILE)) {
             Ok(now) if trust::idea_hash(now.as_bytes()) != lock.request.idea => {
+                // lengua's own entry in `verified` is no change of the user's.
+                let now = trust::without_lengua_verified(&now).unwrap_or(now);
                 Some(kept(&lock.request.idea).map_or_else(
                     || format!("{IDEA_FILE} changed; {unseen}"),
                     |before| testdiff::line_diff(&before, &now),
@@ -1992,10 +2209,16 @@ impl LenguaServer {
         code: CodeStamp,
     ) -> Result<(), String> {
         let _writing = self.lock_writes.lock().await;
+        // The stamp is of main.s, or of main.wat for WebAssembly.
+        let file = if code.is_wasm() {
+            WASM_CODE_FILE
+        } else {
+            CODE_FILE
+        };
         let changed = || {
             format!(
-                "{IDEA_FILE} or {CODE_FILE} changed while the code was being checked, so nothing \
-                 was recorded; call check again."
+                "{IDEA_FILE} or {file} changed while the code was being checked, so nothing was \
+                 recorded; call check again."
             )
         };
         let key = Key::load(&self.data_dir)
@@ -2005,9 +2228,10 @@ impl LenguaServer {
             .ok()
             .flatten()
             .ok_or_else(changed)?;
+        let current = read_optional(folder, file)?.ok_or_else(changed)?;
         let unchanged = lock.idea.sha256 == *idea
             && trust::idea_hash(read_idea(folder)?.as_bytes()) == *idea
-            && header::code_hash(read_code(folder)?.as_bytes()) == code.sha256;
+            && crate::state::code_hash(file, current.as_bytes()) == code.sha256;
         if !unchanged {
             return Err(changed());
         }
@@ -2210,9 +2434,15 @@ fn proven_detail(
 
 /// A test's cost in one line: medians only.
 fn cost_line(cost: &testrun::Cost) -> String {
+    cost_line_in(cost, "instructions")
+}
+
+/// [`cost_line`], counting what a run executes in `unit`: a native program's instructions, or a
+/// WebAssembly program's operations.
+fn cost_line_in(cost: &testrun::Cost, unit: &str) -> String {
     let mut line = format!("{}: {}", cost.test, counted(cost.runs, "run"));
     if let Some(instructions) = cost.instructions {
-        let _ = write!(line, ", {} instructions each", instructions.median);
+        let _ = write!(line, ", {} {unit} each", instructions.median);
     }
     let mut times = Vec::new();
     if let Some(cycles) = cost.cycles {
@@ -2301,9 +2531,9 @@ fn read_code(folder: &ProgramFolder) -> Result<String, String> {
     })
 }
 
-/// Where `folder` stands with lengua.lock, as this user's key reads it.
-/// The parts `idea` builds on that aren't lengua ideas in their folders, each a problem saying so.
-fn missing_parts(folder: &ProgramFolder, idea: &idea::Idea) -> Vec<String> {
+/// The parts `idea` builds on that aren't lengua ideas in their folders, each a problem saying
+/// so: a part is a folder with its own idea.md and `code`, main.s or main.wat.
+fn missing_parts(folder: &ProgramFolder, idea: &idea::Idea, code: &str) -> Vec<String> {
     idea.parts
         .iter()
         .filter_map(|part| {
@@ -2311,7 +2541,7 @@ fn missing_parts(folder: &ProgramFolder, idea: &idea::Idea) -> Vec<String> {
             match std::fs::read_to_string(&path) {
                 Err(_) => Some(format!(
                     "`- Builds on:` links to [{}]({}), but {} isn't there: make that part first, \
-                     a folder with its own idea.md and main.s, or fix the link",
+                     a folder with its own idea.md and {code}, or fix the link",
                     part.name,
                     part.idea,
                     path.display()
@@ -2536,23 +2766,7 @@ async fn runnable(
     // The connections the idea names, which lengua makes for the program, and for a server, its
     // own port on the loopback.
     let net = Net {
-        connections: idea
-            .network
-            .connections
-            .iter()
-            .map(|place| match (&place.host, place.argument) {
-                (_, Some(index)) => crate::connect::Reach::Argument {
-                    index,
-                    port: place.port,
-                    tls: place.tls,
-                },
-                (None, None) => crate::connect::Reach::ThisComputer(place.port),
-                (Some(host), None) if place.tls => {
-                    crate::connect::Reach::Tls(host.clone(), place.port)
-                }
-                (Some(host), None) => crate::connect::Reach::Host(host.clone(), place.port),
-            })
-            .collect(),
+        connections: reaches(&idea.network),
         listen: idea.network.listens,
         serve_anywhere: idea.network.serves_anywhere,
     };
@@ -2566,6 +2780,25 @@ async fn runnable(
         net,
         emulator: target.emulator,
     })
+}
+
+/// The connections `network` names, in order, as lengua makes them for a program: a port of this
+/// computer, of a named computer, over TLS, or of the computer an argument names.
+fn reaches(network: &idea::Network) -> Vec<crate::connect::Reach> {
+    network
+        .connections
+        .iter()
+        .map(|place| match (&place.host, place.argument) {
+            (_, Some(index)) => crate::connect::Reach::Argument {
+                index,
+                port: place.port,
+                tls: place.tls,
+            },
+            (None, None) => crate::connect::Reach::ThisComputer(place.port),
+            (Some(host), None) if place.tls => crate::connect::Reach::Tls(host.clone(), place.port),
+            (Some(host), None) => crate::connect::Reach::Host(host.clone(), place.port),
+        })
+        .collect()
 }
 
 /// What `lengua-mcp run` was asked to run from a shell.
@@ -2596,6 +2829,16 @@ pub async fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i3
         .map_err(|error| format!("can't read the current folder: {error}"))?;
     let absolute = |path: &str| here.join(path).to_string_lossy().into_owned();
     let folder = ProgramFolder::new(&absolute(&request.path))?;
+    // An Attested Computation's main.wat runs here, in this process, as WebAssembly.
+    if wat::attested_folder(&folder)? {
+        let workspace = working_folder(
+            &request
+                .folder
+                .as_deref()
+                .map_or_else(|| here.to_string_lossy().into_owned(), absolute),
+        )?;
+        return wat::run_from_shell(data_dir, &folder, request, &workspace);
+    }
     let Runnable {
         built,
         syscalls,
@@ -2811,7 +3054,17 @@ fn machine_blocker(
     toolchain_error: Option<&crate::toolchain::ToolchainError>,
 ) -> Option<String> {
     if let Err(problem) = session_target(machine) {
-        return Some(format!("Blocked: {problem}"));
+        // Where lengua builds no main.s, it still checks and runs main.wat.
+        let wasm = if machine.profile.is_none() {
+            format!(
+                " On this computer lengua checks and runs WebAssembly: make {IDEA_FILE} an \
+                 Attested Computation (`type: Attested Computation`) with the write-idea skill, \
+                 then compile it into {WASM_CODE_FILE}."
+            )
+        } else {
+            String::new()
+        };
+        return Some(format!("Blocked: {problem}{wasm}"));
     }
     toolchain_error.map(|error| format!("Blocked: {error}"))
 }

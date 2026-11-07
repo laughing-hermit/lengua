@@ -1,5 +1,6 @@
-//! `lengua-mcp`: the lengua MCP server, speaking MCP over stdio, and `lengua-mcp run`, which runs
-//! a checked program from a shell.
+//! `lengua-mcp`: the lengua MCP server, speaking MCP over stdio; `lengua-mcp run`, which runs a
+//! checked program from a shell; and `lengua-mcp check`, which attests a WebAssembly program's
+//! folder on any computer, as its idea's attester.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -14,9 +15,13 @@ use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage: lengua-mcp [--data-dir <absolute path>] [--version]
        lengua-mcp [--data-dir <absolute path>] run <program folder> [--in <folder>] \
-[--env NAME=value]... [-- <argument>...]
+[--env NAME=value]... [[--] <argument>...]
+       lengua-mcp check <program folder>
        lengua-mcp link <main.s>
        lengua-mcp wasm <main.wat> [-o <main.wasm>]";
+
+/// The exit code of `lengua-mcp check` when the folder isn't attested.
+const NOT_ATTESTED: u8 = 1;
 
 /// The exit code when lengua won't run a program or can't start it, as `timeout` and `env` use:
 /// the program's own codes stay its own.
@@ -63,6 +68,7 @@ fn main() -> ExitCode {
     let data_dir = match parse_args(arguments.into_iter()) {
         Ok(Command::Serve(data_dir)) => data_dir,
         Ok(Command::Run(data_dir, request)) => return run_from_shell(&data_dir, &request),
+        Ok(Command::Check(path)) => return attest(&path),
         Ok(Command::Link(path)) => return link(&path),
         Ok(Command::Wasm(path, output)) => return wasm(&path, output),
         Ok(Command::Version) => {
@@ -99,6 +105,31 @@ fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> ExitCode {
             eprintln!("lengua-mcp: {message}");
             ExitCode::from(REFUSED)
         }
+    }
+}
+
+/// Attests the program folder at `path`, as its idea's attester: prints one line for each thing
+/// it finds, the verdict last, and exits 0 when the folder is attested and 1 when it isn't. It
+/// writes nothing and needs no data folder.
+fn attest(path: &str) -> ExitCode {
+    let attestation = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime.block_on(lengua::server::attest(path)),
+        Err(error) => {
+            println!("lengua-mcp could not start: {error}");
+            println!("not attested");
+            return ExitCode::from(NOT_ATTESTED);
+        }
+    };
+    for line in &attestation.lines {
+        println!("{line}");
+    }
+    if attestation.attested {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(NOT_ATTESTED)
     }
 }
 
@@ -162,13 +193,15 @@ async fn serve(data_dir: DataDir) -> ExitCode {
 enum Command {
     Serve(DataDir),
     Run(DataDir, ShellRun),
+    Check(String),
     Link(PathBuf),
     Wasm(PathBuf, Option<PathBuf>),
     Version,
 }
 
 /// `run`'s own words: the program folder, `--in` and `--env` options, then the program's
-/// arguments after `--`.
+/// arguments, after `--` or from the first word that isn't an option, which an argument that
+/// starts with `-` needs.
 fn parse_run(mut args: impl Iterator<Item = String>) -> Result<ShellRun, String> {
     let path = args.next().ok_or("run needs a program folder")?;
     let mut request = ShellRun {
@@ -178,6 +211,11 @@ fn parse_run(mut args: impl Iterator<Item = String>) -> Result<ShellRun, String>
         args: Vec::new(),
     };
     while let Some(arg) = args.next() {
+        // The first word that isn't an option starts the program's arguments.
+        if !arg.starts_with('-') {
+            request.args = std::iter::once(arg).chain(args).collect();
+            break;
+        }
         match arg.as_str() {
             "--in" => request.folder = Some(args.next().ok_or("--in needs a folder")?),
             "--env" => {
@@ -211,6 +249,13 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
                     .or_else(DataDir::from_env)
                     .ok_or(lengua::data_dir::NOT_FOUND)?;
                 return Ok(Command::Run(data_dir, request));
+            }
+            "check" => {
+                let path = args.next().ok_or("check needs a program folder")?;
+                if let Some(extra) = args.next() {
+                    return Err(format!("check takes one program folder, not {extra:?}"));
+                }
+                return Ok(Command::Check(path));
             }
             "link" => {
                 let path = args.next().ok_or("link needs a main.s")?;
@@ -249,5 +294,44 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
     match data_dir.or_else(DataDir::from_env) {
         Some(data_dir) => Ok(Command::Serve(data_dir)),
         None => Err(lengua::data_dir::NOT_FOUND.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `list` as a command line's words.
+    fn words(list: &[&str]) -> impl Iterator<Item = String> {
+        list.iter().map(|word| (*word).to_owned())
+    }
+
+    /// A shell run's program arguments follow its folder, after `--` or from the first word that
+    /// isn't an option; an argument that starts with `-` needs `--`.
+    #[test]
+    fn a_shell_run_takes_the_program_s_arguments_after_its_folder() {
+        let args = |list: &[&str]| parse_run(words(list)).map(|request| request.args);
+        assert_eq!(args(&["./add", "2", "3"]), Ok(vec!["2".to_owned(), "3".to_owned()]));
+        assert_eq!(
+            args(&["./add", "--", "-2", "3"]),
+            Ok(vec!["-2".to_owned(), "3".to_owned()])
+        );
+        let request = parse_run(words(&["./add", "--in", "/tmp", "--env", "A=b", "2", "--in"]))
+            .expect("a shell run");
+        assert_eq!(request.folder.as_deref(), Some("/tmp"));
+        assert_eq!(request.env.get("A").map(String::as_str), Some("b"));
+        assert_eq!(request.args, ["2", "--in"]);
+        assert!(args(&["./add", "-2"]).is_err());
+    }
+
+    /// `check` takes one program folder, and no data folder.
+    #[test]
+    fn check_takes_one_program_folder() {
+        assert!(matches!(
+            parse_args(words(&["check", "./add"])),
+            Ok(Command::Check(path)) if path == "./add"
+        ));
+        assert!(parse_args(words(&["check"])).is_err());
+        assert!(parse_args(words(&["check", "./add", "./sum"])).is_err());
     }
 }
