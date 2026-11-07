@@ -87,7 +87,10 @@ table. Prose under the heading is the idea's own.
   prints, the files it leaves, what the server receives and what the client receives, and its
   exit code, may hold any formula: `{a + b}`, ``it exits with code `{if(a < 0, 1, 0)}` ``. `{{`
   and `}}` stand for braces. Escapes such as `\n` are read in the text around placeholders, while
-  a formula's own strings keep theirs: ``it prints `{count(text, "\n")}` and a newline``.
+  a formula's own strings keep theirs: ``it prints `{count(text, "\n")}` and a newline``. A value
+  with `` `N` times`` after it is fixed text here too, for input past a limit that no generator
+  reaches: ``standard input that contains `\n` `4194304` times then `{line}` ``. A placeholder is
+  never repeated: its value comes from the table.
 - **The table** has a column for each variable, holding its generator, and an optional `runs`
   column: 1 to 1000, or empty for 100. Each row is one generated test, so several rows cover
   inputs one range can't, such as divisors on both sides of zero; all rows share the steps.

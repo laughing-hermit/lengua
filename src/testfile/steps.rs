@@ -31,9 +31,9 @@
 //! - ``it exits with code `0` ``, `it does not stop`
 //!
 //! TEXT is a value in backticks, written with `\n`, `\r`, `\t`, `\e` and `\\` for the characters
-//! they name; `and a newline` adds one, `` `N` times`` after a value repeats it in an example,
-//! and `then` joins parts. In a generated test, `{…}` holds a formula, whose own strings keep
-//! their escapes.
+//! they name; `and a newline` adds one, `` `N` times`` after a value repeats it, and `then` joins
+//! parts. In a generated test, `{…}` holds a formula, whose own strings keep their escapes, and a
+//! repeat is of fixed text, never of a placeholder.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -191,9 +191,12 @@ fn read(
         };
         if read.is_none() {
             let rewrite = if mode == Mode::Generated && repeats(&tokens) {
-                "a value drawn from the table: a generated test's text comes from its variables, \
-                 and a value written `` `N` times`` or `repeated` is for examples"
-                    .to_owned()
+                format!(
+                    "a value drawn from the table: a generated test's text comes from its \
+                     variables, and a value written `` `N` times`` repeats fixed text of at most \
+                     {} bytes, never a placeholder",
+                    super::MAX_FILE_BYTES
+                )
             } else {
                 rewrite(step, phase)
             };
@@ -780,8 +783,10 @@ fn stream(at: &mut Cursor<'_>) -> Option<Stream> {
     Some(Stream::Out)
 }
 
-/// TEXT: values joined by `then`, each optionally with `` `N` times`` after it in an example, and
-/// `a newline` for a line break, which `and` joins too: ``- Then it prints `5` and a newline``.
+/// TEXT: values joined by `then`, each optionally with `` `N` times`` after it, and `a newline`
+/// for a line break, which `and` joins too: ``- Then it prints `5` and a newline``. A generated
+/// test's repeat is of fixed text, written out in its template, as an input past a limit that no
+/// generator reaches needs; a placeholder's value comes from the table, never from a repeat.
 fn text(at: &mut Cursor<'_>, mode: Mode) -> Option<Text> {
     let mut parts = Vec::new();
     loop {
@@ -790,13 +795,15 @@ fn text(at: &mut Cursor<'_>, mode: Mode) -> Option<Text> {
         } else {
             let value = mode.value(&at.value()?);
             if let Some(count) = at.times() {
+                let times: u64 = count.parse().ok()?;
                 if mode == Mode::Generated {
-                    return None;
+                    push_plain(&mut parts, &written_out(&value, times)?);
+                } else {
+                    parts.push(TextPart::Repeat(Repeat {
+                        repeat: value,
+                        times,
+                    }));
                 }
-                parts.push(TextPart::Repeat(Repeat {
-                    repeat: value,
-                    times: count.parse().ok()?,
-                }));
             } else {
                 push_plain(&mut parts, &value);
             }
@@ -815,6 +822,18 @@ fn text(at: &mut Cursor<'_>, mode: Mode) -> Option<Text> {
         [TextPart::Plain(plain)] => Text::Plain(plain.clone()),
         _ => Text::Parts(parts),
     })
+}
+
+/// A generated test's repeat, written out: `value`, fixed text, `times` times, within what an
+/// example's repeated value may hold. `None` for a value with a placeholder, which the table
+/// draws, for an empty one, or for more than a value holds.
+fn written_out(value: &str, times: u64) -> Option<String> {
+    let times = usize::try_from(times).ok()?;
+    let bytes = value.len().checked_mul(times)?;
+    if value.is_empty() || value.contains('{') || bytes > super::MAX_FILE_BYTES {
+        return None;
+    }
+    Some(value.repeat(times))
 }
 
 /// Adds plain text to `parts`, joined to plain text just before it.
@@ -1275,7 +1294,7 @@ mod tests {
     fn generated_tests_draw_text_instead_of_repeating_it() {
         let idea = idea_with(
             &format!(
-                "{EXAMPLE}### For any text\n- Given standard input that contains `a` `3` \
+                "{EXAMPLE}### For any text\n- Given standard input that contains `{{a}}` `3` \
                  times\n- When the program runs\n- Then it prints `x`\n- And it exits with code \
                  `0`\n\n| a |\n|---|\n| `int(1, 9)` |\n"
             ),
@@ -1283,11 +1302,27 @@ mod tests {
         );
         let behavior = &idea.behaviors[0];
         let problems = generated(behavior, behavior.outline.as_ref().expect("tests"), &idea)
-            .expect_err("a repeat");
+            .expect_err("a repeated placeholder");
         assert!(
-            problems[0].message.contains("`repeated` is for examples"),
+            problems[0].message.contains("never a placeholder"),
             "{problems:?}"
         );
+    }
+
+    /// A generated test may repeat fixed text, which its template holds written out, as input
+    /// past a limit that no generator reaches needs: here 4 newlines, then a drawn line.
+    #[test]
+    fn generated_tests_repeat_fixed_text_written_out() {
+        let (steps, rows) = outline(
+            "- Given standard input that contains `\\n` `5` times\n- When the program runs\n- \
+             Then it prints `x`\n- And it exits with code `0`\n\n### For any line\n- Given \
+             standard input that contains `\\n` `4` times then `{line}`\n- When the program \
+             runs\n- Then it prints `x`\n- And it exits with code `0`\n\n| line |\n|---|\n| \
+             `string(1, 9, \"a\\n\")` |",
+            "- Uses: standard input",
+        );
+        assert_eq!(steps.stdin.text, "\n\n\n\n{line}");
+        assert_eq!(rows.len(), 1);
     }
 
     /// A behavior's steps in lengua's STE phrasings, for the tests below to change.
@@ -1433,24 +1468,25 @@ mod tests {
         assert!(serves.ends_with("as `- And it does not stop`"));
     }
 
-    /// A generated test's text comes from its table: a repeat is for examples.
+    /// A generated test's text comes from its table: a placeholder is never repeated.
     #[test]
     fn generated_tests_draw_text_instead_of_repeating_it_in_ste() {
         let idea = idea_with(
             &format!(
-                "{STE_STEPS}\n\n### For any text\n- Given standard input that contains `a` `3` \
-                 times\n- When the program runs\n- Then it prints `x`\n- And it exits with code \
-                 `0`\n\n| a |\n|---|\n| `int(1, 9)` |\n"
+                "{STE_STEPS}\n\n### For any text\n- Given standard input that contains `{{a}}` \
+                 `3` times\n- When the program runs\n- Then it prints `x`\n- And it exits with \
+                 code `0`\n\n| a |\n|---|\n| `int(1, 9)` |\n"
             ),
             "- Uses: standard input",
         );
         let behavior = &idea.behaviors[0];
         let problems = generated(behavior, behavior.outline.as_ref().expect("tests"), &idea)
-            .expect_err("a repeat");
+            .expect_err("a repeated placeholder");
         let message = &problems[0].message;
         assert!(
-            message.contains("`` `N` times`` or `repeated` is for examples"),
+            message.contains("`` `N` times`` repeats fixed text"),
             "{problems:?}"
         );
+        assert!(message.contains("never a placeholder"), "{problems:?}");
     }
 }
