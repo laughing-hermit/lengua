@@ -104,7 +104,7 @@ fn cache_of(record: &[u8]) -> Option<(Cache, bool)> {
     };
     let mask = u64::from_le_bytes(record.get(40..48)?.try_into().ok()?);
     let group = word(48)?;
-    Some((cache, group == 0 && mask & 1 == 1))
+    Some((cache, group == 0 && (mask & 1) == 1))
 }
 
 /// Windows's own calls, which only this crate makes.
