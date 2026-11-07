@@ -214,9 +214,11 @@ proven" for memory, never proven: the memory rules can't follow a loaded address
   isn't zero and, for `div_s`, that it isn't the most negative number divided by -1, or the proof
   shows neither can happen. Either way the program never traps.
 - **Floats** are allowed (`f32`, `f64`). The engine makes every NaN canonical, so every computer
-  computes the same bits, and a program never looks at a NaN's bits: `reinterpret` of a float that
-  may be NaN is refused. Conversions to integers are the saturating ones (`trunc_sat`), never the
-  trapping ones. There is no fused multiply-add in core WebAssembly, so an idea's tests don't ask
-  for one.
+  computes the same bits, a NaN's too, wherever they go. A program never takes a NaN's bits as a
+  number: `reinterpret` of a float that may be NaN is refused. `check` follows that one direct
+  view; it doesn't follow a float's bytes through memory, or a float vector's lanes, where the
+  engine's canonical NaN keeps the bits the same on every computer. Conversions to integers are
+  the saturating ones (`trunc_sat`), never the trapping ones. There is no fused multiply-add in
+  core WebAssembly, so an idea's tests don't ask for one.
 - **Vectors** (`v128`) are the deterministic SIMD128 instructions; their lane accesses obey M2
   like any other.
