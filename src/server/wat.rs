@@ -884,11 +884,11 @@ impl LenguaServer {
         let prover = Prover::Wasm(&code);
         match self.recorded_proofs(folder, checking, &code.suite, &executable) {
             None => {
-                self.prove_all(folder, checking, prover, &executable, &[])
+                self.prove_all(folder, checking, prover, seed, &executable, &[])
                     .await;
             }
             Some(further) if !further.is_empty() => {
-                self.prove_all(folder, checking, prover, &executable, &further)
+                self.prove_all(folder, checking, prover, seed, &executable, &further)
                     .await;
             }
             Some(_) => {}
@@ -1295,7 +1295,7 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
             // The proofs take minutes: a folder that isn't attested for another reason needs
             // none to say so.
             if attests {
-                let proofs = attest_proofs(&pool, &program, &idea, &suite).await;
+                let proofs = attest_proofs(&pool, &program, &idea, &suite, seed).await;
                 for proof in &proofs {
                     lines.push(format!("proofs: {}", proof.line()));
                 }
@@ -1323,13 +1323,15 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
 
 /// The attester's proofs of main.wat, `program`, whose idea is `idea`, as check proves them but
 /// within the attester's own time: each generated test of `suite` in turn, the smallest first,
-/// each with its share of [`proof_time`], and what a proof finds run for real in `pool`'s
-/// workers. Gives each test's proof, in the tests' order.
+/// each with its share of [`proof_time`], the model first held to the runs the tests just made
+/// from `seed`, and what a proof finds run for real in `pool`'s workers. Gives each test's
+/// proof, in the tests' order.
 async fn attest_proofs(
     pool: &Pool,
     program: &Arc<Program>,
     idea: &Idea,
     suite: &TestSuite,
+    seed: u64,
 ) -> Vec<BlockProof> {
     let model = Model::Wasm(Arc::clone(program), Policy::of(&idea.uses, &idea.network));
     let listens = idea.network.listens.is_some();
@@ -1362,7 +1364,7 @@ async fn attest_proofs(
             None => {
                 let budget = prove::Budget::until(now + share, listens);
                 let samples: Vec<testfile::Case> =
-                    block.cases(1).take(24).filter_map(Result::ok).collect();
+                    block.cases(seed).take(24).filter_map(Result::ok).collect();
                 match model.verdict(block, samples, listens, budget).await {
                     Err(reason) | Ok(Verdict::NotProven(reason)) => {
                         (format!("tested, not proven: {reason}"), false)

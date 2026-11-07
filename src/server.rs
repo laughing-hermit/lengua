@@ -1527,11 +1527,11 @@ impl LenguaServer {
             let prover = Prover::Native(&code, &syscalls);
             match self.recorded_proofs(folder, checking, &code.suite, &executable) {
                 None => {
-                    self.prove_all(folder, checking, prover, &executable, &[])
+                    self.prove_all(folder, checking, prover, seed, &executable, &[])
                         .await;
                 }
                 Some(further) if !further.is_empty() => {
-                    self.prove_all(folder, checking, prover, &executable, &further)
+                    self.prove_all(folder, checking, prover, seed, &executable, &further)
                         .await;
                 }
                 Some(_) => {}
@@ -1651,14 +1651,15 @@ impl LenguaServer {
     }
 
     /// Proves each generated test in turn, each with its share of [`PROOF_TIME`], and records
-    /// what was proven: main.s's machine code, or main.wat's module, as `prover` holds it. With
-    /// `further`, proves only those blocks, each from its length on, and keeps what lengua.lock
-    /// records of the others.
+    /// what was proven: main.s's machine code, or main.wat's module, as `prover` holds it, whose
+    /// tests just passed every run drawn from `seed`. With `further`, proves only those blocks,
+    /// each from its length on, and keeps what lengua.lock records of the others.
     async fn prove_all(
         &self,
         folder: &ProgramFolder,
         checking: &Checking,
         prover: Prover<'_>,
+        seed: u64,
         executable: &Sha256Hex,
         further: &[(usize, usize)],
     ) {
@@ -1778,9 +1779,9 @@ impl LenguaServer {
                 proof.progress = Some(Arc::clone(&budget.progress));
             }
             // The model must agree with the real program on inputs it passed before it's
-            // trusted to cover the rest.
+            // trusted to cover the rest: the block's first runs, drawn from the tests' own seed.
             let samples: Vec<testfile::Case> =
-                block.cases(1).take(24).filter_map(Result::ok).collect();
+                block.cases(seed).take(24).filter_map(Result::ok).collect();
             let verdict = model.verdict(block, samples, listens, budget).await;
             if checking.cancel.load(Ordering::Relaxed) {
                 return;
@@ -2367,6 +2368,8 @@ enum Model {
 impl Model {
     /// The verdict on `block` within `budget`, in a thread of its own: the model must agree with
     /// the real program on `samples`, inputs it passed, before it's trusted to cover the rest.
+    /// They must be runs the tests made, drawn from their seed: a sample the program never ran
+    /// may be one it is wrong on, which a disagreement would hide.
     async fn verdict(
         &self,
         block: &testfile::Generated,
