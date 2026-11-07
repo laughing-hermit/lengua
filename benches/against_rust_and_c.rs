@@ -173,7 +173,9 @@ fn workload(name: &str) -> Option<Workload> {
             ..Workload::new(
                 "upcase",
                 "Copies a 1 MiB text file to another with its ASCII letters in capitals: a file \
-                 opened, read, made and written, and one pass over the bytes.",
+                 opened, read, made and written, and one pass over the bytes. lengua's program \
+                 changes 16 bytes a step with SIMD128, written by hand; C, C++ and Rust store \
+                 every byte in a plain loop, for their compilers to vectorize.",
             )
         },
         "upcase-stdin" => Workload {
@@ -181,7 +183,9 @@ fn workload(name: &str) -> Option<Workload> {
             ..Workload::new(
                 "upcase-stdin",
                 "Copies 64 MiB of standard input to standard output with its ASCII letters in \
-                 capitals, a piece at a time.",
+                 capitals, a piece at a time. lengua's program changes 64 bytes a step with \
+                 SIMD128, written by hand, then 16; C, C++ and Rust store every byte in a plain \
+                 loop, for their compilers to vectorize.",
             )
         },
         "shout" => Workload {
@@ -189,14 +193,20 @@ fn workload(name: &str) -> Option<Workload> {
             ..Workload::new(
                 "shout",
                 "Reads 1 MiB of standard input whole, then prints it with its ASCII letters in \
-                 capitals.",
+                 capitals. lengua's program changes 64 bytes a step with SIMD128, written by \
+                 hand, then 16; C, C++ and Rust store every byte in a plain loop, for their \
+                 compilers to vectorize.",
             )
         },
         "wc" => Workload {
             stdin: Some(text(LARGE)),
             ..Workload::new(
                 "wc",
-                "Counts the lines and words of 64 MiB of standard input, as `wc -lw` does.",
+                "Counts the lines and words of 64 MiB of standard input, as `wc -lw` does. \
+                 lengua's program compares 16 bytes a step with SIMD128, written by hand, and \
+                 counts the bits of each comparison's bitmask; C, C++ and Rust compare each byte \
+                 and the byte before it in a plain loop, counted 255 bytes at a time in counters \
+                 of a byte, for their compilers to vectorize.",
             )
         },
         "histogram" => Workload {
@@ -220,7 +230,13 @@ fn workload(name: &str) -> Option<Workload> {
             ..Workload::new(
                 "sort",
                 "Sorts the lines of 64 MiB of standard input in byte order, as `LC_ALL=C sort` \
-                 does.",
+                 does. Each version sorts with its own language's sort: lengua's program finds \
+                 the lines 16 bytes a step from a bitmask of the newlines and orders their 4-byte \
+                 starts with a bottom-up merge sort, the template's, comparing two lines 16 bytes \
+                 at a time with SIMD128, written by hand, and prints them through a 1 MiB buffer; \
+                 C sorts with its C library's qsort (wasi-libc's in WebAssembly), C++ with \
+                 std::sort and Rust with sort_unstable, each comparing lines with its library's \
+                 memcmp or comparison of slices, and they print through a 64 KiB buffer.",
             )
         },
         "tally" => Workload {
@@ -228,7 +244,11 @@ fn workload(name: &str) -> Option<Workload> {
             ..Workload::new(
                 "tally",
                 "Counts each different word of 64 MiB of standard input, 4,096 different words \
-                 from common to rare, and prints them from the most frequent.",
+                 from common to rare, and prints them from the most frequent. lengua's program, \
+                 C and C++ count in a table of FNV-1a with linear probing, Rust in its HashMap \
+                 with FNV-1a; lengua's passes over whitespace and words 16 bytes at a time with \
+                 SIMD128, written by hand, and matches a word 16 bytes at a time, where the \
+                 others take a byte at a time.",
             )
         },
         "server" => Workload {
@@ -1690,6 +1710,14 @@ fn report(results: &Results) -> String {
          against_rust_and_c`, at commit {commit}, in {run}. Every number here is that run's: \
          the bench writes this file from the run's results alone, \
          target/bench/results-{target}.json in its artifacts.\n"
+    );
+    let _ = writeln!(
+        out,
+        "Every version of a workload does the same work in its own language's way: lengua's \
+         program in the fastest form lengua's dialect allows, with SIMD128 written by hand where \
+         the work is bytes, and C, C++ and Rust with their standard libraries and plain loops, \
+         written for their compilers to vectorize, with no SIMD written by hand. Each workload \
+         below says how each version does its work.\n"
     );
     let _ = writeln!(
         out,
