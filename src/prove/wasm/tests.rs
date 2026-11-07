@@ -1,8 +1,11 @@
-//! The WebAssembly model on its own: WebAssembly's integer semantics, each trap at its line of
-//! main.wat, lengua's library, the host's calls, what the model refuses to run, and a branch, a
-//! division, a load and counts of bits the input decides; then, with the solvers, the echo and
-//! greet fixtures proven for every input, add for numbers of up to three digits (for every input
-//! in a slow ignored test), and a planted bug in each found, the traps naming their lines.
+//! The WebAssembly model on its own: WebAssembly's integer, float and SIMD128 semantics, each trap
+//! at its line of main.wat, lengua's library, the host's calls, what the model refuses to run, a
+//! branch, a division, a load and counts of bits the input decides, `$fill` read as a whole, and
+//! where a read loop is; then, with the solvers, the echo and greet fixtures proven for every
+//! input, add for numbers of up to three digits (for every input in a slow ignored test), and a
+//! planted bug in each found, the traps naming their lines; cat-stream, the stream template, and
+//! lines and count in SIMD128 proven for every length by induction, a planted bug in each found;
+//! cat for every length its idea allows; the hypotenuse in doubles and the vector template.
 
 use std::collections::HashMap;
 use std::path::Path;
