@@ -205,6 +205,11 @@ Each merges to main when green on the runners it names; [ROADMAP.md](ROADMAP.md)
 - **W14. Package, `doctor` and release** on all five runners, and the agent's test in the
   interactive session.
 - **W15. The documents, the finish-line run, and the report.**
+- **W16. The repository tidied and presentable on GitHub** (the owner, 2026-11-07: "when
+  finished with lengua please tidy up the repo and make it presentable please in github"): a
+  README that presents lengua, the top level pruned, the merged work branches deleted (never
+  `wip/routes-ci`, `wip/r2-8a-snap` or `wip/r2-base-check`, which are the owner's), and the
+  repository's description and topics on GitHub.
 
 Runs, as they land:
 
@@ -219,7 +224,8 @@ Runs, as they land:
 | W5 | 42336485988 (the rules at 0534a06, on the seam: format, the suite on all five runners and the gate, green; the red team's refusals and the template passing every rule); its review's 23 findings fixed before it |
 | W6 | 42329274411 (the Attested Computation form alone, at 5791d73); 42345074041 (check and run for main.wat at 1c75e7d: format, the suite on all five runners and the gate, green, add from the request to done, run, `lengua-mcp run` and `lengua-mcp check`); the reviews' 15 and 17 findings fixed before them |
 | W7 | 42325471157 (the golden ledger, raw: the checker's and the prover's recordings identical, byte for byte); 42336209846 (the seam on main at d280fa1: format, the suite on all five runners and the gate, green) |
-| W8 | 42344545735 (the WebAssembly model and proofs, z3 and cvc5 on every runner, with add, echo and greet proven and planted bugs found); 42348682819 (stacked on W6 at dac4c7d: format, the suite on all five runners and the gate, green); the review's 11 findings fixed before them. Every length (step 3) and SIMD and floats (step 4) are to come |
+| W8 | 42344545735 (the WebAssembly model and proofs, z3 and cvc5 on every runner, with add, echo and greet proven and planted bugs found); 42348682819 (stacked on W6 at dac4c7d: format, the suite on all five runners and the gate, green); the review's 11 findings fixed before them; 42362037786 (check proves main.wat, at c6508b4: format, the suite on all five runners and the gate, green; the golden ledger 42357663706 differs only in sha256's load-dependent x86-64 line, not proven either way). Every length (step 3) and SIMD and floats (step 4) are to come |
+| W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
 
 ## Superseded by the pivot
 
