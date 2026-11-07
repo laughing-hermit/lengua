@@ -742,9 +742,11 @@ impl Call<'_> {
     /// Whether `fd` is the working folder, descriptor 3, still open, for an idea that names
     /// files.
     fn preopened(&self, fd: u32) -> bool {
-        fd == FOLDER
-            && self.module.policy.files
-            && matches!(self.core.fds.get(&fd), Some(Handle::Folder { path, .. }) if path.is_empty())
+        let working = matches!(
+            self.core.fds.get(&fd),
+            Some(Handle::Folder { path, .. }) if path.is_empty()
+        );
+        fd == FOLDER && self.module.policy.files && working
     }
 
     /// `fd_prestat_get(fd, out)`: the working folder is a preopen named `.`; any other
@@ -1264,7 +1266,12 @@ impl Call<'_> {
     }
 
     /// `path_filestat_get(fd, flags, path, length, out)`: a name's kind and size.
-    fn path_filestat_get(&mut self, fd: u32, (at, length): (u64, u64), out: u64) -> Result<(), Fail> {
+    fn path_filestat_get(
+        &mut self,
+        fd: u32,
+        (at, length): (u64, u64),
+        out: u64,
+    ) -> Result<(), Fail> {
         self.check(out, u64::from(size::FILESTAT))?;
         let names = self.resolve(fd, at, length)?;
         self.files()?;
@@ -1562,7 +1569,8 @@ impl Call<'_> {
                     timeout,
                     absolute,
                 } => {
-                    let known = id == u64::from(clock::REALTIME) || id == u64::from(clock::MONOTONIC);
+                    let known =
+                        id == u64::from(clock::REALTIME) || id == u64::from(clock::MONOTONIC);
                     let error = if !clocks {
                         Some(errno::NOTCAPABLE)
                     } else if !known {

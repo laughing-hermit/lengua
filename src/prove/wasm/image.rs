@@ -675,7 +675,9 @@ impl Module {
             let host = (module.as_str() == wasi::MODULE)
                 .then(|| wasi::function(name))
                 .flatten()
-                .ok_or_else(|| format!("it imports {module}.{name}, which lengua's host doesn't give"))?;
+                .ok_or_else(|| {
+                    format!("it imports {module}.{name}, which lengua's host doesn't give")
+                })?;
             if host.params.len() != params || host.results.len() != results {
                 return Err(format!(
                     "it imports {name} with a signature other than WASI's, which the engine won't \
@@ -746,7 +748,9 @@ impl Module {
                 function.import.is_none() && function.params == 0 && function.results == 0
             });
         if !starts {
-            return Err("its `_start` isn't a function of its own that takes and gives nothing".into());
+            return Err(
+                "its `_start` isn't a function of its own that takes and gives nothing".into(),
+            );
         }
         let entered = functions.iter().map(|_| AtomicBool::new(false)).collect();
         Ok(Self {

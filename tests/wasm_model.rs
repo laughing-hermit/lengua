@@ -248,7 +248,9 @@ fn every_host_case_runs_in_the_model_as_its_file_says() {
     for (wat, toml) in &cases {
         let outcome = match (std::fs::read_to_string(wat), std::fs::read_to_string(toml)) {
             (Ok(wat), Ok(text)) => match toml::from_str::<Case>(&text) {
-                Ok(case) => check(&wat, &case).map_err(|problem| format!("{}: {problem}", case.about)),
+                Ok(case) => {
+                    check(&wat, &case).map_err(|problem| format!("{}: {problem}", case.about))
+                }
                 Err(error) => Err(format!("the case doesn't read: {error}")),
             },
             (Err(error), _) => Err(format!("its module doesn't read: {error}")),
@@ -486,8 +488,8 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
         let wat = std::fs::read_to_string(wat_path).expect("the program reads");
         let idea = lengua::idea::parse(&idea_text)
             .unwrap_or_else(|problems| panic!("{shown}: {problems:?}"));
-        let suite =
-            lengua::testfile::check(&idea).unwrap_or_else(|problems| panic!("{shown}: {problems:?}"));
+        let suite = lengua::testfile::check(&idea)
+            .unwrap_or_else(|problems| panic!("{shown}: {problems:?}"));
         let program = Program::of_text(&wat).unwrap_or_else(|problem| panic!("{shown}: {problem}"));
         let policy = Policy::of(&idea.uses, &idea.network);
         let built = program.built().clone();

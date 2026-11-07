@@ -37,7 +37,13 @@ fn byte(module: &Module, core: &Wasm, pool: &mut Pool, address: u64) -> Term {
 
 /// The `bytes` bytes at `address`, which are inside the memory, as one little-endian value: the
 /// value stored there whole, when its bytes are still the ones it was split into.
-pub(super) fn read(module: &Module, core: &Wasm, pool: &mut Pool, address: u64, bytes: u32) -> Term {
+pub(super) fn read(
+    module: &Module,
+    core: &Wasm,
+    pool: &mut Pool,
+    address: u64,
+    bytes: u32,
+) -> Term {
     let parts: Vec<Term> = (0..u64::from(bytes))
         .map(|offset| byte(module, core, pool, address + offset))
         .collect();
