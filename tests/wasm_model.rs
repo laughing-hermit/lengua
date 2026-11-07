@@ -684,3 +684,38 @@ async fn the_model_refuses_a_recursion_the_engines_stack_runs_out_on() {
     let model = Module::new(program.built(), Policy::default());
     assert!(model.is_err(), "the model took it");
 }
+
+/// A module with the memory MEMORY that exits with what growing it a page gives, plus one: 2
+/// where it grows, from its one page, and 0 where it doesn't.
+const GROWS: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  MEMORY
+  (func (export "_start")
+    (call $exit (i32.add (memory.grow (i32.const 1)) (i32.const 1)))))
+"#;
+
+/// The memory grows in the model as far as the engine lets it: one the module keeps to itself to
+/// its maximum, or without one to the most a 32-bit memory has; one exported as `memory` to its
+/// maximum, or without one not at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_memory_grows_in_the_model_as_on_the_engine() {
+    let pool = Pool::new(launcher(), None);
+    for memory in [
+        "(memory 1)",
+        "(memory 1 3)",
+        "(memory (export \"memory\") 1)",
+        "(memory (export \"memory\") 1 3)",
+    ] {
+        let text = GROWS.replace("MEMORY", memory);
+        let program = Program::of_text(&text).unwrap_or_else(|problem| panic!("{problem}"));
+        let spec = Spec::new(&[], &[], Policy::default());
+        let engine = pool
+            .run(&program, spec, Limits::default())
+            .await
+            .expect("the engine runs it");
+        let module = Module::new(program.built(), Policy::default()).expect("the model");
+        let model = run(&module, &Given::default()).expect("the model runs it");
+        let found = differences(&engine, &model);
+        assert!(found.is_empty(), "{memory}: {}", found.join("; "));
+    }
+}
