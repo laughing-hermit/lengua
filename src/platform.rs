@@ -662,7 +662,10 @@ fn linux_caches(folder: &std::path::Path) -> Vec<Cache> {
                     .ok()
                     .map(|text| text.trim().to_owned())
             };
-            let level = read("level")?.parse::<u8>().ok().filter(|level| *level > 0)?;
+            let level = read("level")?
+                .parse::<u8>()
+                .ok()
+                .filter(|level| *level > 0)?;
             let holds = match read("type")?.as_str() {
                 "Data" => CacheHolds::Data,
                 "Instruction" => CacheHolds::Instructions,
@@ -1170,7 +1173,12 @@ mod tests {
         );
         write(
             "index1",
-            &[("level", "1"), ("type", "Instruction"), ("size", "32K"), line],
+            &[
+                ("level", "1"),
+                ("type", "Instruction"),
+                ("size", "32K"),
+                line,
+            ],
         );
         write(
             "index2",

@@ -1296,9 +1296,12 @@ fn the_secret_rule_refuses_every_way_a_secret_decides_how_the_program_runs() {
     let (text, report) = planted("(if (local.get $byte) (then (nop)))", true);
     let line = line_of(&text, "(if (local.get $byte)");
     assert!(
-        report.lines().iter().any(|shown| shown.starts_with(&format!(
-            "secrets main.wat:{line}: the condition of this `if` is computed from a secret"
-        ))),
+        report
+            .lines()
+            .iter()
+            .any(|shown| shown.starts_with(&format!(
+                "secrets main.wat:{line}: the condition of this `if` is computed from a secret"
+            ))),
         "{:#?}",
         report.lines()
     );
@@ -1441,7 +1444,12 @@ fn each_secret_input_is_secret_where_the_host_puts_it() {
         &[Source::Environment("KEY".to_owned())],
     );
     assert!(secret_lines(&report).is_empty(), "{:#?}", report.lines());
-    let report = check_secret(FILE_READ, &["files"], "", &[Source::File("key.txt".to_owned())]);
+    let report = check_secret(
+        FILE_READ,
+        &["files"],
+        "",
+        &[Source::File("key.txt".to_owned())],
+    );
     assert_eq!(
         secret_lines(&report),
         [line_of(FILE_READ, "(if (i32.load8_u (global.get $key))")],

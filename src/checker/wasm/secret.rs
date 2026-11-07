@@ -148,11 +148,9 @@ impl Marks {
 
     /// Whether any of bytes `start` to `end` of `region` may hold a secret.
     fn holds(&self, region: usize, start: u64, end: u64) -> bool {
-        self.regions.get(&region).is_some_and(|ranges| {
-            ranges
-                .iter()
-                .any(|&(low, high)| low < end && start < high)
-        })
+        self.regions
+            .get(&region)
+            .is_some_and(|ranges| ranges.iter().any(|&(low, high)| low < end && start < high))
     }
 
     /// Whether any byte may hold a secret.
@@ -602,9 +600,8 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
         self.frames
             .push(Frame::new(FrameKind::Block, None, 0, 0, results));
         self.run(0, &mut state);
-        let mut left: Option<(State, Vec<bool>)> = state
-            .reachable
-            .then(|| (state.clone(), self.top(results)));
+        let mut left: Option<(State, Vec<bool>)> =
+            state.reachable.then(|| (state.clone(), self.top(results)));
         if let Some(frame) = self.frames.pop() {
             for (exit, values) in frame.exits {
                 left = Some(match left {
@@ -830,8 +827,7 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
             }
             None => {
                 state.reachable = false;
-                self.stack
-                    .extend(std::iter::repeat_n(false, frame.results));
+                self.stack.extend(std::iter::repeat_n(false, frame.results));
             }
         }
     }
