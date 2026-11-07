@@ -202,6 +202,9 @@ Runs, as they land:
 |---|---|
 | W0 | 42295197937 (compile, both Linux runners); tag `native-final` at 723879e; main at fc86dd3 |
 | W1 | 42304173338 (test, both Linux runners, at ff68d40; the QEMU job's known failures aside); 42296519743 (the golden ledger against `native-final`: no checker or prover verdict changed) |
+| W2 | 42304371890 (the suite natively on all five runners at f762aa2; macOS's one failure, a proof's time test that a fast machine finished early, is fixed at e9f4700) |
+| W3 | 42308171081 (the suite on all five runners at 5acdb65; its format patch is applied at e9f4700) |
+| W3b | 42317583638 (at 2fb46f1, the chain's tip: format, the suite on all five runners and the gate, green); main fast-forwarded to it |
 
 ## Superseded by the pivot
 
