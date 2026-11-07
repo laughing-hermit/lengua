@@ -217,8 +217,9 @@ fn connect(connection: &Connection) -> (Link, Option<String>) {
     match connection {
         Connection::Test(port) => {
             let address = SocketAddr::from((Ipv4Addr::LOCALHOST, *port));
-            match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
-                Ok(stream) => (Link::Tcp(stream), None),
+            let connected = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT);
+            match connected.and_then(Link::tcp) {
+                Ok(link) => (link, None),
                 Err(error) => (
                     Link::Ended,
                     Some(format!("the test's server didn't answer: {error}")),
