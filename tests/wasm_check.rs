@@ -38,6 +38,15 @@ const SMALL_TABLE: &str = "| `int(-999, 999)` | `int(-999, 999)` | 200 |";
 /// none sums to zero: no test tries a sum of zero.
 const NO_ZERO_TABLE: &str = "| `int(-999, 999)` | `int(2, 500)` | 10 |";
 
+/// The numbers add's Purpose gives, where its generators take their ranges from.
+const ADD_PURPOSE: &str = "between `-1000000000` and `1000000000`.";
+
+/// [`ADD_PURPOSE`] for [`SMALL_TABLE`].
+const SMALL_PURPOSE: &str = "between `-999` and `999`.";
+
+/// [`ADD_PURPOSE`] for [`NO_ZERO_TABLE`].
+const NO_ZERO_PURPOSE: &str = "between `-999` and `999`, the second from `2` to `500`.";
+
 /// add's sign for a value below zero, which a wrong constant makes zero's too.
 const SIGN: &str = ";; The sign, for a value below zero.\n    (if (i64.lt_s (local.get $value) \
                     (i64.const 0))";
@@ -518,7 +527,8 @@ async fn add_s_proof_is_named_and_the_lock_keeps_it() {
     }
     let session = Session::proving_for(Protocol::Discover, PROOF_SECONDS).await;
     let program = Program::new();
-    program.write("idea.md", &changed(IDEA, ADD_TABLE, SMALL_TABLE));
+    let small = changed(IDEA, ADD_TABLE, SMALL_TABLE);
+    program.write("idea.md", &changed(&small, ADD_PURPOSE, SMALL_PURPOSE));
     let report = session.record(&program).await;
     assert_eq!(report["state"], "write_code", "{report}");
     program.write("main.wat", CODE);
@@ -584,7 +594,8 @@ async fn a_planted_wrong_constant_is_a_counterexample_through_check() {
     }
     let session = Session::proving_for(Protocol::Discover, PROOF_SECONDS).await;
     let program = Program::new();
-    program.write("idea.md", &changed(IDEA, ADD_TABLE, NO_ZERO_TABLE));
+    let no_zero = changed(IDEA, ADD_TABLE, NO_ZERO_TABLE);
+    program.write("idea.md", &changed(&no_zero, ADD_PURPOSE, NO_ZERO_PURPOSE));
     let report = session.record(&program).await;
     assert_eq!(report["state"], "write_code", "{report}");
     let below_one = SIGN.replace("(i64.const 0)", "(i64.const 1)");
