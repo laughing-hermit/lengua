@@ -4,6 +4,8 @@
 #include <optional>
 #include <string_view>
 
+#include "../io.h"
+
 namespace {
 std::optional<long long> parse(std::string_view text) {
     long long number = 0;
@@ -17,6 +19,7 @@ std::optional<long long> parse(std::string_view text) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    bench_binary();
     if (argc != 3) {
         std::fputs("usage: add <a> <b>\n", stderr);
         return 1;

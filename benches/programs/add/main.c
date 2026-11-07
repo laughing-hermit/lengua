@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "../io.h"
+
 static int parse(const char *text, long long *value) {
     char *end;
     errno = 0;
@@ -17,6 +19,7 @@ static int parse(const char *text, long long *value) {
 
 int main(int argc, char **argv) {
     long long a, b;
+    bench_binary();
     if (argc != 3) {
         fputs("usage: add <a> <b>\n", stderr);
         return 1;
