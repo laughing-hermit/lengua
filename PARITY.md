@@ -112,14 +112,20 @@ frontmatter is the native one's, byte for byte.
 - **Idea:** smaller. Its Purpose is one sentence; B2's title is "Shows the usage line without
   arguments"; it has no B3 (text that isn't a number in range, `error: not a number`, exit code 2)
   and no B4 (exit code 3 with standard output closed).
-- **Program:** text that isn't a number, or a number of more than 19 digits, gets the usage line
-  and exit code 1, where the native program prints `error: not a number` and exits with code 2. A
-  number past the idea's range, up to 9223372036854775807 either way, is added and printed, where
-  the native program refuses it as not a number. A closed standard output gives exit code 3, as
+- **Program:** text that isn't a number, a number of more than 19 digits, or one past
+  9223372036854775807 either way, gets the usage line and exit code 1, where the native program
+  prints `error: not a number` and exits with code 2. A number past the idea's range, up to
+  9223372036854775807 either way, is parsed and added in 64 bits, where the native program
+  refuses it as not a number. A sum from -9223372036854775807 to 9223372036854775807 is printed.
+  A sum past what 64 bits hold wraps, and the twin prints a wrong number and exits with code 0
+  (`9223372036854775807` and `9223372036854775807` print `-2`). A sum that comes to
+  -9223372036854775808, wrapped or not, has no magnitude in 64 bits, so assertion 5 fails with
+  exit code 134 (`9223372036854775807` and `1`). A closed standard output gives exit code 3, as
   natively, though no test of the twin tries it.
 - **Why:** the twin came first, as the fixture of `check`'s path for main.wat in W6 (d5d37ae,
   a7da239), then as the WebAssembly prover's (d31ee1c). No commit says why its idea has two
-  behaviors where the native one has four.
+  behaviors where the native one has four. Without B3, its main.wat checks only that each number
+  fits in 64 bits, and its comment on the sum (line 92) holds only for the idea's numbers.
 - **Proofs:** native: every pair of inputs (`src/prove/tests.rs`,
   `proves_add_for_every_pair_of_inputs`, ignored as slow; no run of it is named here). WebAssembly:
   B1 proven for numbers of up to three digits, by the prover (`src/prove/wasm/tests.rs`,
