@@ -4,9 +4,11 @@
 //! arbitrary head back to it, where what changed is compared with where it started.
 //!
 //! What the induction follows from one time round to the next is kept in the core's slots
-//! ([`Slot`]): a general register of the CPU's here. Where the run stood each time it reached
-//! the head, as far as the checks of the run need, the world keeps ([`World::at_head`]); what
-//! else the core held there, which a time round is compared with, the core keeps.
+//! ([`Slot`]): a general register of the CPU's here, a local, a global or an operand of
+//! WebAssembly's. Where the run stood each time it reached the head, as far as the checks of the
+//! run need, the world keeps ([`World::at_head`]), the one part every core shares; what else the
+//! core held there, which a time round is compared with, and how it takes the head, each core
+//! keeps its own way ([`Looping`]).
 //!
 //! [`World::at_head`]: crate::prove::world::World::at_head
 
@@ -14,7 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
-use super::{End, Last, Memory, Owner, Return, STACK_SIZE, STACK_TOP, State, VECTOR_BYTES};
+use super::{
+    Core, End, Last, Memory, Native, Owner, Return, STACK_SIZE, STACK_TOP, State, VECTOR_BYTES,
+};
 use crate::prove::formula::Phase;
 use crate::prove::term::{Pool, Term};
 use crate::prove::world::Arrival;
@@ -88,13 +92,15 @@ pub struct Fold {
     pub most: u128,
     /// The output's placeholder it counts for, by its place among the template's pieces.
     pub placeholder: usize,
+    /// How many bits the slot holds: a CPU register's 64, or a WebAssembly local's own width.
+    pub width: u32,
 }
 
 impl Fold {
     /// The slot's value at the head, any from its start to its start and its most.
     pub fn value(&self, pool: &mut Pool, slot: Slot) -> Term {
         pool.var_in(
-            64,
+            self.width,
             &format!("induction.f{slot}"),
             self.start,
             self.start + self.most,
@@ -112,6 +118,8 @@ pub struct PhaseFold {
     pub states: BTreeMap<u128, usize>,
     /// The output's placeholder whose count it carries the phase of.
     pub placeholder: usize,
+    /// How many bits the slot holds.
+    pub width: u32,
 }
 
 impl PhaseFold {
@@ -120,7 +128,7 @@ impl PhaseFold {
     pub fn value(&self, pool: &mut Pool, slot: Slot) -> Term {
         let low = self.states.keys().next().copied().unwrap_or(0);
         let high = self.states.keys().next_back().copied().unwrap_or(0);
-        pool.var_in(64, &format!("induction.p{slot}"), low, high)
+        pool.var_in(self.width, &format!("induction.p{slot}"), low, high)
     }
 
     /// That `value` is one of the slot's values.
@@ -129,7 +137,7 @@ impl PhaseFold {
             .states
             .keys()
             .map(|known| {
-                let known = pool.bv(64, *known);
+                let known = pool.bv(self.width, *known);
                 pool.eq(value, known)
             })
             .collect();
@@ -145,7 +153,7 @@ impl PhaseFold {
                     .iter()
                     .filter(|(_, state)| **state == matched)
                     .map(|(known, _)| {
-                        let known = pool.bv(64, *known);
+                        let known = pool.bv(self.width, *known);
                         pool.eq(value, known)
                     })
                     .collect();
@@ -153,6 +161,64 @@ impl PhaseFold {
             })
             .collect();
         Phase::of(conditions)
+    }
+}
+
+/// A core whose runs take a read loop's head for a proof by induction, each core its own way:
+/// what its slots hold, and what a time round the loop changed. Where the run stood at the head
+/// ([`Arrival`]) is the world's, shared by every core; the rest is the core's.
+pub trait Looping: Core {
+    /// What `slot` holds in `state` now.
+    fn held(state: &State<Self>, slot: Slot) -> Term;
+
+    /// What differs between where `state` stood the first time at the head and where it stands
+    /// now: nothing, for a run that never reached the head.
+    fn changes(state: &State<Self>) -> Changes;
+
+    /// What one buffer-full changed, by the second time `state` reached the head, for a run that
+    /// reads two from it.
+    fn changed(state: &State<Self>) -> Option<&Changes>;
+}
+
+/// A run's state, of any core that takes a read loop's head, as a proof by induction reads it.
+pub trait Held {
+    /// What `slot` holds now.
+    fn held(&self, slot: Slot) -> Term;
+
+    /// What differs between where the run stood the first time at the head and where it stands
+    /// now.
+    fn changes(&self) -> Changes;
+
+    /// What one buffer-full changed, by the second time at the head.
+    fn changed(&self) -> Option<&Changes>;
+}
+
+impl<C: Looping> Held for State<C> {
+    fn held(&self, slot: Slot) -> Term {
+        C::held(self, slot)
+    }
+
+    fn changes(&self) -> Changes {
+        C::changes(self)
+    }
+
+    fn changed(&self) -> Option<&Changes> {
+        C::changed(self)
+    }
+}
+
+/// x86-64's and AArch64's runs take fill's loop head, their slots the general registers.
+impl Looping for Native {
+    fn held(state: &State, slot: Slot) -> Term {
+        state.core.registers[slot.0]
+    }
+
+    fn changes(state: &State) -> Changes {
+        state.changes()
+    }
+
+    fn changed(state: &State) -> Option<&Changes> {
+        state.core.changed.as_deref()
     }
 }
 
