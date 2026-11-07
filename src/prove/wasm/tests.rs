@@ -1211,6 +1211,66 @@ fn a_fill_to_the_end_reads_input_of_any_length_whole_in_a_proof() {
     assert!(!run.world.raw_reads);
 }
 
+/// A program that reads standard input once before its read loop and again in the loop, and
+/// copies the loop's pieces only where that first read got nothing: of every input longer than
+/// its buffer of 64 bytes it prints the first 64 alone.
+const READS_BEFORE_ITS_LOOP: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    (local $first i32)
+    (local $got i32)
+    (local.set $first (call $fill (i32.const 0) (i32.const 1024) (i32.const 64) (i32.const -1)))
+    (drop (call $write_all (i32.const 1) (i32.const 1024) (local.get $first)))
+    (block $done
+      (loop $piece
+        (local.set $got
+          (call $fill (i32.const 0) (i32.const 1024) (i32.const 64) (i32.const -1)))
+        (br_if $done (i32.eqz (local.get $got)))
+        (if (i32.eqz (local.get $first))
+          (then (drop (call $write_all (i32.const 1) (i32.const 1024) (local.get $got)))))
+        (br $piece)))
+    (call $exit (i32.const 0))))
+"#;
+
+/// The runs of the first round of an induction's step on `text`: from the program's start with
+/// no input, every branch taken both ways, each fed `a` and `b` at the read loop's head and
+/// stopping when it comes back there.
+fn step_runs(text: &str, policy: Policy) -> (Pool, Vec<State<Wasm>>) {
+    let module = module(text, policy);
+    let hook = Hook {
+        head: module.read_loop_head().expect("a read loop"),
+        stop: true,
+        feed: Some(b"ab".to_vec()),
+        ..Hook::default()
+    };
+    let mut pool = Pool::default();
+    let start = begin(&module, &mut pool, &[], &[], Vec::new()).for_every_cut();
+    let start = hooked(start, Rc::new(hook));
+    let runs = exec::explore(&module, start, &mut pool, &mut Anything, 8).expect("the runs");
+    (pool, runs)
+}
+
+/// A read loop's head must be a run's first read, as fill's own loop's is in machine code: the
+/// step comes to the head with no input read, so a read before it got nothing, where a real
+/// run's got the input's first bytes. The step's run of a program that reads before its loop
+/// stops at the head, unfollowed.
+#[test]
+fn a_read_before_the_read_loops_head_stops_the_step() {
+    let reads = Policy {
+        standard_input: true,
+        ..Policy::default()
+    };
+    let (_, runs) = step_runs(READS_BEFORE_ITS_LOOP, reads);
+    let [run] = runs.as_slice() else {
+        panic!("{} runs", runs.len());
+    };
+    let Some(End::Unsupported(why)) = &run.world.end else {
+        panic!("{:?}", run.world.end);
+    };
+    assert!(why.contains("before the read loop's head"), "{why}");
+}
+
 /// cat-stream's copy, written a buffer-full at a time.
 const WRITES: &str = "(call $write_all (global.get $STDOUT) (global.get $buffer) (local.get $got))";
 
@@ -1254,6 +1314,26 @@ fn proves_a_streaming_copy_for_every_length_by_induction() {
         panic!("a dropped byte: {found:?}");
     };
     assert!(text.len() >= 4096, "a dropped byte: {} bytes", text.len());
+}
+
+/// The program that reads before its loop, which an induction whose step began with that read
+/// getting nothing would prove for every length: proven by length, the bytes past its first
+/// buffer-full it drops are found.
+#[test]
+fn finds_the_bytes_a_read_before_the_read_loop_drops() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_of("cat-stream");
+    let built = build(READS_BEFORE_ITS_LOOP).expect("it builds");
+    let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(900));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("a read before the loop: {verdict:?}");
+    };
+    let Some(Value::Str(text)) = found.get("text") else {
+        panic!("a read before the loop: {found:?}");
+    };
+    assert!(text.len() > 64, "{} bytes", text.len());
 }
 
 /// The stream template with a buffer of 256 bytes, so the base's lengths go by quickly, as the

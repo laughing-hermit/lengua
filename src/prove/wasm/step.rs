@@ -480,6 +480,11 @@ fn call(
     if let Some(function) = callee.import {
         return host::call(module, state, pool, function, at);
     }
+    // Every read a proof by induction takes is a call of `$fill`: the read loop's must be the
+    // first.
+    if module.fill == Some(index) {
+        state.core.filled = true;
+    }
     // lengua's `$fill` on standard input, read as a whole, where a proof takes every way the
     // input can be cut.
     if module.fill == Some(index)

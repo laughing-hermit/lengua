@@ -1,6 +1,8 @@
 //! A WebAssembly run's part in a proof by induction over a read loop
 //! ([`crate::prove::induction`]). The loop's head is the call of lengua's `$fill` in a loop of
-//! main.wat's own code, where each time round starts its read ([`Module::read_loop_head`]). The
+//! main.wat's own code, where each time round starts its read ([`Module::read_loop_head`]). It
+//! must be the run's first read, as every read passes fill's own loop's head in machine code: the
+//! step comes to it with no input read, as a real run does only where nothing read before. The
 //! slots ([`Slot`]) are the globals, then each call's locals, the oldest call's first, then the
 //! operands, as the run holds them there: a time round leaves the calls under way as they were,
 //! so each slot is the same place every time round.
@@ -172,8 +174,8 @@ fn read_at_head(module: &Module, core: &Wasm, pool: &Pool) -> Option<(u64, u64)>
 ///
 /// # Errors
 ///
-/// Ends the step's run back at the head, and a run whose head isn't a read of standard input
-/// through `$fill` the model can follow.
+/// Ends the step's run back at the head, and a run that read before it came there, or whose
+/// head isn't a read of standard input through `$fill` the model can follow.
 pub(super) fn arrive(
     module: &Module,
     state: &mut State<Wasm>,
@@ -200,6 +202,14 @@ pub(super) fn arrive(
     }
     if arrivals != 1 {
         return Ok(());
+    }
+    // The step comes to the head from the program's start with no input, so a read before it
+    // got nothing, where a real run's got the input's first bytes: the step's state at the head
+    // would be none a real run is in. In machine code every read passes fill's own loop's head.
+    if state.core.filled {
+        return Err(End::Unsupported(
+            "a call of $fill before the read loop's head, which the step can't start from".into(),
+        ));
     }
     let Some((fd, room)) = read_at_head(module, &state.core, pool) else {
         return Err(End::Unsupported(
