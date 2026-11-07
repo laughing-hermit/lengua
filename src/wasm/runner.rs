@@ -32,6 +32,45 @@ pub const UNSTARTED: i32 = 127;
 /// The stack of the thread a program runs on: room for the engine's own and the program's.
 pub const STACK: usize = 16 * 1024 * 1024;
 
+/// The most files a process that runs programs holds open at once: the
+/// [`crate::runner::OPEN_FILES`] a program may hold, and room for the process's own, such as its
+/// standard streams, the program's working folder and what the engine opens, within macOS's
+/// `OPEN_MAX` of 10,240.
+pub const PROCESS_FILES: u64 = crate::runner::OPEN_FILES + 256;
+
+/// Lets this process hold [`PROCESS_FILES`] files at once, so a program holds as many as it may
+/// on every system before it gets `MFILE`: on a Unix, the soft limit is raised to it when it is
+/// lower, and the hard limit kept. Windows has no such limit to raise.
+///
+/// # Errors
+///
+/// When this computer's hard limit is lower, saying how to raise it.
+pub fn make_room() -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+        let limit = getrlimit(Resource::Nofile);
+        if limit.current.is_some_and(|current| current < PROCESS_FILES) {
+            setrlimit(
+                Resource::Nofile,
+                Rlimit {
+                    current: Some(PROCESS_FILES),
+                    maximum: limit.maximum,
+                },
+            )
+            .map_err(|error| {
+                format!(
+                    "this computer won't let lengua hold {PROCESS_FILES} open files, the {} a \
+                     program may hold on every system and lengua's own ({error}); raise the hard \
+                     limit (`ulimit -Hn`)",
+                    crate::runner::OPEN_FILES
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 /// The most files read back from a working folder after a run, as for a native program.
 const MAX_FILES_BACK: usize = 256;
 
@@ -473,8 +512,10 @@ pub struct Here<'a> {
 ///
 /// # Errors
 ///
-/// When the module can't be compiled or given what it asks.
+/// When the module can't be compiled or given what it asks, or this process can't hold the files
+/// it may.
 pub fn run_here(wasm: &[u8], here: &Here<'_>) -> io::Result<End> {
+    make_room().map_err(io::Error::other)?;
     let joined = std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("lengua program".to_owned())

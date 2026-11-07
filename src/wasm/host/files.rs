@@ -114,10 +114,28 @@ fn path_of(names: &[String]) -> PathBuf {
     }
 }
 
+/// Whether the system said this process, or the whole system, holds too many files open.
+#[cfg(unix)]
+fn too_many_open(error: &std::io::Error) -> bool {
+    use rustix::io::Errno;
+    Errno::from_io_error(error)
+        .is_some_and(|number| number == Errno::MFILE || number == Errno::NFILE)
+}
+
+/// Whether the system said this process holds too many files open: Windows's handles have no
+/// limit a program reaches before its own.
+#[cfg(not(unix))]
+fn too_many_open(_: &std::io::Error) -> bool {
+    false
+}
+
 /// WASI's error for what the system said, as far as it's one of the closed set.
 #[must_use]
 pub fn errno_of(error: &std::io::Error) -> u16 {
     use std::io::ErrorKind;
+    if too_many_open(error) {
+        return errno::MFILE;
+    }
     match error.kind() {
         ErrorKind::NotFound => errno::NOENT,
         ErrorKind::PermissionDenied => errno::ACCES,
@@ -791,6 +809,17 @@ mod tests {
         assert_eq!(names(&[], "REPORT~1.TXT"), Err(errno::INVAL));
         assert_eq!(names(&[], &"a".repeat(256)), Err(errno::NAMETOOLONG));
         assert_eq!(names_in(&[], b"a\xffb"), Err(errno::ILSEQ));
+    }
+
+    /// A system out of room for open files says so as `MFILE`, as the descriptor table does at
+    /// its own limit, never as `IO`.
+    #[cfg(unix)]
+    #[test]
+    fn too_many_open_files_is_mfile() {
+        for number in [rustix::io::Errno::MFILE, rustix::io::Errno::NFILE] {
+            let error = std::io::Error::from_raw_os_error(number.raw_os_error());
+            assert_eq!(errno_of(&error), errno::MFILE, "{error}");
+        }
     }
 
     fn folder_with(entries: &[(&str, &str)]) -> (tempfile::TempDir, Files) {

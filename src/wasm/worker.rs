@@ -2,7 +2,8 @@
 //! runs WebAssembly jobs one after another, each in a fresh store from a module it compiled once
 //! and keeps. It reads [`Request`]s on its standard input and writes [`Event`]s on its standard
 //! output ([`crate::wasm::job`]). It exits when its standard input ends, so a server that is
-//! killed leaves no program running behind it.
+//! killed leaves no program running behind it. Before its first job it makes room for the files
+//! a program may hold ([`runner::make_room`]), as many on every system.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
@@ -31,6 +32,8 @@ const KEPT_STOPS: usize = 16;
 struct Worker {
     /// Where compiled modules are kept on disk.
     cache: Option<PathBuf>,
+    /// Why this process can't hold the files a program may, when it can't: then no job starts.
+    no_room: Option<String>,
     /// Each configuration's engine and linker, once made.
     engines: BTreeMap<Setup, (Engine, Linker<Host>)>,
     /// Compiled modules, by configuration and hash.
@@ -81,6 +84,9 @@ impl Worker {
 
     /// Runs `job` to its end.
     fn run(&mut self, job: &Job, stop: Arc<AtomicBool>, events: mpsc::Sender<Event>) -> Done {
+        if let Some(problem) = &self.no_room {
+            return runner::unstarted(job.id, problem.clone(), Vec::new());
+        }
         // The connections and the listener first: the server waits on them as the job starts.
         let (world, reached) = match runner::world(job, stop, Some(events)) {
             Ok(world) => world,
@@ -138,6 +144,9 @@ fn read_requests(jobs: &mpsc::Sender<(Job, Arc<AtomicBool>)>) {
 #[must_use]
 pub fn main(mut args: impl Iterator<Item = OsString>) -> ExitCode {
     let cache = args.next().filter(|arg| arg != "none").map(PathBuf::from);
+    // Room for the files a program may hold, before any job: where there's none, each job says
+    // why instead of starting.
+    let no_room = runner::make_room().err();
     let (jobs, queue) = mpsc::channel::<(Job, Arc<AtomicBool>)>();
     let (events, outbox) = mpsc::channel::<Event>();
 
@@ -170,6 +179,7 @@ pub fn main(mut args: impl Iterator<Item = OsString>) -> ExitCode {
         .spawn(move || {
             let mut worker = Worker {
                 cache,
+                no_room,
                 engines: BTreeMap::new(),
                 modules: BTreeMap::new(),
                 order: VecDeque::new(),
