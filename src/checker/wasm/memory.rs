@@ -152,10 +152,11 @@ impl Range {
         }
     }
 
-    /// Whether a limit bounds it as a 32-bit number.
+    /// Whether a limit bounds it as a 32-bit number: every 32-bit number is a bound, the largest
+    /// too, so an offset of -1 is one the rules judge.
     #[must_use]
     pub fn bounded(&self) -> bool {
-        self.high < u64::from(u32::MAX)
+        self.high <= u64::from(u32::MAX)
     }
 
     /// Its one value, when it has one.
@@ -169,22 +170,28 @@ impl Range {
         self.high != u64::MAX || self.checked
     }
 
-    /// It as a number of `bits` bits: past them, anything.
+    /// It as a number of `bits` bits: past them, anything. A number the rules bound past the
+    /// width wraps, so nothing checked what it becomes.
     fn width(self, bits: u32) -> Self {
-        if self.high > max_of(bits) {
+        if self.high <= max_of(bits) {
+            self
+        } else if self.high == u64::MAX {
             Self {
                 checked: self.checked,
                 ..Self::full()
             }
         } else {
-            self
+            Self::full()
         }
     }
 
-    /// Anything, checked as much as `inputs` were.
+    /// Anything, from `inputs`: checked only when one of them was checked against a limit the
+    /// rules don't follow, and the others are bounded or checked too, so the proof holds it.
+    /// What the rules bound and the result outgrows has wrapped, and nothing checked it.
     fn unknown(inputs: &[Self]) -> Self {
+        let unfollowed = inputs.iter().any(|input| input.high == u64::MAX);
         Self {
-            checked: inputs.iter().all(Self::sound),
+            checked: unfollowed && inputs.iter().all(Self::sound),
             ..Self::full()
         }
     }
@@ -598,9 +605,10 @@ fn range_of(operator: &Operator<'_>, a: Range, b: Range, bits: u32) -> Range {
                 Range::unknown(&[a, b])
             }
         }
+        // WebAssembly shifts by the amount modulo the width.
         Operator::I32Shl | Operator::I64Shl => match b.constant() {
-            Some(shift) if shift < u64::from(bits) && a.high != u64::MAX => {
-                let shift = u32::try_from(shift).unwrap_or(0);
+            Some(shift) if a.high != u64::MAX => {
+                let shift = u32::try_from(shift % u64::from(bits)).unwrap_or(0);
                 match a
                     .high
                     .checked_shl(shift)
@@ -618,14 +626,19 @@ fn range_of(operator: &Operator<'_>, a: Range, b: Range, bits: u32) -> Range {
                 let high = if a.high == u64::MAX { max } else { a.high };
                 Range::between(a.low >> shift, high >> shift)
             }
+            // However far it shifts, never more than it was.
+            None if a.high != u64::MAX => Range::between(0, a.high),
             None => Range::unknown(&[a, b]),
         },
-        Operator::I32RemU | Operator::I64RemU if b.low >= 1 && b.high != u64::MAX => {
-            Range::between(0, a.high.min(b.high - 1))
+        // Below the divisor and never more than the dividend; a zero divisor traps, which the
+        // checks of determinism report.
+        Operator::I32RemU | Operator::I64RemU if b.high != u64::MAX => {
+            Range::between(0, a.high.min(b.high.saturating_sub(1)))
         }
-        Operator::I32DivU | Operator::I64DivU if b.low >= 1 => {
+        Operator::I32RemU | Operator::I64RemU if a.high != u64::MAX => Range::between(0, a.high),
+        Operator::I32DivU | Operator::I64DivU if b.low >= 1 || a.high != u64::MAX => {
             let high = if a.high == u64::MAX { max } else { a.high };
-            Range::between(a.low / b.high.max(1), high / b.low)
+            Range::between(a.low / b.high.max(1), high / b.low.max(1))
         }
         Operator::I32Clz | Operator::I32Ctz | Operator::I32Popcnt => Range::between(0, 32),
         Operator::I64Clz | Operator::I64Ctz | Operator::I64Popcnt => Range::between(0, 64),
@@ -646,6 +659,13 @@ fn offset_plus(offset: Offset, value: &Value, index: Option<u32>) -> Offset {
         };
     };
     let range = range.width(32);
+    // A constant of half the 32 bits or more takes the address back, as `i32.add` wraps.
+    if let Some(value) = range.constant()
+        && value >= 1_u64 << 31
+        && let Ok(value) = i64::try_from(value)
+    {
+        return offset.shifted(value - (1_i64 << 32));
+    }
     let bounded = range.bounded();
     let low = offset
         .low

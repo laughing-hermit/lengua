@@ -315,6 +315,42 @@ const ATTEMPTS: &[Attempt] = &[
         refusal: Refusal::Rule(Rule::Immutability, "writes to $usage, a read-only region"),
     },
     Attempt {
+        name: "an address taken back by -1, as i32.add wraps",
+        edits: &[(
+            "    (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get $NEWLINE))\n",
+            "    (i32.store8 (i32.add (global.get $out) (i32.const -1)) (global.get $NEWLINE))\n",
+        )],
+        module: None,
+        refusal: Refusal::Rule(Rule::Bounds, "1 byte before the start of $out"),
+    },
+    Attempt {
+        name: "an offset that wraps past 32 bits to land outside its region",
+        edits: &[(
+            "    (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get $NEWLINE))\n",
+            "    (i32.store8 (i32.add (global.get $out) (i32.add (i32.const -1) (i32.const 101))) \
+             (global.get $NEWLINE))\n",
+        )],
+        module: None,
+        refusal: Refusal::Rule(Rule::Indirection, "isn't bounds-checked first"),
+    },
+    Attempt {
+        name: "an index checked against the largest 32-bit number, which bounds nothing",
+        edits: &[
+            (
+                "  (global $NINE i32 (i32.const 9))\n",
+                "  (global $NINE i32 (i32.const 9))\n  (global $ALL_ONES i32 (i32.const -1))\n",
+            ),
+            (
+                "    (if (i32.ge_u (local.get $i) (global.get $args.size))\n      (then (call \
+                 $assert_fail (i32.const 3)) unreachable))\n",
+                "    (if (i32.gt_u (local.get $i) (global.get $ALL_ONES))\n      (then (call \
+                 $assert_fail (i32.const 3)) unreachable))\n",
+            ),
+        ],
+        module: None,
+        refusal: Refusal::Rule(Rule::Indirection, "reaches byte 4294967295 of $args"),
+    },
+    Attempt {
         name: "lengua's addresses below 1024, through a plain number",
         edits: &[(
             "    (local.set $magnitude (local.get $value))\n",
