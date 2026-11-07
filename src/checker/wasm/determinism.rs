@@ -1,8 +1,13 @@
 //! Every computer computes the same bits: no relaxed SIMD and no atomics, whose results differ
-//! between computers or need threads; no NaN's bits observed, through `reinterpret` of a float
-//! that may be NaN; only the saturating conversions to integers, never the trapping ones; and
-//! every division guarded, its divisor checked not zero and, for a signed one, the most negative
-//! number divided by -1 ruled out, or that last left to the proof.
+//! between computers or need threads; no NaN's bits taken as a number, through `reinterpret` of
+//! a float that may be NaN; only the saturating conversions to integers, never the trapping ones;
+//! and every division guarded, its divisor checked not zero and, for a signed one, the most
+//! negative number divided by -1 ruled out, or that last left to the proof.
+//!
+//! `reinterpret` is the one view of a NaN's bits the checks follow. A float stored to memory
+//! and read back as an integer, or a float vector's lanes read as integers, aren't followed:
+//! there the engine's canonical NaNs (`src/wasm/engine.rs`) keep the bits the same on every
+//! computer, as the standard says.
 
 use wasmparser::Operator;
 
