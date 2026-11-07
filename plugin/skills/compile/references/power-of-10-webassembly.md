@@ -51,7 +51,9 @@ its own memory, and it reaches the computer only through the calls its idea allo
 - **One memory**, declared once with its minimum equal to its maximum (rule 3). No `memory.grow`.
 - **No start function, no tables, no element segments**, so no `call_indirect` (rule 9).
 - **lengua's library** is merged into the module by `check`: `$assert_fail`, `$fill` and
-  `$write_all`. Call them; never define them. Names beginning `$lengua.` are lengua's.
+  `$write_all`. Call them; never define them. Names beginning `$lengua.` are lengua's. Name every
+  function you call or export (`$name`), never its number: the library's imports come first, so
+  the merge changes every number, and `check` refuses one.
 - **The language:** WebAssembly 2.0 with SIMD128: integers, floats, bulk memory (`memory.copy`,
   `memory.fill`), multiple results, sign extension, saturating conversions, and the
   deterministic 128-bit vector instructions. Not threads or atomics, relaxed SIMD, wide
