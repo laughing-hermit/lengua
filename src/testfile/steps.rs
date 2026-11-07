@@ -1295,10 +1295,20 @@ mod tests {
                              Then it prints `x` and a newline\n- And it exits with code `0`";
 
     /// The problems lengua finds once the step at `at` in [`STE_STEPS`] says `text` instead: an
-    /// idea that holds such a step needn't come from idea.md's own reading.
+    /// idea that holds such a step needn't come from idea.md's own reading. The step's values
+    /// are `text`'s own, as reading it would give them.
     fn changed(at: usize, text: &str) -> Vec<Problem> {
         let mut idea = idea_with(STE_STEPS, "- Uses: standard input");
-        idea.behaviors[0].steps[at].text = text.to_owned();
+        let step = &mut idea.behaviors[0].steps[at];
+        step.text = text.to_owned();
+        step.values = step
+            .tokens()
+            .into_iter()
+            .filter_map(|token| match token {
+                Token::Value(value) => Some(value),
+                Token::Word(_) => None,
+            })
+            .collect();
         example(&idea.behaviors[0], &idea).expect_err("a step it doesn't read")
     }
 
