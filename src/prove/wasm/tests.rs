@@ -235,10 +235,10 @@ fn each_trap_ends_the_run_at_its_line() {
             "its calls went deeper than the stack holds",
         ),
         (
-            "(module\n  (import \"wasi_snapshot_preview1\" \"fd_write\"\n    (func $fd_write (param \
-             i32 i32 i32 i32) (result i32)))\n  (memory (export \"memory\") 1 1)\n  (func (export \
-             \"_start\")\n    (drop (call $fd_write (i32.const 1) (i32.const 65532) (i32.const 1) \
-             (i32.const 0)))))\n"
+            "(module\n  (import \"wasi_snapshot_preview1\" \"fd_write\"\n    (func $fd_write \
+             (param i32 i32 i32 i32) (result i32)))\n  (memory (export \"memory\") 1 1)\n  (func \
+             (export \"_start\")\n    (drop (call $fd_write (i32.const 1) (i32.const 65532) \
+             (i32.const 1) (i32.const 0)))))\n"
                 .to_owned(),
             6,
             "it reached memory outside its own",
