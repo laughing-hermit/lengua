@@ -296,7 +296,8 @@ mod tests {
     #[test]
     fn a_module_uses_the_features_it_needs() {
         let used = |text: &str| {
-            let built = crate::wasm::text::build(text).unwrap_or_else(|problem| panic!("{problem}"));
+            let built =
+                crate::wasm::text::build(text).unwrap_or_else(|problem| panic!("{problem}"));
             features_used(&built.wasm)
         };
         assert!(used("(module (func))").is_empty());

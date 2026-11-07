@@ -507,7 +507,9 @@ pub(super) fn run_from_shell(
         cache: Some(cache.as_path()),
         built: Some(&built),
     };
-    match run_here(&built.wasm, &here).map_err(|error| format!("couldn't run the program: {error}"))? {
+    match run_here(&built.wasm, &here)
+        .map_err(|error| format!("couldn't run the program: {error}"))?
+    {
         End::Exited(code) => Ok(code),
         trapped @ End::Trapped(..) => {
             eprintln!(
@@ -560,11 +562,7 @@ impl LenguaServer {
             None => match self.wasm_code(folder, &code, idea, suite) {
                 Ok(code) => self.start_wasm_checking(folder, files, code).await,
                 Err(problems) => {
-                    return Ok(CheckReport::problems(
-                        "code_problems",
-                        problems,
-                        fix_code(folder),
-                    ));
+                    return Ok(CheckReport::problems("code_problems", problems, fix_code(folder)));
                 }
             },
         };
@@ -827,11 +825,7 @@ impl LenguaServer {
         params: &RunParams,
     ) -> Result<RunReport, String> {
         let (built, idea) = runnable(&self.data_dir, folder, &params.env)?;
-        let workspace = params
-            .folder
-            .as_deref()
-            .map(working_folder)
-            .transpose()?;
+        let workspace = params.folder.as_deref().map(working_folder).transpose()?;
         let seconds = params.timeout_seconds.unwrap_or(10);
         if !(1..=RUN_SECONDS).contains(&seconds) {
             return Err(format!("timeout_seconds goes from 1 to {RUN_SECONDS}"));
@@ -845,7 +839,8 @@ impl LenguaServer {
         };
         let assertions = built.assertions.clone();
         let program = Arc::new(
-            Program::new(built).map_err(|error| format!("lengua couldn't keep the module: {error}"))?,
+            Program::new(built)
+                .map_err(|error| format!("lengua couldn't keep the module: {error}"))?,
         );
         let connections = reaches(&idea.network);
         let spec = Spec {
@@ -859,11 +854,7 @@ impl LenguaServer {
             setup: Setup::Run,
             max_written: None,
             alone: true,
-            ..Spec::new(
-                &params.args,
-                &stdin,
-                Policy::of(&idea.uses, &idea.network),
-            )
+            ..Spec::new(&params.args, &stdin, Policy::of(&idea.uses, &idea.network))
         };
         if idea.network.listens.is_some() {
             return self
@@ -956,9 +947,8 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     let found = std::env::current_dir()
         .map_err(|error| format!("can't read the current folder: {error}"))
         .and_then(|here| {
-            let joined = here.join(path);
-            std::fs::canonicalize(&joined)
-                .map_err(|error| format!("{}: {error}", joined.display()))
+            let named = here.join(path);
+            std::fs::canonicalize(&named).map_err(|error| format!("{}: {error}", named.display()))
         })
         .and_then(|folder| ProgramFolder::new(&folder.to_string_lossy()));
     let folder = match found {
@@ -1229,7 +1219,10 @@ mod tests {
             line.contains(&format!("Wasmtime {}", engine::ENGINE_VERSION)),
             "{line}"
         );
-        assert!(line.contains("Cranelift") && line.contains("simd"), "{line}");
+        assert!(
+            line.contains("Cranelift") && line.contains("simd"),
+            "{line}"
+        );
         assert!(!line.contains("LLVM") && !line.contains('\n'), "{line}");
         // Only what the dialect lets main.wat use: no reference types, and mutable globals are
         // 1.0's.

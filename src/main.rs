@@ -311,7 +311,10 @@ mod tests {
     #[test]
     fn a_shell_run_takes_the_program_s_arguments_after_its_folder() {
         let args = |list: &[&str]| parse_run(words(list)).map(|request| request.args);
-        assert_eq!(args(&["./add", "2", "3"]), Ok(vec!["2".to_owned(), "3".to_owned()]));
+        assert_eq!(
+            args(&["./add", "2", "3"]),
+            Ok(vec!["2".to_owned(), "3".to_owned()])
+        );
         assert_eq!(
             args(&["./add", "--", "-2", "3"]),
             Ok(vec!["-2".to_owned(), "3".to_owned()])
