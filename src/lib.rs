@@ -43,4 +43,5 @@ pub mod testdiff;
 pub mod testfile;
 pub mod testrun;
 pub mod toolchain;
+pub mod trust;
 pub mod wasm;

@@ -16,7 +16,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::data_dir::DataDir;
-use crate::hash::Sha256Hex;
 use crate::lock::{self, Key};
 use crate::state::{CODE_FILES, IDEA_FILE};
 
@@ -405,10 +404,10 @@ fn typed(path: &Path) -> bool {
 }
 
 /// What changed in `folder` since its lengua.lock recorded it, as `key` reads the lock: its idea,
-/// `idea` now, or its code.
+/// `idea` now, but for its trust record, or its code.
 fn stale(folder: &Path, idea: &[u8], code: Option<&str>, key: Option<&Key>) -> Option<Stale> {
     let recorded = lock::read(folder, key).ok().flatten()?;
-    if recorded.idea.sha256 != Sha256Hex::of(idea) {
+    if recorded.idea.sha256 != crate::trust::idea_hash(idea) {
         return Some(Stale::Idea);
     }
     let stamp = recorded.code?;
