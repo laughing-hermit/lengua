@@ -1,7 +1,8 @@
 //! How far a WebAssembly program may go: its memory up to the size its module declares, its table
 //! up to [`TABLE_ELEMENTS`], its time up to a deadline, which also bounds every call of the host
 //! that waits, its output up to a cap per stream, each file up to a size and all it writes to
-//! files up to a total.
+//! files up to a total, in which each file or folder it makes counts as a block, and a write past
+//! a file's end counts the gap it leaves as well as its bytes.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,9 +16,15 @@ use crate::wasm::wasi::errno;
 /// The most a host call waits between two looks at the deadline and at lengua's stop.
 pub const SLICE: Duration = Duration::from_millis(20);
 
-/// The most bytes a test's program writes to files in all, every write counted: past it a write
-/// is cut short, and the next fails with `FBIG`, as past one file's limit.
+/// The most bytes a test's program writes to files in all, every write counted, with the gap a
+/// write past a file's end leaves and an [`ENTRY`] for each file or folder it makes: past it a
+/// write is cut short, and the next fails with `FBIG`, as past one file's limit, as does a new
+/// file or folder.
 pub const TEST_WRITTEN: u64 = 256 * 1024 * 1024;
+
+/// What each file or folder a program makes counts for in the total it may write: a block, as a
+/// system holds every name in room of its own, so the total bounds how many it makes too.
+pub const ENTRY: u64 = 4096;
 
 /// The most elements a module's table may hold, whatever the module declares or grows it to: room
 /// for every function a C, C++ or Rust toolchain's module calls through its table, and at 8
@@ -104,25 +111,51 @@ impl Limits {
         })
     }
 
-    /// How many of `wanted` bytes a write at `position` of a file may write: all, fewer when it
-    /// would cross the file's limit or the total, none when it is there already.
+    /// How many of `wanted` bytes a write at `position` of a file may write, `gap` bytes past the
+    /// file's end: all, fewer when it would cross the file's limit or the total, which the gap
+    /// counts against as well, as some systems fill it, none when it is there already.
     ///
     /// # Errors
     ///
     /// `FBIG` for a write of something at a limit already.
-    pub fn file_write(&self, position: u64, wanted: usize) -> Result<usize, Fail> {
+    pub fn file_write(&self, position: u64, gap: u64, wanted: usize) -> Result<usize, Fail> {
         let wanted_bytes = u64::try_from(wanted).unwrap_or(u64::MAX);
         let mut room = wanted_bytes;
         if let Some(limit) = self.max_file {
             room = room.min(limit.saturating_sub(position));
         }
         if let Some(limit) = self.max_written {
-            room = room.min(limit.saturating_sub(self.written));
+            room = room.min(limit.saturating_sub(self.written).saturating_sub(gap));
         }
         if room == 0 && wanted > 0 {
             return Err(Fail::Errno(errno::FBIG));
         }
         Ok(usize::try_from(room).unwrap_or(wanted))
+    }
+
+    /// Counts a write of `bytes` bytes, `gap` bytes past a file's end, against the total.
+    pub fn wrote(&mut self, gap: u64, bytes: usize) {
+        self.written = self
+            .written
+            .saturating_add(gap)
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+    }
+
+    /// Counts a file or folder the program is about to make against the total, as an
+    /// [`ENTRY`]: counted whether or not the system then makes it.
+    ///
+    /// # Errors
+    ///
+    /// `FBIG` when the total has no room for one more, and nothing is counted.
+    pub fn make(&mut self) -> Result<(), Fail> {
+        if self
+            .max_written
+            .is_some_and(|limit| limit.saturating_sub(self.written) < ENTRY)
+        {
+            return Err(Fail::Errno(errno::FBIG));
+        }
+        self.written = self.written.saturating_add(ENTRY);
+        Ok(())
     }
 }
 
@@ -175,26 +208,51 @@ mod tests {
     #[test]
     fn a_write_that_crosses_a_files_limit_is_cut_short_and_the_next_fails() {
         let limits = limits(Some(10), None);
-        assert_eq!(limits.file_write(0, 4).ok(), Some(4));
-        assert_eq!(limits.file_write(8, 4).ok(), Some(2));
+        assert_eq!(limits.file_write(0, 0, 4).ok(), Some(4));
+        assert_eq!(limits.file_write(8, 0, 4).ok(), Some(2));
         assert!(matches!(
-            limits.file_write(10, 1),
+            limits.file_write(10, 0, 1),
             Err(Fail::Errno(errno::FBIG))
         ));
         // Nothing to write is never past a limit.
-        assert_eq!(limits.file_write(10, 0).ok(), Some(0));
+        assert_eq!(limits.file_write(10, 0, 0).ok(), Some(0));
     }
 
     #[test]
     fn the_total_written_holds_across_files() {
         let mut limits = limits(Some(100), Some(10));
         limits.written = 7;
-        assert_eq!(limits.file_write(0, 5).ok(), Some(3));
+        assert_eq!(limits.file_write(0, 0, 5).ok(), Some(3));
         limits.written = 10;
         assert!(matches!(
-            limits.file_write(0, 1),
+            limits.file_write(0, 0, 1),
             Err(Fail::Errno(errno::FBIG))
         ));
+    }
+
+    #[test]
+    fn the_gap_a_write_past_the_end_leaves_counts_against_the_total() {
+        let mut gapped = limits(Some(100), Some(10));
+        // Six bytes past the end, the total has room for four bytes more.
+        assert_eq!(gapped.file_write(6, 6, 8).ok(), Some(4));
+        gapped.wrote(6, 4);
+        assert_eq!(gapped.written, 10);
+        assert!(matches!(
+            gapped.file_write(20, 10, 1),
+            Err(Fail::Errno(errno::FBIG))
+        ));
+    }
+
+    #[test]
+    fn each_file_or_folder_made_counts_an_entry_of_the_total() {
+        let mut total = limits(None, Some(2 * ENTRY));
+        assert_eq!(total.make(), Ok(()));
+        assert_eq!(total.make(), Ok(()));
+        assert_eq!(total.make(), Err(Fail::Errno(errno::FBIG)));
+        assert_eq!(total.written, 2 * ENTRY);
+        // Without a total, there is no end to it.
+        let mut free = limits(None, None);
+        assert_eq!(free.make(), Ok(()));
     }
 
     #[test]

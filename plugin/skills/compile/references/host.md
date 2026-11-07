@@ -57,8 +57,10 @@ anything the call wrote (rule 7):
 | ISDIR | 31 | | NOTCAPABLE | 76 |
 | MFILE | 33 | | | |
 
-A closed standard output gives `PIPE`; a file past its limit gives `FBIG`; a name another program
-holds gives `BUSY`.
+A closed standard output gives `PIPE`; a file past its limit gives `FBIG`, and so does a write, a
+new file or a new folder past the total a test's program may write, in which each file and folder
+counts as 4,096 bytes and a write past a file's end counts the gap it leaves; a name another
+program holds gives `BUSY`.
 
 ## The clock and random bytes
 

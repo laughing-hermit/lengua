@@ -10,7 +10,9 @@
 //! - a file or folder the program holds open isn't renamed or removed: `BUSY`;
 //! - a folder lists sorted by name, turned round in a test's second run, without `.` and `..`;
 //! - a write that takes a file past its limit, or the files past their total, is cut short and
-//!   the next fails with `FBIG`.
+//!   the next fails with `FBIG`; the total counts a block for each file or folder made, which
+//!   fails with `FBIG` past it too, and the gap a write past a file's end leaves, which some
+//!   systems fill.
 
 use std::collections::BTreeMap;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
@@ -315,6 +317,14 @@ fn files(host: &mut Host) -> Result<&mut Files, Fail> {
     host.files.as_mut().ok_or(Fail::Errno(errno::NOTCAPABLE))
 }
 
+/// The working folder, as [`files`] gives it, and the run's limits, which count each file and
+/// folder a call makes there.
+fn files_and_limits(host: &mut Host) -> Result<(&mut Files, &mut Limits), Fail> {
+    let Host { files, limits, .. } = host;
+    let files = files.as_mut().ok_or(Fail::Errno(errno::NOTCAPABLE))?;
+    Ok((files, limits))
+}
+
 /// The names of the folder `fd` is, which a path is resolved from.
 fn base(fds: &Table, fd: u32) -> Result<Vec<String>, Fail> {
     match fds.get(fd) {
@@ -410,7 +420,7 @@ pub fn path_open(
     let append = opening.fdflags & fdflags::APPEND != 0;
     let write = opening.rights & rights::FD_WRITE != 0 || append || empty;
     let read = opening.rights & rights::FD_READ != 0 || !write;
-    let files = files(host)?;
+    let (files, limits) = files_and_limits(host)?;
     let found = files.find(&names).map_err(Fail::Errno)?;
     let descriptor = match found {
         Some(Kind::Link | Kind::Other) => return Err(Fail::Errno(errno::ACCES)),
@@ -431,6 +441,10 @@ pub fn path_open(
             }
             if found.is_none() && files.clashes(&names).map_err(Fail::Errno)? {
                 return Err(Fail::Errno(errno::EXIST));
+            }
+            // A new file counts against the total.
+            if found.is_none() {
+                limits.make()?;
             }
             let mut options = OpenOptions::new();
             options
@@ -472,7 +486,8 @@ pub fn read(open: &mut Open, buffer: &mut [u8]) -> Result<usize, Fail> {
     open.file.read(buffer).map_err(|error| failed(&error))
 }
 
-/// Writes `bytes` to `open`, as far as its limits let it.
+/// Writes `bytes` to `open`, as far as its limits let it. A write past the file's end counts the
+/// gap it leaves against the total as well, as some systems fill it.
 ///
 /// # Errors
 ///
@@ -481,20 +496,27 @@ pub fn write(open: &mut Open, limits: &mut Limits, bytes: &[u8]) -> Result<usize
     if !open.write {
         return Err(Fail::Errno(errno::BADF));
     }
-    let position = if open.append {
-        open.file.metadata().map(|metadata| metadata.len())
+    let (position, gap) = if open.append {
+        (length_of(open)?, 0)
     } else {
-        open.file.stream_position()
-    }
-    .map_err(|error| failed(&error))?;
-    let room = limits.file_write(position, bytes.len())?;
+        let position = seek(open, 0, whence::CUR)?;
+        // The file's length is read only where there's a total to count the gap against.
+        let gap = if limits.max_written.is_some() {
+            position.saturating_sub(length_of(open)?)
+        } else {
+            0
+        };
+        (position, gap)
+    };
+    let room = limits.file_write(position, gap, bytes.len())?;
     let wrote = open
         .file
         .write(&bytes[..room])
         .map_err(|error| failed(&error))?;
-    limits.written = limits
-        .written
-        .saturating_add(u64::try_from(wrote).unwrap_or(u64::MAX));
+    // A write that wrote nothing left no gap.
+    if wrote > 0 {
+        limits.wrote(gap, wrote);
+    }
     Ok(wrote)
 }
 
@@ -635,12 +657,14 @@ pub fn path_create_directory(
     path: (u32, u32),
 ) -> Result<(), Fail> {
     let names = resolve(host, memory, fd, path.0, path.1)?;
-    let files = files(host)?;
+    let (files, limits) = files_and_limits(host)?;
     if files.find(&names).map_err(Fail::Errno)?.is_some()
         || files.clashes(&names).map_err(Fail::Errno)?
     {
         return Err(Fail::Errno(errno::EXIST));
     }
+    // A new folder counts against the total.
+    limits.make()?;
     files
         .root
         .create_dir(path_of(&names))

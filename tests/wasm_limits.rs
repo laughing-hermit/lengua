@@ -14,7 +14,7 @@ use lengua::connect::Reach;
 use lengua::runner::{End, Limits, OPEN_FILES, Run};
 use lengua::supply::{Supply, Time};
 use lengua::wasm::engine::Setup;
-use lengua::wasm::host::limits::TABLE_ELEMENTS;
+use lengua::wasm::host::limits::{ENTRY, TABLE_ELEMENTS};
 use lengua::wasm::job::{self, Job, Request};
 use lengua::wasm::runner::UNSTARTED;
 use lengua::wasm::{Policy, Pool, Program, Spec};
@@ -393,11 +393,12 @@ async fn a_file_past_its_limit_is_cut_short_and_the_next_write_fails() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_files_total_holds_across_files() {
-    // Two files, two writes of 6 each, against a total of 14: 12 go to the first, 2 to the
-    // second, and its next write fails with FBIG.
+    // Two files, each an entry of the total, and two writes of 6 each, against a total of two
+    // entries and 14 bytes: 12 go to the first, 2 to the second, and its next write fails with
+    // FBIG.
     let text = writes(&["a.txt", "b.txt"], 6);
     let spec = Spec {
-        max_written: Some(14),
+        max_written: Some(2 * ENTRY + 14),
         ..Spec::new(&[], &[], files())
     };
     let ran = run(&text, spec, Limits::default()).await;
@@ -405,6 +406,76 @@ async fn the_files_total_holds_across_files() {
     let written = ran.files.expect("its files");
     assert_eq!(written.get("a.txt").map(Vec::len), Some(12));
     assert_eq!(written.get("b.txt").map(Vec::len), Some(2));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_file_and_folder_made_counts_against_the_files_total() {
+    let mkdir = r#"(import "wasi_snapshot_preview1" "path_create_directory"
+    (func $mkdir (param i32 i32 i32) (result i32)))"#;
+    // Folders a and b, then the file d and the folder c, against a total of two entries: the
+    // last two fail with FBIG, and neither is made.
+    let text = module(
+        &[mkdir, OPEN, EXIT],
+        r#"(data (i32.const 100) "abcd")
+  (func (export "_start")
+    (local $errno i32)
+    (local.set $errno (call $mkdir (i32.const 3) (i32.const 100) (i32.const 1)))
+    (if (local.get $errno) (then (call $exit (local.get $errno))))
+    (local.set $errno (call $mkdir (i32.const 3) (i32.const 101) (i32.const 1)))
+    (if (local.get $errno) (then (call $exit (local.get $errno))))
+    (local.set $errno (call $open (i32.const 3) (i32.const 0) (i32.const 103) (i32.const 1)
+      (i32.const 9) (i64.const 64) (i64.const 0) (i32.const 0) (i32.const 0)))
+    (if (i32.ne (local.get $errno) (i32.const 22))
+      (then (call $exit (i32.add (i32.const 100) (local.get $errno)))))
+    (call $exit (call $mkdir (i32.const 3) (i32.const 102) (i32.const 1))))"#,
+    );
+    let spec = Spec {
+        max_written: Some(2 * ENTRY),
+        ..Spec::new(&[], &[], files())
+    };
+    let ran = run(&text, spec, Limits::default()).await;
+    assert_eq!(exited(&ran), 22);
+    assert!(ran.files.expect("its files").is_empty());
+    assert_eq!(ran.folders, BTreeSet::from(["a".to_owned(), "b".to_owned()]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_write_past_a_files_end_counts_its_gap_against_the_files_total() {
+    let seek = r#"(import "wasi_snapshot_preview1" "fd_seek"
+    (func $seek (param i32 i64 i32 i32) (result i32)))"#;
+    // out.txt, an entry of the total, then a byte at 50 and one at 1,000, against a total of an
+    // entry and 100 bytes: the first byte and its gap of 50 fit, the second's gap of 949 doesn't.
+    let text = module(
+        &[OPEN, seek, WRITE, EXIT],
+        r#"(data (i32.const 100) "out.txt")
+  (data (i32.const 200) "x")
+  (func (export "_start")
+    (local $errno i32)
+    (local.set $errno (call $open (i32.const 3) (i32.const 0) (i32.const 100) (i32.const 7)
+      (i32.const 9) (i64.const 64) (i64.const 0) (i32.const 0) (i32.const 0)))
+    (if (local.get $errno) (then (call $exit (local.get $errno))))
+    (i32.store (i32.const 8) (i32.const 200))
+    (i32.store (i32.const 12) (i32.const 1))
+    (local.set $errno (call $seek (i32.load (i32.const 0)) (i64.const 50) (i32.const 0)
+      (i32.const 24)))
+    (if (local.get $errno) (then (call $exit (local.get $errno))))
+    (local.set $errno (call $fd_write (i32.load (i32.const 0)) (i32.const 8) (i32.const 1)
+      (i32.const 16)))
+    (if (local.get $errno) (then (call $exit (local.get $errno))))
+    (local.set $errno (call $seek (i32.load (i32.const 0)) (i64.const 1000) (i32.const 0)
+      (i32.const 24)))
+    (if (local.get $errno) (then (call $exit (local.get $errno))))
+    (call $exit (call $fd_write (i32.load (i32.const 0)) (i32.const 8) (i32.const 1)
+      (i32.const 16))))"#,
+    );
+    let spec = Spec {
+        max_written: Some(ENTRY + 100),
+        ..Spec::new(&[], &[], files())
+    };
+    let ran = run(&text, spec, Limits::default()).await;
+    assert_eq!(exited(&ran), 22);
+    let written = ran.files.expect("its files");
+    assert_eq!(written.get("out.txt").map(Vec::len), Some(51));
 }
 
 /// Makes a link at `at` to the folder `target`, if this system lets the test.
