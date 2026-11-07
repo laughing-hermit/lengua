@@ -165,7 +165,13 @@ solver_licences() {
 }
 
 # The solvers, each as tools.tsv pins it for the target, checked against its SHA-256: z3 with
-# its own libraries beside it, as its archive keeps them, for a z3 that loads one.
+# what of its archive it loads beside it. On Windows that is the DLLs beside z3.exe, but
+# Microsoft.Z3.dll, z3's .NET binding, which z3 never loads; elsewhere, z3's own library only
+# when the z3 program links it (as readelf or otool lists it), since a z3 with it built in, such
+# as Linux's, needs nothing beside it.
+z3_links() {
+  readelf -d "$1" 2> /dev/null || otool -L "$1" 2> /dev/null || echo "libz3, as nothing here lists"
+}
 mkdir -p "$out/solvers" "$out/licenses"
 for tool in z3 cvc5; do
   row="$(awk -F'\t' -v t="$tool" -v g="$target" '$1 == t && $2 == g { print $3 " " $4 }' "$tools")"
@@ -191,8 +197,18 @@ for tool in z3 cvc5; do
   cp "$program" "$out/solvers/$tool$exe"
   chmod 755 "$out/solvers/$tool$exe"
   if [ "$tool" = z3 ]; then
-    find "$(dirname "$program")" -maxdepth 1 -type f \
-      \( -name 'libz3.so*' -o -name 'libz3.dylib' -o -name '*.dll' \) -exec cp {} "$out/solvers/" \;
+    case "$target" in
+      windows-*)
+        find "$(dirname "$program")" -maxdepth 1 -type f -name '*.dll' ! -name 'Microsoft.Z3.dll' \
+          -exec cp {} "$out/solvers/" \;
+        ;;
+      *)
+        if grep -q libz3 <<< "$(z3_links "$program")"; then
+          find "$(dirname "$program")" -maxdepth 1 -type f \
+            \( -name 'libz3.so*' -o -name 'libz3.dylib' \) -exec cp {} "$out/solvers/" \;
+        fi
+        ;;
+    esac
   fi
   solver_licences "$tool" "$unpacked" "$url"
   tag="$(sed -n 's#.*/releases/download/\([^/]*\)/.*#\1#p' <<< "$url")"
@@ -321,7 +337,7 @@ listed() {
   printf '%s' "${list:+$list and }$last"
 }
 
-# What z3's archive ships beside z3, which solvers/ keeps as it is: z3's own library, and on
+# What solvers/ keeps beside z3, from z3's archive: z3's own library where z3 loads it, and on
 # Windows Microsoft's Visual C++ runtime.
 z3_own="" microsoft=""
 for file in $(cd "$out/solvers" && ls); do
