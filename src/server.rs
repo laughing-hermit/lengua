@@ -92,6 +92,11 @@ fn green_grace() -> Duration {
 /// What a proof that stopped short of the idea's lengths says it can do.
 const FURTHER: &str = "; check with prove_further to prove on from there";
 
+/// What `check`'s done reply for main.wat says of lengua's entry in idea.md's `verified`, which
+/// check writes as it replies done; a reply leaves it out when the entry didn't go in.
+const VERIFIED_NOTE: &str = " idea.md's verified list now holds lengua's entry for this idea and \
+                             this main.wat, until a proof finds main.wat wrong.";
+
 /// How long the proof of one version may take: [`PROOF_TIME`], or `LENGUA_PROOF_SECONDS` for
 /// tests that aren't about proofs.
 fn proof_time() -> Duration {
@@ -1867,11 +1872,13 @@ impl LenguaServer {
                 if checking.code == WASM_CODE_FILE {
                     self.unverify(folder, checking).await;
                 }
-            }
-            if last {
-                last_line = Some((index, detail, wrong));
+                // Then its line goes final, the last block's too: the lock already records the
+                // finding, so no reply need wait for its last write to say the build is wrong.
+                set(index, detail, true);
+            } else if last {
+                last_line = Some((index, detail, false));
             } else {
-                set(index, detail, wrong);
+                set(index, detail, false);
             }
         }
         if proven_ids.is_empty() && bounded_ids.is_empty() && wrong_ids.is_empty() {
@@ -2056,8 +2063,7 @@ impl LenguaServer {
         };
         // check writes lengua's entry in main.wat's idea as it replies done.
         let verified = if code == WASM_CODE_FILE {
-            " idea.md's verified list now holds lengua's entry for this idea and this main.wat, \
-             until a proof finds main.wat wrong."
+            VERIFIED_NOTE
         } else {
             ""
         };

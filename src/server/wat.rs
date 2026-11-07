@@ -19,9 +19,9 @@ use tokio::sync::watch;
 use super::{
     BlockProof, CheckParams, CheckReport, Checking, ConnectionReport, FURTHER, Found, IdeaStage,
     LenguaServer, Model, Passed, Prover, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun,
-    Stage, Witness, already_serving, background_limits, check_wait, cost_line_in, counted,
-    ended_report, idea_problems, proof_time, proven_detail, random_seed, reaches, read_idea,
-    read_optional, settled, state_of, wait_for, working_folder,
+    Stage, VERIFIED_NOTE, Witness, already_serving, background_limits, check_wait, cost_line_in,
+    counted, ended_report, idea_problems, proof_time, proven_detail, random_seed, reaches,
+    read_idea, read_optional, settled, state_of, wait_for, working_folder,
 };
 use crate::checker::{self, wasm::Obligation};
 use crate::connect::Reach;
@@ -703,11 +703,16 @@ impl LenguaServer {
         if *checking.stage.borrow() == Stage::Ended {
             self.write_header(folder, &checking).await;
         }
-        let report = self.checking_report(folder, &checking);
+        let mut report = self.checking_report(folder, &checking);
+        // lengua's entry as the reply says done, though proofs may still be running. When it
+        // doesn't go in, as when a proof has just found main.wat wrong, the reply says what holds
+        // now, and claims no entry.
+        if report.state == "done" && !self.write_verified(folder, &checking).await {
+            report = self.checking_report(folder, &checking);
+            report.next_step = report.next_step.replace(VERIFIED_NOTE, "");
+        }
         let proven_wrong = checking.found.lock().is_ok_and(|found| found.wrong);
         if report.state == "done" {
-            // lengua's entry as the reply says done, though proofs may still be running.
-            self.write_verified(folder, &checking).await;
             events.push(graph::Event::Done);
         } else if proven_wrong {
             events.push(graph::Event::ProvenWrong);
@@ -909,15 +914,16 @@ impl LenguaServer {
     /// job ends with every test passed: lengua and its version, the time, and the idea and the
     /// code it checked, provided both files are still those, no proof found the code wrong, and
     /// lengua's entry doesn't say so already. idea.md's hash leaves `verified` out, so the lock
-    /// still holds.
-    pub(super) async fn write_verified(&self, folder: &ProgramFolder, checking: &Checking) {
+    /// still holds. Gives whether idea.md holds that entry once it returns, so that a reply
+    /// claims only an entry that's there.
+    pub(super) async fn write_verified(&self, folder: &ProgramFolder, checking: &Checking) -> bool {
         let [idea, code] = &checking.files;
         let _writing = self.lock_writes.lock().await;
         // Under the lock of the writes: a proof that finds main.wat wrong records it in
         // lengua.lock, then takes the entry away, each under this lock too, so whichever comes
         // first, no entry is left for a build found wrong.
         if checking.found.lock().is_ok_and(|found| found.wrong) {
-            return;
+            return false;
         }
         let recorded_wrong = Key::load(&self.data_dir)
             .ok()
@@ -928,34 +934,40 @@ impl LenguaServer {
                 proofs.executable_sha256 == checking.executable && !proofs.wrong.is_empty()
             });
         if recorded_wrong {
-            return;
+            return false;
         }
         let path = folder.file(IDEA_FILE);
         let Ok(text) = std::fs::read_to_string(&path) else {
-            return;
+            return false;
         };
         let current = std::fs::read(folder.file(WASM_CODE_FILE))
             .ok()
             .map(|bytes| Sha256Hex::of(&bytes));
         if trust::idea_hash(text.as_bytes()) != *idea || current.as_ref() != Some(code) {
-            return;
+            return false;
         }
         if let [entry] = trust::lengua_entries(&text).as_slice()
             && entry.by == trust::ACTOR
             && entry.idea == *idea
             && entry.code == *code
         {
-            return;
+            return true;
         }
         let entry = trust::Verified::new(trust::utc(now_seconds()), idea.clone(), code.clone());
         let written = trust::with_lengua_verified(&text, &entry);
-        if written != text
-            && let Err(error) = replace(&path, &written)
-        {
-            eprintln!(
-                "lengua: couldn't write lengua's entry in {}: {error}",
-                path.display()
-            );
+        // An idea.md with no frontmatter has no `verified` to hold it.
+        if written == text {
+            return false;
+        }
+        match replace(&path, &written) {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!(
+                    "lengua: couldn't write lengua's entry in {}: {error}",
+                    path.display()
+                );
+                false
+            }
         }
     }
 
