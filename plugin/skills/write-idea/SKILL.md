@@ -31,9 +31,10 @@ what it promises.
    call `check` then.
 4. `check` lists every problem at once, in the idea and in its tests, with the fix for each; fix
    them all and call it again. If its `next_step` starts with "Blocked", tell the user and stop.
-   Then follow its `next_step`: next comes `main.s`, with the compile skill. Its `graph` lines
-   say how the program's bundle stands, each starting with how much it matters: fix what
-   `blocks` first, then the warnings in the ideas you wrote; tell the user the rest.
+   Then follow its `next_step`: next comes the code, `main.s` or for an Attested Computation
+   `main.wat`, with the compile skill. Its `graph` lines say how the program's bundle stands,
+   each starting with how much it matters: fix what `blocks` first, then the warnings in the
+   ideas you wrote; tell the user the rest.
 
 ## The idea
 
@@ -48,7 +49,13 @@ by one concrete example in its steps, and its generated tests try that rule with
 - **Frontmatter:** `type: lengua/program-idea`, a short `title` and a one-sentence
   `description`, which `check` requires and the bundle's `index.md` lists the program with.
   Never add a `status` field: the record lives in `lengua.lock`, and any edit to the idea, even a
-  status change, is recorded again.
+  status change, is recorded again. Where `check` asks for an Attested Computation (it does where
+  lengua builds no `main.s`), the idea is an
+  [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format) Attested
+  Computation, whose code is `main.wat`: its frontmatter is `type: Attested Computation`, the same
+  `title` and `description`, then `runtime: webassembly`, `computation: main.wat`, and lengua's
+  `executor` and `attester`, which `check`'s problems give word for word. The rest of the idea is
+  the same.
 - **Sections:** `# Purpose`, `# Behaviors` and `# Constraints`.
 - **Purpose** says in plain words what the program does, for whom and why. It then gives in
   backticks the range of every number the program reads and the length of any text it reads,

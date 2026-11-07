@@ -1,15 +1,18 @@
 ---
 name: compile
-description: Compiles a lengua program's idea.md into main.s, assembly for this computer's target, Linux on x86-64 or AArch64 (integer, vector and floating-point instructions) that passes every test in the idea, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly). Use after check records the idea, when the lengua check tool says to write main.s or reports problems in it, when someone shares an idea to build on this computer, or when the user asks for a faster program. Ends when check says done, with a short report to the user.
+description: Compiles a lengua program's idea.md into main.s, assembly for this computer's target, Linux on x86-64 or AArch64 (integer, vector and floating-point instructions) that passes every test in the idea, in lengua's dialect checked against the lengua Power of 10 (NASA's rules adapted for assembly); an Attested Computation's idea it compiles into main.wat, WebAssembly text that runs the same on every computer. Use after check records the idea, when the lengua check tool says to write main.s or main.wat or reports problems in it, when someone shares an idea to build on this computer, or when the user asks for a faster program. Ends when check says done, with a short report to the user.
 license: Apache-2.0
-compatibility: Needs the lengua MCP server from the lengua plugin, on Linux x86-64 or ARM64 with LLVM (llvm-mc and ld.lld).
+compatibility: Needs the lengua MCP server from the lengua plugin; main.s also needs Linux x86-64 or ARM64 with LLVM (llvm-mc and ld.lld).
 ---
 
 # Compile a lengua idea
 
 > lengua is moving to WebAssembly: a program's code becomes `main.wat`, the same on every
 > computer, held to [the WebAssembly dialect](references/power-of-10-webassembly.md) and calling
-> only [lengua's host](references/host.md). Until `check` takes `main.wat`, compile `main.s` as
+> only [lengua's host](references/host.md). For an idea of `type: Attested Computation`, `check`
+> takes `main.wat` and refuses `main.s`: write `<path>/main.wat` in the shape of
+> [the WebAssembly template](assets/main-template.wat), by those two references, then call
+> `check` and follow it until it says done, as below. For any other idea, compile `main.s` as
 > below.
 
 `main.s` is the program: assembly for this computer's target, Linux on x86-64 or on AArch64,
