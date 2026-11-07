@@ -110,19 +110,27 @@ or run.
 | `plugin/.claude-plugin/plugin.json`, `plugin/.mcp.json` | Claude Code, which ignores the standard's two files |
 
 Both MCP configs start the same binary, `plugin/server/lengua-mcp` (built by
-`scripts/build-plugin.sh`, not committed). `scripts/release.sh` builds the release archive for
-the computer's CPU, `dist/lengua-<version>-x86_64-linux.tar.gz` or
-`dist/lengua-<version>-aarch64-linux.tar.gz`, with a SHA-256 beside it: the plugin with its
-server built, `install.sh` and a short README, so installing needs no Rust toolchain. The server
-needs glibc 2.39 or later. `install.sh` checks for that, LLVM's assembler and linker and the two
-solvers, prints the `dnf` or `apt` line for anything missing, and copies the plugin to
-`~/.local/share/lengua/plugin`; `--link` puts `lengua-mcp` in `~/.local/bin`. The script then
-checks the archive as a user gets it: unpacked in a fresh folder, installed, validated, and
-add taken from its spec to done through the archive's own server over MCP
-(`scripts/release-check.py`), then run from a shell with the done reply's command: one spec,
-compiled for each CPU (`examples/add` on x86-64, `tests/fixtures/linux-aarch64/add` on ARM64).
-`install.sh` refuses an archive built for another CPU. Nothing is
-published. A test holds the crate's version and both manifests' to one. The server keeps its private data in
+`scripts/build-plugin.sh`, not committed). `scripts/release.sh` builds the release archive of the
+computer it runs on, `dist/lengua-<version>-<target>.tar.gz` (a `.zip` on Windows) for one of the
+five targets, with its SHA-256 beside it, so installing needs no Rust toolchain and no other tool.
+The archive is the plugin, ready to load: the skills and the manifests (on Windows naming
+`lengua-mcp.exe`); `server/lengua-mcp`, built with none of the shell's `RUSTFLAGS` and on Windows
+with the C runtime linked in; `solvers/` with the z3 and cvc5 that `scripts/ci/tools.tsv` pins for
+the target, checked by SHA-256; `LICENSE` and `licenses/`, with each solver's licences and every
+Rust crate compiled into the server with its licence and the licence files it ships; `TARGET`;
+and `install.sh` or `install.ps1`. The prover, and `lengua-mcp doctor`, look for each solver in
+the `solvers` folder beside the server's own folder first, then on PATH. The install script
+refuses another system or CPU (on Linux, a glibc older than 2.39 too), copies the plugin into a
+marketplace folder of lengua's own, `plugins` in lengua's data folder (or `--prefix`), adds it
+to Claude Code with `claude plugin marketplace add` and `claude plugin install` when `claude` is
+installed, and runs `lengua-mcp doctor`: the server, the engine (compiling and running a module
+with every feature on), the CPU, both solvers and their pinned versions, whether the data folder
+and `PLUGIN_DATA` can be written, and the clock's resolution, one line each and what to do about a
+problem. CI's `release` mode builds each archive on its own runner, then installs it on a clean
+runner of the same system and CPU, runs doctor, and runs the release check
+(`tests/release_check.rs`): add from its idea to done through the archive's own server with
+rmcp's client, run through `run` and from a shell, and attested. Nothing is published or signed.
+A test holds the crate's version and both manifests' to one. The server keeps its private data in
 `~/.local/share/lengua` (or `$XDG_DATA_HOME/lengua`): one signing key per user, shared by every
 harness, so a lock recorded in one harness verifies in all of them.
 

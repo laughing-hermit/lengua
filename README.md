@@ -134,11 +134,16 @@ scripts/build-plugin.sh
 This builds the server and installs it at `plugin/server/lengua-mcp`, where both plugin manifests
 expect it. Run it again after every change to the Rust code.
 
-`scripts/release.sh` builds an archive for this computer's CPU that installs with no Rust
-toolchain, `dist/lengua-<version>-x86_64-linux.tar.gz` or `dist/lengua-<version>-aarch64-linux.tar.gz`,
-and checks it as a user would get it; the ARM64 one is built on GitHub's ARM64 runners too (the
-workflow's `release` run). Unpack it anywhere and run its `install.sh`, which checks what lengua
-needs, says how to install anything missing, and refuses an archive built for another CPU.
+`scripts/release.sh` builds the release archive of the computer it runs on, one of the five lengua
+is built for: `dist/lengua-<version>-<target>.tar.gz` for `linux-x86_64`, `linux-aarch64` and
+`macos-aarch64`, or a `.zip` for `windows-x86_64` and `windows-aarch64`. It holds the plugin with
+its server built, the z3 and cvc5 that CI pins for that system and CPU, the licences of all of it,
+and `install.sh` (`install.ps1` on Windows), which refuses another system or CPU, copies the
+plugin into a marketplace folder of lengua's own, adds it to Claude Code when `claude` is
+installed, and ends with `lengua-mcp doctor`: one line for each thing lengua needs, and what to do
+about anything missing. CI's `release` run builds each archive on its own runner, then installs
+it on a clean runner of the same system and CPU and checks it there through a plain MCP client
+(`tests/release_check.rs`). The archives are unsigned, and nothing is published.
 
 ## Use it
 
