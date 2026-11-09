@@ -1,8 +1,8 @@
 ---
 name: compile
-description: Compiles a lengua program's idea.md, an Open Knowledge Format Attested Computation, into main.wat, WebAssembly text in lengua's dialect that the lengua check tool builds, holds to the lengua Power of 10 (NASA's rules adapted for WebAssembly, with memory rules like Rust's), tests, proves and runs the same way on every computer. An idea of type lengua/program-idea it compiles into main.s, assembly for Linux on x86-64 or ARM64, until lengua retires that path. Use after check records the idea, when check says to write main.wat or main.s or reports problems in it, when someone shares an idea to build here, or when the user asks for a faster program. Ends when check says done, with a short report to the user.
+description: Compiles a lengua program's idea.md, an Open Knowledge Format Attested Computation, into main.wat, WebAssembly text in lengua's dialect that the lengua check tool builds, holds to the lengua Power of 10 (NASA's rules adapted for WebAssembly, with memory rules like Rust's), tests, proves and runs the same way on every computer. Use after check records the idea, when check says to write main.wat or reports problems in it, when someone shares an idea to build here, or when the user asks for a faster program. Ends when check says done, with a short report to the user.
 license: Apache-2.0
-compatibility: Needs the lengua MCP server from the lengua plugin. Only main.s, for an idea of type lengua/program-idea, also needs Linux on x86-64 or ARM64 with LLVM (llvm-mc and ld.lld).
+compatibility: Needs the lengua MCP server from the lengua plugin.
 ---
 
 # Compile a lengua idea
@@ -21,10 +21,8 @@ For an idea with a `- Secret:` line, write `main.wat` by [the secret rule](refer
 with masks where a branch would decide on a secret. The `machine` line names the CPU's caches, and
 [caches.md](references/caches.md) says how to lay work out for them.
 
-The idea's frontmatter says which code it takes. `type: Attested Computation` takes `main.wat`, by
-the steps below. `type: lengua/program-idea`, an idea from before WebAssembly, takes `main.s`,
-assembly for this computer, by the last section. `check` refuses the other code file and says
-which to write.
+The idea is an Attested Computation (`type: Attested Computation`), and its code is `main.wat`
+alone, by the steps below: `check` refuses any other code file and says what to do.
 
 ## Steps
 
@@ -121,8 +119,11 @@ which to write.
      time reached, and tested beyond, as the line says. When it ends with
      `check with prove_further to prove on from there`, a `check` with `prove_further: true`
      proves on, for another stretch in the background. The WebAssembly prover proves a text one
-     length after another, so a stream is proven up to a length: proofs for every length, by
-     induction over a read loop, are main.s's for now.
+     length after another, so a stream is proven up to a length, unless it is proven for every
+     length by induction over its read loop through `$fill`, as the next line says.
+   - `…; every length by induction over its read loop: …`: a stream whose read loop calls
+     `$fill`, proven for every length: from any state the loop can be in at its head, one more
+     buffer-full keeps what it writes and counts in step with the formula.
    - `tested, not proven: <why>`: the tests passed, and the proof couldn't settle it. lengua's
      WebAssembly prover doesn't follow SIMD128 or float instructions yet, and names the first
      one it met, as ``main.wat line 89: `I8x16Splat`, which the WebAssembly model doesn't follow
@@ -198,7 +199,7 @@ which to write.
 seconds, or within the `timeout_seconds` you pass, up to 40. A program that works on files runs
 in a folder of the user's: pass it as `folder` and name the files in `args` relative to it; the
 program can't touch anything outside it. `stdin_file` names a file in `folder` to give as
-standard input, up to 16 MiB for main.wat, and `env` gives environment variables to a program
+standard input, up to 16 MiB, and `env` gives environment variables to a program
 whose idea uses the environment, and to no other. A server starts in the background on its
 idea's port, and `run` returns its address: try it with your own tools, such as `curl` or `nc`,
 then call `run` with `stop: true` to stop it and see what it printed. A program that connects
@@ -223,44 +224,3 @@ main.wat that comes along in a copied folder is checked from scratch before `run
 `check` on the folder. lengua's entry in `verified` records which idea and which main.wat lengua
 checked, and `lengua-mcp check` lets anyone check that on their own computer; lengua's guarantees
 hold for the programs that `run` runs after `check`.
-
-## Ideas compiled to main.s
-
-An idea of `type: lengua/program-idea` compiles to `main.s`, assembly for this computer's target,
-until lengua retires that path: Linux on x86-64 or on AArch64, the first word of the `machine`
-line (`linux-x86_64` or `linux-aarch64`), built with LLVM's `llvm-mc` and `ld.lld`. The steps
-above hold for it, with these differences:
-
-- Start from [the template](assets/main-template.s) ([its idea](assets/template-idea.md)), whose
-  first line is `.intel_syntax noprefix`, or on `linux-aarch64` from
-  [the AArch64 template](assets/linux-aarch64/main-template.s), whose first line is
-  `.arch armv8-a`. `main` takes the argument count, the arguments and the environment in its
-  first three argument registers, and ends with `call os_exit`. The other native templates are
-  [the streaming filter](assets/stream-template.s), [the vector template](assets/vector-template.s),
-  [the event-loop server](assets/server-template.s), [the key reader](assets/terminal-template.s),
-  [the word tally](assets/tally-template.s) and [the parallel template](assets/parallel-template.s),
-  each beside its idea, with their AArch64 forms in `assets/linux-aarch64`.
-- Write by [the native rules](references/power-of-10.md), with functions of at most 60
-  instructions; call only [the edge's](references/edge.md) operations (`os_read`, `os_write`,
-  `os_open`, …) and library (`assert_fail`, `fill`, `parallel_for`); and follow
-  [the x86-64 reference](references/x86_64.md) or [the AArch64 reference](references/aarch64.md)
-  for the calling convention and the dialect's form. Write for the target's baseline first: SSE2
-  to SSE4.2 and POPCNT on x86-64, ARMv8.0-A with NEON on AArch64. An extension the `machine` line
-  lists is only ever a faster tier beside the baseline, from the very same idea, as
-  [the fast wc](assets/fast/wc/main.s) has one in `assets/fast`.
-- A broken rule is reported as `rule N (name) main.s:LINE`. Once a check passes, lengua writes
-  main.s's second line itself, naming the idea, the target and the CPU features the code needs:
-  never write that line. A function from a part has a `# from: ../sort` line in the comment
-  above its `.type`.
-- The proofs run on the machine code, and follow vector code from SSE2 to AVX-512 and NEON,
-  floats, threads, and clients and servers on the network; a read loop through `fill` is proven
-  for every length by induction (`every length by induction over its read loop`). `memory` adds
-  that on every run a proof covers, each access stays inside the object its pointer was made
-  from.
-- `performance` gives instructions, cycles and CPU time, and an idea that allows threads
-  (`- Threads: up to N`) may split its work with `parallel_for`.
-- [porting.md](references/porting.md) says how lengua would take another CPU or system.
-
-To move such an idea to WebAssembly, make it an Attested Computation with the write-idea skill,
-write main.wat, and delete main.s: `check` says so when the folder holds a code file the idea's
-type doesn't take.

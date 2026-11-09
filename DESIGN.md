@@ -1362,7 +1362,7 @@ clears the bytes above its 16. A proof runs at the CPU's vector length (the kern
 QEMU the length a four-instruction program measures), holds for that length alone, and the
 lock's needs say it (`sve16` to `sve64`), which `run` holds the CPU to. Its `against_a64` harness
 holds every SVE instruction to the CPU with Z and P registers of its length, and
-[the SVE wc](plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s) is proven for every
+[the SVE wc](https://github.com/laughing-hermit/lengua/blob/native-final/plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s) is proven for every
 length with a 64 KiB buffer at 16-byte vectors and at 64, about 100 seconds each, with no solver
 question, its loop leaving where its index reaches the bytes read as the NEON one's does. An access at a place
    the input chooses is held to the object its own CPU's base register holds (`Through`), so a
@@ -1379,7 +1379,7 @@ question, its loop leaving where its index reaches the bytes read as the NEON on
    low byte of `min(left, 16)` that `dup` spreads over a vector: a branch of a choice keeps the
    range its condition gives it, so `ite(x < k, x, k)` is at most k, and a comparison with the
    low bits of a value that fits in them is the comparison of the value itself. So
-   [the fast wc's NEON form](plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s), each
+   [the fast wc's NEON form](https://github.com/laughing-hermit/lengua/blob/native-final/plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s), each
    16-byte step masked with `cmhi` of the bytes left against each lane's place, is proven for
    every length with a 64 KiB buffer, with no solver question, in about 105 seconds and 1.8 GB,
    as x86-64's SSE2 one is; and the vector template from its spec unchanged, every line with

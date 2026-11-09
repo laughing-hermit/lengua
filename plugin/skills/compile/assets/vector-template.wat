@@ -1,5 +1,5 @@
 ;; shout: reads a line from standard input and prints it in capital letters, 16 bytes at a time
-;; with 128-bit vectors. The WebAssembly counterpart of vector-template.s, in the WebAssembly
+;; with 128-bit vectors. The compile skill's vector template, in the WebAssembly
 ;; dialect 1 (references/power-of-10-webassembly.md): $find_newline compares 16 bytes at once and
 ;; takes the first newline's place from a bitmask, and $shout capitalizes 16 bytes at once while
 ;; 16 are left, then the rest one at a time, a scalar tail.

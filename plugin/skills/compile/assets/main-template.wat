@@ -1,5 +1,5 @@
-;; negate: prints the negative of the whole number in its argument. The WebAssembly counterpart
-;; of main-template.s, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
+;; negate: prints the negative of the whole number in its argument: the compile skill's main
+;; template, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
 ;; every rule passes, and lengua's library gives $assert_fail and $write_all.
 (module
   (import "wasi_snapshot_preview1" "args_sizes_get"

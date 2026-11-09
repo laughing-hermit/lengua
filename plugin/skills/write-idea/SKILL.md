@@ -8,13 +8,12 @@ compatibility: Needs the lengua MCP server from the lengua plugin.
 # Write a lengua idea
 
 A lengua program is a folder of two files: `idea.md`, which says what the program does and holds
-every test, and its code, `main.wat`, the WebAssembly that the compile skill writes from it (until
-`check` takes `main.wat`, the compile skill writes `main.s`, assembly for this computer). lengua
-keeps its own record beside them in `lengua.lock`. The idea is the source of truth and the only
-file people share: the code is disposable, written from the idea and checked where it runs, so
-whatever must be the same everywhere goes in the idea. You write it from the user's request; their
-request is the go-ahead, so don't ask them to approve it. They read it in your final report, which
-says what it promises.
+every test, and its code, `main.wat`, the WebAssembly that the compile skill writes from it.
+lengua keeps its own record beside them in `lengua.lock`. The idea is the source of truth and the
+only file people share: the code is disposable, written from the idea and checked where it runs,
+so whatever must be the same everywhere goes in the idea. You write it from the user's request;
+their request is the go-ahead, so don't ask them to approve it. They read it in your final report,
+which says what it promises.
 
 ## Steps
 
@@ -147,8 +146,8 @@ by one concrete example in its steps, and its generated tests try that rule with
   or `- Uses: nothing`. lengua programs can't start processes or handle signals, and their memory
   is fixed by the idea's limits. lengua holds the program to this line when it runs, so it's a promise the user can rely
   on, and it means the same on every kind of computer. `# Constraints` holds only `- Uses:`,
-  `- Network:`, `- Threads:`, `- Secret:` and `- Builds on:` lines; anything else goes in
-  Purpose.
+  `- Network:`, `- Secret:` and `- Builds on:` lines; anything else goes in Purpose. A program
+  runs as one thread, so `check` refuses a `- Threads:` line: don't promise the user more cores.
 - **Secret inputs:** when the user says an input is secret, or the program compares or
   transforms data that is, such as a key or a token, name it under `# Constraints` with
   ``- Secret: …``: `standard input`, ``a file `key.txt` ``, ``the environment variable `TOKEN` ``
@@ -253,12 +252,6 @@ by one concrete example in its steps, and its generated tests try that rule with
   starting with `/`: these links and `- Builds on:` are the graph's edges, and `check` warns of
   one that leads nowhere. Any other page in the bundle needs a frontmatter `type`, as
   `type: note`, as every Open Knowledge Format page does.
-- **Threads:** when the user wants a program that does heavy work on large inputs as fast as
-  possible, add `- Threads: up to N` under `# Constraints`, with N up to the machine's cores
-  (`check` reports them in `machine`; at most 64). The program may then split its work across
-  that many cores. Behaviors don't change: the output is the same as on one thread. A
-  computation in WebAssembly runs on one thread, so the line doesn't make it faster: don't
-  promise the user more cores.
 
 ## Write it in Simplified Technical English
 

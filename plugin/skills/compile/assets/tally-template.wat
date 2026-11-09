@@ -1,5 +1,5 @@
 ;; tally: counts how often each word of standard input occurs and prints the words, the most
-;; frequent first. The WebAssembly counterpart of tally-template.s, in the WebAssembly dialect 1
+;; frequent first. The compile skill's word tally, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): a hash table of a million slots by FNV-1a with linear
 ;; probing, its entries in the order the words first appear, sorted by a merge sort to print, so
 ;; printing walks the entries, never the slots. Every array is a region of linear memory sized

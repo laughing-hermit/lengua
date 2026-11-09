@@ -17,10 +17,10 @@ of its idea.
 | `server-template.wat` | `server-template-wat-idea.md` | A server for several clients at once: `poll_oneoff`, `sock_accept`, `sock_recv`, `sock_send` |
 | `tally-template.wat` | `tally-template-wat-idea.md` | A hash table, a merge sort and buffered output, in regions of several megabytes |
 
-Start from the template closest to the idea, and keep its shape. Two native templates have no
-WebAssembly form yet: the key reader (`terminal-template.s`) waits for lengua's host to give the
-terminal's two imports, raw mode and the window's size; the parallel template
-(`parallel-template.s`) has none, since a WebAssembly program has no threads.
+Start from the template closest to the idea, and keep its shape. Two kinds of program have no
+template: one that reads keys from the terminal waits for lengua's host to give the terminal's
+two imports, raw mode and the window's size; one that needs threads has none, since a
+WebAssembly program has no threads.
 
 ## The module's layout
 

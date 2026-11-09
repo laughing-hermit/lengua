@@ -2,14 +2,13 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "lengua",
   "version": "0.2.0",
-  "description": "An AI language: a behavior-driven idea in plain words, its tests inside, which the agent compiles into WebAssembly that runs the same on Linux, macOS and Windows, or for now, when the idea isn't an Attested Computation, into assembly for Linux on x86-64 or ARM64; lengua checks the code against those tests, proofs and an adapted NASA Power of 10.",
+  "description": "An AI language: a behavior-driven idea in plain words, its tests inside, which the agent compiles into WebAssembly that runs the same on Linux, macOS and Windows; lengua checks the code against those tests, proofs and an adapted NASA Power of 10.",
   "license": "Apache-2.0",
   "author": {
     "name": "lengua"
   },
   "keywords": [
     "webassembly",
-    "assembly",
     "idea-driven",
     "bdd",
     "mcp",

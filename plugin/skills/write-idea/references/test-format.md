@@ -240,17 +240,18 @@ to choose text.
 
 - **Whole numbers** are checked 128-bit: overflow is an error, never a wrapped value.
 - **Decimals** are written `12.50`, with 1 to 15 places. Arithmetic on decimals (`+ - * /`) is
-  done in doubles, exactly as `addsd`, `subsd`, `mulsd` and `divsd` compute, so `0.1 + 0.2` is
-  0.30000000000000004, and the order of operations is part of the formula: `a + b + c` is
-  `(a + b) + c`. A result must be a finite number.
+  done in doubles, exactly as WebAssembly's `f64.add`, `f64.sub`, `f64.mul` and `f64.div`
+  compute, so `0.1 + 0.2` is 0.30000000000000004, and the order of operations is part of the
+  formula: `a + b + c` is `(a + b) + c`. A result must be a finite number.
 - **Singles** (32-bit floating point) come from `single(x)`. Arithmetic with a single is done in
-  singles, as `addss`, `subss`, `mulss` and `divss` compute, and a decimal written next to one
-  becomes the nearest single, as a `.float` constant does: `single(x) * 2.5` multiplies by
-  `.float 2.5`. Singles hold about 7 significant digits; use them only when the idea's precision
-  allows it.
+  singles, as `f32.add`, `f32.sub`, `f32.mul` and `f32.div` compute, and a decimal written next
+  to one becomes the nearest single, as an `f32.const` does: `single(x) * 2.5` multiplies by
+  `(f32.const 2.5)`. Singles hold about 7 significant digits; use them only when the idea's
+  precision allows it.
 - **Singles and doubles don't mix:** convert one side with `single(x)` or `double(x)`.
-- **`fma(a, b, c)`** is `a × b + c` rounded once, as `vfmadd231sd` (or `vfmadd231ss` for singles)
-  computes. `a * b + c` rounds twice, so the formula says which of the two the program does.
+- **`fma(a, b, c)`** is `a × b + c` rounded once. WebAssembly has no fused multiply-add, so a
+  program can't compute it in one instruction: write `a * b + c`, which rounds after each step,
+  as `f64.mul` then `f64.add` do.
 - **Whole numbers and decimals don't mix** in arithmetic: write `2.0`, not `2`, or `double(n)`.
   Comparisons may mix them (`x > 0`), and `12.5 == 12.50`.
 - **Strings** are written `"text"`, with the escapes `\"`, `\\`, `\n` and `\t`; `+` joins two
@@ -278,12 +279,12 @@ to choose text.
 | `tr(s, from, to)` | Each character of `s` listed in `from` becomes the one at the same place in `to`, as Unix `tr` does; `a-z` is a range. ROT13 is `tr(s, "A-Za-z", "N-ZA-Mn-za-m")` |
 | `count(s, part)` | How many times `part` appears in `s`, without overlaps: `count(line, "e")` |
 | `words(s)` | How many words `s` has: runs of bytes other than spaces, tabs, newlines, vertical tabs, form feeds and carriage returns, as `wc -w` counts them |
-| `fixed(x, places)` | `x` printed with exactly `places` decimals (0 to 15): x·10^places rounded to the nearest whole number, ties to even, like `mulsd` then `cvtsd2si`. `fixed(2.5, 0)` is "2", `fixed(-0.004, 2)` is "0.00". A single widens exactly first (`cvtss2sd`), then prints as a double does |
-| `double(x)` | `x` as a double: a whole number exactly (up to 2^53), a single exactly (like `cvtss2sd`) |
-| `single(x)` | `x` as a single: a whole number exactly (up to 2^24), a double to the nearest single (like `cvtsd2ss`), an exact decimal to the nearest single (up to 7 digits and 10 places, like `cvtsi2ss` then `divss`) |
-| `fma(a, b, c)` | `a × b + c` rounded once, like `vfmadd231sd`; in singles when an argument is a single |
-| `round(x)`, `trunc(x)`, `floor(x)`, `ceil(x)` | A whole number: nearest with ties to even (like `cvtsd2si`), toward zero (like `cvttsd2si`), down, up |
-| `sqrt(x)` | The square root, as `sqrtsd` computes it, or `sqrtss` for a single |
+| `fixed(x, places)` | `x` printed with exactly `places` decimals (0 to 15): x·10^places rounded to the nearest whole number, ties to even, like `f64.mul`, then `f64.nearest` then `i64.trunc_sat_f64_s`. `fixed(2.5, 0)` is "2", `fixed(-0.004, 2)` is "0.00". A single widens exactly first (`f64.promote_f32`), then prints as a double does |
+| `double(x)` | `x` as a double: a whole number exactly (up to 2^53), a single exactly (like `f64.promote_f32`) |
+| `single(x)` | `x` as a single: a whole number exactly (up to 2^24), a double to the nearest single (like `f32.demote_f64`), an exact decimal to the nearest single (up to 7 digits and 10 places, like `f32.convert_i64_s` then `f32.div`) |
+| `fma(a, b, c)` | `a × b + c` rounded once, in singles when an argument is a single. WebAssembly has no fused multiply-add, so write `a * b + c` for what a program computes |
+| `round(x)`, `trunc(x)`, `floor(x)`, `ceil(x)` | A whole number: nearest with ties to even (like `f64.nearest` then `i64.trunc_sat_f64_s`), toward zero (like `i64.trunc_sat_f64_s`), down (like `f64.floor`), up (like `f64.ceil`) |
+| `sqrt(x)` | The square root, as `f64.sqrt` computes it, or `f32.sqrt` for a single |
 | `scaled(x, places)` | An exact decimal as a whole number of its smallest units: `scaled(12.5, 2)` is 1250 (cents) |
 | `places(n, places)` | A whole number of units printed as a decimal: `places(1250, 2)` is "12.50", `places(-5, 2)` is "-0.05" |
 | `sha256(s)` | The SHA-256 of `s`'s bytes, in lowercase hex |
@@ -330,9 +331,18 @@ values, exact output turned into a rule, or a removed row, variable or expected 
 
 ```markdown
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: shout
 description: Reads one line from standard input and prints it in capital letters.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: line, type: text, required: true, from: standard input }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 Reads a line of `1` to `80` lowercase letters and spaces from standard input, then prints it in
@@ -369,9 +379,19 @@ capital letters.
 
 ```markdown
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: divide
 description: Divides one whole number by another and prints the quotient, rounded toward zero.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: a, type: integer, required: true, from: argument 1 }
+  - { name: b, type: integer, required: true, from: argument 2 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 Divides a whole number between `-1000000` and `1000000` by a whole number between `-1000` and
@@ -421,9 +441,16 @@ Negative divisors, then positive ones: one range cannot hold both without 0.
 
 ```markdown
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: dice
 description: Rolls a fair six-sided die and prints the roll.
+runtime: webassembly
+computation: main.wat
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 Rolls a fair six-sided die for a board game and prints the roll, a whole number from `1` to `6`.
@@ -463,9 +490,18 @@ is 1.
 
 ```markdown
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: roll
 description: Rolls a six-sided die for a player and prints the roll.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: player, type: integer, required: true, from: argument 1 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 Rolls a fair six-sided die for a player with a number from `1` to `9`, given as an argument. If

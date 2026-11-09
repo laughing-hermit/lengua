@@ -60,6 +60,23 @@ fn claude_code_manifest_mirrors_the_standard_one() {
     );
 }
 
+/// The manifests offer main.wat alone: lengua compiles to WebAssembly since 0.2.0, and the tag
+/// native-final keeps the native lengua, which compiled to assembly.
+#[test]
+fn manifests_offer_webassembly_alone() {
+    let standard = read_json(&repo().join("plugin/plugin.json"));
+    let description = standard["description"].as_str().expect("a description");
+    assert!(
+        description.contains("WebAssembly") && !description.to_lowercase().contains(" assembly"),
+        "the description offers WebAssembly alone: {description}"
+    );
+    let keywords = standard["keywords"].as_array().expect("keywords");
+    assert!(
+        !keywords.iter().any(|keyword| keyword == "assembly"),
+        "no keyword says assembly: {keywords:?}"
+    );
+}
+
 #[test]
 fn manifests_carry_the_crate_version() {
     let standard = read_json(&repo().join("plugin/plugin.json"));

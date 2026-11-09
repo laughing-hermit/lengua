@@ -1,6 +1,6 @@
 ;; shout-stream: copies standard input of any length to standard output with every ASCII letter
-;; in capitals, a buffer-full at a time, in constant memory. The WebAssembly counterpart of
-;; stream-template.s, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
+;; in capitals, a buffer-full at a time, in constant memory. The compile skill's streaming
+;; filter, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
 ;; lengua's library reads each buffer-full with $fill and writes it with $write_all. The
 ;; transform here takes a byte at a time; vector-template.wat takes 16 at a time.
 (module

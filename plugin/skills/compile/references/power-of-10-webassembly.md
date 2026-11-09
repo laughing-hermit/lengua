@@ -3,12 +3,11 @@
 `main.wat` is WebAssembly text, one program for every computer. `check` parses it, merges lengua's
 library into it, validates the module with the engine's own features, and checks the rules below.
 Nothing runs before every rule passes. Each violation names its rule, its line in `main.wat` and a
-fix. (During the pivot, `main.s` programs keep [the native dialect](power-of-10.md).)
+fix.
 
 These are NASA's "Power of 10" rules for safety-critical code (Holzmann, 2006), adapted for
-WebAssembly as the native dialect adapted them for assembly, and joined with Rust's promise of
-memory safety. A program that passes them, and its proofs, has the three guarantees Rust gives,
-proven rather than checked while it runs:
+WebAssembly and joined with Rust's promise of memory safety. A program that passes them, and its
+proofs, has the three guarantees Rust gives, proven rather than checked while it runs:
 - **no access outside its object:** every load, store and copy the rules follow stays inside the
   region it names, for every input (rule 9 and the memory rules M1 to M8). An access they leave to
   the proof stays inside the program's memory on every run the proof covers, and inside its region
@@ -72,7 +71,7 @@ WebAssembly's control is already structured: `block`, `loop` and `if` nest, and 
 - **Every path ends** at the function's `end` with its results, or in a call that never returns
   (`$proc_exit`, `$assert_fail`) followed by `unreachable`. `unreachable` appears nowhere else.
 - **A `br_table`'s default** leads to an assertion or an error path, so an unexpected value can't
-  slip through, as a chain of comparisons ends in an assertion in the native dialect.
+  slip through.
 
 ### 2. Bounded loops
 
@@ -108,8 +107,9 @@ which rule 1 makes finite.
 ### 4. Small functions
 
 At most 180 operators a function (WebAssembly needs about three for each instruction of a CPU's,
-so this is the native dialect's 60, to be calibrated on the templates). A function ends once, at
-its `end`: no `return` before it; leave a block with `br` instead.
+so this is about 60 of a CPU's instructions, the 60 lines NASA's rule allows a function, to be
+calibrated on the templates). A function ends once, at its `end`: no `return` before it; leave a
+block with `br` instead.
 
 ### 5. Assertions
 

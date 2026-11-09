@@ -2984,7 +2984,7 @@ The program prints the UTC hour of the day, from `0` to `23`, for a reader numbe
     fn clients_at_once_stay_within_what_the_server_serves() {
         let idea = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("plugin/skills/compile/assets/server-template-idea.md"),
+                .join("plugin/skills/compile/assets/server-template-wat-idea.md"),
         )
         .expect("the server template's idea");
         let suite = tests_of(&idea).expect("valid tests");

@@ -44,7 +44,7 @@ programs stay in the repository until the native product is retired (W11); the t
 | The idea's type | `lengua/program-idea` | `Attested Computation`, with `runtime`, `computation`, `parameters` (where each input comes from: an argument, standard input, an environment variable or a named file; clock, dice, nap and sweep take none of these and have no `parameters`, and echo's list is empty), `executor` and `attester` |
 | The code | `main.s` for each CPU: two programs, one in `examples/` or `tests/fixtures/` and its twin in `tests/fixtures/linux-aarch64/` | `main.wat`: one module for every computer |
 | Where it runs | Linux on x86-64 and Linux on ARM64 | the five runners: Linux on x86-64 and on ARM64, Windows on x86-64 and on ARM64, and macOS on ARM64 |
-| The rules | the native dialect 4 ([power-of-10.md](plugin/skills/compile/references/power-of-10.md)) | WebAssembly dialect 1 ([power-of-10-webassembly.md](plugin/skills/compile/references/power-of-10-webassembly.md)) |
+| The rules | the native dialect 4 ([power-of-10.md](https://github.com/laughing-hermit/lengua/blob/native-final/plugin/skills/compile/references/power-of-10.md), at the tag `native-final`) | WebAssembly dialect 1 ([power-of-10-webassembly.md](plugin/skills/compile/references/power-of-10-webassembly.md)) |
 | The calls | lengua's edge (`os_read`, `os_open`, …), through the broker and the Linux sandbox | WASI preview 1, as lengua's host implements it |
 | Descriptors | the listener 3, the connections from 4 | the working folder 3, the listener 4, the connections from 5 |
 | Names | 255 bytes a name and 1023 a path (`src/names.rs`), held by the broker | the same rules, held by the host |

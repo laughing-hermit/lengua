@@ -1,5 +1,5 @@
-;; echo-at-once: sends each line back to its client, for up to 8 clients at once. The WebAssembly
-;; counterpart of server-template.s, in the WebAssembly dialect 1
+;; echo-at-once: sends each line back to its client, for up to 8 clients at once. The compile
+;; skill's event-loop server, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): one loop that never ends waits with poll_oneoff on
 ;; every client's connection and, while a slot is free, on the listener that lengua binds and
 ;; hands over as descriptor 4. It takes each new connection with sock_accept, reads what has come

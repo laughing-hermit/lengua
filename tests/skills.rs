@@ -1,5 +1,5 @@
-//! The shipped skills follow the Agent Skills format (agentskills.io), and every idea they show
-//! is one lengua accepts.
+//! The shipped skills follow the Agent Skills format (agentskills.io), every idea they show is
+//! one lengua accepts, and they offer main.wat alone.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -126,23 +126,6 @@ fn skills_link_only_to_files_that_exist() {
 }
 
 #[test]
-fn the_assembly_template_is_a_complete_lengua_program() {
-    let assets = skills_dir().join("compile/assets");
-    let idea_text = read(&assets.join("template-idea.md"));
-    let idea = lengua::idea::parse(&idea_text)
-        .unwrap_or_else(|problems| panic!("the template's idea has problems: {problems:#?}"));
-    if let Err(problems) = lengua::testfile::check(&idea) {
-        panic!("the template's tests fail check: {problems:#?}");
-    }
-    let code = read(&assets.join("main-template.s"));
-    assert_eq!(
-        code.lines().next(),
-        Some(".intel_syntax noprefix"),
-        "main-template.s starts with its syntax, with no label to copy"
-    );
-}
-
-#[test]
 fn the_idea_template_is_a_valid_idea() {
     let text = read(&skills_dir().join("write-idea/assets/idea-template.md"));
     let idea = lengua::idea::parse(&text)
@@ -202,18 +185,22 @@ fn code_blocks(text: &str) -> Vec<(String, String)> {
 }
 
 /// Each idea the skills show whole is one lengua accepts, its tests included: an Attested
-/// Computation, or an idea compiled to main.s.
+/// Computation, the only idea lengua compiles since 0.2.0.
 #[test]
 fn examples_in_the_skills_pass_lenguas_own_checks() {
     let mut ideas = 0;
     for (document, text) in documents() {
         for (language, block) in code_blocks(&text) {
-            let whole = block.contains("type: Attested Computation")
-                || block.contains("type: lengua/program-idea");
-            if language == "markdown" && whole {
+            // A whole idea starts with its frontmatter, and the frontmatter with its type.
+            if language == "markdown" && block.starts_with("---\ntype: ") {
                 let idea = lengua::idea::parse(&block).unwrap_or_else(|problems| {
                     panic!("{document} shows an invalid idea: {problems:#?}")
                 });
+                assert!(
+                    idea.attested.is_some(),
+                    "{document} shows an idea that isn't an Attested Computation, which check \
+                     refuses"
+                );
                 if let Err(problems) = lengua::testfile::check(&idea) {
                     panic!("{document} shows an idea whose tests fail check: {problems:#?}");
                 }
@@ -222,4 +209,18 @@ fn examples_in_the_skills_pass_lenguas_own_checks() {
         }
     }
     assert!(ideas >= 4, "found only {ideas} example ideas");
+}
+
+/// The skills offer main.wat alone: lengua compiles to main.wat since 0.2.0, and the tag
+/// native-final keeps the native lengua, so no page of a skill names its main.s.
+#[test]
+fn the_skills_offer_main_wat_alone() {
+    for (document, text) in documents() {
+        let named = text.match_indices("main.s").any(|(at, found)| {
+            let before = text[..at].chars().next_back();
+            let after = text[at + found.len()..].chars().next();
+            !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+        });
+        assert!(!named, "{document} names main.s, the native lengua's code");
+    }
 }
