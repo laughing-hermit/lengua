@@ -21,6 +21,14 @@
 //! didn't (the list may only shrink, so the bench reads the repository's whole history), and
 //! where a version can't be measured.
 //!
+//! Apart from the gate's rounds, and after them, lengua's program runs against lengua-module:
+//! the very module lengua's build makes from the program's main.wat, run by `lengua-mcp measure`
+//! as the other modules are. The two run alone, in rounds of their own, so the gate's rounds run
+//! as they would without them, and the report says how far apart they are: what lengua's run
+//! does before and around running its module. lengua-module is no row, and the gate and
+//! KNOWN_BEHIND never see it; like every version, it must give the same output, or the bench
+//! fails.
+//!
 //! What the environment can say:
 //! - `LENGUA_BENCH_WASM`: the folder of the WebAssembly builds, target/bench-wasm when unset;
 //! - `LENGUA_BENCH_ONLY`: the workloads to measure, between commas, instead of every one;
@@ -51,6 +59,24 @@ const WARM_UP: usize = 2;
 
 /// The runs of each version with the CPU's counters attached, apart from the counted ones.
 const COUNTER_RUNS: usize = 5;
+
+/// The version that runs lengua's own module the way the other modules run: built from the
+/// checked program's main.wat by lengua's build, the module `lengua-mcp run` runs, and run by
+/// `lengua-mcp measure` in lengua's host. It runs only in rounds of its own with lengua's
+/// program, and is no row of the gate's.
+const MODULE_VERSION: &str = "lengua-module";
+
+/// lengua-module's file, beside the workload's working folder and never in it.
+const MODULE_FILE: &str = "lengua-module.wasm";
+
+/// The counted runs each of lengua and lengua-module takes in their rounds of their own.
+const APART_RUNS: usize = 160;
+
+/// The fewest counted runs each of them takes before their rounds may stop on time.
+const APART_FEWEST: usize = 20;
+
+/// How long their counted rounds go on, once each has [`APART_FEWEST`] runs.
+const APART_TIME: Duration = Duration::from_secs(60);
 
 /// The large workloads' input: 64 MiB, so that the work outweighs starting and ending a process.
 const LARGE: usize = 64 * 1024 * 1024;
@@ -731,6 +757,61 @@ fn floats(values: &[u64]) -> Vec<f64> {
     values.iter().map(|value| *value as f64).collect()
 }
 
+/// The shift from `before`'s values to `after`'s, as Hodges and Lehmann estimate it: the median
+/// of every difference of a value of `after` less a value of `before`, with its 95% interval, the
+/// k-th smallest and the k-th largest of those m·n differences, k = floor(m·n/2 − 1.96·
+/// sqrt(m·n·(m+n+1)/12)) and at least 1 (Mann-Whitney's normal bound). None when either has no
+/// values.
+fn hodges_lehmann(after: &[u64], before: &[u64]) -> Option<(f64, f64, f64)> {
+    if after.is_empty() || before.is_empty() {
+        return None;
+    }
+    let mut differences = Vec::with_capacity(after.len() * before.len());
+    for value in after {
+        for other in before {
+            differences.push(*value as f64 - *other as f64);
+        }
+    }
+    differences.sort_by(f64::total_cmp);
+    let (m, n) = (after.len() as f64, before.len() as f64);
+    let bound = (m * n / 2.0 - 1.96 * (m * n * (m + n + 1.0) / 12.0).sqrt()).floor();
+    let count = differences.len();
+    let k = if bound >= 1.0 {
+        (bound as usize).min(count)
+    } else {
+        1
+    };
+    let estimate = gate::median(&differences)?;
+    Some((estimate, differences[k - 1], differences[count - k]))
+}
+
+/// The mean of `values`, or none for none.
+fn mean(values: &[u64]) -> Option<f64> {
+    (!values.is_empty()).then(|| floats(values).iter().sum::<f64>() / values.len() as f64)
+}
+
+/// The difference of `after`'s mean less `before`'s, with its 95% interval: 1.96 standard errors
+/// either side, each sample's variance taken on its own (Welch's). None when either has fewer than
+/// two values.
+fn welch(after: &[u64], before: &[u64]) -> Option<(f64, f64, f64)> {
+    let spread = |values: &[u64]| -> Option<(f64, f64)> {
+        if values.len() < 2 {
+            return None;
+        }
+        let average = mean(values)?;
+        let squares: f64 = floats(values)
+            .iter()
+            .map(|value| (value - average) * (value - average))
+            .sum();
+        Some((average, squares / (values.len() - 1) as f64 / values.len() as f64))
+    };
+    let (after_mean, after_share) = spread(after)?;
+    let (before_mean, before_share) = spread(before)?;
+    let difference = after_mean - before_mean;
+    let error = (after_share + before_share).sqrt();
+    Some((difference, difference - 1.96 * error, difference + 1.96 * error))
+}
+
 /// The gate's verdict at a look on lengua's values against the other version's, over the runs
 /// both have, and its p.
 fn tested(lengua: &[u64], other: &[u64]) -> (Verdict, f64) {
@@ -827,6 +908,80 @@ fn rounds(
         }
         round += 1;
     }
+}
+
+/// lengua's run apart from its module on `prepared`: `lengua`, lengua's version, whose checked
+/// run gave the size it holds, and `module`, lengua-module, run alone in rounds of their own, in
+/// an order shuffled from round to round. lengua-module's output is checked first, as every
+/// version's is; then [`WARM_UP`] rounds go uncounted, and counted rounds follow until each has
+/// [`APART_RUNS`] runs, or until they have taken [`APART_TIME`] once each has [`APART_FEWEST`]. A
+/// version that can't be measured, or gives another output, ends them, with why.
+fn apart_rounds(
+    runner: &Runner,
+    prepared: &Prepared,
+    (lengua, size): (&Version, u64),
+    module: Result<Version, String>,
+) -> Apart {
+    let mut apart = Apart {
+        lengua: Measured {
+            name: lengua.name.clone(),
+            made: lengua.made.clone(),
+            size,
+            ..Measured::default()
+        },
+        module: Measured {
+            name: MODULE_VERSION.to_owned(),
+            ..Measured::default()
+        },
+        seconds: 0.0,
+    };
+    let module = match module {
+        Ok(module) => module,
+        Err(problem) => {
+            apart.module.problem = Some(problem);
+            return apart;
+        }
+    };
+    apart.module.made.clone_from(&module.made);
+    match check(runner, prepared, &module) {
+        Ok(checked) => apart.module.size = checked,
+        Err(problem) => {
+            apart.module.problem = Some(problem);
+            return apart;
+        }
+    }
+    let versions = [lengua, &module];
+    let mut started = Instant::now();
+    let mut round = 0;
+    loop {
+        let counted = round >= WARM_UP;
+        if round == WARM_UP {
+            started = Instant::now();
+        }
+        let runs = apart.lengua.cpu_ns.len().min(apart.module.cpu_ns.len());
+        let timed_out = runs >= APART_FEWEST && started.elapsed() >= APART_TIME;
+        if counted && (runs >= APART_RUNS || timed_out) {
+            break;
+        }
+        for at in order(round, versions.len()) {
+            let one = if at == 0 {
+                &mut apart.lengua
+            } else {
+                &mut apart.module
+            };
+            match runner.run(prepared, versions[at], false, false) {
+                Ok(measures) if counted => one.push(&measures),
+                Ok(_) => {}
+                Err(problem) => one.problem = Some(problem),
+            }
+        }
+        if apart.lengua.problem.is_some() || apart.module.problem.is_some() {
+            break;
+        }
+        round += 1;
+    }
+    apart.seconds = started.elapsed().as_secs_f64();
+    apart
 }
 
 /// The medians of the CPU's counts of `version`'s reads that missed the L1 data cache, the
@@ -978,6 +1133,23 @@ struct Outcome {
     versions: Vec<Measured>,
     /// Each row, in the order of the versions.
     rows: Vec<Row>,
+    /// lengua's run apart from its module, in rounds of their own after the gate's: none for a
+    /// workload measured against an earlier commit, or in a results file from before they ran.
+    #[serde(default)]
+    apart: Option<Apart>,
+}
+
+/// lengua's run apart from its module, as a workload's rounds of their own measured it: lengua's
+/// program, run as `lengua-mcp run` runs it, and lengua-module, the very module that run runs,
+/// run as the other modules are.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Apart {
+    /// lengua's runs in these rounds.
+    lengua: Measured,
+    /// lengua-module's.
+    module: Measured,
+    /// How long their counted rounds took, in seconds.
+    seconds: f64,
 }
 
 /// lengua's programs today against the same programs at an earlier commit.
@@ -1023,6 +1195,15 @@ struct Results {
     row_seconds: u64,
     /// The rounds after each version's checked run that weren't counted.
     warm_up: usize,
+    /// The most counted runs each of lengua and lengua-module took in their rounds of their own.
+    #[serde(default)]
+    apart_runs: usize,
+    /// The fewest counted runs each of them took before those rounds could stop on time.
+    #[serde(default)]
+    apart_fewest: usize,
+    /// How long those counted rounds could go on once each had the fewest, in seconds.
+    #[serde(default)]
+    apart_seconds: u64,
     /// Whether the run measured every workload of the gate.
     every_workload: bool,
     /// Each workload's outcome.
@@ -1237,14 +1418,48 @@ fn lengua_made(
     }
 }
 
+/// lengua-module's bytes for lengua's checked program `checked`: the module lengua's build makes
+/// from its main.wat, which `lengua-mcp run` runs, or why there are none.
+fn lengua_module(checked: Option<&Result<Program, String>>) -> Result<Vec<u8>, String> {
+    let program = match checked {
+        Some(Ok(program)) => program,
+        Some(Err(problem)) => return Err(format!("lengua's program isn't done: {problem}")),
+        None => return Err("lengua's program wasn't checked".to_owned()),
+    };
+    let file = program.file("main.wat");
+    let code = std::fs::read_to_string(&file).map_err(|error| failed(file.display(), error))?;
+    lengua::wasm::text::build(&code)
+        .map(|built| built.wasm)
+        .map_err(|problem| failed(file.display(), problem))
+}
+
+/// lengua-module, ready to run: `bytes`, its module, written to a file in `place`, beside the
+/// workload's working folder and never in it, or why it couldn't be.
+fn module_version(place: &Path, bytes: Result<Vec<u8>, String>) -> Result<Version, String> {
+    let file = place.join(MODULE_FILE);
+    std::fs::write(&file, bytes?).map_err(|error| failed(file.display(), error))?;
+    let (release, engine) = (env!("CARGO_PKG_VERSION"), lengua::wasm::engine::ENGINE);
+    Ok(Version {
+        name: MODULE_VERSION.to_owned(),
+        program: file,
+        made: format!(
+            "the module lengua-mcp {release} builds from lengua's main.wat, run in {engine} as \
+             the other modules are"
+        ),
+    })
+}
+
 /// Measures the `made` versions of `prepared` that are ready, lengua's first, and gives each
 /// one's runs in the same order, with how long their rounds took: a version that isn't ready
-/// gets only why, and when lengua's isn't, no version runs.
+/// gets only why, and when lengua's isn't, no version runs. Given `module`, lengua-module, once
+/// the gate's rounds are over and when lengua's version ran in them to the end, lengua and
+/// lengua-module run in rounds of their own, which the third value gives.
 fn measure_versions(
     context: &Context,
     prepared: &Prepared,
     made: Vec<Made>,
-) -> (Vec<Measured>, f64) {
+    module: Option<Result<Version, String>>,
+) -> (Vec<Measured>, f64, Option<Apart>) {
     let mut measured = Vec::new();
     let mut versions = Vec::new();
     for made in made {
@@ -1270,6 +1485,19 @@ fn measure_versions(
         rounds(runner, prepared, &versions, &mut measured, context.seconds);
     }
     let seconds = started.elapsed().as_secs_f64();
+    // lengua's run apart from its module, after the gate's rounds, which run as they would
+    // without it.
+    let lengua = versions.first().and_then(Option::as_ref);
+    let ran = measured
+        .first()
+        .filter(|one| one.problem.is_none())
+        .map(|one| one.size);
+    let apart = match (module, lengua, ran) {
+        (Some(module), Some(lengua), Some(size)) => {
+            Some(apart_rounds(&context.runner, prepared, (lengua, size), module))
+        }
+        _ => None,
+    };
     for (version, one) in versions.iter().zip(&mut measured) {
         if let Some(version) = version
             && one.problem.is_none()
@@ -1277,11 +1505,17 @@ fn measure_versions(
             one.misses = misses(&context.runner, prepared, version);
         }
     }
-    (measured, seconds)
+    (measured, seconds, apart)
 }
 
-/// Measures the `made` versions of workload `name` on its input, made in a folder of its own.
-fn outcome_of(context: &Context, name: &str, made: Vec<Made>) -> Outcome {
+/// Measures the `made` versions of workload `name` on its input, made in a folder of its own, and
+/// with `module`, lengua-module's bytes, lengua's run apart from its module.
+fn outcome_of(
+    context: &Context,
+    name: &str,
+    made: Vec<Made>,
+    module: Option<Result<Vec<u8>, String>>,
+) -> Outcome {
     let workload = workload(name).expect("each of the gate's workloads has its input here");
     let program = program_of(name).to_owned();
     let idea = std::fs::read_to_string(context.root.join(&program).join("idea.md"));
@@ -1294,9 +1528,11 @@ fn outcome_of(context: &Context, name: &str, made: Vec<Made>) -> Outcome {
     let place = tempfile::tempdir_in(&context.out).expect("a folder for the workload");
     match prepare(workload, place.path(), &idea.unwrap_or_default()) {
         Ok(prepared) => {
-            let (versions, seconds) = measure_versions(context, &prepared, made);
+            let module = module.map(|bytes| module_version(place.path(), bytes));
+            let (versions, seconds, apart) = measure_versions(context, &prepared, made, module);
             outcome.versions = versions;
             outcome.seconds = seconds;
+            outcome.apart = apart;
         }
         Err(problem) => {
             for made in made {
@@ -1313,7 +1549,7 @@ fn outcome_of(context: &Context, name: &str, made: Vec<Made>) -> Outcome {
 }
 
 /// Measures workload `name` on this runner: lengua's program, `checked`, against the WebAssembly
-/// builds and the native versions, built here.
+/// builds and the native versions, built here; then lengua's run apart from its module.
 fn measure_workload(
     context: &Context,
     name: &str,
@@ -1329,7 +1565,7 @@ fn measure_workload(
             version,
         });
     }
-    outcome_of(context, name, made)
+    outcome_of(context, name, made, Some(lengua_module(checked)))
 }
 
 /// lengua's programs today against the same programs at `commit`, each workload's two in rounds
@@ -1347,7 +1583,7 @@ fn measure_against(
             lengua_made("lengua", now.get(name), program, ""),
             lengua_made("then", then.get(name), program, commit),
         ];
-        workloads.push(outcome_of(context, name, made));
+        workloads.push(outcome_of(context, name, made, None));
     }
     Against {
         commit: commit.to_owned(),
@@ -1771,6 +2007,129 @@ fn workload_section(out: &mut String, outcome: &Outcome) {
     }
 }
 
+/// `value` shown by `show`, with its sign.
+fn signed(value: f64, show: fn(f64) -> String) -> String {
+    if value < 0.0 {
+        format!("-{}", show(-value))
+    } else {
+        format!("+{}", show(value))
+    }
+}
+
+/// A cell of the section on lengua's run apart from its module: lengua's median against
+/// lengua-module's, then the shift from lengua-module's runs to lengua's with its 95% interval
+/// ([`hodges_lehmann`]), each shown by `show`; a dash where either has no values.
+fn shift_cell(lengua: &[u64], module: &[u64], show: fn(f64) -> String) -> String {
+    let medians = (gate::median(&floats(lengua)), gate::median(&floats(module)));
+    let (Some(ours), Some(theirs)) = medians else {
+        return dash();
+    };
+    let Some((shift, low, high)) = hodges_lehmann(lengua, module) else {
+        return dash();
+    };
+    let (ours, theirs) = (show(ours), show(theirs));
+    let (shift, low, high) = (signed(shift, show), signed(low, show), signed(high, show));
+    format!("{ours} against {theirs}: {shift} ({low} to {high})")
+}
+
+/// A cell of that section from means, for CPU time counted in a clock's ticks: lengua's mean
+/// against lengua-module's, then the difference of the means with its 95% interval ([`welch`]),
+/// each shown by `show`; a dash where either has fewer than two values.
+fn means_cell(lengua: &[u64], module: &[u64], show: fn(f64) -> String) -> String {
+    let (Some(ours), Some(theirs)) = (mean(lengua), mean(module)) else {
+        return dash();
+    };
+    let Some((difference, low, high)) = welch(lengua, module) else {
+        return dash();
+    };
+    let (ours, theirs) = (show(ours), show(theirs));
+    let (difference, low, high) = (
+        signed(difference, show),
+        signed(low, show),
+        signed(high, show),
+    );
+    format!("means {ours} against {theirs}: {difference} ({low} to {high})")
+}
+
+/// The report's section on lengua's run apart from its module, when the run measured it: on each
+/// workload, lengua's program and lengua-module from their rounds of their own, and the shift
+/// from lengua-module's runs to lengua's on CPU time, wall time and peak memory.
+fn apart_section(out: &mut String, results: &Results) {
+    let workloads: Vec<(&str, &Apart)> = results
+        .workloads
+        .iter()
+        .filter_map(|outcome| Some((outcome.name.as_str(), outcome.apart.as_ref()?)))
+        .collect();
+    if workloads.is_empty() {
+        return;
+    }
+    let Results {
+        warm_up,
+        apart_runs,
+        apart_fewest,
+        apart_seconds,
+        ..
+    } = results;
+    let _ = writeln!(out, "\n## lengua's run apart from its module\n");
+    let _ = writeln!(
+        out,
+        "After the gate's rounds, each workload's lengua program ran against lengua-module: the \
+         very module that `lengua-mcp run` runs, built by lengua from the same main.wat and run \
+         by `lengua-mcp measure` as the other modules are, in the same engine with the same \
+         cache of compiled modules and with the words of the program's idea. The two ran alone, \
+         in rounds of their own, in an order shuffled from round to round, after {warm_up} \
+         rounds that weren't counted, until each had {apart_runs} runs, or for {apart_seconds} \
+         seconds once each had {apart_fewest}. Each cell gives lengua's median against \
+         lengua-module's, then the shift from lengua-module's runs to lengua's: the median of \
+         every difference of a lengua run less a lengua-module run (Hodges and Lehmann's \
+         estimate), with its 95% interval (Mann-Whitney's normal bound). The shift is what \
+         lengua's run does before and around running its module.\n"
+    );
+    let ticks = results.target.starts_with("windows");
+    if ticks {
+        let _ = writeln!(
+            out,
+            "Windows counts CPU time in ticks of 15.6 ms, so on a short run each version's \
+             median is a whole number of ticks, and a shift of medians is none or a whole tick. \
+             The CPU time cells give means instead: each run's ticks sample its CPU time, so a \
+             mean converges on it. A cell gives lengua's mean against lengua-module's, then the \
+             difference of the means, with its 95% interval (1.96 standard errors either side, \
+             Welch's). Wall time and peak memory give medians, as on every runner.\n"
+        );
+    }
+    out.push_str("| workload | runs | CPU time | wall time | peak memory |\n");
+    out.push_str("|---|---|---|---|---|\n");
+    for (name, apart) in &workloads {
+        let (lengua, module) = (&apart.lengua, &apart.module);
+        let (counted, seconds) = (lengua.cpu_ns.len(), apart.seconds.round());
+        let runs = format!("{counted}, {} in {seconds} s", module.cpu_ns.len());
+        let cpu = if ticks {
+            means_cell(&lengua.cpu_ns, &module.cpu_ns, duration)
+        } else {
+            shift_cell(&lengua.cpu_ns, &module.cpu_ns, duration)
+        };
+        let wall = shift_cell(&lengua.wall_ns, &module.wall_ns, duration);
+        let peak = shift_cell(&lengua.peak_bytes, &module.peak_bytes, bytes);
+        let _ = writeln!(out, "| {name} | {runs} | {cpu} | {wall} | {peak} |");
+    }
+    let _ = writeln!(
+        out,
+        "\nThe runs are lengua's and lengua-module's counted runs, in that order, and how long \
+         their counted rounds took."
+    );
+    for (name, apart) in &workloads {
+        for measured in [&apart.lengua, &apart.module] {
+            if let Some(problem) = &measured.problem {
+                let version = &measured.name;
+                let _ = writeln!(
+                    out,
+                    "\n- {name}, {version}, wasn't measured to the end: {problem}"
+                );
+            }
+        }
+    }
+}
+
 /// BENCHMARKS-<target>.md, written from `results` alone: every number in it is the run's.
 fn report(results: &Results) -> String {
     let Results {
@@ -1897,6 +2256,7 @@ fn report(results: &Results) -> String {
     for outcome in &results.workloads {
         workload_section(&mut out, outcome);
     }
+    apart_section(&mut out, results);
     if let Some(against) = &results.against {
         let commit = &against.commit;
         let _ = writeln!(out, "\n## lengua now against lengua at {commit}\n");
@@ -2007,6 +2367,9 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
         max_runs: gate::MAX_RUNS,
         row_seconds: seconds,
         warm_up: WARM_UP,
+        apart_runs: APART_RUNS,
+        apart_fewest: APART_FEWEST,
+        apart_seconds: APART_TIME.as_secs(),
         every_workload: names.len() == gate::WORKLOADS.len(),
         grown,
         ..Results::default()
@@ -2043,6 +2406,18 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
             if let Some(problem) = &measured.problem {
                 let (name, version) = (&outcome.name, &measured.name);
                 failures.push(format!("{name}, {version}: {problem}"));
+            }
+        }
+        // lengua-module tests itself as every version does: one that can't be measured, or
+        // gives another output, fails the bench, and so does lengua's run in its rounds.
+        let apart = outcome.apart.iter().flat_map(|apart| [&apart.lengua, &apart.module]);
+        for measured in apart {
+            if let Some(problem) = &measured.problem {
+                let (name, version) = (&outcome.name, &measured.name);
+                failures.push(format!(
+                    "{name}, {version}, in the rounds of lengua's run apart from its module: \
+                     {problem}"
+                ));
             }
         }
     }
