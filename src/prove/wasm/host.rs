@@ -782,7 +782,7 @@ impl Call<'_> {
     fn read_world(&mut self, opened: u64, buffer: u64, length: u64) -> Result<u64, Fail> {
         match World::read(self, opened, buffer, length)? {
             Reading::Done(result) => outcome(result),
-            Reading::EveryCount(_) => Err(Fail::End(unsupported(EVERY_CUT))),
+            Reading::EveryCount => Err(Fail::End(unsupported(EVERY_CUT))),
         }
     }
 

@@ -186,9 +186,10 @@ pub(super) trait Host {
 pub(super) enum Reading {
     /// Its result: the count it took, or minus an error number.
     Done(u64),
-    /// Any count from 1 to this one, each a run of its own: a short read of standard input,
-    /// where a proof takes every way the input can be cut.
-    EveryCount(u64),
+    /// Any count from 1 to as many as are asked for and left, each a run of its own: a short
+    /// read of standard input, where a proof takes every way the input can be cut. The
+    /// WebAssembly model reads input whole through `$fill` instead, and refuses this.
+    EveryCount,
 }
 
 impl World {
@@ -349,7 +350,7 @@ impl World {
                 && available <= RAW_CUT_BYTES
                 && count.min(available) > 1
             {
-                return Ok(Reading::EveryCount(count.min(available)));
+                return Ok(Reading::EveryCount);
             }
             let mut taken = count.min(available);
             if !world.stdin_pieces.is_empty() {
