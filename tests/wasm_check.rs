@@ -8,13 +8,15 @@
 //! main.wat's proofs through check: add's proof named in the reply and kept in the lock, a proof
 //! by length that stops short kept as far as it went and proven on with prove_further, a planted
 //! wrong constant found as a counterexample, a wrong verdict that outlasts a change of lengua's
-//! own build, and a program the model refuses left tested, not proven, with the reason.
+//! own build, one found once another build stamped the same files, which goes on to that build's
+//! module, and a program the model refuses left tested, not proven, with the reason.
 
 mod common;
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 use common::{Program, Protocol, Session};
 use lengua::hash::Sha256Hex;
@@ -998,6 +1000,33 @@ fn refused_as_wrong(ran: &Output) -> bool {
         && String::from_utf8_lossy(&ran.stderr).contains(WRONG_BUILD)
 }
 
+/// The key `session`'s server signs locks with, from its data folder, to sign a lock as lengua
+/// does.
+fn signing_key(session: &Session) -> lengua::lock::Key {
+    let key_bytes: [u8; 32] = std::fs::read(session.data_dir.path().join("key"))
+        .expect("the signing key")
+        .try_into()
+        .expect("32 bytes");
+    lengua::lock::Key::from_bytes(key_bytes)
+}
+
+/// Whether `program`'s lengua.lock holds `text`.
+fn lock_holds(program: &Program, text: &str) -> bool {
+    program
+        .read("lengua.lock")
+        .is_some_and(|lock| lock.contains(text))
+}
+
+/// Waits until `program`'s lengua.lock holds `text`, for as long as a proving session gives its
+/// proofs; `never` says what didn't come when it never does.
+async fn until_the_lock_holds(program: &Program, text: &str, never: &str) {
+    let (started, patience) = (Instant::now(), Duration::from_secs(PROOF_SECONDS));
+    while !lock_holds(program, text) {
+        assert!(started.elapsed() < patience, "{never}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// What a proof found wrong outlasts a change of lengua's own build, after which check builds
 /// another module of the same main.wat. add, checked to done, gets a lock that names another
 /// module and records a wrong verdict on B1 about it, signed with the session's key, as a lock
@@ -1011,11 +1040,7 @@ async fn a_wrong_verdict_outlasts_a_change_of_lengua_s_build() {
     let program = add(&session).await;
     let done = session.settle(&program).await;
     assert_eq!(done["state"], "done", "{done}");
-    let key_bytes: [u8; 32] = std::fs::read(session.data_dir.path().join("key"))
-        .expect("the signing key")
-        .try_into()
-        .expect("32 bytes");
-    let key = lengua::lock::Key::from_bytes(key_bytes);
+    let key = signing_key(&session);
     let mut lock = lengua::lock::read(program.path(), Some(&key))
         .expect("a valid lock")
         .expect("a lock");
@@ -1046,6 +1071,64 @@ async fn a_wrong_verdict_outlasts_a_change_of_lengua_s_build() {
     let lock = program.read("lengua.lock").expect("the lock");
     let hash = Sha256Hex::of(&module);
     let proofs = format!("\n[proofs]\nmodule_sha256 = \"{hash}\"\n");
+    assert!(lock.contains(&proofs), "{lock}");
+    let ran = run_from_shell(&session, program.path(), &["2", "3"]);
+    assert!(refused_as_wrong(&ran), "{ran:?}");
+    session.service.cancel().await.expect("close the session");
+}
+
+/// How long each write of the proofs to lengua.lock waits in the session below: time to stamp
+/// the lock as another build of lengua would, after check's stamp and before the proof's record.
+const STAMP_DELAY_MS: u64 = 3000;
+
+/// What a proof finds wrong once another build of lengua stamped the same files goes on to that
+/// build's module. Once check stamps the planted wrong constant's module, and before the proof
+/// records what it found, the lock is signed again with the session's key so that its stamp names
+/// main.wat's module with its names, as a build of lengua from before the name section was cut
+/// made it, kept where a run from a shell finds it: what another build's check of the same folder
+/// leaves. The proof's record goes to that module, and `lengua-mcp run` refuses it, where a
+/// record dropped for naming another module would let it run.
+#[tokio::test]
+async fn a_wrong_verdict_found_after_another_build_stamped_the_files_goes_on() {
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving_slow_to_record(Protocol::Discover, 50, STAMP_DELAY_MS).await;
+    let program = Program::new();
+    let no_zero = changed(IDEA, ADD_TABLE, NO_ZERO_TABLE);
+    program.write("idea.md", &changed(&no_zero, ADD_PURPOSE, NO_ZERO_PURPOSE));
+    let report = session.record(&program).await;
+    assert_eq!(report["state"], "write_code", "{report}");
+    let below_one = SIGN.replace("(i64.const 0)", "(i64.const 1)");
+    let wrong = changed(CODE, SIGN, &below_one);
+    program.write("main.wat", &wrong);
+    let built = lengua::wasm::text::build(&wrong).expect("main.wat builds");
+    let report = session.check(&program).await;
+    assert!(
+        matches!(report["state"].as_str(), Some("testing" | "proving")),
+        "{report}"
+    );
+    let ours = format!("module_sha256 = \"{}\"\n", Sha256Hex::of(&built.wasm));
+    until_the_lock_holds(&program, &ours, "check never stamped main.wat").await;
+    // Another build stamps the same files as its own module, and keeps it.
+    let key = signing_key(&session);
+    let mut lock = lengua::lock::read(program.path(), Some(&key))
+        .expect("a valid lock")
+        .expect("a lock");
+    // The proof's record hasn't come yet: its write waits.
+    assert!(lock.proofs.is_none(), "{lock:?}");
+    let theirs = Sha256Hex::of(&built.named);
+    let stamp = lock.code.as_mut().expect("the code's stamp");
+    stamp.module_sha256 = theirs.clone();
+    lengua::lock::write(program.path(), &lock, &key).expect("write the lock");
+    let file = kept(&session, &built.named);
+    std::fs::create_dir_all(file.parent().expect("its folder")).expect("make its folder");
+    std::fs::write(&file, &built.named).expect("keep their module");
+    // The proof's record goes to their module, which run then refuses.
+    let found = "wrong = [{ id = \"B1\", found = \"the proof found inputs the tests didn't try";
+    until_the_lock_holds(&program, found, "the proof's record never came").await;
+    let lock = program.read("lengua.lock").expect("the lock");
+    let proofs = format!("\n[proofs]\nmodule_sha256 = \"{theirs}\"\n");
     assert!(lock.contains(&proofs), "{lock}");
     let ran = run_from_shell(&session, program.path(), &["2", "3"]);
     assert!(refused_as_wrong(&ran), "{ran:?}");

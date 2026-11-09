@@ -1273,6 +1273,7 @@ impl LenguaServer {
                 wrong_ids.push((block.id.to_string(), detail.clone()));
                 self.stamp_proofs(
                     folder,
+                    &checking.files,
                     ProofStamp {
                         module_sha256: checking.module.clone(),
                         proven: proven_ids.iter().map(|(_, id)| id.clone()).collect(),
@@ -1314,6 +1315,7 @@ impl LenguaServer {
         unproven_ids.sort_unstable_by_key(|(index, _)| *index);
         self.stamp_proofs(
             folder,
+            &checking.files,
             ProofStamp {
                 module_sha256: checking.module.clone(),
                 proven: proven_ids.into_iter().map(|(_, id)| id).collect(),
@@ -1569,9 +1571,18 @@ impl LenguaServer {
         Ok(())
     }
 
-    /// Records in the lock what the proofs found, `proofs`, about the build they name, provided
-    /// the lock still records that build as the checked code. Returns whether it did.
-    async fn stamp_proofs(&self, folder: &ProgramFolder, proofs: ProofStamp) -> bool {
+    /// Records in the lock what the proofs found, `proofs`, of the job that checked `files`
+    /// (idea.md and main.wat, by lengua's hashes), as [`written_proofs`] takes them: about the
+    /// build they name, while the lock records that build as the checked code, with what the lock
+    /// records as found wrong about it; or what they found wrong alone, about the build the lock
+    /// stamps, when another build of lengua stamped those very files since. Returns whether it
+    /// did.
+    async fn stamp_proofs(
+        &self,
+        folder: &ProgramFolder,
+        files: &[Sha256Hex; 2],
+        proofs: ProofStamp,
+    ) -> bool {
         let delay = stamp_delay();
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
@@ -1583,13 +1594,9 @@ impl LenguaServer {
         let Ok(Some(lock)) = lock::read(folder.path(), Some(&key)) else {
             return false;
         };
-        if lock
-            .code
-            .as_ref()
-            .is_none_or(|code| code.module_sha256 != proofs.module_sha256)
-        {
+        let Some(proofs) = written_proofs(&lock, files, proofs) else {
             return false;
-        }
+        };
         let lock = Lock {
             proofs: Some(Box::new(proofs)),
             ..lock
@@ -1814,6 +1821,57 @@ fn kept_proofs(
         wrong,
         unproven: Vec::new(),
     }))
+}
+
+/// The proofs a write of `proofs`, found by the job that checked `files` (idea.md and main.wat,
+/// by lengua's hashes), leaves in `lock`, or `None` when it leaves the lock as it is. Proofs about
+/// the module the lock stamps go in with every wrong verdict the lock records about it that they
+/// don't hold: a module found wrong stays so, though a later proof of it, such as another
+/// server's, didn't find it. Proofs about another module of the very files the lock stamps, as
+/// when another build of lengua checked the same folder and stamped its own module since, give
+/// what they found wrong and nothing else, now about the module stamped, as [`kept_proofs`]
+/// carries it over: a wrong verdict refuses more, never less, while what the others say held of
+/// another module. Proofs about another module that found nothing wrong, or of other files, leave
+/// the lock as it is.
+fn written_proofs(lock: &Lock, files: &[Sha256Hex; 2], proofs: ProofStamp) -> Option<ProofStamp> {
+    let stamp = lock.code.as_ref()?;
+    let recorded = lock
+        .proofs
+        .as_deref()
+        .filter(|recorded| recorded.module_sha256 == stamp.module_sha256);
+    if proofs.module_sha256 == stamp.module_sha256 {
+        let wrong = recorded.map_or_else(Vec::new, |recorded| recorded.wrong.clone());
+        return Some(with_wrong(proofs, &wrong));
+    }
+    let same_files = lock.idea.sha256 == files[0] && stamp.sha256 == files[1];
+    if !same_files || proofs.wrong.is_empty() {
+        return None;
+    }
+    let onto = recorded.cloned().unwrap_or_else(|| ProofStamp {
+        module_sha256: stamp.module_sha256.clone(),
+        proven: Vec::new(),
+        bounded: Vec::new(),
+        solvers: proofs.solvers.clone(),
+        wrong: Vec::new(),
+        unproven: Vec::new(),
+    });
+    Some(with_wrong(onto, &proofs.wrong))
+}
+
+/// `proofs` with each verdict of `wrong`, a test's id and what a proof found wrong in it, whose
+/// test they don't hold as wrong yet: added, and the test taken out of what they hold proven,
+/// bounded or unproven, since a test a proof found wrong is wrong, whatever else was found of it.
+fn with_wrong(mut proofs: ProofStamp, wrong: &[(String, String)]) -> ProofStamp {
+    for (id, found) in wrong {
+        if proofs.wrong.iter().any(|(known, _)| known == id) {
+            continue;
+        }
+        proofs.proven.retain(|proven| proven != id);
+        proofs.bounded.retain(|bounded| bounded.id != *id);
+        proofs.unproven.retain(|(unproven, _)| unproven != id);
+        proofs.wrong.push((id.clone(), found.clone()));
+    }
+    proofs
 }
 
 /// Notes on what `proofs` found wrong, or why they left a test unproven, once main.wat is edited
@@ -2350,6 +2408,101 @@ mod tests {
         let same = proofs(b"old module");
         let kept = kept_proofs(Some(&before), Some(same.clone()), &before);
         assert_eq!(kept, Some(same));
+    }
+
+    /// A write of the proofs keeps every wrong verdict: proofs about the module the lock stamps go
+    /// in with what the lock records as found wrong about it, which they lack; a proof about
+    /// another module of the very files the lock stamps, as once another build of lengua stamped
+    /// its own module of them, gives what it found wrong alone, about the module stamped, beside
+    /// the lock's own proofs and out of their other lists, or alone; and one about another module
+    /// that found nothing wrong, of another main.wat or another idea, or with no code stamped,
+    /// leaves the lock as it is.
+    #[test]
+    fn a_write_of_the_proofs_keeps_every_wrong_verdict() {
+        let idea = Sha256Hex::of(b"idea.md");
+        let code = Sha256Hex::of(b"main.wat");
+        let files = [idea.clone(), code.clone()];
+        let stamped = |module: &[u8], proofs: Option<ProofStamp>| Lock {
+            request: lock::RequestStamp {
+                words: vec!["an adder".to_owned()],
+                idea: idea.clone(),
+            },
+            idea: IdeaStamp {
+                sha256: idea.clone(),
+            },
+            code: Some(CodeStamp {
+                sha256: code.clone(),
+                module_sha256: Sha256Hex::of(module),
+                engine: crate::wasm::engine::ENGINE.to_owned(),
+                max_stack_bytes: 16,
+                unsafe_blocks: 0,
+                features: Vec::new(),
+            }),
+            proofs: proofs.map(Box::new),
+        };
+        let found = |module: &[u8]| ProofStamp {
+            module_sha256: Sha256Hex::of(module),
+            proven: vec!["B2".into()],
+            bounded: Vec::new(),
+            solvers: "z3 and cvc5".to_owned(),
+            wrong: vec![("B1".into(), "it printed -0".into())],
+            unproven: Vec::new(),
+        };
+        // Ours, once another build stamped its own module of the same files, with no proofs.
+        let carried = written_proofs(&stamped(b"theirs", None), &files, found(b"ours"))
+            .expect("the wrong verdict goes on");
+        assert_eq!(carried.module_sha256, Sha256Hex::of(b"theirs"));
+        assert_eq!(carried.wrong, found(b"ours").wrong);
+        assert_eq!(carried.solvers, "z3 and cvc5");
+        assert!(carried.proven.is_empty() && carried.bounded.is_empty());
+        assert!(carried.unproven.is_empty());
+        // Beside the proofs the other build recorded, B1 among them proven.
+        let theirs = ProofStamp {
+            module_sha256: Sha256Hex::of(b"theirs"),
+            proven: vec!["B1".into(), "B2".into()],
+            bounded: vec![lock::Bounded {
+                id: "B3".into(),
+                bytes: 8,
+                of: 16,
+                more: true,
+            }],
+            solvers: "one solver alone: cvc5 isn't installed".to_owned(),
+            wrong: Vec::new(),
+            unproven: vec![("B4".into(), "a float".into())],
+        };
+        let recorded = stamped(b"theirs", Some(theirs.clone()));
+        let merged = written_proofs(&recorded, &files, found(b"ours"))
+            .expect("the wrong verdict goes on");
+        let expected = ProofStamp {
+            proven: vec!["B2".into()],
+            wrong: found(b"ours").wrong,
+            ..theirs.clone()
+        };
+        assert_eq!(merged, expected);
+        // The other build's own proofs, written after: B1's verdict stays.
+        let recorded = stamped(b"theirs", Some(merged));
+        let after = written_proofs(&recorded, &files, theirs);
+        assert_eq!(after, Some(expected));
+        // Proofs about the module stamped, with nothing recorded: as they are.
+        let own = written_proofs(&stamped(b"ours", None), &files, found(b"ours"));
+        assert_eq!(own, Some(found(b"ours")));
+        // Nothing found wrong, another main.wat, another idea, or no code stamped: no write.
+        let mut right = found(b"ours");
+        right.wrong.clear();
+        let wrote = written_proofs(&stamped(b"theirs", None), &files, right);
+        assert_eq!(wrote, None);
+        let edited = [idea.clone(), Sha256Hex::of(b"edited main.wat")];
+        let wrote = written_proofs(&stamped(b"theirs", None), &edited, found(b"ours"));
+        assert_eq!(wrote, None);
+        let revised = [Sha256Hex::of(b"revised idea.md"), code.clone()];
+        let wrote = written_proofs(&stamped(b"theirs", None), &revised, found(b"ours"));
+        assert_eq!(wrote, None);
+        let unstamped = Lock {
+            code: None,
+            ..stamped(b"theirs", None)
+        };
+        let wrote = written_proofs(&unstamped, &files, found(b"ours"));
+        assert_eq!(wrote, None);
     }
 
     /// What this server's job found wrong refuses a run of the module the job checked, by the
