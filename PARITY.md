@@ -9,9 +9,9 @@ in what lengua says of it, with the reason.
 
 It was made on 2026-11-07, at commit b761dd3, from the two ideas and the programs of each pair,
 the tests, the commit messages of the ports, and the logs of CI's runs. Where a verdict comes from
-a run, the run is named; where it comes from the code or a test alone, that is said. The native
-programs stay in the repository until the native product is retired (W11); the tag
-`native-final` keeps them after that.
+a run, the run is named; where it comes from the code or a test alone, that is said. Since W11 the
+native programs are at the tag `native-final`, and each twin is in its native program's folder,
+`examples/<name>` or `tests/fixtures/<name>`, where `tests/fixtures-wasm/<name>` held it before.
 
 ## Where the runs stand
 
@@ -91,13 +91,14 @@ a named constant, so a bound is at most 2147483647.
 
 ## Program by program
 
-Each section names the native folder for x86-64; its ARM64 twin is the folder of the same name in
-`tests/fixtures/linux-aarch64/`. "The same, but the frontmatter" means the idea's text below its
+Each section names the program's folder: the native program's for x86-64 at the tag
+`native-final`, whose ARM64 twin is the folder of the same name in `tests/fixtures/linux-aarch64/`
+there, and the twin's since W11. "The same, but the frontmatter" means the idea's text below its
 frontmatter is the native one's, byte for byte.
 
 ### absdiff
 
-`examples/absdiff`, and `tests/fixtures-wasm/absdiff`.
+`examples/absdiff`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers; its arguments as the table above has them.
@@ -108,7 +109,9 @@ frontmatter is the native one's, byte for byte.
 
 ### add
 
-`examples/add`, and `tests/fixtures-wasm/add`.
+`examples/add`, and the twin's, `tests/fixtures/add`. Since W11, `examples/add` holds a second
+WebAssembly port, whose idea is the native one but the frontmatter (5fed702); this section is of
+the twin, the prover's fixture.
 
 - **Idea:** smaller. Its Purpose is one sentence; B2's title is "Shows the usage line without
   arguments"; it has no B3 (text that isn't a number in range, `error: not a number`, exit code 2)
@@ -140,7 +143,7 @@ frontmatter is the native one's, byte for byte.
 
 ### aes
 
-`examples/aes`, and `tests/fixtures-wasm/aes`.
+`examples/aes`.
 
 - **Idea:** the description and the Purpose. The native idea says the program uses the CPU's AES
   instructions and shows how lengua checks them, which only its fast tier,
@@ -163,7 +166,7 @@ frontmatter is the native one's, byte for byte.
 
 ### amounts
 
-`tests/fixtures/amounts`, and `tests/fixtures-wasm/amounts`.
+`tests/fixtures/amounts`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers. Both read a byte at a time; the twin reads each byte through
@@ -176,7 +179,7 @@ frontmatter is the native one's, byte for byte.
 
 ### archive
 
-`examples/archive`, and `tests/fixtures-wasm/archive`.
+`examples/archive`.
 
 - **Idea:** the same, but the frontmatter, whose receipt adds `files`.
 - **Program:** the same answers. The twin looks for the file with `path_filestat_get` before
@@ -191,7 +194,7 @@ frontmatter is the native one's, byte for byte.
 
 ### calc
 
-`tests/fixtures/calc`, and `tests/fixtures-wasm/calc`.
+`tests/fixtures/calc`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers. The operator's case is a `br_table` whose default is an
@@ -203,7 +206,7 @@ frontmatter is the native one's, byte for byte.
 
 ### cat
 
-`tests/fixtures/cat`, and `tests/fixtures-wasm/cat`.
+`tests/fixtures/cat`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers. The twin reads standard input with `$fill`, which reads the same
@@ -216,7 +219,7 @@ frontmatter is the native one's, byte for byte.
 
 ### cat-stream
 
-`tests/fixtures/cat-stream`, and `tests/fixtures-wasm/cat-stream`.
+`tests/fixtures/cat-stream`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers, 4096 bytes at a time in both; the read loop's bound as above.
@@ -228,7 +231,7 @@ frontmatter is the native one's, byte for byte.
 
 ### clock
 
-`tests/fixtures/clock`, and `tests/fixtures-wasm/clock`.
+`tests/fixtures/clock`.
 
 - **Idea:** the same, but the frontmatter. Its clock reads to `4102444799`, inside WASI's range.
 - **Program:** the same answers; the twin reads the clock in nanoseconds and keeps whole seconds.
@@ -238,13 +241,14 @@ frontmatter is the native one's, byte for byte.
 
 ### count
 
-`examples/count`, and `tests/fixtures-wasm/count`.
+`examples/count`.
 
 - **Idea:** two generators draw from fewer bytes. In the native idea, the alphabets of B1's
   second row and of B2's row hold the vertical tab and the form feed, as raw bytes beside `\t`,
   `\n` and `\r`; the twin's file has neither byte, so its tests and proofs never draw them. Its
   Purpose still counts both as whitespace, and its main.wat does (the bytes 9 to 13). No commit
-  says why the two bytes are missing.
+  says why the two bytes are missing. W11 puts both back (b71d17c), so the twin's idea is now the
+  same, but the frontmatter.
 - **Program:** the same answers, 65536 bytes at a time and 16 a step in both (SSE2, NEON and
   SIMD128), with the lanes past the end masked; the read loop's bound as above.
 - **Proofs:** native: lines and words over text with accented letters and symbols, up to 8
@@ -256,7 +260,7 @@ frontmatter is the native one's, byte for byte.
 
 ### dates
 
-`tests/fixtures/dates`, and `tests/fixtures-wasm/dates`.
+`tests/fixtures/dates`.
 
 - **Idea:** the clock's range. The native clock reads from `0` to `253402300799` seconds, the
   end of 9999; the twin's to `18446744073`, a time in July 2554, and its tests draw from that
@@ -273,7 +277,7 @@ frontmatter is the native one's, byte for byte.
 
 ### days
 
-`tests/fixtures/days`, and `tests/fixtures-wasm/days`.
+`tests/fixtures/days`.
 
 - **Idea:** the clock's range, as for `dates`: `18446744073` seconds in place of `253402300799`,
   in its Purpose and in each of its tests that draws the clock.
@@ -284,7 +288,7 @@ frontmatter is the native one's, byte for byte.
 
 ### dice
 
-`examples/dice`, and `tests/fixtures-wasm/dice`.
+`examples/dice`.
 
 - **Idea:** the same, but the frontmatter, which has no `parameters`: random bytes aren't one.
 - **Program:** the same answers: 64 random bytes drawn at once, the roll from the first below 252.
@@ -294,7 +298,9 @@ frontmatter is the native one's, byte for byte.
 
 ### echo
 
-`examples/echo`, and `tests/fixtures-wasm/echo`.
+`examples/echo`, and the twin's, `tests/fixtures/echo`. Since W11, `examples/echo` holds a second
+WebAssembly port, whose idea is the native one but the frontmatter (2bc8d2c); this section is of
+the twin, the prover's fixture.
 
 - **Idea:** smaller limits. A line has at most `8` characters, and the server reads at most 16
   bytes, where the native one takes `1023` and 1024.
@@ -312,7 +318,7 @@ frontmatter is the native one's, byte for byte.
 
 ### fetch
 
-`examples/fetch`, and `tests/fixtures-wasm/fetch`.
+`examples/fetch`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers. Its connection is descriptor 5, where the native one's is 4.
@@ -323,7 +329,9 @@ frontmatter is the native one's, byte for byte.
 
 ### greet
 
-`examples/greet`, and `tests/fixtures-wasm/greet`.
+`examples/greet`, and the twin's, `tests/fixtures/greet`. Since W11, `examples/greet` holds a
+second WebAssembly port, whose idea is the native one but the frontmatter (5a013b6); this section
+is of the twin, the prover's fixture.
 
 - **Idea:** smaller limits. A name has `1` to `8` characters, and the too-long names are `9` to
   `16`, where the native ones are `1` to `64` and `65` to `100`; B2's range goes to 9 characters,
@@ -339,7 +347,7 @@ frontmatter is the native one's, byte for byte.
 
 ### hypotenuse
 
-`examples/hypotenuse`, and `tests/fixtures-wasm/hypotenuse`.
+`examples/hypotenuse`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers. Both read each side in thousandths and compute in doubles, the
@@ -354,7 +362,7 @@ frontmatter is the native one's, byte for byte.
 
 ### lines
 
-`tests/fixtures/lines`, and `tests/fixtures-wasm/lines`.
+`tests/fixtures/lines`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers, 4096 bytes at a time and 16 a step in both, with a scalar tail in
@@ -366,7 +374,7 @@ frontmatter is the native one's, byte for byte.
 
 ### mean
 
-`examples/mean`, and `tests/fixtures-wasm/mean`.
+`examples/mean`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers. Both compute exact cents with integers, and no float takes part:
@@ -381,7 +389,7 @@ frontmatter is the native one's, byte for byte.
 
 ### nap
 
-`tests/fixtures/nap`, and `tests/fixtures-wasm/nap`.
+`tests/fixtures/nap`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers. The twin waits with `poll_oneoff` on one time, 30 seconds on the
@@ -391,7 +399,7 @@ frontmatter is the native one's, byte for byte.
 
 ### padded
 
-`tests/fixtures/padded`, and `tests/fixtures-wasm/padded`.
+`tests/fixtures/padded`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers, 65536 bytes at a time and 16 a step in both, the counts
@@ -403,7 +411,7 @@ frontmatter is the native one's, byte for byte.
 
 ### pairs
 
-`tests/fixtures/pairs`, and `tests/fixtures-wasm/pairs`.
+`tests/fixtures/pairs`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers. Both read 256 bytes at a time and look at each byte in turn,
@@ -417,7 +425,7 @@ frontmatter is the native one's, byte for byte.
 
 ### second
 
-`tests/fixtures/second`, and `tests/fixtures-wasm/second`.
+`tests/fixtures/second`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the native program is wrong by design: one `fill` to the first newline a read ends
@@ -436,7 +444,7 @@ frontmatter is the native one's, byte for byte.
 
 ### sha256
 
-`examples/sha256`, and `tests/fixtures-wasm/sha256`.
+`examples/sha256`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers, 4096 bytes at a time in both. The native baseline is integer
@@ -448,12 +456,12 @@ frontmatter is the native one's, byte for byte.
 - **Proofs:** its tests compute `sha256`, which the prover doesn't model on either path ("the test
   function sha256, which the proof doesn't model yet", `src/prove/formula.rs`), so they are tested,
   not proven; natively a proof can stop for memory first, as `scripts/ci/golden-expected.txt`
-  notes. WebAssembly: before that, the model stops at main.wat line 182, `V128Load`, on the runs of
-  every block (run 42361995155).
+  notes at the tag `native-final`. WebAssembly: before that, the model stops at main.wat line
+  182, `V128Load`, on the runs of every block (run 42361995155).
 
 ### sort
 
-`examples/sort`, and `tests/fixtures-wasm/sort`.
+`examples/sort`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers and the same limits, with a merge sort in both. The native
@@ -469,7 +477,7 @@ frontmatter is the native one's, byte for byte.
 
 ### sweep
 
-`tests/fixtures/sweep`, and `tests/fixtures-wasm/sweep`.
+`tests/fixtures/sweep`.
 
 - **Idea:** the same, but the frontmatter, whose receipt adds `files`.
 - **Program:** the same answers for the folders the idea gives (it prints `0` to `16`). Past them:
@@ -486,7 +494,7 @@ frontmatter is the native one's, byte for byte.
 
 ### total
 
-`tests/fixtures/total`, and `tests/fixtures-wasm/total`.
+`tests/fixtures/total`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the same answers. The twin copies the file's name to a region of its own, so
@@ -499,7 +507,7 @@ frontmatter is the native one's, byte for byte.
 
 ### upcase
 
-`examples/upcase`, and `tests/fixtures-wasm/upcase`.
+`examples/upcase`.
 
 - **Idea:** the same, but the frontmatter, whose receipt adds `files`.
 - **Program:** the twin capitalizes a byte at a time, where the native x86-64 program takes 16
@@ -519,7 +527,7 @@ frontmatter is the native one's, byte for byte.
 
 ### words
 
-`tests/fixtures/words`, and `tests/fixtures-wasm/words`.
+`tests/fixtures/words`.
 
 - **Idea:** the same, but the frontmatter.
 - **Program:** the twin looks at each byte in turn, 4096 bytes at a time, where the native
