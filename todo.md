@@ -96,6 +96,15 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 
 The owner was away while these were made (2026-11-06: "im not going to check up on you anymore").
 Each can be reversed.
+- **lengua is written in Rust and WebAssembly only** (the owner, 2026-11-09: "ok go with rust
+  and webassembly, proceed"):
+  - Rust is everything lengua is: the server, its tools and command line, and its tooling.
+    lengua's scripts become Rust (W17), and GitHub's workflow file stays only as glue.
+  - WebAssembly is everything lengua makes: main.wat, lengua's library, the templates and the
+    programs. They stay WebAssembly text, because the checker, the prover and the agent read
+    them line by line, so not 100% Rust.
+  - The benchmark's C and C++ programs stay, being the competitors point 4 measures, and so do
+    the manifests the Agent Plugins standard requires, data, and documents.
 - **The code is WebAssembly text** (`main.wat`), written by the agent and validated by lengua.
 - **The interface is WASI preview 1**, which every WebAssembly runtime runs and Wasmtime keeps
   supporting. lengua implements the part its programs use, holding the semantics of today's 21
@@ -223,6 +232,19 @@ Each merges to main when green on the runners it names; [ROADMAP.md](ROADMAP.md)
   README that presents lengua, the top level pruned, the merged work branches deleted (never
   `wip/routes-ci`, `wip/r2-8a-snap` or `wip/r2-base-check`, which are the owner's), and the
   repository's description and topics on GitHub.
+- **W12b. lengua's run made lean.** The first gate run (42661776298, all five runners) found
+  lengua's program ahead on module size nearly everywhere, and on time where the work is large
+  (wc, files, readings, part of sort). It is behind on time and memory wherever starting dominates,
+  and on memory almost everywhere. That gap is `lengua-mcp run`'s own work around the program
+  (reading the whole idea, building main.wat again) and lengua's library merged in whole. W12b
+  cuts it and keeps every guarantee. KNOWN_BEHIND holds each runner's rows from that run, and
+  may only shrink.
+- **W17. lengua in Rust and WebAssembly only** (the owner, 2026-11-09):
+  - The shell, PowerShell, sed and Python scripts become Rust: `lengua-mcp install` for the
+    install scripts, and a Rust task crate for release, CI setup and the goldens.
+  - Each step of the workflow file calls into Rust.
+  - The site is rebuilt in Rust or left out.
+  - The solvers run as WebAssembly if the research shows they can at a fair cost.
 
 Runs, as they land:
 
