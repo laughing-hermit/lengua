@@ -3,9 +3,10 @@
 //! The file starts with YAML frontmatter (`type`, `title` and `description`), followed by
 //! markdown sections: `# Purpose`, `# Behaviors` with one `## B<n>: <title>` heading per behavior
 //! written as Given/When/Then steps, each followed by its generated tests under a `###` heading,
-//! and `# Constraints`, which names what the program uses: `- Uses:`, `- Network:` and
-//! `- Threads:` lines, and the inputs whose values must not decide how it runs, `- Secret:`.
-//! Nothing in it is particular to one computer.
+//! and `# Constraints`, which names what the program uses, `- Uses:` and `- Network:` lines, and
+//! the inputs whose values must not decide how it runs, `- Secret:`. Nothing in it is particular
+//! to one computer. A `- Threads:` line still parses, so that check can say why it refuses one: a
+//! program runs as one thread.
 //!
 //! An idea that lengua compiles to WebAssembly is an OKF Attested Computation (OKF v0.2 §10):
 //! `type: Attested Computation`, with `runtime: webassembly`, `computation: main.wat`, the
@@ -2439,8 +2440,8 @@ impl Parser {
             self.problem(
                 Some(number),
                 "`# Constraints` lists only what the program uses, which means the same on every \
-                 computer: `- Uses: …`, `- Network: …`, `- Threads: …`, `- Secret: …` and `- \
-                 Builds on: …`; say anything else in `# Purpose`",
+                 computer: `- Uses: …`, `- Network: …`, `- Secret: …` and `- Builds on: …`; say \
+                 anything else in `# Purpose`",
             );
             return;
         };
@@ -2469,15 +2470,18 @@ impl Parser {
                 ),
                 None if lower.contains("thread") => self.problem(
                     Some(number),
-                    "threads have their own line: `- Threads: up to N`",
+                    format!(
+                        "a program runs as one thread, so an idea names no threads: remove \
+                         `{name}`"
+                    ),
                 ),
                 None => self.problem(
                     Some(number),
                     format!(
-                        "`{name}` isn't something lengua lets a program use; it may use {known}, \
-                         the network and threads, besides writing its output. lengua programs \
-                         can't allocate memory, start processes, handle signals or change the \
-                         file system"
+                        "`{name}` isn't something lengua lets a program use; it may use {known} \
+                         and the network, besides writing its output. lengua programs can't \
+                         allocate memory, start processes, handle signals or change the file \
+                         system"
                     ),
                 ),
             }
@@ -2676,7 +2680,9 @@ impl Parser {
         }
     }
 
-    /// `- Threads: up to 16`: how many threads the program may run at once.
+    /// `- Threads: up to 16`: how many threads the program may run at once, which check refuses,
+    /// as a program runs as one thread. A line that doesn't read so, or a second one, is refused
+    /// here with the same words.
     fn threads_line(&mut self, number: usize, rest: &str) {
         let rest = rest.trim().trim_end_matches('.');
         let count = strip_prefix_ignore_case(rest, "up to")
@@ -2690,15 +2696,14 @@ impl Parser {
         match (count, self.threads) {
             (_, Some(_)) => self.problem(
                 Some(number),
-                "the threads are given twice; keep one `- Threads: up to N` line",
+                "a program runs as one thread, so an idea names no threads: remove the \
+                 `- Threads:` lines",
             ),
             (Some(count), None) => self.threads = Some(count),
             (None, None) => self.problem(
                 Some(number),
-                format!(
-                    "write the threads as `- Threads: up to N`, with N from 2 to {MAX_THREADS}, \
-                     such as `- Threads: up to 16`"
-                ),
+                "a program runs as one thread, so an idea names no threads: remove the \
+                 `- Threads:` line",
             ),
         }
     }
@@ -3021,7 +3026,7 @@ fn allowed_calls_rewrite(listed: &str) -> String {
     };
     format!(
         "idea.md names what the program uses, the same on every computer, not Linux system \
-         calls: {line}{refused}; the network and threads keep their own lines"
+         calls: {line}{refused}; the network keeps its own line"
     )
 }
 
@@ -3529,16 +3534,17 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
                 "{line}"
             );
         }
-        assert_problem(&with("- Threads: up to 1"), "with N from 2 to 64");
-        assert_problem(&with("- Threads: up to 65"), "with N from 2 to 64");
-        assert_problem(&with("- Threads: many"), "with N from 2 to 64");
-        assert_problem(
-            &with("- Threads: up to 4\n- Threads: up to 8"),
-            "the threads are given twice",
-        );
+        // check refuses every `- Threads:` line: one it can't read, or a second, at once.
+        let refused = "a program runs as one thread, so an idea names no threads: remove the \
+                       `- Threads:` line";
+        assert_problem(&with("- Threads: up to 1"), refused);
+        assert_problem(&with("- Threads: up to 65"), refused);
+        assert_problem(&with("- Threads: many"), refused);
+        assert_problem(&with("- Threads: up to 4\n- Threads: up to 8"), refused);
+        // A use of threads offers no `- Threads:` line, which check refuses on every idea.
         assert_problem(
             &ADD.replace("- Uses: nothing", "- Uses: threads"),
-            "threads have their own line",
+            "a program runs as one thread, so an idea names no threads: remove `threads`",
         );
     }
 
