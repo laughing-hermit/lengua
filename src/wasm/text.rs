@@ -9,7 +9,8 @@ use std::fmt;
 
 use wast::Wat;
 use wast::core::{
-    ElemPayload, ExportKind, FuncKind, GlobalKind, Instruction, ModuleField, ModuleKind, TableKind,
+    ElemPayload, ExportKind, FuncKind, GlobalKind, ImportItems, Instruction, ItemKind, ModuleField,
+    ModuleKind, TableKind,
 };
 use wast::parser::{self, ParseBuffer};
 use wast::token::{Id, Index, Span};
@@ -312,13 +313,79 @@ fn library_name<'a>(field: &ModuleField<'a>) -> Option<&'a str> {
     ids(field).first().map(|(id, _)| id.name())
 }
 
+/// main.wat's own imports of WASI's functions that it gives a `$name`, by the function's field,
+/// the first of each with its name: written as an import, in a group of them, or inline.
+fn own_imports<'a>(fields: &[ModuleField<'a>]) -> BTreeMap<&'a str, Id<'a>> {
+    let mut found = BTreeMap::new();
+    let mut keep = |module: &str, field: &'a str, id: Option<Id<'a>>| {
+        if module == crate::wasm::wasi::MODULE
+            && let Some(id) = id
+        {
+            found.entry(field).or_insert(id);
+        }
+    };
+    for field in fields {
+        match field {
+            ModuleField::Import(import) => match &import.items {
+                ImportItems::Single { module, name, sig }
+                    if matches!(sig.kind, ItemKind::Func(_)) =>
+                {
+                    keep(module, *name, sig.id);
+                }
+                ImportItems::Group1 { module, items } => {
+                    for item in items {
+                        if matches!(item.sig.kind, ItemKind::Func(_)) {
+                            keep(module, item.name, item.sig.id);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            ModuleField::Func(func) => {
+                if let FuncKind::Import(import, false) = &func.kind {
+                    keep(import.module, import.field, func.id);
+                }
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// The WASI function a library import imports, by its field, with the `$name` the library calls
+/// it by.
+fn library_import<'a>(field: &ModuleField<'a>) -> Option<(&'a str, Id<'a>)> {
+    let ModuleField::Import(import) = field else {
+        return None;
+    };
+    let ImportItems::Single { module, name, sig } = &import.items else {
+        return None;
+    };
+    let function = matches!(sig.kind, ItemKind::Func(_));
+    (*module == crate::wasm::wasi::MODULE && function).then_some((*name, sig.id?))
+}
+
 /// Builds main.wat's `text` into a module: the library's functions it calls and doesn't define
-/// merged in after its own, encoded, and validated as the engine takes it.
+/// merged in after its own, encoded, and validated as the engine takes it. Where main.wat imports
+/// a WASI function under a `$name` that the library imports too, as `proc_exit`, the library
+/// calls main.wat's import and its own isn't merged; a module that doesn't build so, as when
+/// main.wat's import has another type, is built with the library's own imports.
 ///
 /// # Errors
 ///
 /// What's wrong with the text, on its line when it has one.
 pub fn build(text: &str) -> Result<Built, Problem> {
+    let mut shared = false;
+    match merged(text, true, &mut shared) {
+        Err(_) if shared => merged(text, false, &mut shared),
+        built => built,
+    }
+}
+
+/// [`build`]'s work: main.wat's `text` built with the library merged in, sharing main.wat's own
+/// imports of WASI's functions with the library when `share` says so, and saying in `shared`
+/// whether it shared any.
+fn merged(text: &str, share: bool, shared: &mut bool) -> Result<Built, Problem> {
     let starts = line_starts(text);
     let mut main_buffer =
         ParseBuffer::new(text).map_err(|error| parse_problem(text, &starts, &error))?;
@@ -375,6 +442,14 @@ pub fn build(text: &str) -> Result<Built, Problem> {
             pending.extend(needs(name).iter().copied());
         }
     }
+    // A WASI function main.wat imports itself, under a name: the library calls main.wat's import
+    // of it, and its own isn't merged.
+    let imported = if share {
+        own_imports(fields)
+    } else {
+        BTreeMap::new()
+    };
+    let mut calls = Vec::new();
     let mut imports = Vec::new();
     let mut rest = Vec::new();
     let mut library = Vec::new();
@@ -386,7 +461,14 @@ pub fn build(text: &str) -> Result<Built, Problem> {
             continue;
         }
         match field {
-            ModuleField::Import(_) => imports.push(field),
+            ModuleField::Import(_) => {
+                let shared_with = library_import(&field)
+                    .and_then(|(wasi, id)| imported.get(wasi).map(|theirs| (id.name(), *theirs)));
+                match shared_with {
+                    Some(call) => calls.push(call),
+                    None => imports.push(field),
+                }
+            }
             ModuleField::Func(_) => {
                 library.push(name.to_owned());
                 rest.push(field);
@@ -394,6 +476,22 @@ pub fn build(text: &str) -> Result<Built, Problem> {
             _ => rest.push(field),
         }
     }
+    for field in &mut rest {
+        let ModuleField::Func(func) = field else {
+            continue;
+        };
+        let FuncKind::Inline { expression, .. } = &mut func.kind else {
+            continue;
+        };
+        for instruction in expression.instrs.iter_mut() {
+            if let Instruction::call(Index::Id(id)) = instruction
+                && let Some((_, theirs)) = calls.iter().find(|(ours, _)| *ours == id.name())
+            {
+                *id = *theirs;
+            }
+        }
+    }
+    *shared = !calls.is_empty();
     // The library's imports go before main.wat's fields and take the first functions' numbers,
     // so a number main.wat gives a function by would name another, maybe of the same type.
     if !imports.is_empty()
@@ -639,7 +737,42 @@ mod tests {
             "{:?}",
             built.lines
         );
-        // Imported twice, as `$exit` and as `$lengua.proc_exit`, is legal.
+        // main.wat's `$exit` is the one proc_exit, which the library's $assert_fail calls too.
+        assert!(crate::wasm::engine::validate(&built.wasm).is_ok());
+    }
+
+    /// The WASI functions `wasm` imports, by module and field, in order.
+    fn imports(wasm: &[u8]) -> Vec<(String, String)> {
+        let mut found = Vec::new();
+        for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+            if let Ok(wasmparser::Payload::ImportSection(reader)) = payload {
+                for import in reader.into_imports().flatten() {
+                    found.push((import.module.to_owned(), import.name.to_owned()));
+                }
+            }
+        }
+        found
+    }
+
+    /// The library calls main.wat's own import of a WASI function it imports too: HELLO imports
+    /// proc_exit as `$exit`, and its module imports proc_exit once, beside the library's
+    /// fd_write. A main.wat that imports proc_exit with another type still builds, with the
+    /// library's own import of it.
+    #[test]
+    fn the_library_calls_main_wat_s_own_imports() {
+        let count = |found: &[(String, String)], field: &str| {
+            found.iter().filter(|(_, name)| name == field).count()
+        };
+        let hello = imports(&build(HELLO).expect("it builds").wasm);
+        assert_eq!(count(&hello, "proc_exit"), 1, "{hello:?}");
+        assert_eq!(count(&hello, "fd_write"), 1, "{hello:?}");
+        let wide = HELLO
+            .replace("(func $exit (param i32))", "(func $exit (param i64))")
+            .replace("(call $exit (i32.const 0))", "(call $exit (i64.const 0))");
+        assert_ne!(wide, HELLO);
+        let built = build(&wide).expect("it builds");
+        let found = imports(&built.wasm);
+        assert_eq!(count(&found, "proc_exit"), 2, "{found:?}");
         assert!(crate::wasm::engine::validate(&built.wasm).is_ok());
     }
 
