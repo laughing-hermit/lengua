@@ -24,7 +24,9 @@ pub const LOCK_FILE: &str = "lengua.lock";
 pub const VERSION: u32 = 7;
 
 /// The oldest lock format this server still reads: version 6, whose stamp of main.wat version 7
-/// keeps as it was, so a program checked before stays checked. lengua writes it again as 7.
+/// keeps as it was, so a program checked before stays checked. lengua writes it again as 7. Every
+/// format before it came before main.wat: only the native lengua wrote them, with its dialect 4,
+/// so a lock of one is the native lengua's ([`LockError::Native`]).
 pub const OLDEST_VERSION: u32 = 6;
 
 /// The dialect a lock of checked main.wat records: the WebAssembly dialect 1, which
@@ -433,9 +435,12 @@ pub(crate) fn parse_body(body: &str) -> Result<Lock, LockError> {
     let found = toml::from_str::<VersionOnly>(body)
         .map_err(|_| malformed("it isn't valid TOML"))?
         .version;
-    let Some(version) = found
-        .and_then(|version| u32::try_from(version).ok())
-        .filter(|version| (OLDEST_VERSION..=VERSION).contains(version))
+    let version = found.and_then(|version| u32::try_from(version).ok());
+    // A format from before main.wat is the native lengua's, whatever else it records.
+    if version.is_some_and(|version| (1..OLDEST_VERSION).contains(&version)) {
+        return Err(LockError::Native);
+    }
+    let Some(version) = version.filter(|version| (OLDEST_VERSION..=VERSION).contains(version))
     else {
         return Err(LockError::UnsupportedVersion(
             found.map_or_else(|| "none".to_owned(), |version| version.to_string()),
@@ -569,9 +574,11 @@ pub enum LockError {
     Malformed(String),
     /// The signature doesn't match: something other than this server changed the file.
     BadSignature,
-    /// The file uses a lock format this server doesn't read.
+    /// The file uses a lock format this server doesn't read: a later lengua's, or one no lengua
+    /// wrote.
     UnsupportedVersion(String),
-    /// The file records main.s, the native lengua's code, which this lengua doesn't check.
+    /// The file records main.s, the native lengua's code, which this lengua doesn't check: its
+    /// stamp, its dialect, or a format from before main.wat, which only the native lengua wrote.
     Native,
     /// The file's main.wat was checked against a WebAssembly dialect this server doesn't check.
     UnsupportedWasmDialect(String),
@@ -1085,7 +1092,8 @@ mod tests {
     }
 
     /// A lock that records the native lengua's code, its stamp of main.s or its dialect beside
-    /// code, can't be used, and says where the native lengua is.
+    /// code, or is of a format from before main.wat, which only the native lengua wrote, can't be
+    /// used, and says where the native lengua is.
     #[test]
     fn a_lock_of_the_native_lengua_is_stale() {
         let body = full_lock().body_in(6);
@@ -1105,6 +1113,11 @@ mod tests {
             full_lock()
                 .body()
                 .replace("target = \"webassembly\"", "target = \"linux-aarch64\""),
+            // Version 5 came before main.wat, version 4 named the program's spec.md, and 1 was
+            // the first.
+            body.replace("version = 6", "version = 5"),
+            body.replace("version = 6", "version = 4"),
+            body.replace("version = 6", "version = 1"),
         ];
         for body in cases {
             assert_eq!(
@@ -1123,19 +1136,14 @@ mod tests {
     #[test]
     fn unknown_versions_and_dialects_are_reported() {
         let body = full_lock().body();
-        // Version 5 came before main.wat; version 4 named the program's spec.md.
-        for older in ["4", "5"] {
-            let text = forge(&body.replace("version = 7", &format!("version = {older}")), &key(1));
+        // No lengua wrote a format 0, and 8 is a later lengua's.
+        for unknown in ["0", "8"] {
+            let text = forge(&body.replace("version = 7", &format!("version = {unknown}")), &key(1));
             assert_eq!(
                 Lock::from_signed_text(&text, &key(1)),
-                Err(LockError::UnsupportedVersion(older.into()))
+                Err(LockError::UnsupportedVersion(unknown.into()))
             );
         }
-        let newer = forge(&body.replace("version = 7", "version = 8"), &key(1));
-        assert_eq!(
-            Lock::from_signed_text(&newer, &key(1)),
-            Err(LockError::UnsupportedVersion("8".into()))
-        );
         let later = forge(
             &body.replace("\"webassembly 1\"", "\"webassembly 2\""),
             &key(1),
