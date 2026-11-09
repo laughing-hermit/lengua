@@ -1,7 +1,14 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: echo
 description: A server that sends each line back to the client that sent it.
+runtime: webassembly
+computation: main.wat
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 This program is a small network service. Use it to test clients. On each connection, it reads a
