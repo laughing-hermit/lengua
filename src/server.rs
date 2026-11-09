@@ -2046,12 +2046,13 @@ pub struct ShellRun {
 /// Runs a checked program from a shell, script or service: `run`'s checks and confinement, with
 /// the shell's own standard input, output and error and no time limit, main.wat's module in this
 /// process. Returns the program's exit code, or 134 when it trapped, which it says on standard
-/// error.
+/// error. It is a plain function, and needs no async runtime: nothing on its way waits on one,
+/// and the connections lengua makes for a program have a runtime of their own.
 ///
 /// # Errors
 ///
 /// Fails, saying why, when lengua won't run the program or can't start it.
-pub async fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i32, String> {
+pub fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i32, String> {
     let here = std::env::current_dir()
         .map_err(|error| format!("can't read the current folder: {error}"))?;
     let absolute = |path: &str| here.join(path).to_string_lossy().into_owned();

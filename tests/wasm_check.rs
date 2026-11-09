@@ -327,6 +327,19 @@ async fn a_shell_runs_and_attests_the_checked_program() {
         assert_eq!(sum.stdout, b"5\n", "{args:?}: {sum:?}");
         assert_eq!(sum.status.code(), Some(0), "{args:?}: {sum:?}");
     }
+    // A shell's run logs nothing of lengua's own unless LENGUA_LOG asks, and with it the
+    // program's output is the same.
+    let logged = Command::new(env!("CARGO_BIN_EXE_lengua-mcp"))
+        .arg("--data-dir")
+        .arg(session.data_dir.path())
+        .arg("run")
+        .arg(program.path())
+        .args(["2", "3"])
+        .env("LENGUA_LOG", "warn")
+        .output()
+        .expect("lengua-mcp runs");
+    assert_eq!(logged.stdout, b"5\n", "{logged:?}");
+    assert_eq!(logged.status.code(), Some(0), "{logged:?}");
     let usage = run_from_shell(&session, program.path(), &[]);
     assert_eq!(usage.stderr, b"usage: add <a> <b>\n", "{usage:?}");
     assert_eq!(usage.status.code(), Some(1), "{usage:?}");

@@ -60,15 +60,6 @@ fn main() -> ExitCode {
         return ExitCode::from(u8::try_from(code).unwrap_or(REFUSED));
     }
 
-    // stdout carries the MCP protocol, so all logging goes to stderr.
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            EnvFilter::try_from_env("LENGUA_LOG").unwrap_or_else(|_| EnvFilter::new("warn")),
-        )
-        .with_ansi(false)
-        .init();
-
     // Every system passes Unicode arguments, as Windows's UTF-16 does: lengua takes no others.
     let arguments: Result<Vec<String>, _> = std::env::args_os()
         .skip(1)
@@ -81,7 +72,14 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(REFUSED);
     };
-    let data_dir = match parse_args(arguments.into_iter()) {
+    let command = parse_args(arguments.into_iter());
+    // A shell's run of main.wat logs nothing, as a module's run doesn't: nothing on its way logs,
+    // and the engine's warnings would land among the program's own output. LENGUA_LOG brings
+    // them back, for a developer; every other command logs as it did.
+    if !matches!(command, Ok(Command::Run(..))) || std::env::var_os("LENGUA_LOG").is_some() {
+        log_to_stderr();
+    }
+    let data_dir = match command {
         Ok(Command::Serve(data_dir)) => data_dir,
         Ok(Command::Run(data_dir, request)) => return run_from_shell(&data_dir, &request),
         Ok(Command::Check(path)) => return attest(&path),
@@ -109,14 +107,22 @@ fn main() -> ExitCode {
     }
 }
 
-/// Runs a checked program attached to this shell, exiting with its exit code.
+/// Logs to stderr, at the level `LENGUA_LOG` says, or warnings: stdout carries the MCP protocol,
+/// and the `log` records of the engine and its cache come here too.
+fn log_to_stderr() {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            EnvFilter::try_from_env("LENGUA_LOG").unwrap_or_else(|_| EnvFilter::new("warn")),
+        )
+        .with_ansi(false)
+        .init();
+}
+
+/// Runs a checked program attached to this shell, exiting with its exit code: in a plain
+/// function, with no async runtime built around it, as nothing on its way waits on one.
 fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> ExitCode {
-    let result = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("could not start: {error}"))
-        .and_then(|runtime| runtime.block_on(lengua::server::run_from_shell(data_dir, request)));
-    match result {
+    match lengua::server::run_from_shell(data_dir, request) {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(REFUSED)),
         Err(message) => {
             eprintln!("lengua-mcp: {message}");
