@@ -105,6 +105,18 @@ Each can be reversed.
     them line by line, so not 100% Rust.
   - The benchmark's C and C++ programs stay, being the competitors point 4 measures, and so do
     the manifests the Agent Plugins standard requires, data, and documents.
+  - Four choices made with it, after research (each with its sources in W17's brief):
+    - "Only" covers lengua's own code and tooling. Third-party programs and crates stay, pinned
+      and checked, and DESIGN names the C they carry: the solvers, ring for TLS, zstd, and a
+      file of Wasmtime's.
+    - z3 runs as WebAssembly if it costs fairly. That means the same verdicts on all five
+      runners at today's limits, with the replayed questions taking at most twice as long in
+      all. Another project already runs z3 under Wasmtime, with 413 of 414 answers the same
+      as native z3. If the bar isn't met, native z3 stays and the measurement is written here.
+    - cvc5 stays native, since no build that Wasmtime runs exists yet. After z3, one bounded try
+      to make one: at most five build runs.
+    - The site (`site/`) goes, and the tag keeps it. Static pages built by Rust can come back
+      when the owner wants to publish one.
 - **The code is WebAssembly text** (`main.wat`), written by the agent and validated by lengua.
 - **The interface is WASI preview 1**, which every WebAssembly runtime runs and Wasmtime keeps
   supporting. lengua implements the part its programs use, holding the semantics of today's 21
