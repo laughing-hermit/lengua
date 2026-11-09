@@ -1543,19 +1543,9 @@ impl LenguaServer {
         if !unchanged {
             return Err(changed());
         }
-        // Proofs about this very build still hold; about any other, they're gone. Code edited
-        // without changing its build, as by a comment, keeps them, but the lines its records
-        // name may have moved since: those records say so.
-        let edited = lock
-            .code
-            .as_ref()
-            .is_some_and(|checked| checked.sha256 != code.sha256);
-        let mut proofs = lock
-            .proofs
-            .filter(|proofs| proofs.module_sha256 == code.module_sha256);
-        if edited && let Some(kept) = &mut proofs {
-            lines_may_have_moved(kept);
-        }
+        // Proofs about this very build still hold; of any other, only what a proof found wrong
+        // about the same main.wat goes on ([`kept_proofs`]).
+        let proofs = kept_proofs(lock.code.as_ref(), lock.proofs, &code);
         // The module the stamp replaces, when it is another: its kept file goes once the new
         // stamp is written, and a folder whose lock still names it builds it at its next run.
         let replaced = lock
@@ -1786,6 +1776,42 @@ fn settled(
             ),
         },
     }
+}
+
+/// The proofs a new stamp of main.wat, `code`, keeps of the lock's, `proofs`, which are about the
+/// code the lock stamped before, `before`. About the very module stamped, all of them: code
+/// edited without changing its module, as by a comment, keeps them, though the lines their
+/// records name may have moved since, which those records then say. About another module of the
+/// same main.wat, as when lengua's own build changed, what they found wrong and nothing else,
+/// now about the new module: a wrong verdict refuses more, never less, while what the others say
+/// held of another module. None after an edit that changed the module, or of proofs about
+/// another module than the one stamped before: the new module is proven afresh.
+fn kept_proofs(
+    before: Option<&CodeStamp>,
+    proofs: Option<Box<ProofStamp>>,
+    code: &CodeStamp,
+) -> Option<Box<ProofStamp>> {
+    let mut proofs = proofs?;
+    let edited = before.is_some_and(|checked| checked.sha256 != code.sha256);
+    if proofs.module_sha256 == code.module_sha256 {
+        if edited {
+            lines_may_have_moved(&mut proofs);
+        }
+        return Some(proofs);
+    }
+    let before = before?;
+    if edited || proofs.module_sha256 != before.module_sha256 || proofs.wrong.is_empty() {
+        return None;
+    }
+    let ProofStamp { solvers, wrong, .. } = *proofs;
+    Some(Box::new(ProofStamp {
+        module_sha256: code.module_sha256.clone(),
+        proven: Vec::new(),
+        bounded: Vec::new(),
+        solvers,
+        wrong,
+        unproven: Vec::new(),
+    }))
 }
 
 /// Notes on what `proofs` found wrong, or why they left a test unproven, once main.wat is edited
@@ -2262,5 +2288,61 @@ mod tests {
             proofs.unproven[0].1,
             format!("main.wat line 94: a float{moved}")
         );
+    }
+
+    /// A check that stamps another module of the same main.wat, as after lengua's own build
+    /// changed, carries what a proof found wrong over to the new module, and nothing else of the
+    /// old proofs; an edited main.wat, old proofs about another module than the old stamp's, or
+    /// old proofs that found nothing wrong carry nothing; and proofs about the very module
+    /// stamped stay, all of them.
+    #[test]
+    fn a_wrong_verdict_outlasts_a_change_of_lengua_s_build() {
+        let stamp = |code: &[u8], module: &[u8]| CodeStamp {
+            sha256: Sha256Hex::of(code),
+            module_sha256: Sha256Hex::of(module),
+            engine: crate::wasm::engine::ENGINE.to_owned(),
+            max_stack_bytes: 16,
+            unsafe_blocks: 0,
+            features: Vec::new(),
+        };
+        let proofs = |module: &[u8]| {
+            Box::new(ProofStamp {
+                module_sha256: Sha256Hex::of(module),
+                proven: vec!["B2".into()],
+                bounded: vec![lock::Bounded {
+                    id: "B3".into(),
+                    bytes: 8,
+                    of: 16,
+                    more: true,
+                }],
+                solvers: "z3 and cvc5".to_owned(),
+                wrong: vec![("B1".into(), "it printed -0".into())],
+                unproven: vec![("B4".into(), "a float".into())],
+            })
+        };
+        let before = stamp(b"main.wat", b"old module");
+        let rebuilt = stamp(b"main.wat", b"new module");
+        let carried = kept_proofs(Some(&before), Some(proofs(b"old module")), &rebuilt)
+            .expect("the wrong verdict goes on");
+        assert_eq!(carried.module_sha256, rebuilt.module_sha256);
+        assert_eq!(carried.wrong, proofs(b"old module").wrong);
+        assert_eq!(carried.solvers, "z3 and cvc5");
+        assert!(carried.proven.is_empty() && carried.bounded.is_empty());
+        assert!(carried.unproven.is_empty());
+        let edited = stamp(b"edited main.wat", b"new module");
+        assert_eq!(
+            kept_proofs(Some(&before), Some(proofs(b"old module")), &edited),
+            None
+        );
+        let other = proofs(b"another module");
+        assert_eq!(kept_proofs(Some(&before), Some(other), &rebuilt), None);
+        let mut right = proofs(b"old module");
+        right.wrong.clear();
+        assert_eq!(kept_proofs(Some(&before), Some(right), &rebuilt), None);
+        let unstamped = proofs(b"old module");
+        assert_eq!(kept_proofs(None, Some(unstamped), &rebuilt), None);
+        let same = proofs(b"old module");
+        let kept = kept_proofs(Some(&before), Some(same.clone()), &before);
+        assert_eq!(kept, Some(same));
     }
 }

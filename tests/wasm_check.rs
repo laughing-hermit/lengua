@@ -7,8 +7,8 @@
 //! only one its program gets; and a program built on another, its part. Then, with the solvers,
 //! main.wat's proofs through check: add's proof named in the reply and kept in the lock, a proof
 //! by length that stops short kept as far as it went and proven on with prove_further, a planted
-//! wrong constant found as a counterexample, and a program the model refuses left tested, not
-//! proven, with the reason.
+//! wrong constant found as a counterexample, a wrong verdict that outlasts a change of lengua's
+//! own build, and a program the model refuses left tested, not proven, with the reason.
 
 mod common;
 
@@ -986,6 +986,70 @@ async fn a_planted_wrong_constant_is_a_counterexample_through_check() {
     assert_eq!(code, Some(1), "{said}");
     assert!(said.contains(&format!("\nproofs: {found}")), "{said}");
     assert_eq!(said.lines().last(), Some("not attested"), "{said}");
+}
+
+/// What the lock below records a proof found wrong on add's B1.
+const FOUND: &str = "with a = 1 and b = -1: it printed \"-0\"";
+
+/// Whether `ran`, a run from a shell, was refused as a build a proof found wrong.
+fn refused_as_wrong(ran: &Output) -> bool {
+    ran.status.code() == Some(125)
+        && ran.stdout.is_empty()
+        && String::from_utf8_lossy(&ran.stderr).contains(WRONG_BUILD)
+}
+
+/// What a proof found wrong outlasts a change of lengua's own build, after which check builds
+/// another module of the same main.wat. add, checked to done, gets a lock that names another
+/// module and records a wrong verdict on B1 about it, signed with the session's key, as a lock
+/// from before such a change does: `lengua-mcp run` refuses it. Checked again, in a restarted
+/// session, B1's verdict is replayed about the new module, which the lock now names in its
+/// proofs, and idea.md holds no entry of lengua's; and `lengua-mcp run` still refuses it, where
+/// a check that dropped the verdict would let it print the sum.
+#[tokio::test]
+async fn a_wrong_verdict_outlasts_a_change_of_lengua_s_build() {
+    let session = Session::start(Protocol::Discover).await;
+    let program = add(&session).await;
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let key_bytes: [u8; 32] = std::fs::read(session.data_dir.path().join("key"))
+        .expect("the signing key")
+        .try_into()
+        .expect("32 bytes");
+    let key = lengua::lock::Key::from_bytes(key_bytes);
+    let mut lock = lengua::lock::read(program.path(), Some(&key))
+        .expect("a valid lock")
+        .expect("a lock");
+    let earlier = Sha256Hex::of(b"the module an earlier build of lengua made");
+    let stamp = lock.code.as_mut().expect("the code's stamp");
+    stamp.module_sha256 = earlier.clone();
+    lock.proofs = Some(Box::new(lengua::lock::ProofStamp {
+        module_sha256: earlier,
+        proven: Vec::new(),
+        bounded: Vec::new(),
+        solvers: "z3 and cvc5".to_owned(),
+        wrong: vec![("B1".to_owned(), FOUND.to_owned())],
+        unproven: Vec::new(),
+    }));
+    lengua::lock::write(program.path(), &lock, &key).expect("write the lock");
+    let ran = run_from_shell(&session, program.path(), &["2", "3"]);
+    assert!(refused_as_wrong(&ran), "{ran:?}");
+    let session = session.restart().await;
+    let again = session.settle(&program).await;
+    assert_eq!(again["state"], "tests_failed", "{again}");
+    let replayed = format!("generated B1: {FOUND}");
+    assert!(any_line(&again["problems"], &replayed), "{again}");
+    let idea = program.read("idea.md").expect("idea.md");
+    assert!(trust::lengua_entries(&idea).is_empty(), "{idea}");
+    let module = lengua::wasm::text::build(CODE)
+        .expect("main.wat builds")
+        .wasm;
+    let lock = program.read("lengua.lock").expect("the lock");
+    let hash = Sha256Hex::of(&module);
+    let proofs = format!("\n[proofs]\nmodule_sha256 = \"{hash}\"\n");
+    assert!(lock.contains(&proofs), "{lock}");
+    let ran = run_from_shell(&session, program.path(), &["2", "3"]);
+    assert!(refused_as_wrong(&ran), "{ran:?}");
+    session.service.cancel().await.expect("close the session");
 }
 
 /// A program the WebAssembly model refuses, here for the float lanes add's sum goes through,
