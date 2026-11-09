@@ -431,8 +431,10 @@ async fn lengua_s_entry_goes_wherever_check_stops() {
     session.service.cancel().await.expect("close the session");
 }
 
-/// A folder's code file is main.wat alone: the native lengua's main.s beside it, or main.s with
-/// no main.wat, which says where the native lengua went, is a problem that says what to do.
+/// A folder's code file is main.wat alone: the native lengua's main.s beside it is a problem that
+/// says what to do, and so is main.s with no main.wat, where check and the attester both say where
+/// the native lengua went. An Attested Computation beside main.s alone is recorded with the
+/// user's words first, so once main.wat is there and main.s gone, check needs no words again.
 #[tokio::test]
 async fn an_attested_computation_s_code_is_main_wat_alone() {
     let session = Session::start(Protocol::Discover).await;
@@ -461,6 +463,26 @@ async fn an_attested_computation_s_code_is_main_wat_alone() {
         text(&report["next_step"]).contains("main.wat with the compile skill, delete "),
         "{report}"
     );
+    let (code, said) = attest(program.path());
+    assert_eq!(code, Some(1), "{said}");
+    assert!(
+        said.contains("the tag native-final keeps the native lengua"),
+        "{said}"
+    );
+    assert_eq!(said.lines().last(), Some("not attested"), "{said}");
+    let fresh = Program::new();
+    fresh.write("idea.md", IDEA);
+    fresh.write("main.s", ".intel_syntax noprefix\n");
+    let report = session.record(&fresh).await;
+    assert_eq!(report["state"], "code_problems", "{report}");
+    assert!(
+        any_line(&report["problems"], "the tag native-final keeps the native lengua"),
+        "{report}"
+    );
+    std::fs::remove_file(fresh.file("main.s")).expect("remove main.s");
+    fresh.write("main.wat", CODE);
+    let done = session.settle(&fresh).await;
+    assert_eq!(done["state"], "done", "{done}");
     session.service.cancel().await.expect("close the session");
 }
 

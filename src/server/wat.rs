@@ -711,11 +711,12 @@ pub(super) fn run_from_shell(
 
 impl LenguaServer {
     /// `check`'s stages for an Attested Computation, `idea_text`, up to the first that needs
-    /// work: the idea stage; main.wat built, held to its parts and checked against every rule;
-    /// its tests, then its proofs, in the background; and at done, lengua's entry in idea.md's
-    /// `verified`, which every check takes away first once the idea or the code no longer is what
-    /// it names ([`Self::keep_verified`]), and a proof that finds main.wat wrong takes away at
-    /// once ([`Self::unverify`]).
+    /// work: the idea stage; main.s, the native lengua's code, beside main.wat or in its place;
+    /// main.wat built, held to its parts and checked against every rule; its tests, then its
+    /// proofs, in the background; and at done, lengua's entry in idea.md's `verified`, which every
+    /// check takes away first once the idea or the code no longer is what it names
+    /// ([`Self::keep_verified`]), and a proof that finds main.wat wrong takes away at once
+    /// ([`Self::unverify`]).
     pub(super) async fn check_wasm(
         &self,
         folder: &ProgramFolder,
@@ -728,7 +729,9 @@ impl LenguaServer {
             IdeaStage::Recorded(recorded) => *recorded,
             IdeaStage::Stops(report) => return Ok(*report),
         };
-        if let Some(report) = both_code_files(folder) {
+        // main.s waits until the idea is recorded, with the user's words, so the next check, once
+        // main.wat is there, needs no words again.
+        if let Some(report) = both_code_files(folder).or_else(|| native_code(folder)) {
             return Ok(report);
         }
         let Some(code) = read_optional(folder, CODE_FILE)? else {
@@ -1237,6 +1240,12 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
             return false;
         }
     };
+    // main.s in main.wat's place is the native lengua's code, of which only that it is there is
+    // read: the line says where the native lengua went, as check's reply does.
+    if let Some(native) = native_code(&folder) {
+        lines.extend(native.problems);
+        return false;
+    }
     let (idea_text, code) = match (
         read_optional(&folder, IDEA_FILE),
         read_optional(&folder, CODE_FILE),
@@ -1266,9 +1275,12 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
             return false;
         }
     };
-    if let Some(problem) =
-        type_problem(&idea_text, &idea).or_else(|| threads_problem(&idea_text, &idea))
-    {
+    // The type's problem names idea.md itself; the threads' is on a line of it.
+    if let Some(problem) = type_problem(&idea_text, &idea) {
+        lines.push(problem);
+        return false;
+    }
+    if let Some(problem) = threads_problem(&idea_text, &idea) {
         lines.push(format!("{IDEA_FILE} {problem}"));
         return false;
     }
@@ -1517,15 +1529,20 @@ mod tests {
     /// The add idea as an Attested Computation.
     const IDEA: &str = include_str!("../../tests/fixtures/add/idea.md");
 
+    /// The add idea as an idea of the native lengua's type, whose line 2 says the type.
+    fn native_idea() -> String {
+        let (_, body) = IDEA.split_once("\n---\n").expect("the add idea's frontmatter");
+        format!(
+            "---\ntype: {}\ntitle: add\ndescription: Adds two numbers.\n---\n{body}",
+            idea::IDEA_TYPE
+        )
+    }
+
     /// An idea of the native lengua's type still parses, and check refuses it on its type's
     /// line, saying where the native lengua went; an Attested Computation has no such problem.
     #[test]
     fn an_idea_of_the_native_lengua_s_type_is_told_where_it_went() {
-        let (_, body) = IDEA.split_once("\n---\n").expect("the add idea's frontmatter");
-        let native = format!(
-            "---\ntype: {}\ntitle: add\ndescription: Adds two numbers.\n---\n{body}",
-            idea::IDEA_TYPE
-        );
+        let native = native_idea();
         let parsed = idea::parse(&native).unwrap_or_else(|problems| panic!("{problems:#?}"));
         let problem = type_problem(&native, &parsed).expect("the native lengua's type");
         assert!(
@@ -1575,6 +1592,33 @@ mod tests {
             "compile it into {folder}/main.wat with the compile skill, delete {folder}/main.s"
         );
         assert!(alone.next_step.contains(&wanted), "{alone:?}");
+    }
+
+    /// `lengua-mcp check` says where the native lengua went as check does: of main.s in
+    /// main.wat's place, and of an idea of the native lengua's type beside main.wat, on its
+    /// type's line, which names idea.md once.
+    #[tokio::test]
+    async fn the_attester_says_where_the_native_lengua_went() {
+        let program = tempfile::tempdir().expect("a folder");
+        let path = program.path().to_str().expect("UTF-8").to_owned();
+        let folder = ProgramFolder::new(&path).expect("absolute");
+        std::fs::write(folder.file(IDEA_FILE), native_idea()).expect("write idea.md");
+        std::fs::write(folder.file(NATIVE_CODE_FILE), "_start:\n").expect("write main.s");
+        let alone = attest(&path).await;
+        assert!(!alone.attested, "{alone:?}");
+        assert!(
+            alone.lines[0].contains("main.wat since 0.2.0")
+                && alone.lines[0].contains("the tag native-final keeps the native lengua"),
+            "{alone:?}"
+        );
+        std::fs::write(folder.file(CODE_FILE), "(module)").expect("write main.wat");
+        let typed = attest(&path).await;
+        assert!(!typed.attested, "{typed:?}");
+        let line = "line 2: idea.md is an idea of the native lengua";
+        assert!(
+            typed.lines.iter().any(|said| said.starts_with(line)),
+            "{typed:?}"
+        );
     }
 
     #[test]

@@ -753,16 +753,17 @@ impl LenguaServer {
             Some(text) => Some(self.keep_verified(folder, text).await),
             None => None,
         };
-        // main.s alone is the native lengua's code, which this lengua doesn't read.
-        if let Some(report) = wat::native_code(folder) {
-            return Ok(report);
-        }
         let Some(idea_text) = idea_text else {
             let next_step = if read_optional(folder, LEGACY_IDEA_FILE)?.is_some() {
                 format!(
                     "Next: rename {folder}/{LEGACY_IDEA_FILE} to {IDEA_FILE}, the idea file's \
                      name now (what it says stays as it is), then call check with path {folder}."
                 )
+            } else if let Some(report) = wat::native_code(folder) {
+                // main.s with no idea is the native lengua's code, which this lengua doesn't
+                // read. Beside an idea, main.s waits until the idea stage has recorded the idea
+                // with the user's words (check_wasm).
+                return Ok(report);
             } else {
                 State::NoIdea.next_step(folder)
             };
