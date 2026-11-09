@@ -249,47 +249,6 @@ impl World {
             .collect()
     }
 
-    /// Whether some system would refuse `name` for a file call, as lengua's broker does in a
-    /// run (`crate::names`): the error number, when it would. A new name (`creates`) may not
-    /// differ only in case or normalization from another in its folder, and a name a call
-    /// renames or removes (`removes`) may not be open.
-    #[must_use]
-    pub fn refused(&self, name: &str, creates: bool, removes: bool) -> Option<i64> {
-        if let Some(broken) = crate::names::broken(name.as_bytes()) {
-            return Some(broken.errno);
-        }
-        if creates {
-            let (folder, last) = name
-                .rsplit_once('/')
-                .map_or(("", name), |(folder, last)| (folder, last));
-            let inside = if folder.is_empty() {
-                String::new()
-            } else {
-                format!("{folder}/")
-            };
-            let clash = self
-                .files
-                .keys()
-                .chain(self.written.keys())
-                .chain(self.folders_before.iter())
-                .chain(&self.made)
-                .filter_map(|other| other.strip_prefix(&inside))
-                .filter(|rest| !rest.contains('/'))
-                .any(|rest| {
-                    let full = format!("{inside}{rest}");
-                    (self.file(&full).is_some() || self.is_folder(&full))
-                        && crate::names::clashes(last, rest)
-                });
-            if clash {
-                return Some(crate::names::EEXIST);
-            }
-        }
-        if removes && self.open.values().any(|open| open.name == name) {
-            return Some(crate::names::EBUSY);
-        }
-        None
-    }
-
     /// Whether the folder holding `name` is there: the working folder, or a folder in it.
     fn parent_is_there(&self, name: &str) -> bool {
         name.rsplit_once('/')

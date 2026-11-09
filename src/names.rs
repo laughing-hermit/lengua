@@ -236,8 +236,8 @@ pub fn clashes(name: &str, other: &str) -> bool {
     if name == other {
         return false;
     }
-    // Two ASCII names meet when they differ only in case, which is all folding does to them; the
-    // broker asks this of every entry of a folder for every name a program makes.
+    // Two ASCII names meet when they differ only in case, which is all folding does to them;
+    // lengua's host asks this of every entry of a folder for every name a program makes.
     if name.is_ascii() && other.is_ascii() {
         return name.eq_ignore_ascii_case(other);
     }
