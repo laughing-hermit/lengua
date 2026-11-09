@@ -2039,16 +2039,12 @@ fn means_cell(lengua: &[u64], module: &[u64], show: fn(f64) -> String) -> String
     let (Some(ours), Some(theirs)) = (mean(lengua), mean(module)) else {
         return dash();
     };
-    let Some((difference, low, high)) = welch(lengua, module) else {
+    let Some((shift, low, high)) = welch(lengua, module) else {
         return dash();
     };
     let (ours, theirs) = (show(ours), show(theirs));
-    let (difference, low, high) = (
-        signed(difference, show),
-        signed(low, show),
-        signed(high, show),
-    );
-    format!("means {ours} against {theirs}: {difference} ({low} to {high})")
+    let (shift, low, high) = (signed(shift, show), signed(low, show), signed(high, show));
+    format!("means {ours} against {theirs}: {shift} ({low} to {high})")
 }
 
 /// The report's section on lengua's run apart from its module, when the run measured it: on each
