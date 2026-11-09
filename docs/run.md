@@ -17,9 +17,11 @@ records `idea.md` and `main.wat` as they are, and `check` built `main.wat`, held
 of lengua's WebAssembly dialect and ran every test, and none of its proofs found inputs where
 `main.wat` is wrong. Given such a folder, it:
 
-1. builds `main.wat` into a standard WebAssembly module, with lengua's small library merged in,
-   and runs it only when the module is byte for byte the one `check` tested, so a module that
-   breaks a rule never runs;
+1. takes the standard WebAssembly module `check` tested, `main.wat` with lengua's small library
+   merged in, which `check` kept in lengua's data folder, and runs it only when it is byte for
+   byte the module `lengua.lock` records, so a module that breaks a rule never runs; where the
+   kept module is missing or another, it builds `main.wat` and runs the build only when it is
+   that same module;
 2. runs it on Wasmtime, in lengua's own WASI host, with the current folder as the working folder
    (or the one `--in <folder>` names) and the arguments after the folder as the program's
    arguments. An argument that starts with `-` goes after `--`.

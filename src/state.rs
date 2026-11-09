@@ -33,6 +33,17 @@ pub fn stamped_copy(data_dir: &Path, file: &Sha256Hex) -> PathBuf {
     data_dir.join("stamped").join(file.as_str())
 }
 
+/// Where check keeps a module whose tests passed, by `builder`, the build that made it
+/// ([`crate::wasm::text::BUILDER`]), and `module`, its SHA-256: the module a run from a shell
+/// runs, once its bytes hash to the module hash the lock records.
+#[must_use]
+pub fn tested_module(data_dir: &Path, builder: u64, module: &Sha256Hex) -> PathBuf {
+    data_dir
+        .join("tested")
+        .join(format!("{builder:016x}"))
+        .join(format!("{}.wasm", module.as_str()))
+}
+
 /// A program folder, given as an absolute path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramFolder(PathBuf);

@@ -521,9 +521,25 @@ pub struct Here<'a> {
     pub connections: &'a [job::Made],
     /// Where compiled modules are kept.
     pub cache: Option<&'a Path>,
-    /// The build the module comes from, when there is one: a trap is then placed on its line
-    /// of main.wat.
-    pub built: Option<&'a crate::wasm::text::Built>,
+    /// What places a trap on its line of main.wat.
+    pub source: Source<'a>,
+}
+
+/// What places a trap of a run from a shell on its line of main.wat.
+#[derive(Debug, Clone, Copy)]
+pub enum Source<'a> {
+    /// Nothing: the module is no build of a main.wat's, and a trap is named without a line.
+    Unknown,
+    /// The build the module comes from.
+    Built(&'a crate::wasm::text::Built),
+    /// main.wat's text, which is built only once the program traps, and whose build places the
+    /// trap only when it hashes to `module`, the SHA-256 of the module that ran.
+    Text {
+        /// main.wat.
+        text: &'a str,
+        /// The module that ran, by its SHA-256.
+        module: &'a crate::hash::Sha256Hex,
+    },
 }
 
 /// Runs the module `wasm` here, attached to this process's own streams, as `lengua-mcp run` does
@@ -620,10 +636,64 @@ fn run_on_this_thread(wasm: &[u8], here: &Here<'_>) -> io::Result<End> {
     if let Some(problem) = &executed.problem {
         eprintln!("lengua-mcp: {problem}");
     }
+    // main.wat's text is built once, and only on a trap, which is all its build is for here.
+    let rebuilt = std::cell::OnceCell::new();
+    let line = |offset: u64| match here.source {
+        Source::Unknown => None,
+        Source::Built(built) => built.line_at(offset),
+        Source::Text { text, module } => rebuilt
+            .get_or_init(|| {
+                crate::wasm::text::build(text)
+                    .ok()
+                    .filter(|built| crate::hash::Sha256Hex::of(&built.wasm) == *module)
+            })
+            .as_ref()
+            .and_then(|built| built.line_at(offset)),
+    };
     let run = run_of(
         done(0, executed, Vec::new()),
         (Ok(BTreeMap::new()), BTreeSet::new()),
-        |offset| here.built.and_then(|built| built.line_at(offset)),
+        line,
     );
     Ok(run.end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hash::Sha256Hex;
+
+    /// A main.wat whose `_start` reaches `unreachable` on its line 4.
+    const TRAPS: &str = "(module\n  (memory (export \"memory\") 1)\n  (func (export \"_start\")\n    \
+                         unreachable))\n";
+
+    /// A run from a shell with no build of its module, only main.wat's text, builds main.wat once
+    /// the program traps, and places the trap on main.wat's line only when that build hashes to
+    /// the module that ran; with another hash, the trap is named without a line.
+    #[test]
+    fn a_trap_takes_its_line_from_a_build_of_the_module_that_ran() {
+        let built = crate::wasm::text::build(TRAPS).expect("it builds");
+        let folder = tempfile::tempdir().expect("a folder");
+        let (args, env) = (Vec::new(), BTreeMap::new());
+        let ended = |module: &Sha256Hex| {
+            let here = Here {
+                args: &args,
+                env: &env,
+                folder: folder.path(),
+                policy: Policy::default(),
+                listen: None,
+                connections: &[],
+                cache: None,
+                source: Source::Text {
+                    text: TRAPS,
+                    module,
+                },
+            };
+            run_here(&built.wasm, &here).expect("it runs")
+        };
+        let module = Sha256Hex::of(&built.wasm);
+        assert_eq!(ended(&module), End::Trapped(Trap::Unreachable, Some(4)));
+        let other = Sha256Hex::of(b"another module");
+        assert_eq!(ended(&other), End::Trapped(Trap::Unreachable, None));
+    }
 }

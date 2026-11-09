@@ -35,7 +35,7 @@ use crate::prove;
 use crate::runner::{self, End, Limits};
 use crate::state::{
     CODE_FILE, Files, IDEA_FILE, LEGACY_IDEA_FILE, LEGACY_TESTS_FILE, ProgramFolder, Snapshot,
-    State, stamped_copy,
+    State, stamped_copy, tested_module,
 };
 use crate::testdiff;
 use crate::testfile::{self, TestSuite};
@@ -1514,7 +1514,7 @@ impl LenguaServer {
     }
 
     /// Records checked code in the lock, provided neither the idea nor the code changed while
-    /// being checked.
+    /// being checked. The module kept for the stamp it replaces goes, when that was another.
     async fn stamp_code(
         &self,
         folder: &ProgramFolder,
@@ -1556,13 +1556,25 @@ impl LenguaServer {
         if edited && let Some(kept) = &mut proofs {
             lines_may_have_moved(kept);
         }
+        // The module the stamp replaces, when it is another: its kept file goes once the new
+        // stamp is written, and a folder whose lock still names it builds it at its next run.
+        let replaced = lock
+            .code
+            .as_ref()
+            .map(|checked| checked.module_sha256.clone())
+            .filter(|module| *module != code.module_sha256);
         let lock = Lock {
             code: Some(code),
             proofs,
             ..lock
         };
         lock::write(folder.path(), &lock, &key)
-            .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))
+            .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
+        if let Some(module) = replaced {
+            let builder = crate::wasm::text::BUILDER;
+            let _ = std::fs::remove_file(tested_module(self.data_dir.path(), builder, &module));
+        }
+        Ok(())
     }
 
     /// Records in the lock what the proofs found, `proofs`, about the build they name, provided
@@ -2099,6 +2111,29 @@ fn write_stamped_copy(data_dir: &DataDir, file: &Sha256Hex, text: &str) -> Resul
     std::fs::create_dir_all(folder).map_err(failed)?;
     let mut file = tempfile::NamedTempFile::new_in(folder).map_err(failed)?;
     file.write_all(text.as_bytes()).map_err(failed)?;
+    file.persist(&path).map_err(|error| failed(error.error))?;
+    Ok(())
+}
+
+/// Keeps `wasm`, a module whose tests passed, whose SHA-256 is `module`, in this build's folder
+/// of the data folder ([`tested_module`]), written atomically, for a run from a shell to run:
+/// unless it is there already.
+fn keep_tested(data_dir: &DataDir, module: &Sha256Hex, wasm: &[u8]) -> Result<(), String> {
+    use std::io::Write as _;
+    let path = tested_module(data_dir.path(), crate::wasm::text::BUILDER, module);
+    if std::fs::read(&path).is_ok_and(|kept| Sha256Hex::of(&kept) == *module) {
+        return Ok(());
+    }
+    let failed = |error: std::io::Error| {
+        format!(
+            "couldn't keep the module check tested at {}: {error}",
+            path.display()
+        )
+    };
+    let folder = path.parent().unwrap_or(data_dir.path());
+    std::fs::create_dir_all(folder).map_err(failed)?;
+    let mut file = tempfile::NamedTempFile::new_in(folder).map_err(failed)?;
+    file.write_all(wasm).map_err(failed)?;
     file.persist(&path).map_err(|error| failed(error.error))?;
     Ok(())
 }

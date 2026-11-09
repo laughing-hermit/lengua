@@ -14,7 +14,8 @@
 //!
 //! It runs three kinds of program, each as it is run outside lengua's tests:
 //! - a program folder whose code is `main.wat`: `lengua-mcp run`, with every check `run` makes
-//!   (the lock, its signature, the build) before the module runs in lengua's host;
+//!   (the lock, its signature, the module check kept held to the lock's hash of it) before the
+//!   module runs in lengua's host;
 //! - any WebAssembly module of WASI preview 1, such as a C, C++ or Rust toolchain makes: in
 //!   lengua's host too, in the engine's configuration for a run from a shell, with what its
 //!   `--uses` and `--network` words allow, as an idea's lines would ([`MODULE_FLAG`]);
@@ -42,7 +43,7 @@ use serde::{Deserialize, Serialize};
 use crate::data_dir::DataDir;
 use crate::runner::{End, Limits};
 use crate::wasm::Policy;
-use crate::wasm::runner::{Here, run_here};
+use crate::wasm::runner::{Here, Source, run_here};
 
 /// The hidden flag that starts this binary as the runner of one WebAssembly module, which
 /// `measure` gives the module's run after it, as JSON.
@@ -884,7 +885,7 @@ fn module_run(spec: &str) -> Result<i32, String> {
         listen: network.listens.map(|port| (port, network.serves_anywhere)),
         connections: &[],
         cache: run.cache.as_deref(),
-        built: None,
+        source: Source::Unknown,
     };
     match run_here(&wasm, &here).map_err(|error| format!("couldn't run the module: {error}"))? {
         End::Exited(code) => Ok(code),

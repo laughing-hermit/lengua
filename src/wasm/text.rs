@@ -27,6 +27,49 @@ pub const SCRATCH: u32 = 16;
 /// The prefix of the names lengua keeps for its library's imports and data.
 pub const RESERVED: &str = "lengua.";
 
+/// What decides the bytes [`build`] makes of a main.wat: lengua's version, this file, lengua's
+/// library and Cargo.lock, which pins wast and wasm-encoder exactly; a validation or a line map
+/// changes none of them. A 64-bit FNV-1a over each, its length first, computed as lengua is
+/// compiled. check keeps the module whose tests passed under its 16 hex digits, and a run from
+/// a shell takes a kept module only from its own builder's folder, so a lengua whose build may
+/// differ builds main.wat instead. It names a build and secures nothing: what runs is held to the
+/// module hash in the lock that lengua's key signed.
+#[allow(long_running_const_eval)]
+pub const BUILDER: u64 = {
+    let mut hash = FNV_OFFSET;
+    hash = fnv_with_length(hash, env!("CARGO_PKG_VERSION").as_bytes());
+    hash = fnv_with_length(hash, include_bytes!("text.rs"));
+    hash = fnv_with_length(hash, include_bytes!("library.wat"));
+    fnv_with_length(hash, include_bytes!("../../Cargo.lock"))
+};
+
+/// FNV-1a's 64-bit offset basis.
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// FNV-1a's 64-bit prime.
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// `hash` taken on over `bytes` by FNV-1a: each byte xored in, then the product with the prime,
+/// modulo 2^64. The product is taken in 128 bits, where it can't overflow, so that the compiler
+/// works it out with no call a byte.
+const fn fnv(mut hash: u64, bytes: &[u8]) -> u64 {
+    let length = bytes.len();
+    let mut at = 0;
+    while at < length {
+        hash ^= bytes[at] as u64;
+        hash = (hash as u128 * FNV_PRIME as u128) as u64;
+        at += 1;
+    }
+    hash
+}
+
+/// `hash` taken on over the length of `bytes`, its eight bytes from the least significant, then
+/// over `bytes`, so that no two inputs one after another hash as another two do.
+const fn fnv_with_length(hash: u64, bytes: &[u8]) -> u64 {
+    let length = (bytes.len() as u64).to_le_bytes();
+    fnv(fnv(hash, &length), bytes)
+}
+
 /// What each of the library's functions needs besides itself, by its names in the library.
 fn needs(function: &str) -> &'static [&'static str] {
     match function {

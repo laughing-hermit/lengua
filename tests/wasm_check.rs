@@ -13,7 +13,7 @@
 mod common;
 
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use common::{Program, Protocol, Session};
@@ -380,6 +380,83 @@ async fn a_shell_runs_and_attests_the_checked_program() {
     );
     let (code, said) = attest(program.path());
     assert_eq!(code, Some(0), "{said}");
+    session.service.cancel().await.expect("close the session");
+}
+
+/// A module of its own, valid, that prints 6 and a newline: another module than add's.
+const OTHER: &str = r#"(module
+  (memory (export "memory") 1)
+  (data (i32.const 64) "6\n")
+  (func (export "_start")
+    (drop (call $write_all (i32.const 1) (i32.const 64) (i32.const 2)))))
+"#;
+
+/// Where check keeps `module`, under this build's folder of `session`'s data folder.
+fn kept(session: &Session, module: &[u8]) -> PathBuf {
+    let builder = lengua::wasm::text::BUILDER;
+    lengua::state::tested_module(session.data_dir.path(), builder, &Sha256Hex::of(module))
+}
+
+/// check keeps the module whose tests passed, and `lengua-mcp run` runs it: once add is done,
+/// the kept file holds main.wat's build, whose SHA-256 is the lock's module hash. A kept file of
+/// other bytes, no file, and the right module only under another builder's folder each leave the
+/// run to build main.wat, held to the lock, print add's sum, and keep the build again; an edited
+/// main.wat is refused as before; and once check stamps an edit that changes the module, the old
+/// module's file is gone and the new one's is there.
+#[tokio::test]
+async fn a_shell_runs_the_module_check_kept() {
+    let session = Session::start(Protocol::Discover).await;
+    let program = add(&session).await;
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let module = lengua::wasm::text::build(CODE)
+        .expect("main.wat builds")
+        .wasm;
+    let file = kept(&session, &module);
+    let held = std::fs::read(&file).ok();
+    assert_eq!(held.as_ref(), Some(&module), "{}", file.display());
+    let lock = program.read("lengua.lock").expect("the lock");
+    let hash = format!("module_sha256 = \"{}\"\n", Sha256Hex::of(&module));
+    assert!(lock.contains(&hash), "{lock}");
+    let sums = |why: &str| {
+        let sum = run_from_shell(&session, program.path(), &["2", "3"]);
+        assert_eq!(sum.stdout, b"5\n", "{why}: {sum:?}");
+        assert_eq!(sum.status.code(), Some(0), "{why}: {sum:?}");
+        assert_eq!(std::fs::read(&file).ok().as_ref(), Some(&module), "{why}");
+    };
+    sums("the kept module");
+    let other = lengua::wasm::text::build(OTHER).expect("it builds").wasm;
+    std::fs::write(&file, &other).expect("write another module");
+    sums("another module in its place");
+    std::fs::remove_file(&file).expect("remove the kept module");
+    sums("no kept module");
+    let builder = lengua::wasm::text::BUILDER ^ 1;
+    let elsewhere =
+        lengua::state::tested_module(session.data_dir.path(), builder, &Sha256Hex::of(&module));
+    let folder = elsewhere.parent().expect("its folder");
+    std::fs::create_dir_all(folder).expect("make its folder");
+    std::fs::write(&elsewhere, &module).expect("keep the module under another builder");
+    std::fs::remove_file(&file).expect("remove the kept module");
+    sums("the module under another builder's folder alone");
+    // Edited, main.wat is refused, kept module or not.
+    program.write("main.wat", &format!("{CODE};; edited\n"));
+    let refused = run_from_shell(&session, program.path(), &["2", "3"]);
+    assert_eq!(refused.status.code(), Some(125), "{refused:?}");
+    assert!(refused.stdout.is_empty(), "{refused:?}");
+    // An edit that changes the module, checked to done: the old module's file goes.
+    let local = "    (local $a i64)\n";
+    let nop = changed(CODE, local, &format!("{local}    nop\n"));
+    program.write("main.wat", &nop);
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let rebuilt = lengua::wasm::text::build(&nop)
+        .expect("main.wat builds")
+        .wasm;
+    assert_ne!(rebuilt, module);
+    assert!(!file.exists(), "{}", file.display());
+    let new = kept(&session, &rebuilt);
+    let held = std::fs::read(&new).ok();
+    assert_eq!(held, Some(rebuilt), "{}", new.display());
     session.service.cancel().await.expect("close the session");
 }
 

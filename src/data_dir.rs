@@ -1,7 +1,17 @@
 //! The server's private data folder: the lock-signing key, stamped test copies and scratch space.
 //!
 //! One folder per user, shared by every agent harness, so a lock recorded in one harness verifies
-//! in all of them.
+//! in all of them. It holds:
+//! - `key`, the secret that signs every lock ([`crate::lock::Key`]);
+//! - `stamped/<sha256>`, each idea.md check recorded, by lengua's hash of it, which later
+//!   changes are shown against ([`crate::state::stamped_copy`]);
+//! - `tested/<builder>/<sha256>.wasm`, each module whose tests passed, by the build that made it
+//!   and the module's SHA-256, which a run from a shell runs once its bytes hash to the module
+//!   hash its lock records ([`crate::state::tested_module`]);
+//! - `cache/`, the engine's compiled modules, unless the agent's harness gives the plugin a data
+//!   folder of its own ([`crate::wasm::engine::cache_folder`]);
+//! - `graph/<sha256>.lock`, which keeps lengua's processes from writing one bundle's index.md and
+//!   log.md at once ([`DataDir::graph_lock`]).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

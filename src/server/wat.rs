@@ -21,8 +21,8 @@ use super::{
     BlockProof, CheckParams, CheckReport, Checking, ConnectionReport, FURTHER, Found, IdeaStage,
     LenguaServer, Model, Passed, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun, Stage,
     VERIFIED_NOTE, Witness, already_serving, background_limits, check_wait, cost_line, counted,
-    ended_report, idea_problems, proof_time, proven_detail, random_seed, reaches, read_optional,
-    settled, state_for_run, state_of, wait_for, working_folder,
+    ended_report, idea_problems, keep_tested, proof_time, proven_detail, random_seed, reaches,
+    read_optional, settled, state_for_run, state_of, wait_for, working_folder,
 };
 use crate::checker::{self, wasm::Obligation};
 use crate::connect::Reach;
@@ -35,13 +35,13 @@ use crate::lock::{self, CodeStamp, Key};
 use crate::platform::{Cache, CacheHolds, Machine};
 use crate::prove::{self, Verdict};
 use crate::runner::{End, Limits};
-use crate::state::{CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, ProgramFolder, State};
+use crate::state::{CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, ProgramFolder, State, tested_module};
 use crate::testfile::{self, TestSuite};
 use crate::testrun;
 use crate::trust;
 use crate::wasm::engine::{self, Setup};
 use crate::wasm::job::{Connection, Made};
-use crate::wasm::runner::{Here, run_here};
+use crate::wasm::runner::{Here, Source, run_here};
 use crate::wasm::text::{self, Built};
 use crate::wasm::{Policy, Pool, Program, Spec, parts};
 
@@ -563,17 +563,29 @@ fn text_of(
         .transpose()
 }
 
+/// What `run` may run in a folder once its checks pass: main.wat as the state's read kept it,
+/// its idea, and the module check tested, by the hash lengua.lock records.
+struct Runnable {
+    /// main.wat's text, the very bytes whose hash the lock was held to.
+    code: String,
+    /// The idea.
+    idea: Idea,
+    /// The SHA-256 of the module check tested.
+    module: Sha256Hex,
+}
+
 /// Checks that `folder` holds main.wat lengua may run, as `run` does from MCP and from a shell:
-/// its idea and code match lengua.lock, no proof the lock records found that module wrong, and
-/// the module built from it now is byte for byte the one check tested. Environment variables
-/// reach only a program whose idea uses the environment. Gives the build and the idea. idea.md
-/// and main.wat are read once, by the state's own read: the build, the comparison and the idea
-/// are made from the very bytes whose hashes the lock was held to.
+/// its idea and code match lengua.lock, and no proof the lock records found the module check
+/// tested wrong. Environment variables reach only a program whose idea uses the environment.
+/// Gives what may run; the bytes that run are held to its module hash, by the MCP tool's build
+/// ([`built_as_tested`]) or by a shell's run ([`kept_or_built`]). idea.md and main.wat are read
+/// once, by the state's own read: what is built, compared and parsed are the very bytes whose
+/// hashes the lock was held to.
 fn runnable(
     data_dir: &DataDir,
     folder: &ProgramFolder,
     env: &BTreeMap<String, String>,
-) -> Result<(Built, Idea), String> {
+) -> Result<Runnable, String> {
     let (state, files) = state_for_run(data_dir, folder)?;
     if state != State::Ready {
         return Err(format!(
@@ -621,15 +633,54 @@ fn runnable(
              variables; leave env out, or add `the environment` to its `- Uses:` line"
         ));
     }
-    let built =
-        text::build(&code).map_err(|problem| format!("{CODE_FILE} doesn't build: {problem}"))?;
-    if Sha256Hex::of(&built.wasm) != stamp.module_sha256 {
+    Ok(Runnable {
+        code,
+        idea,
+        module: stamp.module_sha256.clone(),
+    })
+}
+
+/// The module main.wat in `ready` builds, provided it is byte for byte the module check tested:
+/// another build, as after lengua itself changed, doesn't run.
+fn built_as_tested(folder: &ProgramFolder, ready: &Runnable) -> Result<Built, String> {
+    let built = text::build(&ready.code)
+        .map_err(|problem| format!("{CODE_FILE} doesn't build: {problem}"))?;
+    if Sha256Hex::of(&built.wasm) != ready.module {
         return Err(format!(
             "This build of {CODE_FILE} differs from the module check tested, as after lengua \
              itself changed, so it won't run. Call check with path {folder} to test this build."
         ));
     }
-    Ok((built, idea))
+    Ok(built)
+}
+
+/// The module a run from a shell runs.
+enum ToRun {
+    /// The module check kept, whose bytes hash to the module it tested: main.wat isn't built.
+    Kept(Vec<u8>),
+    /// main.wat built now, the module check tested.
+    Built(Built),
+}
+
+/// The module a run from a shell runs for `ready`: the one check kept in this build's folder of
+/// the data folder, when its bytes hash to the module check tested, with no build of main.wat;
+/// otherwise, missing, unreadable or other bytes, main.wat built from the bytes the state's read
+/// kept, provided the build is that very module ([`built_as_tested`]), and kept again for the
+/// next run, which never fails for a module it couldn't keep.
+fn kept_or_built(
+    data_dir: &DataDir,
+    folder: &ProgramFolder,
+    ready: &Runnable,
+) -> Result<ToRun, String> {
+    let kept = tested_module(data_dir.path(), text::BUILDER, &ready.module);
+    if let Ok(wasm) = std::fs::read(&kept)
+        && Sha256Hex::of(&wasm) == ready.module
+    {
+        return Ok(ToRun::Kept(wasm));
+    }
+    let built = built_as_tested(folder, ready)?;
+    let _ = keep_tested(data_dir, &ready.module, &built.wasm);
+    Ok(ToRun::Built(built))
 }
 
 /// The bytes of `name`, a file inside `folder`, as a run's standard input: at most
@@ -680,9 +731,10 @@ fn made(reach: &Reach, args: &[String]) -> Made {
     Made { place, connection }
 }
 
-/// `lengua-mcp run` for main.wat: `run`'s checks, then the module in this process, attached to
-/// the shell's standard input, output and error, with no time limit, in `workspace`. Gives the
-/// program's exit code, or [`TRAPPED`] when it trapped, which it says on standard error.
+/// `lengua-mcp run` for main.wat: `run`'s checks, then the module check tested, kept or built
+/// ([`kept_or_built`]), in this process, attached to the shell's standard input, output and
+/// error, with no time limit, in `workspace`. Gives the program's exit code, or [`TRAPPED`] when
+/// it trapped, which it says on standard error.
 ///
 /// # Errors
 ///
@@ -693,7 +745,19 @@ pub(super) fn run_from_shell(
     request: &ShellRun,
     workspace: &Path,
 ) -> Result<i32, String> {
-    let (built, idea) = runnable(data_dir, folder, &request.env)?;
+    let ready = runnable(data_dir, folder, &request.env)?;
+    let to_run = kept_or_built(data_dir, folder, &ready)?;
+    let (wasm, source) = match &to_run {
+        ToRun::Kept(wasm) => (
+            wasm.as_slice(),
+            Source::Text {
+                text: &ready.code,
+                module: &ready.module,
+            },
+        ),
+        ToRun::Built(built) => (built.wasm.as_slice(), Source::Built(built)),
+    };
+    let idea = &ready.idea;
     let connections: Vec<Made> = reaches(&idea.network)
         .iter()
         .map(|reach| made(reach, &request.args))
@@ -710,9 +774,9 @@ pub(super) fn run_from_shell(
             .map(|port| (port, idea.network.serves_anywhere)),
         connections: &connections,
         cache: Some(cache.as_path()),
-        built: Some(&built),
+        source,
     };
-    match run_here(&built.wasm, &here)
+    match run_here(wasm, &here)
         .map_err(|error| format!("couldn't run the program: {error}"))?
     {
         End::Exited(code) => Ok(code),
@@ -923,6 +987,12 @@ impl LenguaServer {
         if !outcome.passed() {
             return fail(outcome.failures);
         }
+        // The module the tests ran, kept for a run from a shell, which runs it once its bytes
+        // hash to the module the stamp records; a stamp it couldn't be kept for isn't written.
+        let tested = &code.program.built().wasm;
+        if let Err(error) = keep_tested(&self.data_dir, &checking.module, tested) {
+            return fail(vec![error]);
+        }
         let stamp = CodeStamp {
             sha256: code_hash,
             module_sha256: checking.module.clone(),
@@ -1122,7 +1192,11 @@ impl LenguaServer {
         folder: &ProgramFolder,
         params: &RunParams,
     ) -> Result<RunReport, String> {
-        let (built, idea) = runnable(&self.data_dir, folder, &params.env)?;
+        let ready = runnable(&self.data_dir, folder, &params.env)?;
+        // The tool's reply and its worker need the build's assertions and lines: it builds
+        // main.wat, held to the module check tested.
+        let built = built_as_tested(folder, &ready)?;
+        let idea = ready.idea;
         if let Some(wrong) = self.proven_wrong(folder).await {
             return Err(format!(
                 "The proof found inputs where {CODE_FILE} is wrong, so it won't run: \

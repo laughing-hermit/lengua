@@ -180,7 +180,8 @@ Each can be reversed.
   again is still decided wrongly with a chance below 1%. A row also stops at ten minutes; one the
   looks don't decide is undecided, and KNOWN_BEHIND must name it.
 - **What the gate runs** (W12): lengua's program through `lengua-mcp run`, with every check it
-  makes on each run (the lock, its signature, main.wat built again); C, C++ and Rust's modules in
+  makes on each run (the lock, its signature, the module check kept held to the lock's hash of
+  it, or main.wat built again where none is kept); C, C++ and Rust's modules in
   lengua's host through `lengua-mcp measure`, with the same engine and the same cache of compiled
   modules, the policy from the words of lengua's program's idea, and memory that may grow to
   4 GiB, as lengua's host holds a module to the maximum it declares. The native builds use each
