@@ -2,8 +2,7 @@ name: ci
 
 # lengua built and tested natively on five runners, GitHub's free ones (the repository is public):
 # Linux on x86-64 and ARM64, macOS on ARM64 (Apple stopped making Intel Macs), and Windows on
-# x86-64 and ARM64. During the pivot to WebAssembly (todo.md), the native assembly path runs
-# programs on the two Linux runners only, and the WebAssembly path everywhere.
+# x86-64 and ARM64, each running the same WebAssembly programs.
 # scripts/ci/targets.json names the five runners; scripts/ci/tools.tsv pins what they install;
 # scripts/ci/setup.sh installs it.
 #
@@ -15,9 +14,7 @@ name: ci
 #   and the prover's recordings of every program, made at two commits and compared), bench (the
 #   gate: lengua against C, C++ and Rust compiled to WebAssembly and built natively, and against
 #   an earlier commit's programs) or release (each runner's archive, built there, then installed
-#   and checked on a clean runner of the same system and CPU). A test run also has a job on
-#   x86-64 Linux with QEMU's user mode, so the ARM64 cells run there too, as on a developer's
-#   x86-64 computer.
+#   and checked on a clean runner of the same system and CPU).
 # - A bench's C, C++ and Rust are compiled to WebAssembly once, by the bench-wasm job on
 #   linux-x86_64, and every runner's bench measures those same modules.
 # - `filter` matches test *names* only (libtest's filters, after `--`). To run a test *file*, name
@@ -43,7 +40,7 @@ on:
   workflow_dispatch:
     inputs:
       targets:
-        description: "Which targets: all, or a comma-separated list from scripts/ci/targets.json (and qemu, which runs only when named)"
+        description: "Which targets: all, or a comma-separated list from scripts/ci/targets.json"
         type: string
         default: "all"
       mode:
@@ -62,15 +59,11 @@ on:
         type: string
         default: ""
       test_files:
-        description: "Only these test files, by name, separated by spaces (limits red_team ...; lib for the library's own tests)"
+        description: "Only these test files, by name, separated by spaces (wasm_limits wasm_red_team ...; lib for the library's own tests)"
         type: string
         default: ""
       check_folder:
         description: "Program folders, comma-separated, for the ignored check_one_folder test (LENGUA_CHECK_FOLDER)"
-        type: string
-        default: ""
-      check_target:
-        description: "The target to check them as (LENGUA_CHECK_TARGET), when not the runner's own: through QEMU"
         type: string
         default: ""
       mutate_only:
@@ -156,11 +149,11 @@ jobs:
           # to KNOWN_BEHIND in the history to the list before it (the list may only shrink), and
           # reads any commit it is measured against. The weekly run's bench leg too.
           matrix=$(jq -c --argjson modes "$modes" \
-            '[.[] as $t | $modes[] as $m | $t + {mode: $m, base: $t.target, qemu: false, ref: "", label: "", depth: (if $m == "bench" then 0 else 1 end)}]' <<< "$include")
+            '[.[] as $t | $modes[] as $m | $t + {mode: $m, ref: "", label: "", depth: (if $m == "bench" then 0 else 1 end)}]' <<< "$include")
           if [ "$MODE" = golden ]; then
             # The goldens: the dispatched ref and, unless an earlier run's are reused, the base,
             # each recorded on its own runner so that the two legs run at once. The recordings are
-            # the prover's and the checker's for both CPUs, which a x86-64 host makes for both.
+            # the checker's and the prover's, which one x86-64 host makes.
             if [ -z "$GOLDEN_BASE" ] && [ -z "$GOLDEN_BASE_RUN" ]; then
               echo "golden needs golden_base (a commit) or golden_base_run (an earlier golden run)" >&2
               exit 1
@@ -172,12 +165,7 @@ jobs:
               legs=$(jq -c --arg r "$full" '. + [{label: "base", ref: $r}]' <<< "$legs")
             fi
             matrix=$(jq -c --argjson legs "$legs" \
-              '[.[] | select(.target == "linux-x86_64") as $t | $legs[] | $t + . + {mode: "golden", base: $t.target, qemu: false, depth: 0}]' <<< "$listed")
-          fi
-          # The suite on x86-64 Linux with QEMU's user mode, only when `targets` names `qemu`:
-          # ARM64 Linux has its own runner, and the pivot retires the job (todo.md, "Superseded").
-          if [ "$MODE" = test ] && [[ ",$TARGETS," == *,qemu,* ]]; then
-            matrix=$(jq -c '. + [{target: "linux-x86_64-qemu", runner: "ubuntu-24.04", mode: "test", base: "linux-x86_64", qemu: true, ref: "", label: "", depth: 1}]' <<< "$matrix")
+              '[.[] | select(.target == "linux-x86_64") as $t | $legs[] | $t + . + {mode: "golden", depth: 0}]' <<< "$listed")
           fi
           if [ "$matrix" = "[]" ]; then
             echo "Nothing to run for: $TARGETS in $MODE" >&2
@@ -290,9 +278,6 @@ jobs:
     # A golden leg, the mutation test and the bench run longer than the suite: the first golden
     # head leg (run 42152180357) was cut off at 120 minutes, where its base leg took 101.
     timeout-minutes: ${{ (matrix.mode == 'test' || matrix.mode == 'compile') && 120 || 330 }}
-    # The QEMU job reports without failing the run until its seven failing cases are fixed
-    # (todo.md, round 2): they expect a native run's wording, which an emulated one doesn't have.
-    continue-on-error: ${{ matrix.qemu }}
     defaults:
       run:
         shell: bash
@@ -311,38 +296,22 @@ jobs:
         run: git checkout ${{ github.sha }} -- scripts
 
       - name: The machine
-        run: bash scripts/ci/machine.sh ${{ matrix.base }}
+        run: bash scripts/ci/machine.sh ${{ matrix.target }}
 
       - name: Rust
-        run: bash scripts/ci/setup.sh ${{ matrix.base }} rust
+        run: bash scripts/ci/setup.sh ${{ matrix.target }} rust
 
-      # The tools are kept between runs: the solvers, and LLVM where it is installed by hand. A
-      # release needs neither: the archive brings its own solvers, which scripts/release.sh
-      # fetches as tools.tsv pins them.
+      # The solvers are kept between runs. A release doesn't need them: the archive brings its own,
+      # which scripts/release.sh fetches as tools.tsv pins them.
       - uses: actions/cache@v4
         if: ${{ matrix.mode != 'compile' && matrix.mode != 'release' }}
         with:
-          path: |
-            ~/solvers
-            ~/llvm
-            ~/micromamba
-          key: tools-${{ matrix.base }}-${{ hashFiles('scripts/ci/tools.tsv', 'scripts/ci/setup.sh') }}
-
-      - name: LLVM
-        if: ${{ matrix.mode != 'compile' && matrix.mode != 'release' }}
-        run: bash scripts/ci/setup.sh ${{ matrix.base }} llvm
+          path: ~/solvers
+          key: tools-${{ matrix.target }}-${{ hashFiles('scripts/ci/tools.tsv', 'scripts/ci/setup.sh') }}
 
       - name: z3 and cvc5, pinned by checksum
         if: ${{ matrix.mode != 'compile' && matrix.mode != 'release' }}
-        run: bash scripts/ci/setup.sh ${{ matrix.base }} solvers
-
-      - name: QEMU's user mode, for the other CPU's programs
-        if: ${{ matrix.qemu }}
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q qemu-user-static binfmt-support
-          echo "binfmt_misc/qemu-aarch64:"
-          cat /proc/sys/fs/binfmt_misc/qemu-aarch64
+        run: bash scripts/ci/setup.sh ${{ matrix.target }} solvers
 
       - uses: actions/cache@v4
         with:
@@ -350,8 +319,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ci-${{ matrix.base }}-${{ hashFiles('Cargo.lock', 'scripts/ci/setup.sh') }}
-          restore-keys: ci-${{ matrix.base }}-
+          key: ci-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'scripts/ci/setup.sh') }}
+          restore-keys: ci-${{ matrix.target }}-
 
       # --keep-going: every target's errors in one run, not the first target's alone. A release
       # is built from a commit whose suite already ran.
@@ -394,7 +363,6 @@ jobs:
           TEST_FILES: ${{ inputs.test_files }}
           LENGUA_RANDOM_SEED: ${{ inputs.seed }}
           LENGUA_CHECK_FOLDER: ${{ inputs.check_folder }}
-          LENGUA_CHECK_TARGET: ${{ inputs.check_target }}
           LENGUA_MUTATE_ONLY: ${{ inputs.mutate_only }}
           STALL_SECONDS: ${{ inputs.stall_seconds }}
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
@@ -408,11 +376,11 @@ jobs:
           fi
           bash scripts/ci/ran-some-tests.sh ignored.log "$FILTER$TEST_FILES"
 
-      # The checker's and the prover's reports on every program, for both CPUs, recorded. target/
-      # is cached whole, recordings included, and the build cache under it keys on main.s alone, so
-      # both go first: a restored old recording would be compared with silently. One test at a
-      # time: the prover's recordings run under fixed time budgets, and tests run side by side
-      # would make "out of time" differ between the two legs. (Two filters cover the four tests;
+      # The checker's and the prover's reports on every program, recorded. target/ is cached
+      # whole, the recordings and their build cache included, so both go first: a restored old
+      # recording would be compared with silently. One test at a time: the prover's recordings run
+      # under fixed time budgets, and tests run side by side would make "out of time" differ
+      # between the two legs. (Two filters cover the four tests;
       # the helper explains_a_mutant matches neither.)
       - name: The goldens, recorded
         if: ${{ matrix.mode == 'golden' }}
@@ -469,7 +437,7 @@ jobs:
         id: release
         if: ${{ matrix.mode == 'release' }}
         run: |
-          bash scripts/release.sh ${{ matrix.base }}
+          bash scripts/release.sh ${{ matrix.target }}
           echo "version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_OUTPUT"
 
       - name: The release check, built
@@ -485,7 +453,7 @@ jobs:
             exit 1
           fi
           mkdir -p dist/check
-          case "${{ matrix.base }}" in
+          case "${{ matrix.target }}" in
             windows-*) cp "$(cygpath -u "$built")" dist/check/release-check.exe ;;
             *) cp "$built" dist/check/release-check ;;
           esac

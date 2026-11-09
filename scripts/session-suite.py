@@ -8,7 +8,7 @@ says check passed it and the agent is quiet, or at the time limit, and appends e
 outcome, turns and minutes to RESULTS. Each session costs Claude usage, about $2: run it by hand,
 never while the server is being rebuilt.
 
-  scripts/session-suite.py RESULTS [--target linux-aarch64] [--only N[,N...]] [CLAUDE ARGS...]
+  scripts/session-suite.py RESULTS [--only N[,N...]] [CLAUDE ARGS...]
 """
 
 import os
@@ -118,16 +118,12 @@ def answer(name, shown):
     return False
 
 
-def run(number, request, target, claude_args, results):
-    name = f"suite-{target}-{number:02d}"
+def run(number, request, claude_args, results):
+    name = f"suite-{number:02d}"
     folder = FOLDERS / name
     if folder.exists():
         subprocess.run(["rm", "-rf", str(folder)], check=True)
     folder.mkdir(parents=True)
-    env_note = ""
-    if target != "native":
-        os.environ["LENGUA_TARGET"] = target
-        env_note = f" (LENGUA_TARGET={target})"
     started = time.monotonic()
     session("start", name, str(folder), *claude_args)
     trust(name)
@@ -157,8 +153,8 @@ def run(number, request, target, claude_args, results):
     minutes = (time.monotonic() - started) / 60
     session("stop", name)
     state, proofs = outcome(folder)
-    line = (f"| {number} | {target}{env_note} | {request} | {state} | {proofs or '-'} | "
-            f"{turns} | {minutes:.1f} | {folder} |\n")
+    line = (f"| {number} | {request} | {state} | {proofs or '-'} | {turns} | {minutes:.1f} | "
+            f"{folder} |\n")
     with open(results, "a") as file:
         file.write(line)
     print(line, end="", flush=True)
@@ -168,18 +164,15 @@ def main(argv):
     if len(argv) < 2:
         sys.exit(__doc__)
     results, rest = pathlib.Path(argv[1]), argv[2:]
-    target, only = "native", None
-    while rest and rest[0] in ("--target", "--only"):
-        if rest[0] == "--target":
-            target, rest = rest[1], rest[2:]
-        else:
-            only, rest = {int(n) for n in rest[1].split(",")}, rest[2:]
+    only = None
+    while rest and rest[0] == "--only":
+        only, rest = {int(n) for n in rest[1].split(",")}, rest[2:]
     if not results.exists():
-        results.write_text("| # | target | request | outcome | proofs | turns | minutes | folder |\n"
-                           "|---|---|---|---|---|---|---|---|\n")
+        results.write_text("| # | request | outcome | proofs | turns | minutes | folder |\n"
+                           "|---|---|---|---|---|---|---|\n")
     for number, request in enumerate(REQUESTS, 1):
         if only is None or number in only:
-            run(number, request, target, rest, results)
+            run(number, request, rest, results)
 
 
 if __name__ == "__main__":

@@ -4,16 +4,12 @@
 #
 # Steps:
 #   rust     the pinned Rust with clippy and rustfmt, first on PATH
-#   llvm     LLVM 22, for lengua's assembler and linker: apt.llvm.org on Linux, conda-forge's build
-#            (installed with micromamba, pinned in tools.tsv) on macOS and Windows
 #   solvers  z3 and cvc5, pinned by SHA-256 in tools.tsv
 #   wasi     wasi-sdk, pinned in tools.tsv, in ~/wasi-sdk (WASI_SDK names it), and Rust's
 #            wasm32-wasip1 target: what bench-wasm.sh compiles the benchmark's programs with
 set -euo pipefail
 
 RUST_VERSION="1.99.1"
-LLVM_VERSION="22"
-LLVM_FULL="22.1.8"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 target="${1:?usage: setup.sh <target> <step>...}"
@@ -55,45 +51,6 @@ rust() {
     add_to_path "/c/Program Files/LLVM/bin"
     clang --version | head -1
   fi
-}
-
-llvm() {
-  case "$target" in
-    linux-*)
-      wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-        | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
-      echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-$LLVM_VERSION main" \
-        | sudo tee /etc/apt/sources.list.d/llvm.list
-      sudo apt-get update -q
-      sudo apt-get install -y -q "llvm-$LLVM_VERSION" "lld-$LLVM_VERSION"
-      add_to_path "/usr/lib/llvm-$LLVM_VERSION/bin"
-      llvm-mc --version | head -2
-      ld.lld --version
-      ;;
-    *)
-      prefix="$HOME/llvm"
-      if [ ! -d "$prefix" ]; then
-        row="$(awk -F'\t' -v g="$target" '$1 == "micromamba" && $2 == g { print $3 " " $4 }' "$here/tools.tsv")"
-        [ -n "$row" ] || { echo "tools.tsv has no micromamba for $target" >&2; exit 1; }
-        mkdir -p "$HOME/micromamba"
-        exe="$HOME/micromamba/micromamba"
-        case "$target" in windows-*) exe="$exe.exe" ;; esac
-        curl -sSfL -o "$exe" "${row%% *}"
-        check_sha "$exe" "${row##* }"
-        chmod +x "$exe"
-        where="$prefix"
-        case "$target" in windows-*) where="$(cygpath -w "$prefix")" ;; esac
-        "$exe" create -y -p "$where" --override-channels -c conda-forge \
-          "lld=$LLVM_FULL" "llvm-tools=$LLVM_FULL"
-      fi
-      # conda puts a system's programs in bin, and Windows's in Library/bin.
-      for dir in "$prefix/bin" "$prefix/Library/bin"; do
-        [ -d "$dir" ] && add_to_path "$dir"
-      done
-      llvm-mc --version | head -2
-      ld.lld --version
-      ;;
-  esac
 }
 
 # Checks a file against its SHA-256.
