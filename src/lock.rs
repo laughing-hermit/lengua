@@ -8,7 +8,7 @@ use std::fmt::{self, Write as _};
 use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
-use hmac::{Hmac, KeyInit, Mac};
+use hmac::{Hmac, Mac, digest::KeyInit};
 use serde::Deserialize;
 use sha2::Sha256;
 
