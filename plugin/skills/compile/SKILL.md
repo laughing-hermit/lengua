@@ -125,10 +125,13 @@ alone, by the steps below: `check` refuses any other code file and says what to 
      `$fill`, proven for every length: from any state the loop can be in at its head, one more
      buffer-full keeps what it writes and counts in step with the formula.
    - `tested, not proven: <why>`: the tests passed, and the proof couldn't settle it. lengua's
-     WebAssembly prover doesn't follow SIMD128 or float instructions yet, and names the first
-     one it met, as ``main.wat line 89: `I8x16Splat`, which the WebAssembly model doesn't follow
-     yet``. It doesn't follow a name the input chooses, a server's wait on `poll_oneoff` for its
-     connections, or a run longer than its step limit either. Tell the user why in one line.
+     WebAssembly prover follows scalar floats and SIMD128's integer lanes, but not yet SIMD128's
+     float lanes (`f64x2.add`, …), its narrowing, widening, pairwise and dot-product forms,
+     `i8x16.popcnt`, or a load or store of less than a whole vector, and names the first such
+     instruction it met, as ``main.wat line 89: `F64x2Add`, which the WebAssembly model doesn't
+     follow yet``. It doesn't follow a name the input chooses, a server's wait on `poll_oneoff`
+     for its connections, or a run longer than its step limit either. Tell the user why in one
+     line.
    - `proving, …` or `waiting for its turn`: still running. Don't wait for it, but call `check`
      again before the user relies on the program: a proof that finds the program wrong shows
      there, and `run` refuses that build from then on.
@@ -173,9 +176,9 @@ alone, by the steps below: `check` refuses any other code file and says what to 
    - **Memory the program touches** costs time too: work in place where the rules allow.
 
    Use only the deterministic instructions: no relaxed SIMD, and no fused multiply-add, which
-   core WebAssembly doesn't have. Vector and float code stays tested, not proven, until the
-   prover follows it: where the user wants a proof more than speed, keep the scalar form, and
-   tell them which they got.
+   core WebAssembly doesn't have. Code on float lanes, and lanes narrowed, widened or added
+   pairwise, stays tested, not proven, until the prover follows it: where the user wants a proof
+   more than speed, keep scalar or integer-lane code, and tell them which they got.
 8. **Tell the user**, from the `done` reply, in a few short lines and plain words: where the
    program is; what its idea promises, in two or three lines (its behaviors, its limits such as
    input sizes and ranges, and what it may touch: files, ports); that it follows every rule and
