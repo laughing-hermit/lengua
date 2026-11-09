@@ -1195,16 +1195,18 @@ impl LenguaServer {
         params: &RunParams,
     ) -> Result<RunReport, String> {
         let ready = runnable(&self.data_dir, folder, &params.env)?;
-        // The tool's reply and its worker need the build's assertions and lines: it builds
-        // main.wat, held to the module check tested.
-        let built = built_as_tested(folder, &ready)?;
-        let (uses, network) = (ready.uses, ready.network);
-        if let Some(wrong) = self.proven_wrong(folder).await {
+        // What this server's job found wrong in the module the run holds, which lengua.lock may
+        // not record, refuses it too, before anything is built.
+        if let Some(wrong) = self.proven_wrong(folder, &ready.module).await {
             return Err(format!(
                 "The proof found inputs where {CODE_FILE} is wrong, so it won't run: \
                  {wrong}. Call check with path {folder} to see them, then fix {CODE_FILE}."
             ));
         }
+        // The tool's reply and its worker need the build's assertions and lines: it builds
+        // main.wat, held to the module check tested.
+        let built = built_as_tested(folder, &ready)?;
+        let (uses, network) = (ready.uses, ready.network);
         let workspace = params.folder.as_deref().map(working_folder).transpose()?;
         let seconds = params.timeout_seconds.unwrap_or(10);
         if !(1..=RUN_SECONDS).contains(&seconds) {

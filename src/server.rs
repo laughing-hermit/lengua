@@ -864,12 +864,14 @@ impl LenguaServer {
             .unwrap_or_else(|error| vec![format!("lengua couldn't read the graph: {error}")])
     }
 
-    /// What the proof found wrong in the code now in `folder`, when its job confirmed a
-    /// counterexample: the tests passed, but these inputs, run for real, show main.wat is wrong.
-    async fn proven_wrong(&self, folder: &ProgramFolder) -> Option<String> {
+    /// What the proof found wrong in `module`, the module a run of `folder` is about to run, when
+    /// this server's job for the folder checked that very module and confirmed a counterexample:
+    /// the tests passed, but these inputs, run for real, show main.wat is wrong. The module is the
+    /// one the run holds, by the hash lengua.lock records, and no file is read again: a main.wat
+    /// replaced or removed after the state's read can't hide what the job found.
+    async fn proven_wrong(&self, folder: &ProgramFolder, module: &Sha256Hex) -> Option<String> {
         let checking = self.checks.lock().await.get(folder.path()).cloned()?;
-        let code = std::fs::read(folder.file(CODE_FILE)).ok()?;
-        if Sha256Hex::of(&code) != checking.files[1] {
+        if checking.module != *module {
             return None;
         }
         let found = checking.found.lock().ok()?;
@@ -2348,5 +2350,50 @@ mod tests {
         let same = proofs(b"old module");
         let kept = kept_proofs(Some(&before), Some(same.clone()), &before);
         assert_eq!(kept, Some(same));
+    }
+
+    /// What this server's job found wrong refuses a run of the module the job checked, by the
+    /// hash the run holds, whatever main.wat is in the folder by then: none, as once it is
+    /// removed after the state's read, or another; it refuses no run of another module.
+    #[tokio::test]
+    async fn a_job_s_finding_refuses_its_module_whatever_main_wat_is_now() {
+        let data = tempfile::tempdir().expect("a data folder");
+        let program = tempfile::tempdir().expect("a program folder");
+        let server = LenguaServer::new(DataDir::new(data.path().to_path_buf()));
+        let path = program.path().to_str().expect("UTF-8 path");
+        let folder = ProgramFolder::new(path).expect("absolute path");
+        let module = Sha256Hex::of(b"the module the job checked");
+        let detail = "the proof found inputs the tests didn't try where main.wat is wrong: with \
+                      a = 1 and b = -1: it printed \"-0\"";
+        let checking = Arc::new(Checking {
+            files: [Sha256Hex::of(b"idea.md"), Sha256Hex::of(b"main.wat")],
+            module: module.clone(),
+            cancel: Arc::default(),
+            found: std::sync::Mutex::new(Found {
+                proofs: vec![BlockProof {
+                    test: "generated B1".to_owned(),
+                    progress: None,
+                    detail: Some(detail.to_owned()),
+                    wrong: true,
+                }],
+                wrong: true,
+                ..Found::default()
+            }),
+            stage: watch::Sender::new(Stage::Ended),
+            green_told: AtomicBool::new(false),
+            further: false,
+            obligations: Vec::new(),
+        });
+        server
+            .checks
+            .lock()
+            .await
+            .insert(folder.path().to_path_buf(), checking);
+        let refused = Some(format!("generated B1: {detail}"));
+        assert_eq!(server.proven_wrong(&folder, &module).await, refused);
+        std::fs::write(folder.file(CODE_FILE), "(module)\n").expect("write another main.wat");
+        assert_eq!(server.proven_wrong(&folder, &module).await, refused);
+        let other = Sha256Hex::of(b"another module");
+        assert_eq!(server.proven_wrong(&folder, &other).await, None);
     }
 }
