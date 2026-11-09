@@ -216,10 +216,10 @@ fn examples_in_the_skills_pass_lenguas_own_checks() {
 #[test]
 fn the_skills_offer_main_wat_alone() {
     for (document, text) in documents() {
+        // A name of its own: no letter or digit just before it or just after it.
+        let apart = |near: Option<char>| near.is_none_or(|next| !next.is_alphanumeric());
         let named = text.match_indices("main.s").any(|(at, found)| {
-            let before = text[..at].chars().next_back();
-            let after = text[at + found.len()..].chars().next();
-            !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+            apart(text[..at].chars().next_back()) && apart(text[at + found.len()..].chars().next())
         });
         assert!(!named, "{document} names main.s, the native lengua's code");
     }
