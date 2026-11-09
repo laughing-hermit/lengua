@@ -1,10 +1,9 @@
 //! Every WebAssembly program in tests/fixtures-wasm goes through the server from the user's
 //! request to done, the same on every system: its idea, an Attested Computation, is recorded with
 //! the user's words; its main.wat follows every rule of the WebAssembly dialect and passes every
-//! test of its idea; and lengua's entry in the idea's `verified` names the main.wat it checked. As
-//! tests/every_program.rs does for the native programs, the test takes every folder there, so a
-//! program added to it is checked with the rest, and a program that fails is named while the
-//! others still go through.
+//! test of its idea; and lengua's entry in the idea's `verified` names the main.wat it checked.
+//! The test takes every folder there, so a program added to it is checked with the rest, and a
+//! program that fails is named while the others still go through.
 
 mod common;
 

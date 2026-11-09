@@ -32,41 +32,11 @@ enum Proving {
     Alone(OwnedRwLockWriteGuard<()>),
 }
 
-/// A valid idea, tests included, for a program that adds two numbers.
-pub const ADD_IDEA: &str = r#"---
-type: lengua/program-idea
-title: add
-description: Adds the two whole numbers in its arguments and prints the sum.
----
-# Purpose
-The program adds two whole numbers between `-1000000000` and `1000000000`.
+/// A valid idea, tests included, for a program that adds two numbers: an Attested Computation.
+pub const ADD_IDEA: &str = include_str!("../fixtures-wasm/add/idea.md");
 
-# Behaviors
-## B1: Adds two numbers
-- Given the arguments `2` and `3`
-- When the program runs
-- Then it prints `5` and a newline
-- And it exits with code `0`
-
-### For any `a` and `b`
-- Given the arguments `{a}` and `{b}`
-- When the program runs
-- Then it prints `{a + b}` and a newline
-- And it exits with code `0`
-
-| a | b | runs |
-|---|---|---|
-| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | 200 |
-
-## B2: Shows the usage line without arguments
-- Given no arguments
-- When the program runs
-- Then it prints `usage: add <a> <b>` and a newline to standard error
-- And it exits with code `1`
-
-# Constraints
-- Uses: nothing
-"#;
+/// The main.wat compiled from [`ADD_IDEA`], which follows every rule and passes every test.
+pub const ADD_CODE: &str = include_str!("../fixtures-wasm/add/main.wat");
 
 /// What a user says to ask for a program.
 pub const REQUEST: &str = "Make me a program that adds two numbers";
@@ -98,26 +68,6 @@ impl ClientHandler for TestClient {
     }
 }
 
-/// Whether this computer runs AArch64 programs only through QEMU's user mode, registered with
-/// binfmt_misc's flag F as lengua needs: then a session for linux-aarch64 is emulated here.
-#[must_use]
-pub fn qemu_runs_aarch64() -> bool {
-    if cfg!(target_arch = "aarch64") {
-        return false;
-    }
-    let entry =
-        std::fs::read_to_string("/proc/sys/fs/binfmt_misc/qemu-aarch64").unwrap_or_default();
-    let ready = entry.lines().next() == Some("enabled")
-        && entry.lines().any(|line| {
-            line.strip_prefix("flags: ")
-                .is_some_and(|flags| flags.contains('F'))
-        });
-    if !ready {
-        lengua::skiplog::note("QEMU doesn't run AArch64 programs here (install qemu-user-static)");
-    }
-    ready
-}
-
 /// The timings a session sets on its server, for tests: each `None` leaves the server's own.
 #[derive(Debug, Clone, Copy, Default)]
 struct Knobs {
@@ -140,8 +90,6 @@ pub struct Session {
     protocol: Protocol,
     /// The timings it set on the server.
     knobs: Knobs,
-    /// The target a developer's `LENGUA_TARGET` names, when the session has one.
-    target: Option<&'static str>,
     /// While the session may prove, its hold on the proving lock.
     _proving: Option<Proving>,
 }
@@ -197,7 +145,7 @@ impl Session {
             grace_ms,
             stamp_ms: None,
         };
-        Self::connect(protocol, data_dir, knobs, None, hold).await
+        Self::connect(protocol, data_dir, knobs, hold).await
     }
 
     /// Starts `lengua-mcp` with its full time for proofs, `check` waiting at most `wait_ms` for
@@ -211,30 +159,7 @@ impl Session {
             stamp_ms: Some(stamp_ms),
             ..Knobs::default()
         };
-        Self::connect(protocol, data_dir, knobs, None, hold).await
-    }
-
-    /// Starts `lengua-mcp` for `target`, as a developer's `LENGUA_TARGET` asks: a target this
-    /// computer runs only through QEMU's user mode. Its proofs get no time.
-    pub async fn emulating(protocol: Protocol, target: &'static str) -> Self {
-        let data_dir = tempfile::tempdir().expect("create a temporary data folder");
-        let knobs = Knobs {
-            proof_seconds: Some(0),
-            ..Knobs::default()
-        };
-        Self::connect(protocol, data_dir, knobs, Some(target), None).await
-    }
-
-    /// Starts `lengua-mcp` for `target` through QEMU's user mode, as [`Self::emulating`] does,
-    /// giving each version's proofs `seconds` in all.
-    pub async fn emulating_for(protocol: Protocol, target: &'static str, seconds: u64) -> Self {
-        let hold = Some(Proving::Shared(proving().read_owned().await));
-        let data_dir = tempfile::tempdir().expect("create a temporary data folder");
-        let knobs = Knobs {
-            proof_seconds: Some(seconds),
-            ..Knobs::default()
-        };
-        Self::connect(protocol, data_dir, knobs, Some(target), hold).await
+        Self::connect(protocol, data_dir, knobs, hold).await
     }
 
     /// Starts `lengua-mcp` giving each version's proofs `seconds` in all, once no other session
@@ -247,7 +172,7 @@ impl Session {
             proof_seconds: Some(seconds),
             ..Knobs::default()
         };
-        Self::connect(protocol, data_dir, knobs, None, hold).await
+        Self::connect(protocol, data_dir, knobs, hold).await
     }
 
     /// Starts `lengua-mcp` with its full time for proofs, once no other session in the test
@@ -255,45 +180,32 @@ impl Session {
     pub async fn proving_alone(protocol: Protocol) -> Self {
         let hold = Some(Proving::Alone(proving().write_owned().await));
         let data_dir = tempfile::tempdir().expect("create a temporary data folder");
-        Self::connect(protocol, data_dir, Knobs::default(), None, hold).await
+        Self::connect(protocol, data_dir, Knobs::default(), hold).await
     }
 
     /// Ends this server and starts a new one on the same data folder, as when a harness restarts
     /// it: whatever the old one kept in memory is gone.
     pub async fn restart(self) -> Self {
-        let target = self.target;
-        self.restart_for(target).await
-    }
-
-    /// Restarts it as [`Session::restart`] does, for `target` (`None`: this computer's own).
-    pub async fn restart_for(self, target: Option<&'static str>) -> Self {
         let Self {
             service,
             data_dir,
             protocol,
             knobs,
             _proving: hold,
-            ..
         } = self;
         service.cancel().await.expect("close the session");
-        Self::connect(protocol, data_dir, knobs, target, hold).await
+        Self::connect(protocol, data_dir, knobs, hold).await
     }
 
     async fn connect(
         protocol: Protocol,
         data_dir: TempDir,
         knobs: Knobs,
-        target: Option<&'static str>,
         hold: Option<Proving>,
     ) -> Self {
         let command =
             tokio::process::Command::new(env!("CARGO_BIN_EXE_lengua-mcp")).configure(|command| {
                 command.arg("--data-dir").arg(data_dir.path());
-                // The session's own target, never one the developer's shell happens to name.
-                command.env_remove("LENGUA_TARGET");
-                if let Some(target) = target {
-                    command.env("LENGUA_TARGET", target);
-                }
                 if let Some(seconds) = knobs.proof_seconds {
                     command.env("LENGUA_PROOF_SECONDS", seconds.to_string());
                 }
@@ -327,7 +239,6 @@ impl Session {
             data_dir,
             protocol,
             knobs,
-            target,
             _proving: hold,
         }
     }

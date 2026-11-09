@@ -89,7 +89,7 @@ async fn template(pool: &Pool, code: &str, idea_file: &str) -> Result<usize, Str
         seed,
         &idea.uses,
         &idea.network,
-        lengua::testrun::workers(idea.threads),
+        lengua::testrun::workers(),
     )
     .await
     .map_err(|error| format!("its tests couldn't run (seed {seed}): {error}"))?;

@@ -3,7 +3,6 @@
 //! no program: they read and write a bundle as `check` does, through lengua's own functions.
 
 mod common;
-mod per_target;
 
 use std::path::{Path, PathBuf};
 
@@ -44,13 +43,13 @@ impl Bundle {
     }
 
     /// A program folder of the bundle, `name` from its root, holding `idea` and, with `code`, a
-    /// main.s.
+    /// main.wat.
     fn program(&self, name: &str, idea: &str, code: bool) -> PathBuf {
         let folder = self.root().join(name);
         std::fs::create_dir_all(&folder).expect("a program folder");
         std::fs::write(folder.join("idea.md"), idea).expect("write idea.md");
         if code {
-            std::fs::write(folder.join("main.s"), ".intel_syntax noprefix\n").expect("main.s");
+            std::fs::write(folder.join("main.wat"), "(module)\n").expect("main.wat");
         }
         folder
     }
@@ -131,7 +130,7 @@ fn lengua_makes_the_index_with_okf_version() {
     assert_eq!(
         bundle.read("index.md"),
         "---\nokf_version: \"0.2\"\n---\n# Programs\n\n* [add](add/idea.md) - Adds the two \
-         whole numbers in its arguments and prints the sum. Code: [main.s](add/main.s)\n"
+         whole numbers in its arguments and prints the sum. Code: [main.wat](add/main.wat)\n"
     );
     assert_eq!(
         bundle.read("log.md"),
@@ -140,7 +139,7 @@ fn lengua_makes_the_index_with_okf_version() {
     // The index declares the bundle now, and nothing else landed anywhere: not in the program's
     // own folder, and no scratch file beside the two.
     assert!(graph::scan::bundle_root(&add).declared);
-    assert_eq!(listing(&add), ["idea.md", "main.s"]);
+    assert_eq!(listing(&add), ["idea.md", "main.wat"]);
     assert_eq!(listing(bundle.root()), ["add", "index.md", "log.md"]);
 }
 
@@ -159,7 +158,7 @@ fn the_index_keeps_every_line_lengua_doesnt_own() {
                 hand.\n\n## Tools\n\n\
                 * [the manual](https://example.com/manual) - read it first\n\
                 * [add](add/idea.md) - Adds the two whole numbers in its arguments and prints \
-                the sum. Code: [main.s](add/main.s)\n\
+                the sum. Code: [main.wat](add/main.wat)\n\
                 * [sort](sort/idea.md) - Sorts lines.\n\nThe end.\r\n";
     assert_eq!(bundle.read("index.md"), kept);
     assert_eq!(written.changed, ["add"]);
@@ -229,7 +228,8 @@ fn a_changed_description_updates_its_entry() {
     let index = bundle.read("index.md");
     assert!(
         index.ends_with(
-            "# Programs\n\n* [add](add/idea.md) - Adds two numbers. Code: [main.s](add/main.s)\n"
+            "# Programs\n\n* [add](add/idea.md) - Adds two numbers. Code: \
+             [main.wat](add/main.wat)\n"
         ),
         "{index}"
     );
@@ -338,17 +338,15 @@ fn a_stale_program_is_reported() {
     let bundle = Bundle::new();
     let add = bundle.program("add", ADD_IDEA, true);
     let key = Key::load_or_create(&bundle.data_dir()).expect("a signing key");
-    let code = std::fs::read(add.join("main.s")).expect("main.s");
+    let code = std::fs::read(add.join("main.wat")).expect("main.wat");
     let recorded = Lock {
         code: Some(CodeStamp {
-            sha256: lengua::header::code_hash(&code),
-            executable_sha256: Sha256Hex::of(b"executable"),
-            toolchain: "llvm-mc 22.1.8, ld.lld 22.1.8".into(),
+            sha256: Sha256Hex::of(&code),
+            module_sha256: Sha256Hex::of(b"module"),
+            engine: lengua::wasm::engine::ENGINE.into(),
             max_stack_bytes: 16,
             unsafe_blocks: 0,
-            target: "linux-x86_64".into(),
             features: Vec::new(),
-            emulator: None,
         }),
         ..Lock::requested(
             Sha256Hex::of(ADD_IDEA.as_bytes()),
@@ -365,7 +363,7 @@ fn a_stale_program_is_reported() {
     assert_ne!(verified, ADD_IDEA);
     std::fs::write(add.join("idea.md"), &verified).expect("write lengua's entry");
     assert_eq!(stale(&bundle.graph(&add)), None);
-    std::fs::write(add.join("main.s"), ".intel_syntax noprefix\n_start:\n").expect("edit main.s");
+    std::fs::write(add.join("main.wat"), "(module (func))\n").expect("edit main.wat");
     assert_eq!(stale(&bundle.graph(&add)), Some(Stale::Code));
     std::fs::write(add.join("idea.md"), idea("add", "Adds.")).expect("edit idea.md");
     let graph = bundle.graph(&add);
@@ -548,7 +546,9 @@ fn two_writers_at_once_leave_a_consistent_index() {
     let expected: Vec<String> = names
         .iter()
         .map(|name| {
-            format!("* [{name}]({name}/idea.md) - Program {name}. Code: [main.s]({name}/main.s)")
+            format!(
+                "* [{name}]({name}/idea.md) - Program {name}. Code: [main.wat]({name}/main.wat)"
+            )
         })
         .collect();
     assert_eq!(entries, expected, "{index}");
@@ -610,9 +610,6 @@ async fn every_check_reports_the_graph() {
 
 #[tokio::test]
 async fn check_keeps_the_bundles_index_and_log() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_idea();
     let report = session.record(&program).await;
@@ -645,9 +642,6 @@ async fn check_keeps_the_bundles_index_and_log() {
 
 #[tokio::test]
 async fn check_blocks_a_cycle_and_not_a_broken_link() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let parent = tempfile::tempdir().expect("a folder for the bundle");
     let a = Program::new_in(parent.path(), "a");
@@ -685,9 +679,6 @@ async fn check_blocks_a_cycle_and_not_a_broken_link() {
 
 #[tokio::test]
 async fn two_checks_at_once_leave_a_consistent_index() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let parent = tempfile::tempdir().expect("a folder for the bundle");
     let one = Program::new_in(parent.path(), "one");

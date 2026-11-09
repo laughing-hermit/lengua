@@ -330,7 +330,7 @@ fn programs() -> Vec<(PathBuf, PathBuf)> {
             else {
                 continue;
             };
-            // A template with a native twin keeps its own idea beside it, `-wat-idea.md`.
+            // A template whose idea once had the native lengua's beside it keeps `-wat-idea.md`.
             let idea = [
                 format!("{stem}-template-wat-idea.md"),
                 format!("{stem}-template-idea.md"),

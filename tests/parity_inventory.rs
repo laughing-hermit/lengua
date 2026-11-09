@@ -1,43 +1,25 @@
 //! The inventory that keeps the test suite one suite for every target, so that a gap between two
 //! targets is a failing test rather than something an audit finds.
 //!
-//! lengua is one product on every target, tested by the same cases (`PerCpu` tables in
-//! `tests/red_team.rs`, `tests/every_program.rs`, `tests/limits.rs` and `src/checker/tests.rs`).
-//! Two things keep it so:
+//! lengua is one product on every target: its programs are WebAssembly, which runs the same way on
+//! each of the five runners lengua-mcp is built for, and every test file runs on every one of
+//! them. Two things keep it so:
 //!
-//! - A ratchet on test files made for one target: a file that is compiled for one CPU only
-//!   (`#![cfg(target_arch = ...)]`) or that names a target in its own name has a twin missing on
-//!   the others, so it must be listed in [`DEBT`] with its reason and what the other targets lack.
-//!   A new such file fails; a listed file that stops being for one target must leave the list,
-//!   so the debt only shrinks.
-//! - A native test runner for every target: `scripts/ci/targets.json` lists the GitHub runner of
-//!   each target's own CPU and system, and `ci.yml`'s one test job runs `cargo test` on every
-//!   runner the list names, since a table's cells for a target run natively on that target's
-//!   runner. A target added to lengua without a runner in the list fails, and so does a second
-//!   workflow that runs the suite.
+//! - No test file is made for one target: a file that is compiled for some targets only
+//!   (`#![cfg(target_arch = ...)]`) or that names a target in its own name fails. A case that only
+//!   some systems can take, such as one that starts `sh`, is a test of its own gated where it
+//!   stands, in a file every runner runs.
+//! - A test runner for every target: `scripts/ci/targets.json` lists the GitHub runner of each of
+//!   the five targets, and `ci.yml`'s one test job runs `cargo test` on every runner the list
+//!   names. A target without a runner in the list fails, and so does a second workflow that runs
+//!   the suite.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use lengua::platform::Profile;
 use serde_json::Value;
 
-/// A test file for one target: why it is, and what the other targets lack because of it.
-struct Debt {
-    /// The file, relative to the repository.
-    file: &'static str,
-    /// Why it is for one target.
-    reason: &'static str,
-    /// The counterpart the other targets are missing.
-    missing: &'static str,
-}
-
-/// Every test file that is for one target today, which is the debt: what the suite still tests
-/// on one target only. Paying one (a `PerCpu` table that both runners run) means deleting its
-/// entry, and the ratchet fails until it is gone.
-const DEBT: &[Debt] = &[];
-
-/// The names of a target in a file's name, besides the CPUs and OSes of the targets lengua has.
+/// The names of a target in a file's name, besides the systems and CPUs of the five targets.
 const ALIASES: &[&str] = &[
     "x86", "x64", "amd64", "arm64", "arm", "macos", "darwin", "windows", "win",
 ];
@@ -49,9 +31,8 @@ fn target_words(file_name: &str) -> Vec<String> {
         .rsplit_once('.')
         .map_or(file_name, |(stem, _)| stem);
     let mut names: Vec<String> = ALIASES.iter().map(|alias| (*alias).to_owned()).collect();
-    for target in Profile::ALL {
-        names.push(target.cpu().to_owned());
-        names.extend(target.name().split('-').map(str::to_owned));
+    for target in lengua::gate::TARGETS {
+        names.extend(target.split('-').map(str::to_owned));
     }
     stem.split(|character: char| !character.is_ascii_alphanumeric())
         .filter(|word| names.iter().any(|name| name == word))
@@ -91,7 +72,7 @@ fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
         let path = entry.expect("an entry").path();
         if path.is_dir() {
             let name = path.file_name().and_then(|name| name.to_str());
-            if !matches!(name, Some("fixtures" | "schemas")) {
+            if !matches!(name, Some("fixtures" | "fixtures-wasm" | "schemas")) {
                 rust_files(&path, found);
             }
         } else if path.extension().is_some_and(|extension| extension == "rs") {
@@ -126,35 +107,19 @@ fn files_for_one_target() -> BTreeMap<String, String> {
     found
 }
 
-/// A new test file for one target fails; so does a listed one that no longer is, and a listed
-/// one that doesn't say why and what is missing.
+/// No test file is for one target: every runner runs every file.
 #[test]
-fn no_new_test_file_is_for_one_target() {
-    let found = files_for_one_target();
-    let mut problems = Vec::new();
-    for (file, why) in &found {
-        if !DEBT.iter().any(|debt| debt.file == file) {
-            problems.push(format!(
-                "{file} is for one target ({why}) and is not in DEBT: write the cases once, as a \
-                 table with a cell for each target (lengua::targets::PerCpu), or list the \
-                 file with its reason and the counterpart the other targets lack"
-            ));
-        }
-    }
-    for debt in DEBT {
-        if !found.contains_key(debt.file) {
-            problems.push(format!(
-                "{} is in DEBT but is not a file for one target any more: delete its entry",
-                debt.file
-            ));
-        }
-        if debt.reason.len() < 40 || debt.missing.len() < 40 {
-            problems.push(format!(
-                "{}: say why it is for one target, and what the others lack",
-                debt.file
-            ));
-        }
-    }
+fn no_test_file_is_for_one_target() {
+    let problems: Vec<String> = files_for_one_target()
+        .into_iter()
+        .map(|(file, why)| {
+            format!(
+                "{file} is for one target ({why}): every runner runs every test file, so write \
+                 its cases for every target, and gate a case only some systems can take where it \
+                 stands"
+            )
+        })
+        .collect();
     assert!(problems.is_empty(), "{problems:#?}");
 }
 
@@ -167,17 +132,21 @@ fn the_ratchet_sees_a_file_for_one_target() {
     assert!(why_for_one_target("x86-64-things.rs", "").is_some());
     assert!(why_for_one_target("macos_runner.rs", "").is_some());
     assert!(why_for_one_target("windows.rs", "").is_some());
+    assert!(why_for_one_target("linux_only.rs", "").is_some());
     let gated = "//! Docs.\n\n#![cfg(target_arch = \"x86_64\")]\n\nmod common;\n";
     assert!(why_for_one_target("e2e.rs", gated).is_some());
     let gated_by_os = "#![cfg(all(target_os = \"linux\", unix))]\n";
     assert!(why_for_one_target("sandbox.rs", gated_by_os).is_some());
-    // A comment, a use in a function and a name with no target in it are not a gate.
+    // A comment, a use in a function, a gated test and a name with no target in it are not a
+    // gate.
     let commented = "// #![cfg(target_arch = \"x86_64\")]\nfn f() {}\n";
-    assert!(why_for_one_target("red_team.rs", commented).is_none());
+    assert!(why_for_one_target("wasm_red_team.rs", commented).is_none());
     let used = "fn f() { if cfg!(target_arch = \"x86_64\") {} }\n";
-    assert!(why_for_one_target("red_team.rs", used).is_none());
-    assert!(why_for_one_target("every_program.rs", "").is_none());
-    assert!(why_for_one_target("limits.rs", "").is_none());
+    assert!(why_for_one_target("wasm_red_team.rs", used).is_none());
+    let one_test = "#[cfg(unix)]\n#[test]\nfn f() {}\n";
+    assert!(why_for_one_target("workflow.rs", one_test).is_none());
+    assert!(why_for_one_target("wasm_every_program.rs", "").is_none());
+    assert!(why_for_one_target("wasm_limits.rs", "").is_none());
     assert!(why_for_one_target("parity_inventory.rs", "").is_none());
 }
 
@@ -232,21 +201,22 @@ fn runs(job: &Value, needle: &str) -> bool {
     })
 }
 
-/// Every target has a runner in the list, and `ci.yml`'s test job runs `cargo test` on every
-/// runner the list names, so the cells of every table run natively on every target: a target
-/// added without a runner fails.
+/// Every one of the five targets has a runner in the list, the list names no other, and
+/// `ci.yml`'s test job runs `cargo test` on every runner it names: a target added without a
+/// runner fails.
 #[test]
-fn every_target_has_a_native_test_runner() {
+fn every_target_has_a_test_runner() {
     let hosts = hosts();
-    for target in Profile::ALL {
-        let label = hosts.get(target.name()).unwrap_or_else(|| {
-            panic!(
-                "{} has no runner in scripts/ci/targets.json: add its GitHub runner",
-                target.name()
-            )
+    for target in lengua::gate::TARGETS {
+        let label = hosts.get(target).unwrap_or_else(|| {
+            panic!("{target} has no runner in scripts/ci/targets.json: add its GitHub runner")
         });
-        assert!(!label.is_empty(), "{}: an empty runner", target.name());
+        assert!(!label.is_empty(), "{target}: an empty runner");
     }
+    let listed: Vec<&str> = hosts.keys().map(String::as_str).collect();
+    let mut targets = lengua::gate::TARGETS.to_vec();
+    targets.sort_unstable();
+    assert_eq!(listed, targets, "the targets scripts/ci/targets.json lists");
     let workflows = workflows();
     let ci: Value = serde_saphyr::from_str(workflows.get("ci.yml").expect("ci.yml"))
         .unwrap_or_else(|error| panic!("ci.yml: not YAML: {error}"));

@@ -1,12 +1,11 @@
 //! main.wat's path end to end, the same on every system: the add program, an Attested
 //! Computation, from the user's request to done through the MCP session, then run with its
 //! arguments, run from a shell with `lengua-mcp run`, and attested with `lengua-mcp check`; its
-//! lock's stamp, format 6; lengua's entry in the idea's `verified`, written at done and taken away
-//! once the idea changes; and how check answers a folder with both code files, a rule broken on
-//! its line, and failing tests. Then, with the solvers, main.wat's proofs through check as main.s's
-//! go: add's proof named in the reply and kept in the lock, a planted wrong constant found as a
+//! lock's stamp, format 7; lengua's entry in the idea's `verified`, written at done and taken away
+//! once the idea changes; and how check answers a folder with the native lengua's main.s, a rule
+//! broken on its line, and failing tests. Then, with the solvers, main.wat's proofs through check:
+//! add's proof named in the reply and kept in the lock, a planted wrong constant found as a
 //! counterexample, and a program the model refuses left tested, not proven, with the reason.
-//! Nothing here needs LLVM, a Linux kernel or a CPU target.
 
 mod common;
 
@@ -164,7 +163,7 @@ async fn add(session: &Session) -> Program {
 
 /// add from the user's request to done, in both protocol generations: the machine line names
 /// the engine and no LLVM, the tests pass, the proof, which this session gives no time, says
-/// tested, not proven, and only it does, the lock stamps main.wat in format 6, the idea's
+/// tested, not proven, and only it does, the lock stamps main.wat in format 7, the idea's
 /// `verified` holds lengua's entry, and `run` runs it.
 #[tokio::test]
 async fn add_goes_from_its_request_to_done_and_runs() {
@@ -221,14 +220,14 @@ async fn add_goes_from_its_request_to_done_and_runs() {
             "{done}"
         );
 
-        // The lock stamps main.wat as it is, its module and the engine, in format 6, and no
+        // The lock stamps main.wat as it is, its module and the engine, in format 7, and no
         // proof, which had no time.
         let lock = program.read("lengua.lock").expect("the lock");
         let module = lengua::wasm::text::build(CODE)
             .expect("main.wat builds")
             .wasm;
         assert!(
-            lock.contains("version = 6\ndialect = \"webassembly 1\"\n"),
+            lock.contains("version = 7\ndialect = \"webassembly 1\"\n"),
             "{lock}"
         );
         assert!(
@@ -378,8 +377,8 @@ async fn lengua_s_entry_goes_when_the_idea_changes() {
     session.service.cancel().await.expect("close the session");
 }
 
-/// lengua's entry goes wherever check stops, on either path: from an idea made a native one, and
-/// from an Attested Computation that has a problem.
+/// lengua's entry goes wherever check stops: from an idea made one of the native lengua's type,
+/// and from an Attested Computation that has a problem.
 #[tokio::test]
 async fn lengua_s_entry_goes_wherever_check_stops() {
     let session = Session::start(Protocol::Discover).await;
@@ -402,8 +401,8 @@ async fn lengua_s_entry_goes_wherever_check_stops() {
     session.service.cancel().await.expect("close the session");
 }
 
-/// A folder's code file is the one its idea's type asks for: both, or main.s for an Attested
-/// Computation, is a problem that says what to do.
+/// A folder's code file is main.wat alone: the native lengua's main.s beside it, or main.s with
+/// no main.wat, which says where the native lengua went, is a problem that says what to do.
 #[tokio::test]
 async fn an_attested_computation_s_code_is_main_wat_alone() {
     let session = Session::start(Protocol::Discover).await;
@@ -423,7 +422,8 @@ async fn an_attested_computation_s_code_is_main_wat_alone() {
     let report = session.check(&program).await;
     assert_eq!(report["state"], "code_problems", "{report}");
     assert!(
-        any_line(&report["problems"], "compile idea.md into main.wat"),
+        any_line(&report["problems"], "lengua compiles an idea to main.wat since 0.2.0")
+            && any_line(&report["problems"], "the tag native-final keeps the native lengua"),
         "{report}"
     );
     // There's no main.wat to keep: the next step compiles it first.
@@ -474,10 +474,10 @@ async fn a_broken_rule_is_reported_on_its_line() {
     session.service.cancel().await.expect("close the session");
 }
 
-/// A failing test of main.wat is reported as a native program's is: the example and its line
-/// in idea.md, what it printed, and a failed assertion on its line of main.wat.
+/// A failing test of main.wat is reported with its lines: the example and its line in idea.md,
+/// what it printed, and a failed assertion on its line of main.wat.
 #[tokio::test]
-async fn a_failing_test_is_reported_as_native_ones_are() {
+async fn a_failing_test_is_reported_with_its_lines() {
     let session = Session::start(Protocol::Discover).await;
     let program = add(&session).await;
     let wrong = changed(CODE, "(i64.add (local.get $a)", "(i64.sub (local.get $a)");
@@ -553,7 +553,7 @@ async fn add_s_proof_is_named_and_the_lock_keeps_it() {
         .expect("main.wat builds")
         .wasm;
     let kept = format!(
-        "\n[proofs]\nexecutable_sha256 = \"{}\"\nproven = [\"B1\"]\n",
+        "\n[proofs]\nmodule_sha256 = \"{}\"\nproven = [\"B1\"]\n",
         Sha256Hex::of(&module)
     );
     let lock = program.read("lengua.lock").expect("the lock");
@@ -581,7 +581,7 @@ async fn add_s_proof_is_named_and_the_lock_keeps_it() {
 }
 
 /// A wrong constant planted in add's main.wat, so that a sum of zero prints as "-0", is a
-/// counterexample through check, the same state as a native program's: B1 runs only its ten
+/// counterexample through check, the tests_failed state: B1 runs only its ten
 /// boundary values, none of which sums to zero, so the tests pass, and the proof finds the sum,
 /// which a real run confirms. The lock records it, so run refuses the build, after a restart
 /// too. lengua's entry, which check writes only if it says done while the proof still runs, is

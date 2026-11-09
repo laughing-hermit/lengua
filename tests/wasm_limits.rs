@@ -899,8 +899,8 @@ async fn a_server_still_serving_is_stopped() {
     assert_eq!(ran.end, End::Stopped);
 }
 
-/// A server says what became of the connections lengua made for it once it serves, as a native
-/// one does, before it takes a client: one that reached its place, and one refused.
+/// A server says what became of the connections lengua made for it once it serves, before it
+/// takes a client: one that reached its place, and one refused.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_server_says_what_became_of_its_connections_once_it_serves() {
     let policy = Policy {

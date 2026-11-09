@@ -2,7 +2,6 @@
 //! user's words kept until they're fixed, and an old tests.toml moved into the idea.
 
 mod common;
-mod per_target;
 
 use common::{ADD_IDEA, Program, Protocol, REQUEST, Session};
 use lengua::hash::Sha256Hex;
@@ -14,9 +13,6 @@ fn text(value: &Value) -> &str {
 
 #[tokio::test]
 async fn records_a_idea_with_its_tests() {
-    if !per_target::runs_programs() {
-        return;
-    }
     for protocol in Protocol::ALL {
         let session = Session::start(protocol).await;
         let program = Program::with_add_idea();
@@ -32,7 +28,7 @@ async fn records_a_idea_with_its_tests() {
         );
         assert!(
             text(&report["machine"]).contains("core"),
-            "the machine shows while main.s is missing: {report}"
+            "the machine shows while main.wat is missing: {report}"
         );
         let lock = program.read("lengua.lock").expect("the lock");
         let hash = Sha256Hex::of(ADD_IDEA.as_bytes()).to_string();
@@ -56,9 +52,6 @@ async fn records_a_idea_with_its_tests() {
 
 #[tokio::test]
 async fn tests_can_be_fixed_under_the_same_request() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_idea();
     session.record(&program).await;
@@ -81,9 +74,6 @@ async fn tests_can_be_fixed_under_the_same_request() {
 
 #[tokio::test]
 async fn problems_are_reported_and_the_words_wait_for_the_fix() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::new();
     program.write("idea.md", &ADD_IDEA.replace("{a + b}", "{a - b}"));
@@ -114,9 +104,6 @@ async fn problems_are_reported_and_the_words_wait_for_the_fix() {
 
 #[tokio::test]
 async fn an_old_tests_file_goes_into_the_idea() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_idea();
     program.write(
@@ -137,9 +124,6 @@ async fn an_old_tests_file_goes_into_the_idea() {
 
 #[tokio::test]
 async fn a_changed_idea_checks_its_tests_again() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_idea();
     session.record(&program).await;

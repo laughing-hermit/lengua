@@ -3,7 +3,6 @@
 //! recorded under them, and every change after them is shown.
 
 mod common;
-mod per_target;
 
 use common::{ADD_IDEA, Program, Protocol, REQUEST, Session};
 use lengua::hash::Sha256Hex;
@@ -19,9 +18,6 @@ fn hash(text: &str) -> String {
 
 #[tokio::test]
 async fn lists_check_with_its_hints() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let tools = session.service.list_all_tools().await.expect("list tools");
     let tool = tools
@@ -42,9 +38,6 @@ async fn lists_check_with_its_hints() {
 
 #[tokio::test]
 async fn records_the_users_words_in_both_protocols() {
-    if !per_target::runs_programs() {
-        return;
-    }
     for protocol in Protocol::ALL {
         let session = Session::start(protocol).await;
         let program = Program::with_add_idea();
@@ -56,7 +49,7 @@ async fn records_the_users_words_in_both_protocols() {
         );
         assert!(
             text(&report["machine"]).contains("core"),
-            "the machine shows until main.s is written: {report}"
+            "the machine shows until main.wat is written: {report}"
         );
         assert!(report.get("changes").is_none(), "{report}");
         let lock = program.read("lengua.lock").expect("the lock");
@@ -74,9 +67,6 @@ async fn records_the_users_words_in_both_protocols() {
 
 #[tokio::test]
 async fn the_path_may_name_the_idea_itself() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_idea();
     let idea_path = program.file("idea.md");
@@ -96,9 +86,6 @@ async fn the_path_may_name_the_idea_itself() {
 
 #[tokio::test]
 async fn the_users_words_are_needed_the_first_time() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_idea();
     for arguments in [program.arguments(), program.request(" \n ")] {
@@ -119,9 +106,6 @@ async fn the_users_words_are_needed_the_first_time() {
 
 #[tokio::test]
 async fn checking_the_same_idea_again_changes_nothing() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_idea();
     session.record(&program).await;
@@ -136,9 +120,6 @@ async fn checking_the_same_idea_again_changes_nothing() {
 
 #[tokio::test]
 async fn an_invalid_idea_is_reported_before_it_is_recorded() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::new();
     let invalid = ADD_IDEA.replace("exits with code `1`", "exits with code `134`");
@@ -161,9 +142,6 @@ async fn an_invalid_idea_is_reported_before_it_is_recorded() {
 
 #[tokio::test]
 async fn paths_must_be_absolute_and_a_new_folder_asks_for_an_idea() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let relative = session
         .call_error("check", json!({ "path": "add", "request": REQUEST }))
@@ -182,16 +160,10 @@ async fn paths_must_be_absolute_and_a_new_folder_asks_for_an_idea() {
 
 #[tokio::test]
 async fn a_folder_with_only_the_old_spec_md_is_asked_to_rename_it() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::new();
-    // An idea file from before the rename: the old name and the old type.
-    program.write(
-        "spec.md",
-        &ADD_IDEA.replace("type: lengua/program-idea", "type: lengua/program-spec"),
-    );
+    // An idea file from before the rename: its old name.
+    program.write("spec.md", ADD_IDEA);
     let report = session.record(&program).await;
     assert_eq!(report["state"], "write_idea", "{report}");
     assert!(
@@ -199,18 +171,15 @@ async fn a_folder_with_only_the_old_spec_md_is_asked_to_rename_it() {
         "{report}"
     );
     assert!(program.read("lengua.lock").is_none());
-    // Renamed, its old type still reads.
+    // Renamed, it is recorded.
     program.write("idea.md", &program.read("spec.md").expect("spec.md"));
     let report = session.record(&program).await;
-    assert_ne!(report["state"], "write_idea", "{report}");
+    assert_eq!(report["state"], "write_code", "{report}");
     session.service.cancel().await.expect("close the session");
 }
 
 #[tokio::test]
 async fn an_edited_idea_is_recorded_under_the_same_words() {
-    if !per_target::runs_programs() {
-        return;
-    }
     for protocol in Protocol::ALL {
         let session = Session::start(protocol).await;
         let program = Program::with_add_idea();
@@ -249,9 +218,6 @@ async fn an_edited_idea_is_recorded_under_the_same_words() {
 
 #[tokio::test]
 async fn a_build_keeps_its_requests_and_its_first_idea() {
-    if !per_target::runs_programs() {
-        return;
-    }
     let session = Session::start(Protocol::Discover).await;
     let program = Program::with_add_idea();
     session.record(&program).await;

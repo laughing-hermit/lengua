@@ -48,12 +48,11 @@ const ATTESTER_PROOF_SECONDS: &str = "20";
 const NO_SOLVER: [&str; 3] = ["isn't installed", "couldn't start", "no SMT solver"];
 
 /// The knobs lengua's own tests turn on a server, which a user's server runs without.
-const KNOBS: [&str; 5] = [
+const KNOBS: [&str; 4] = [
     "LENGUA_PROOF_SECONDS",
     "LENGUA_CHECK_WAIT_MS",
     "LENGUA_GREEN_GRACE_MS",
     "LENGUA_STAMP_DELAY_MS",
-    "LENGUA_TARGET",
 ];
 
 /// A plain MCP client: lengua needs nothing from it but tool calls.

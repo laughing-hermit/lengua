@@ -1,19 +1,15 @@
 //! One program folder's check, for writing a program by hand on a machine that isn't the
-//! developer's: `LENGUA_CHECK_FOLDER` names the folder, which holds idea.md and main.s, and the
+//! developer's: `LENGUA_CHECK_FOLDER` names the folder, which holds idea.md and main.wat, and the
 //! test prints what `check` reports (rules, tests, proofs) and fails unless the job ends done.
 //! GitHub's runners run it (the workflow's "ignored" mode with this test's name as the filter).
-//!
-//! It checks the folder as this computer's own target, natively. `LENGUA_CHECK_TARGET` names
-//! another target (`linux-aarch64` on an x86-64 computer, say) to check it through QEMU's user
-//! mode, where that is set up; the test then ends with a note in the run's summary.
 
 mod common;
-mod flow;
-mod per_target;
 
-use common::Program;
-use lengua::platform::Profile;
+use common::{Program, Protocol, Session};
 use serde_json::Value;
+
+/// How long each folder's proofs may take, in seconds.
+const PROOF_SECONDS: u64 = 60;
 
 fn text(value: &Value) -> &str {
     value.as_str().unwrap_or_default()
@@ -28,29 +24,13 @@ async fn check_one_folder() {
     else {
         return;
     };
-    let target = match std::env::var("LENGUA_CHECK_TARGET")
-        .ok()
-        .filter(|name| !name.is_empty())
-    {
-        Some(name) => Profile::from_name(&name)
-            .unwrap_or_else(|| panic!("LENGUA_CHECK_TARGET names no target lengua has: {name}")),
-        None => {
-            let Some(target) = per_target::this_target() else {
-                per_target::runs_programs();
-                return;
-            };
-            target
-        }
-    };
-    let Some((session, _)) = flow::proving(target, Some(60)).await else {
-        return;
-    };
+    let session = Session::proving_for(Protocol::Discover, PROOF_SECONDS).await;
     let mut failed = Vec::new();
     // Several folders, separated by commas, share one session.
     for folder in folder.split(',') {
         let folder = std::path::PathBuf::from(folder);
         let program = Program::new();
-        for file in ["idea.md", "main.s"] {
+        for file in ["idea.md", "main.wat"] {
             let text = std::fs::read_to_string(folder.join(file)).expect("the file");
             program.write(file, &text);
         }
