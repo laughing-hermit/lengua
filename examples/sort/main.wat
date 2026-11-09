@@ -1,5 +1,5 @@
 ;; sort: sorts the lines of standard input in byte order, as LC_ALL=C sort does, and with -u
-;; keeps one of each. The WebAssembly twin of examples/sort, in the WebAssembly dialect 1
+;; keeps one of each. The WebAssembly port of the native sort, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): the input read whole, each line an entry of its start
 ;; and its length, the entries sorted by tally-template.wat's bottom-up merge sort, and the lines
 ;; printed in one write. Lines are found, compared and copied 16 bytes at a time with 128-bit

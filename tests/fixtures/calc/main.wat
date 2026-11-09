@@ -1,5 +1,5 @@
 ;; calc: adds, subtracts or multiplies two whole numbers from its arguments, with an operator
-;; between them. The WebAssembly counterpart of tests/fixtures/calc, in the WebAssembly dialect 1
+;; between them. The WebAssembly port of the native calc, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): lengua's library gives $assert_fail and $write_all.
 ;; The operator's character picks its case through a br_table, whose default is an assertion: a
 ;; check before it leaves only the cases' characters.

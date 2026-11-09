@@ -1,5 +1,5 @@
-;; second: reads two lines from standard input and prints the second line. The WebAssembly twin of
-;; tests/fixtures/second, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
+;; second: reads two lines from standard input and prints the second line. The WebAssembly port of
+;; the native second, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
 ;; lengua's library gives $fill and $write_all. The native twin is wrong by design: its one fill
 ;; stops at the first read that ends with a newline, so it reads both lines only when they arrive
 ;; in one read. This one reads to the end of the input, however the input arrives, and passes

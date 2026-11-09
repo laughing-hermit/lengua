@@ -1,5 +1,5 @@
 ;; total: reads the CSV file of expenses that its argument names and prints the total amount with
-;; two decimals. The WebAssembly twin of tests/fixtures/total, in the WebAssembly dialect 1
+;; two decimals. The WebAssembly port of the native total, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): lengua's library gives $fill and $write_all. It copies
 ;; the file's name from its argument to a region of its own, opens the file in the working folder,
 ;; reads all of it with $fill, and adds each line's amount exactly, in whole cents: a line ends at

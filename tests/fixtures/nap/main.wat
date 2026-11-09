@@ -1,5 +1,5 @@
-;; nap: sleeps for half a minute and then says that it is awake. The WebAssembly counterpart of
-;; tests/fixtures/nap, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
+;; nap: sleeps for half a minute and then says that it is awake. The WebAssembly port of the
+;; native nap, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
 ;; lengua's library gives $assert_fail and $write_all. It waits with poll_oneoff on one time, 30
 ;; seconds on the clock that only moves forward; in a test, the wait ends at once.
 (module

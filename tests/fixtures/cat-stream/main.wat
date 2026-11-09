@@ -1,5 +1,5 @@
 ;; cat-stream: prints standard input of any length back unchanged, a buffer-full at a time, in
-;; constant memory. The WebAssembly twin of tests/fixtures/cat-stream, in the WebAssembly dialect 1
+;; constant memory. The WebAssembly port of the native cat-stream, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md), in the shape of stream-template.wat: lengua's library
 ;; reads each buffer-full with $fill and writes it with $write_all.
 (module

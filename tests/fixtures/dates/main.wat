@@ -1,5 +1,5 @@
 ;; clock: prints the current UTC time as hh:mm:ss, or the number of days until the date in its
-;; argument. The WebAssembly counterpart of tests/fixtures/dates, in the WebAssembly dialect 1
+;; argument. The WebAssembly port of the native dates, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): lengua's library gives $assert_fail and $write_all.
 ;; A date's day is counted from 1970-01-01 by Howard Hinnant's days_from_civil; the clock reads
 ;; in nanoseconds, of which the program keeps the whole seconds, and only once a date is valid.

@@ -1,5 +1,5 @@
 ;; archive: moves a file into the archive folder and makes the folder if it does not exist. The
-;; WebAssembly twin of examples/archive, in the WebAssembly dialect 1
+;; WebAssembly port of the native archive, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): lengua's library gives $write_all. It copies the file's
 ;; name from its argument to a region of its own, so each path starts where its region does; it
 ;; looks for the file with path_filestat_get before it makes the folder, so a name with no file

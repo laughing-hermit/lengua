@@ -1,5 +1,5 @@
 ;; total: reads a CSV from standard input and prints the total of its amount column. The
-;; WebAssembly twin of tests/fixtures/amounts, in the WebAssembly dialect 1
+;; WebAssembly port of the native amounts, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): the whole input read with $fill, the header's
 ;; `amount` column found, and each row's field in that column read as exact cents and added up;
 ;; a row at fault is reported with its line. Every byte is read through $byte_at, which checks

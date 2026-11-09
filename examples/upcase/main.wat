@@ -1,5 +1,5 @@
 ;; upcase: copies a text file to another file with its ASCII letters in capitals. The WebAssembly
-;; twin of examples/upcase, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
+;; port of the native upcase, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
 ;; lengua's library gives $fill and $write_all. It copies each file's name from its argument to a
 ;; region of its own, so each path starts where its region does; it reads the whole input file
 ;; with $fill, capitalizes it 16 bytes at a time with 128-bit vectors, as vector-template.wat does

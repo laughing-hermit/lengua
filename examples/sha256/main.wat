@@ -1,5 +1,5 @@
 ;; sha256: prints the SHA-256 digest of standard input, as FIPS 180-4 defines it. The WebAssembly
-;; twin of examples/sha256, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
+;; port of the native sha256, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
 ;; standard input of any length a 4 KiB piece at a time, each whole block of 64 bytes hashed as it
 ;; comes, then the last bytes padded. A block's 16 words are read 4 at a time, each word's bytes
 ;; turned round with one shuffle, and the rounds' constants are added to the schedule 4 words at a

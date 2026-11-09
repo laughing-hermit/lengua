@@ -1,5 +1,5 @@
-;; dice: rolls a fair six-sided die and prints the roll. The WebAssembly counterpart of
-;; examples/dice, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md): lengua's
+;; dice: rolls a fair six-sided die and prints the roll. The WebAssembly port of the
+;; native dice, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md): lengua's
 ;; library gives $assert_fail and $write_all. It draws 64 random bytes at once and rolls with the
 ;; first below 252, 42 times the faces, so each face has the same chance.
 (module

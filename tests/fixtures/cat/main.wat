@@ -1,4 +1,4 @@
-;; cat: prints standard input back unchanged. The WebAssembly twin of tests/fixtures/cat, in the
+;; cat: prints standard input back unchanged. The WebAssembly port of the native cat, in the
 ;; WebAssembly dialect 1 (references/power-of-10-webassembly.md): lengua's library reads the
 ;; input with $fill, until the buffer is full or the input ends, and writes it with $write_all.
 (module

@@ -1,5 +1,5 @@
 ;; hypotenuse: prints the length of the hypotenuse of a right triangle from the lengths of its two
-;; sides, with three decimals. The WebAssembly counterpart of examples/hypotenuse, in the
+;; sides, with three decimals. The WebAssembly port of the native hypotenuse, in the
 ;; WebAssembly dialect 1 (references/power-of-10-webassembly.md): lengua's library gives
 ;; $assert_fail and $write_all. Each side is read exactly, in thousandths; the square root is a
 ;; double's, as the idea's tests compute it, and its thousandths round to the nearest, ties to

@@ -1,5 +1,5 @@
 ;; absdiff: prints the absolute difference of the two whole numbers in its arguments. The
-;; WebAssembly counterpart of examples/absdiff, in the WebAssembly dialect 1
+;; WebAssembly port of the native absdiff, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): lengua's library gives $assert_fail and $write_all. A
 ;; number's digits past its limit are only checked, so a number of any length is out of range,
 ;; never a number that overflows.

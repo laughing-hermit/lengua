@@ -1,5 +1,5 @@
-;; pairs-stream: counts the pairs of a letter in standard input of any length. The WebAssembly twin
-;; of tests/fixtures/pairs, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
+;; pairs-stream: counts the pairs of a letter in standard input of any length. The WebAssembly port
+;; of the native pairs, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
 ;; lengua's library gives $fill and $write_all. It reads a buffer-full of 256 bytes at a time, as
 ;; stream-template.wat does, and what crosses from one buffer-full to the next is whether its last
 ;; byte is a letter that starts no pair yet.

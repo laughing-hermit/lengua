@@ -1,5 +1,5 @@
-;; utc: prints the current UTC time of day as HH:MM:SS. The WebAssembly counterpart of
-;; tests/fixtures/clock, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
+;; utc: prints the current UTC time of day as HH:MM:SS. The WebAssembly port of the
+;; native clock, in the WebAssembly dialect 1 (references/power-of-10-webassembly.md):
 ;; lengua's library gives $assert_fail and $write_all. The clock reads in nanoseconds, of which
 ;; the program keeps the whole seconds since the most recent midnight.
 (module

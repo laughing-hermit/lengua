@@ -1,5 +1,5 @@
 ;; count: counts the lines and words of standard input and prints the two counts, as wc -lw
-;; does. The WebAssembly twin of examples/count, in the WebAssembly dialect 1
+;; does. The WebAssembly port of the native count, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): standard input of any length a 64 KiB buffer-full at
 ;; a time, each counted 16 bytes a step with 128-bit vectors. A compare gives each lane all ones
 ;; where it holds, its bitmask a bit for each lane, and the bitmask's bits are counted; the lanes

@@ -1,5 +1,5 @@
 ;; words-stream: counts the lines and words of standard input of any length, as `wc -lw` does. The
-;; WebAssembly twin of tests/fixtures/words, in the WebAssembly dialect 1
+;; WebAssembly port of the native words, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): lengua's library gives $fill and $write_all. It reads
 ;; a buffer-full of 4096 bytes at a time, as stream-template.wat does, and looks at each byte in
 ;; turn, where the native twin takes 16 at a time with SSE2; what crosses from one buffer-full to

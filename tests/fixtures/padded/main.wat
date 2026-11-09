@@ -1,5 +1,5 @@
 ;; wc: counts the lines and words of standard input, as GNU wc -lw prints them for standard input:
-;; each count right-aligned in a field of 7. The WebAssembly twin of tests/fixtures/padded, in the
+;; each count right-aligned in a field of 7. The WebAssembly port of the native padded, in the
 ;; WebAssembly dialect 1 (references/power-of-10-webassembly.md): standard input of any length a
 ;; 64 KiB buffer-full at a time, each counted 16 bytes a step with 128-bit vectors. A compare
 ;; gives each lane all ones where it holds, its bitmask a bit for each lane, and the bitmask's

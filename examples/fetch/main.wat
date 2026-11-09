@@ -1,5 +1,5 @@
 ;; fetch: gets a page from the web server on port 8080 of this computer and prints its body. The
-;; WebAssembly twin of examples/fetch, in the WebAssembly dialect 1
+;; WebAssembly port of the native fetch, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): lengua's library gives $fill and $write_all. lengua
 ;; makes the connection to the server before the program starts and hands it over as descriptor
 ;; 5, the first connection's. The program sends its request there, reads the response with $fill

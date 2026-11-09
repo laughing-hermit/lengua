@@ -1,5 +1,5 @@
 ;; sweep: deletes the empty files in the current folder and says how many it deleted. The
-;; WebAssembly twin of tests/fixtures/sweep, in the WebAssembly dialect 1
+;; WebAssembly port of the native sweep, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): lengua's library gives $write_all. It lists the working
 ;; folder a batch of entries at a time with fd_readdir, each batch from the cookie of the last
 ;; whole entry before it; it reads each file's size with path_filestat_get, and deletes an empty

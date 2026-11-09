@@ -1,5 +1,5 @@
 ;; lines-stream: counts the newlines of standard input of any length and prints the count. The
-;; WebAssembly twin of tests/fixtures/lines, in the WebAssembly dialect 1
+;; WebAssembly port of the native lines, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): standard input a 4 KiB buffer-full at a time, as
 ;; stream-template.wat reads it, and each buffer-full's newlines counted 16 bytes at a time, as
 ;; vector-template.wat finds a byte: a vector compare, its bitmask, and the bitmask's bits.

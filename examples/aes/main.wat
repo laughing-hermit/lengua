@@ -1,5 +1,5 @@
 ;; aes: encrypts blocks of hexadecimal data with AES-128 (FIPS 197) in ECB mode, in portable code.
-;; The WebAssembly twin of examples/aes, in the WebAssembly dialect 1
+;; The WebAssembly port of the native aes, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md). No step looks up a table with a byte of the key or of
 ;; the data, and none of the encryption branches on one: a block is one 128-bit vector, its byte
 ;; i at row i mod 4 and column i / 4 as FIPS 197 lays out its state. SubBytes computes each byte's

@@ -1,5 +1,5 @@
 ;; mean: prints the mean of the two decimal numbers in its arguments, with two decimal places. The
-;; WebAssembly counterpart of examples/mean, in the WebAssembly dialect 1
+;; WebAssembly port of the native mean, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md): lengua's library gives $assert_fail and $write_all.
 ;; The numbers are read exactly, in whole cents, and their mean rounds a half cent away from
 ;; zero, so no float takes part.
