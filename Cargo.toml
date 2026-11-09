@@ -78,9 +78,14 @@ rmcp = { version = "3.8.0", features = ["client", "transport-child-process"] }
 
 # The build that ships and that the gate measures (`cargo bench` takes it too): lengua-mcp without
 # the symbols nothing maps, which the native rows count in lengua's size. An MSVC executable keeps
-# its symbols in the .pdb, so on Windows this changes nothing.
+# its symbols in the .pdb, so on Windows this changes nothing. One codegen unit and link-time
+# optimization over every crate put fewer, closer code pages in every run. A panic still unwinds:
+# the program's thread reports one as an error, and the server outlives a tool's.
 [profile.release]
 strip = "symbols"
+codegen-units = 1
+lto = "fat"
+panic = "unwind"
 
 [lints.rust]
 unsafe_code = "forbid"
