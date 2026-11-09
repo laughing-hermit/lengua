@@ -1281,4 +1281,48 @@ mod tests {
     fn debug_output_hides_the_key() {
         assert_eq!(format!("{:?}", key(7)), "Key(<secret>)");
     }
+
+    /// SHA-256 of `parts`, one after another, as bytes.
+    fn sha256(parts: &[&[u8]]) -> Vec<u8> {
+        unhex(Sha256Hex::of(&parts.concat()).as_str()).expect("a digest is hex")
+    }
+
+    /// `Key::sign` is HMAC-SHA256, keyed with the 32-byte key, over the signature's domain and
+    /// then the body, as RFC 2104 defines HMAC from SHA-256 alone: SHA-256 of the key padded with
+    /// zeros to SHA-256's 64-byte block and xored with 0x5c, then of the inner hash, SHA-256 of
+    /// the padded key xored with 0x36, then the domain, then the body. Every lock on a user's
+    /// computer verifies only while that stays so, whichever crates compute it. `verifies` takes
+    /// the tag, and refuses it with any one bit changed.
+    #[test]
+    fn a_signature_is_hmac_sha256_over_the_domain_and_the_body() {
+        let body = "# lengua.lock: a body\nversion = 7\n";
+        let mut padded = [0_u8; 64];
+        padded[..KEY_LEN].copy_from_slice(&[1; KEY_LEN]);
+        let pad = |byte: u8| padded.map(|each| each ^ byte);
+        let inner = sha256(&[&pad(0x36), SIGNATURE_DOMAIN, body.as_bytes()]);
+        let tag = sha256(&[&pad(0x5c), &inner]);
+        let signed = key(1).sign(body);
+        assert_eq!(signed.as_str(), hex(&tag));
+        assert!(key(1).verifies(body, &signed));
+        for bit in [0, 7, 100, 255] {
+            let mut flipped = tag.clone();
+            flipped[bit / 8] ^= 1 << (bit % 8);
+            let flipped = Sha256Hex::parse(&hex(&flipped)).expect("a tag is hex");
+            assert!(!key(1).verifies(body, &flipped), "bit {bit}");
+        }
+    }
+
+    /// The MAC lengua signs with gives the standard's own answer: RFC 4231's test case 1 for
+    /// HMAC-SHA256, a key of 20 bytes 0x0b over "Hi There". (SHA-256's own, of "abc", is
+    /// src/hash.rs's.)
+    #[test]
+    fn hmac_sha256_gives_rfc_4231_s_first_answer() {
+        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(&[0x0b; 20])
+            .expect("HMAC takes a key of any length");
+        mac.update(b"Hi There");
+        assert_eq!(
+            hex(&mac.finalize().into_bytes()),
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+    }
 }
