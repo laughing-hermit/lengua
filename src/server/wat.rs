@@ -21,8 +21,8 @@ use super::{
     BlockProof, CheckParams, CheckReport, Checking, ConnectionReport, FURTHER, Found, IdeaStage,
     LenguaServer, Model, Passed, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun, Stage,
     VERIFIED_NOTE, Witness, already_serving, background_limits, check_wait, cost_line, counted,
-    ended_report, idea_problems, proof_time, proven_detail, random_seed, reaches, read_idea,
-    read_optional, settled, state_of, wait_for, working_folder,
+    ended_report, idea_problems, proof_time, proven_detail, random_seed, reaches, read_optional,
+    settled, state_for_run, state_of, wait_for, working_folder,
 };
 use crate::checker::{self, wasm::Obligation};
 use crate::connect::Reach;
@@ -549,16 +549,32 @@ fn parts_problems(
     problems
 }
 
+/// A file's text from the bytes a read kept, `bytes`: `None` when the file wasn't there.
+fn text_of(
+    folder: &ProgramFolder,
+    name: &str,
+    bytes: Option<Vec<u8>>,
+) -> Result<Option<String>, String> {
+    bytes
+        .map(|bytes| {
+            String::from_utf8(bytes)
+                .map_err(|_| format!("couldn't read {folder}/{name}: it isn't UTF-8 text"))
+        })
+        .transpose()
+}
+
 /// Checks that `folder` holds main.wat lengua may run, as `run` does from MCP and from a shell:
 /// its idea and code match lengua.lock, no proof the lock records found that module wrong, and
 /// the module built from it now is byte for byte the one check tested. Environment variables
-/// reach only a program whose idea uses the environment. Gives the build and the idea.
+/// reach only a program whose idea uses the environment. Gives the build and the idea. idea.md
+/// and main.wat are read once, by the state's own read: the build, the comparison and the idea
+/// are made from the very bytes whose hashes the lock was held to.
 fn runnable(
     data_dir: &DataDir,
     folder: &ProgramFolder,
     env: &BTreeMap<String, String>,
 ) -> Result<(Built, Idea), String> {
-    let state = state_of(data_dir, folder)?;
+    let (state, files) = state_for_run(data_dir, folder)?;
     if state != State::Ready {
         return Err(format!(
             "lengua runs a program only when its idea and code match lengua.lock, and {folder} \
@@ -592,11 +608,13 @@ fn runnable(
             wrong.join("; ")
         ));
     }
-    let code = read_optional(folder, CODE_FILE)?.ok_or_else(|| {
+    let code = text_of(folder, CODE_FILE, files.code)?.ok_or_else(|| {
         format!("There's no {CODE_FILE} in {folder}. Write it with the compile skill.")
     })?;
-    let idea = read_idea(folder)
-        .and_then(|text| idea::parse(&text).map_err(|problems| idea_problems(folder, &problems)))?;
+    let idea_text = text_of(folder, IDEA_FILE, files.idea)?.ok_or_else(|| {
+        format!("There's no {IDEA_FILE} in {folder}. Write it with the write-idea skill first.")
+    })?;
+    let idea = idea::parse(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
     if !env.is_empty() && !idea.uses.contains(&Use::Environment) {
         return Err(format!(
             "{IDEA_FILE} doesn't use the environment, so the program gets no environment \

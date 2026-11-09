@@ -107,6 +107,16 @@ pub enum LockStatus {
     Invalid(LockError),
 }
 
+/// The bytes of a program folder's idea.md and main.wat as one read found them: the very bytes
+/// that read's [`Snapshot`] hashed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Files {
+    /// idea.md's bytes, when it exists.
+    pub idea: Option<Vec<u8>>,
+    /// main.wat's bytes, when the folder holds it.
+    pub code: Option<Vec<u8>>,
+}
+
 impl Snapshot {
     /// Reads and hashes the folder's files. A folder that doesn't exist yet has no files.
     ///
@@ -114,21 +124,35 @@ impl Snapshot {
     ///
     /// Fails when a file exists but can't be read.
     pub fn read(folder: &ProgramFolder, key: Option<&Key>) -> io::Result<Self> {
+        Self::read_with_files(folder, key).map(|(snapshot, _)| snapshot)
+    }
+
+    /// [`Self::read`], with the bytes of idea.md and main.wat it hashed: a run builds, compares
+    /// and takes its idea's grants from these, and reads neither file again, so no file another
+    /// process swaps in after the hashes were taken reaches the run.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a file exists but can't be read.
+    pub fn read_with_files(folder: &ProgramFolder, key: Option<&Key>) -> io::Result<(Self, Files)> {
         let read = |name: &str| match std::fs::read(folder.file(name)) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         };
-        Ok(Self {
-            idea: read(IDEA_FILE)?.map(|bytes| crate::trust::idea_hash(&bytes)),
-            code: read(CODE_FILE)?.map(|bytes| Sha256Hex::of(&bytes)),
+        let idea = read(IDEA_FILE)?;
+        let code = read(CODE_FILE)?;
+        let snapshot = Self {
+            idea: idea.as_deref().map(crate::trust::idea_hash),
+            code: code.as_deref().map(Sha256Hex::of),
             native: folder.file(NATIVE_CODE_FILE).exists(),
             lock: match lock::read(folder.path(), key) {
                 Ok(None) => LockStatus::Missing,
                 Ok(Some(lock)) => LockStatus::Valid(Box::new(lock)),
                 Err(error) => LockStatus::Invalid(error),
             },
-        })
+        };
+        Ok((snapshot, Files { idea, code }))
     }
 
     /// The lock, when it can be trusted.
@@ -454,5 +478,32 @@ mod tests {
                 .idea,
             None
         );
+    }
+
+    /// A run's read keeps the very bytes of idea.md and main.wat that its snapshot hashed, and
+    /// its snapshot is the one [`Snapshot::read`] gives.
+    #[test]
+    fn a_read_keeps_the_bytes_it_hashed() {
+        let folder = tempfile::tempdir().expect("temporary folder");
+        let program =
+            ProgramFolder::new(folder.path().to_str().expect("UTF-8 path")).expect("absolute path");
+        let read = || Snapshot::read_with_files(&program, None).expect("read the folder");
+        let (snapshot, files) = read();
+        assert_eq!(files, Files::default());
+        assert_eq!(snapshot, Snapshot::read(&program, None).expect("read it"));
+        // An idea with lengua's entry in its `verified`, which its hash leaves out: the bytes
+        // kept are the file's, entry and all.
+        let at = "2026-11-06T23:00:00Z";
+        let entry = crate::trust::Verified::new(at, digest("idea"), digest("code"));
+        let idea = crate::trust::with_lengua_verified("---\ntitle: add\n---\n", &entry);
+        let wat = "(module)\n";
+        std::fs::write(program.file(IDEA_FILE), &idea).expect("write idea.md");
+        std::fs::write(program.file(CODE_FILE), wat).expect("write main.wat");
+        let (snapshot, files) = read();
+        assert_eq!(files.idea.as_deref(), Some(idea.as_bytes()));
+        assert_eq!(files.code.as_deref(), Some(wat.as_bytes()));
+        assert_eq!(snapshot.idea, Some(crate::trust::idea_hash(idea.as_bytes())));
+        assert_eq!(snapshot.code, Some(digest(wat)));
+        assert_eq!(snapshot, Snapshot::read(&program, None).expect("read it"));
     }
 }

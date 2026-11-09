@@ -34,8 +34,8 @@ use crate::platform::Machine;
 use crate::prove;
 use crate::runner::{self, End, Limits};
 use crate::state::{
-    CODE_FILE, IDEA_FILE, LEGACY_IDEA_FILE, LEGACY_TESTS_FILE, ProgramFolder, Snapshot, State,
-    stamped_copy,
+    CODE_FILE, Files, IDEA_FILE, LEGACY_IDEA_FILE, LEGACY_TESTS_FILE, ProgramFolder, Snapshot,
+    State, stamped_copy,
 };
 use crate::testdiff;
 use crate::testfile::{self, TestSuite};
@@ -1986,6 +1986,15 @@ fn state_of(data_dir: &DataDir, folder: &ProgramFolder) -> Result<State, String>
     let snapshot = Snapshot::read(folder, key.as_ref())
         .map_err(|error| format!("can't read {folder}: {error}"))?;
     Ok(State::of(&snapshot))
+}
+
+/// [`state_of`] for a run: the folder's state, with the bytes of idea.md and main.wat that its
+/// snapshot hashed, which the run takes in place of reading either file again.
+fn state_for_run(data_dir: &DataDir, folder: &ProgramFolder) -> Result<(State, Files), String> {
+    let key = Key::load(data_dir).map_err(|error| error.to_string())?;
+    let (snapshot, files) = Snapshot::read_with_files(folder, key.as_ref())
+        .map_err(|error| format!("can't read {folder}: {error}"))?;
+    Ok((State::of(&snapshot), files))
 }
 
 /// The connections `network` names, in order, as lengua makes them for a program: a port of this
