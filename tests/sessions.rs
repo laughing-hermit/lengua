@@ -323,11 +323,11 @@ async fn done_comes_once_the_tests_pass_while_the_proofs_go_on() {
     if !solvers_installed() {
         return;
     }
-    // The hypotenuse's proofs ask the solvers about doubles, which takes minutes, so done comes
-    // first, with the proofs still running. (add's are settled by the terms at once now, the
-    // shipped one's included, so it can't show this.)
+    // sha256's proofs go through 64 rounds of mixing for each length of text, which takes
+    // minutes, so done comes first, with the proofs still running. (add's and the hypotenuse's
+    // are settled by the terms within the check, so they can't show this.)
     let session = Session::proving_with_grace(Protocol::Discover, 0).await;
-    let program = shipped(&session, "examples/hypotenuse").await;
+    let program = shipped(&session, "examples/sha256").await;
     let report = session.check(&program).await;
     assert_eq!(report["state"], "done", "{report}");
     assert!(any_line(&report["proofs"], ": proving"), "{report}");
@@ -336,10 +336,14 @@ async fn done_comes_once_the_tests_pass_while_the_proofs_go_on() {
         "{report}"
     );
     // The program runs while its proofs go on.
-    let run = session
-        .call_ok("run", with_args(&program, &["3", "4"]))
-        .await;
-    assert_eq!(run["stdout"], "5.000\n", "{run}");
+    let mut arguments = program.arguments();
+    arguments["stdin"] = json!("abc");
+    let run = session.call_ok("run", arguments).await;
+    assert_eq!(
+        run["stdout"],
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n",
+        "{run}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 
