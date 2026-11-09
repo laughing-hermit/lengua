@@ -76,7 +76,8 @@ fn assert_no(report: &Report, rule: Rule) {
 }
 
 /// The module wast encodes from `text` with nothing validated and no library merged, as a build
-/// it gives: each of its functions main.wat's own, each operator on its line.
+/// it gives: each of its functions main.wat's own, each operator on its line, and its names in
+/// both of its modules.
 fn unvalidated(text: &str) -> Built {
     use wast::core::{FuncKind, ModuleField, ModuleKind};
     let mut buffer = wast::parser::ParseBuffer::new(text).expect("it lexes");
@@ -131,6 +132,7 @@ fn unvalidated(text: &str) -> Built {
         }
     }
     Built {
+        named: wasm.clone(),
         wasm,
         lines,
         bodies,

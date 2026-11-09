@@ -736,7 +736,8 @@ fn regions(globals: &[Global], notes: &Notes) -> Vec<Region> {
 }
 
 impl<'a> Module<'a> {
-    /// Reads `built`, the module lengua built from main.wat's `text`.
+    /// Reads `built`, the module lengua built from main.wat's `text`: as wast encoded it, with
+    /// its names ([`Built::named`]), whose bytes before the names are the module that runs.
     ///
     /// # Errors
     ///
@@ -746,7 +747,7 @@ impl<'a> Module<'a> {
         let starts = line_starts(text);
         let places = places(text, &starts);
         let notes = notes(text);
-        let wasm = built.wasm.as_slice();
+        let wasm = built.named.as_slice();
         let failed = |error: wasmparser::BinaryReaderError| {
             format!("lengua couldn't read the module back: {error}")
         };

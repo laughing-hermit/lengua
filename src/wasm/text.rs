@@ -104,8 +104,13 @@ impl std::error::Error for Problem {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Built {
     /// The module: main.wat with the library's functions it calls, a standard WASI preview 1
-    /// module that any WebAssembly runtime runs.
+    /// module that any WebAssembly runtime runs, without the `name` section wast ends it with,
+    /// which running needs none of: the bytes check stamps, tests and keeps, and run runs.
     pub wasm: Vec<u8>,
+    /// The module as wast encoded it: [`Self::wasm`], then the `name` section with every name of
+    /// main.wat and of the library, which only check's rules and the prover read. Every offset
+    /// of [`Self::wasm`] holds in it, and the build checks that nothing else follows.
+    pub named: Vec<u8>,
     /// main.wat's line of each operator of its own functions, by the operator's offset in
     /// [`Self::wasm`].
     pub lines: BTreeMap<u64, usize>,
@@ -420,9 +425,12 @@ pub fn build(text: &str) -> Result<Built, Problem> {
     merged.extend(rest);
     *fields = merged;
 
-    let wasm = module
+    let named = module
         .encode()
         .map_err(|error| parse_problem(text, &starts, &error))?;
+    // The module that runs is the encoded one without its names: wast writes them last, so no
+    // offset of the code moves.
+    let wasm = without_names(&named)?;
 
     // Each of main.wat's functions' instructions, by place, with where it is in the text.
     let ModuleKind::Text(fields) = &module.kind else {
@@ -502,11 +510,104 @@ pub fn build(text: &str) -> Result<Built, Problem> {
     }
     Ok(Built {
         wasm,
+        named,
         lines,
         bodies,
         assertions,
         library,
     })
+}
+
+/// The unsigned LEB128 number that starts at `at` in `bytes`, of at most five bytes, as
+/// WebAssembly writes a u32, and where the bytes after it start.
+fn leb128(bytes: &[u8], at: usize) -> Option<(u64, usize)> {
+    let mut value = 0_u64;
+    for count in 0..5 {
+        let byte = *bytes.get(at + count)?;
+        value |= u64::from(byte & 0x7f) << (7 * count);
+        if byte & 0x80 == 0 {
+            return Some((value, at + count + 1));
+        }
+    }
+    None
+}
+
+/// Where each section of `module` starts after its 8-byte header, each an id byte, its size in
+/// unsigned LEB128, then that many bytes: none when the sections don't end where the module does.
+fn section_starts(module: &[u8]) -> Option<Vec<usize>> {
+    let mut starts = Vec::new();
+    let mut at = 8;
+    while at < module.len() {
+        starts.push(at);
+        let (size, contents) = leb128(module, at + 1)?;
+        at = contents.checked_add(usize::try_from(size).ok()?)?;
+    }
+    (at == module.len()).then_some(starts)
+}
+
+/// The name of the custom section that starts at `start` in `module`, when a custom section
+/// starts there: its id 0, its size, then its name's length and the name.
+fn custom_name(module: &[u8], start: usize) -> Option<&[u8]> {
+    if *module.get(start)? != 0 {
+        return None;
+    }
+    let (_, contents) = leb128(module, start + 1)?;
+    let (length, text) = leb128(module, contents)?;
+    module.get(text..text.checked_add(usize::try_from(length).ok()?)?)
+}
+
+/// A section of a module as wasmparser reads it: its id, where its contents are, and a custom
+/// section's name.
+type Section = (u8, std::ops::Range<u64>, Option<String>);
+
+/// Each section of `module` as wasmparser reads it, in order; none when it can't read them all.
+fn sections(module: &[u8]) -> Option<Vec<Section>> {
+    let mut found = Vec::new();
+    for payload in wasmparser::Parser::new(0).parse_all(module) {
+        let payload = payload.ok()?;
+        let name = match &payload {
+            wasmparser::Payload::CustomSection(reader) => Some(reader.name().to_owned()),
+            _ => None,
+        };
+        if let Some((id, range)) = payload.as_section() {
+            found.push((id, range, name));
+        }
+    }
+    Some(found)
+}
+
+/// `named`, a module wast encoded, without the `name` section wast ends it with: the bytes
+/// before that section, which hold every offset of its code. A module with no names has no such
+/// section, and is its own. The cut is checked apart from the walk that finds it, as wasmparser
+/// reads both modules: the sections of the module kept must be the encoded module's own, at the
+/// same offsets, and after them must come nothing, or exactly one custom section called `name`
+/// that ends the module. A cut that fails is a fault of lengua's own build, which only a change
+/// of wast's, such as names written before the code, could cause.
+fn without_names(named: &[u8]) -> Result<Vec<u8>, Problem> {
+    let broken = || {
+        library_problem(&"the module's sections couldn't be told apart to leave its names out")
+    };
+    let starts = section_starts(named).ok_or_else(broken)?;
+    let cut = starts
+        .last()
+        .copied()
+        .filter(|start| custom_name(named, *start) == Some(b"name".as_slice()))
+        .unwrap_or(named.len());
+    let wasm = named.get(..cut).ok_or_else(broken)?.to_vec();
+    let (Some(kept), Some(all)) = (sections(&wasm), sections(named)) else {
+        return Err(broken());
+    };
+    let rest = all.get(kept.len()..).filter(|_| all.starts_with(&kept));
+    let ends = |range: &std::ops::Range<u64>| usize::try_from(range.end).ok() == Some(named.len());
+    let checked = match rest {
+        Some([]) => cut == named.len(),
+        Some([(0, range, Some(name))]) => name.as_str() == "name" && ends(range),
+        _ => false,
+    };
+    if !checked {
+        return Err(broken());
+    }
+    Ok(wasm)
 }
 
 #[cfg(test)]
@@ -649,5 +750,86 @@ mod tests {
   (export \"_start\" (func 0)))";
         let refused = build(exported).expect_err("an export by number");
         assert_eq!(refused.line, Some(3), "{refused}");
+    }
+
+    /// What a build's two modules must be: `named` is `wasm` and then exactly one custom section,
+    /// called `name`, that ends it; `wasm` holds no custom section and validates; and every
+    /// offset of the build's lines and bodies lies inside `wasm`.
+    fn assert_cut(shown: &str, built: &Built) {
+        let (wasm, named) = (&built.wasm, &built.named);
+        assert!(named.starts_with(wasm), "{shown}");
+        let kept = sections(wasm).expect("wasmparser reads the module");
+        let all = sections(named).expect("wasmparser reads the module with its names");
+        assert!(kept.iter().all(|(_, _, name)| name.is_none()), "{shown}: {kept:?}");
+        let Some((last, before)) = all.split_last() else {
+            panic!("{shown}: no sections");
+        };
+        assert_eq!(before, kept.as_slice(), "{shown}");
+        assert_eq!((last.0, last.2.as_deref()), (0, Some("name")), "{shown}");
+        assert_eq!(usize::try_from(last.1.end).ok(), Some(named.len()), "{shown}");
+        assert!(crate::wasm::engine::validate(wasm).is_ok(), "{shown}");
+        let size = u64::try_from(wasm.len()).expect("a module's size");
+        assert!(built.lines.keys().all(|offset| *offset < size), "{shown}");
+        let inside = |(start, end): &(u64, u64)| start < end && *end <= size;
+        assert!(built.bodies.iter().all(inside), "{shown}");
+    }
+
+    /// A main.wat whose code section and names each pass 16 KiB, so that both sections' sizes
+    /// take three bytes of LEB128, which no program of the repository's do.
+    fn large() -> String {
+        use std::fmt::Write as _;
+        let mut text = String::from("(module\n  (memory (export \"memory\") 1)\n");
+        let name = "a_function_whose_name_is_long_enough_to_fill_the_names_of_many";
+        for number in 0..400 {
+            let _ = writeln!(
+                text,
+                "  (func ${name}_{number:04} (result i32) (local $a_local_with_a_long_name i32)"
+            );
+            for _ in 0..5 {
+                text.push_str("    (drop (i32.add (i32.const 1000000) (i32.const 2000000)))\n");
+            }
+            text.push_str("    (i32.const 0))\n");
+        }
+        text.push_str(")\n");
+        text
+    }
+
+    /// The module that runs is the module wast encoded without its names, which only check's
+    /// rules and the prover read: for HELLO, for every program of the repository and for a
+    /// main.wat whose sections' sizes take three bytes, the build's two modules are cut as they
+    /// must be. A module with no names at all has no `name` section, and is its own.
+    #[test]
+    fn the_module_that_runs_is_the_encoded_one_without_its_names() {
+        assert_cut("HELLO", &build(HELLO).expect("it builds"));
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut cut = 0;
+        for place in ["examples", "tests/fixtures"] {
+            for entry in std::fs::read_dir(root.join(place)).expect("a folder of programs") {
+                let file = entry.expect("an entry").path().join("main.wat");
+                let Ok(text) = std::fs::read_to_string(&file) else {
+                    continue;
+                };
+                let shown = file.display().to_string();
+                let built = build(&text).unwrap_or_else(|problem| panic!("{shown}: {problem}"));
+                assert_cut(&shown, &built);
+                cut += 1;
+            }
+        }
+        assert!(cut >= 43, "only {cut} programs");
+        let built = build(&large()).expect("it builds");
+        let all = sections(&built.named).expect("wasmparser reads it");
+        let size = |id: u8, custom: Option<&str>| {
+            all.iter()
+                .find(|(found, _, name)| *found == id && name.as_deref() == custom)
+                .map(|(_, range, _)| range.end - range.start)
+        };
+        assert!(size(10, None).is_some_and(|code| code >= 16_384), "{all:?}");
+        assert!(size(0, Some("name")).is_some_and(|names| names >= 16_384), "{all:?}");
+        assert_cut("a large main.wat", &built);
+        let nameless = build("(module (memory (export \"memory\") 1) (func (export \"_start\")))")
+            .expect("it builds");
+        assert_eq!(nameless.named, nameless.wasm);
+        let customs = sections(&nameless.wasm).expect("wasmparser reads it");
+        assert!(customs.iter().all(|(id, ..)| *id != 0), "{customs:?}");
     }
 }

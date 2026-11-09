@@ -1177,7 +1177,8 @@ fn deepest(functions: &[Function], entry: usize) -> Result<u64, String> {
 
 impl Module {
     /// Reads the module `built` holds, for a program whose idea lets it reach what `policy`
-    /// allows.
+    /// allows: as wast encoded it, with its names ([`Built::named`]), whose bytes before the
+    /// names are the module that runs.
     ///
     /// # Errors
     ///
@@ -1203,7 +1204,7 @@ impl Module {
         let mut segments: Vec<(Vec<u8>, Option<u64>)> = Vec::new();
         let mut bodies = Vec::new();
         let mut names: BTreeMap<u32, String> = BTreeMap::new();
-        for payload in Parser::new(0).parse_all(&built.wasm) {
+        for payload in Parser::new(0).parse_all(&built.named) {
             match payload.map_err(failed)? {
                 Payload::TypeSection(reader) => {
                     for group in reader {
