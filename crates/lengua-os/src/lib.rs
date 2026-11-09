@@ -141,6 +141,8 @@ pub fn caches() -> Result<Vec<Cache>, String> {
     Ok(processor_caches(&bytes[..used]))
 }
 
+/// What a program cost that ran in a process forked from this one, as Linux counted it for that
+/// process, and for any it waited for.
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Forked {
