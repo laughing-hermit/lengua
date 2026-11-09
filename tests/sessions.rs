@@ -323,11 +323,11 @@ async fn done_comes_once_the_tests_pass_while_the_proofs_go_on() {
     if !solvers_installed() {
         return;
     }
-    // The shipped add's proof of every pair of numbers from -1000000000 to 1000000000 takes
-    // minutes (the prover's small add, in tests/fixtures, is proven at once), so done comes first,
-    // with the proofs still running.
+    // The hypotenuse's proofs ask the solvers about doubles, which takes minutes, so done comes
+    // first, with the proofs still running. (add's are settled by the terms at once now, the
+    // shipped one's included, so it can't show this.)
     let session = Session::proving_with_grace(Protocol::Discover, 0).await;
-    let program = shipped(&session, "examples/add").await;
+    let program = shipped(&session, "examples/hypotenuse").await;
     let report = session.check(&program).await;
     assert_eq!(report["state"], "done", "{report}");
     assert!(any_line(&report["proofs"], ": proving"), "{report}");
@@ -337,9 +337,9 @@ async fn done_comes_once_the_tests_pass_while_the_proofs_go_on() {
     );
     // The program runs while its proofs go on.
     let run = session
-        .call_ok("run", with_args(&program, &["2", "3"]))
+        .call_ok("run", with_args(&program, &["3", "4"]))
         .await;
-    assert_eq!(run["stdout"], "5\n", "{run}");
+    assert_eq!(run["stdout"], "5.000\n", "{run}");
     session.service.cancel().await.expect("close the session");
 }
 
