@@ -405,3 +405,30 @@ async fn an_edit_mid_proof_starts_over_and_the_old_proof_never_lands() {
     assert_eq!(module_in(&lock, "code"), module_in(&lock, "proofs"), "{lock}");
     session.service.cancel().await.expect("close the session");
 }
+
+/// The streaming copy is proven for every length through the server, by induction over its read
+/// loop: B1's line says so, and lengua.lock records B1 as proven. Its two blocks share the
+/// proofs' time, so B1 gets half of it: the 900 seconds the prover's own test of the induction
+/// gives it (src/prove/wasm/tests.rs). Minutes on a runner, so it runs with the slow tests.
+#[tokio::test]
+#[ignore = "slow: cat-stream's proofs through the server take minutes on a runner"]
+async fn a_streaming_program_is_proven_for_every_length() {
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving_alone_for(Protocol::Discover, 1800).await;
+    let program = shipped(&session, "cat-stream").await;
+    let report = done(&session, &program).await;
+    let proof = text(&report["proofs"][0]);
+    assert!(
+        proof.starts_with("generated B1: proven for every input in range"),
+        "{report}"
+    );
+    assert!(
+        proof.contains("; every length by induction over its read loop: "),
+        "{report}"
+    );
+    let lock = program.read("lengua.lock").expect("the lock");
+    assert!(lock.contains("proven = [\"B1\""), "{lock}");
+    session.service.cancel().await.expect("close the session");
+}
