@@ -2,10 +2,13 @@
 //! Computation, from the user's request to done through the MCP session, then run with its
 //! arguments, run from a shell with `lengua-mcp run`, and attested with `lengua-mcp check`; its
 //! lock's stamp, format 7; lengua's entry in the idea's `verified`, written at done and taken away
-//! once the idea changes; and how check answers a folder with the native lengua's main.s, a rule
-//! broken on its line, and failing tests. Then, with the solvers, main.wat's proofs through check:
-//! add's proof named in the reply and kept in the lock, a planted wrong constant found as a
-//! counterexample, and a program the model refuses left tested, not proven, with the reason.
+//! once the idea changes; how check answers a folder with the native lengua's main.s, a rule
+//! broken on its line, and failing tests; small ranges tried in full; a run's environment, the
+//! only one its program gets; and a program built on another, its part. Then, with the solvers,
+//! main.wat's proofs through check: add's proof named in the reply and kept in the lock, a proof
+//! by length that stops short kept as far as it went and proven on with prove_further, a planted
+//! wrong constant found as a counterexample, and a program the model refuses left tested, not
+//! proven, with the reason.
 
 mod common;
 
@@ -62,6 +65,33 @@ const FLOAT_SUM: &str = "(i64.trunc_sat_f64_s (f64x2.extract_lane 0 (f64x2.add (
 /// How long the sessions and the attester that prove give the proofs: far more than add's numbers
 /// of up to three digits need on any runner.
 const PROOF_SECONDS: u64 = 600;
+
+/// The cat program's idea, whose texts run to 5000 bytes, and its code: it reads its whole input
+/// with one `$fill`, so its proof goes one length after another.
+const CAT_IDEA: &str = include_str!("fixtures-wasm/cat/idea.md");
+
+/// cat's main.wat.
+const CAT_CODE: &str = include_str!("fixtures-wasm/cat/main.wat");
+
+/// How long the session that proves cat gives its proofs: a few seconds, far less than every
+/// length of its 5000 bytes takes (src/prove/wasm/tests.rs gives the whole proof 900), so B1's
+/// proof stops short of them.
+const SHORT_PROOF_SECONDS: u64 = 4;
+
+/// What a proof line that stopped short of a text's longest length offers.
+const FURTHER: &str = "; check with prove_further to prove on from there";
+
+/// The compile skill's main template's idea, negate, and its code.
+const TEMPLATE_IDEA: &str = include_str!("../plugin/skills/compile/assets/main-template-idea.md");
+
+/// The main template, main-template.wat.
+const TEMPLATE_CODE: &str = include_str!("../plugin/skills/compile/assets/main-template.wat");
+
+/// The greet program's idea, which reads the `NAME` environment variable, and its code.
+const GREET_IDEA: &str = include_str!("fixtures-wasm/greet/idea.md");
+
+/// greet's main.wat.
+const GREET_CODE: &str = include_str!("fixtures-wasm/greet/main.wat");
 
 /// What `run` says of a build a proof found wrong.
 const WRONG_BUILD: &str = "The proof found inputs where main.wat is wrong";
@@ -517,6 +547,119 @@ async fn a_failing_test_is_reported_with_its_lines() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// A row whose ranges hold at most 5000 combinations runs every one of them, and the reply says
+/// so: the main template's idea with its number from -100 to 100 tries all 201 in B1 and in B4.
+#[tokio::test]
+async fn small_ranges_run_every_value() {
+    let session = Session::start(Protocol::Discover).await;
+    let program = Program::new();
+    let full = "`int(-9223372036854775807, 9223372036854775807)`";
+    assert_eq!(TEMPLATE_IDEA.matches(full).count(), 2, "{full}");
+    let narrowed = changed(
+        &TEMPLATE_IDEA.replace(full, "`int(-100, 100)`"),
+        "between `-9223372036854775807`\nand `9223372036854775807`",
+        "between `-100`\nand `100`",
+    );
+    program.write("idea.md", &narrowed);
+    let report = session.record(&program).await;
+    assert_eq!(report["state"], "write_code", "{report}");
+    program.write("main.wat", TEMPLATE_CODE);
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    for id in ["B1", "B4"] {
+        let every = format!("generated {id} tried every value of n in its range (all 201)");
+        assert!(any_line(&done["tests"], &every), "{done}");
+    }
+    session.service.cancel().await.expect("close the session");
+}
+
+/// A program gets only the environment its test or its run gives it: greet, checked to done,
+/// greets the name a run's `env` gives, and shows its usage line to a run that gives none.
+#[tokio::test]
+async fn a_run_gives_a_program_only_the_environment_it_names() {
+    let session = Session::start(Protocol::Discover).await;
+    let program = Program::new();
+    program.write("idea.md", GREET_IDEA);
+    let report = session.record(&program).await;
+    assert_eq!(report["state"], "write_code", "{report}");
+    program.write("main.wat", GREET_CODE);
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let mut arguments = program.arguments();
+    arguments["env"] = json!({"NAME": "Grace"});
+    let greeted = session.call_ok("run", arguments).await;
+    assert_eq!(greeted["stdout"], "Hello, Grace!\n", "{greeted}");
+    assert_eq!(greeted["exit_code"], 0, "{greeted}");
+    // Nothing else reaches it: without NAME, it shows how to use it.
+    let usage = session.call_ok("run", program.arguments()).await;
+    assert_eq!(usage["stderr"], "usage: NAME=<who> greet\n", "{usage}");
+    assert_eq!(usage["exit_code"], 1, "{usage}");
+    session.service.cancel().await.expect("close the session");
+}
+
+/// A program builds on another, its part, by taking the part's functions word for word, each
+/// with a `;; from:` line above it. sum, add's idea and code under another title that builds on
+/// add, takes nothing from it at first; then its `$write_i64` says it comes from add, which isn't
+/// checked yet; once add is done, so is sum; and a copy that drifts from add's own is told to
+/// copy it again.
+#[tokio::test]
+async fn a_program_builds_on_another() {
+    let session = Session::start(Protocol::Discover).await;
+    let parent = tempfile::tempdir().expect("a folder for both");
+    let part = Program::new_in(parent.path(), "add");
+    let node = Program::new_in(parent.path(), "sum");
+    part.write("idea.md", IDEA);
+    part.write("main.wat", CODE);
+    let link = format!("../{}", part.name());
+    let building = changed(
+        &changed(IDEA, "title: add\n", "title: sum\n"),
+        "- Uses: nothing",
+        &format!("- Uses: nothing\n- Builds on: [add]({link}/idea.md)"),
+    );
+    node.write("idea.md", &building);
+    let report = session.record(&node).await;
+    assert_eq!(report["state"], "write_code", "{report}");
+    let problems = |report: &Value| report["problems"].to_string();
+    // A part it builds on but takes nothing from.
+    node.write("main.wat", CODE);
+    let report = session.check(&node).await;
+    assert_eq!(report["state"], "code_problems", "{report}");
+    assert!(
+        problems(&report).contains("takes nothing from it"),
+        "{report}"
+    );
+    // A part that isn't checked yet.
+    let header = "  (func $write_i64 (param $value i64) (result i32)  ;; returns: result\n";
+    let taken = changed(CODE, header, &format!("  ;; from: {link}\n{header}"));
+    node.write("main.wat", &taken);
+    let report = session.check(&node).await;
+    assert_eq!(report["state"], "code_problems", "{report}");
+    assert!(
+        problems(&report).contains("isn't checked on this computer"),
+        "{report}"
+    );
+    // Once the part is done, so is the program built on it.
+    session.record(&part).await;
+    let done = session.settle(&part).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let done = session.settle(&node).await;
+    assert_eq!(done["state"], "done", "{done}");
+    // A copy that drifts from the part's own.
+    let drifted = changed(
+        &taken,
+        "    (local $magnitude i64)\n",
+        "    (local $magnitude i64)\n    (local $spare i32)\n",
+    );
+    node.write("main.wat", &drifted);
+    let report = session.check(&node).await;
+    assert_eq!(report["state"], "code_problems", "{report}");
+    assert!(
+        problems(&report).contains("differs from") && problems(&report).contains("copy it again"),
+        "{report}"
+    );
+    session.service.cancel().await.expect("close the session");
+}
+
 /// add's proof, over numbers of up to three digits: the reply names it, proven for every input in
 /// range through the WebAssembly, with a memory line that says what it settles of the rules'
 /// obligations; the lock keeps it, and a restarted server replays it from there; and
@@ -578,6 +721,66 @@ async fn add_s_proof_is_named_and_the_lock_keeps_it() {
         "{said}"
     );
     assert_eq!(said.lines().last(), Some("attested"), "{said}");
+}
+
+/// How far B1's proof line says its proof by length went, in bytes: the N of "proven for every
+/// input with text up to N of …", or none when the line names no such length.
+fn reached(line: &str) -> Option<usize> {
+    line.strip_prefix("generated B1: proven for every input with text up to ")?
+        .split(' ')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// A proof by length that stops short of the longest text its idea allows: cat's texts run to
+/// 5000 bytes, and a few seconds prove only the shorter ones. The reply says how far B1's proof
+/// went and offers to prove on; the lock keeps that bound apart from the full proofs; and a check
+/// with prove_further goes on from there, further or to the end. A runner that proves every
+/// length in those seconds, or none, leaves nothing to prove on from, and the run's summary says
+/// so.
+#[tokio::test]
+async fn a_proof_that_stops_short_is_kept_and_proven_on() {
+    if !solvers_installed() {
+        return;
+    }
+    let session = Session::proving_for(Protocol::Discover, SHORT_PROOF_SECONDS).await;
+    let program = Program::new();
+    program.write("idea.md", CAT_IDEA);
+    let report = session.record(&program).await;
+    assert_eq!(report["state"], "write_code", "{report}");
+    program.write("main.wat", CAT_CODE);
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let first = text(&done["proofs"][0]);
+    let Some(before) = reached(first) else {
+        lengua::skiplog::note("cat's proof didn't stop short of its 5000 bytes in its seconds");
+        session.service.cancel().await.expect("close the session");
+        return;
+    };
+    assert!(
+        first.contains(" of 5000 bytes (") && first.contains(FURTHER),
+        "{done}"
+    );
+    // The lock keeps the bound apart from the full proofs.
+    let lock = program.read("lengua.lock").expect("the lock");
+    let bound = format!("{{ id = \"B1\", bytes = {before}, of = 5000, more = true }}");
+    assert!(lock.contains(&bound), "{lock}");
+    assert!(!lock.contains("proven = [\"B1\""), "{lock}");
+    // Proving on goes on from there: further, or to the last length.
+    let mut arguments = program.arguments();
+    arguments["prove_further"] = json!(true);
+    let further = session.settle_with(&program, arguments).await;
+    assert_eq!(further["state"], "done", "{further}");
+    let again = text(&further["proofs"][0]);
+    match reached(again) {
+        Some(after) => assert!(after > before, "{before} bytes, then {after}: {further}"),
+        None => assert!(
+            again.starts_with("generated B1: proven for every input in range ("),
+            "{further}"
+        ),
+    }
+    session.service.cancel().await.expect("close the session");
 }
 
 /// A wrong constant planted in add's main.wat, so that a sum of zero prints as "-0", is a
