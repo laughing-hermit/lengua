@@ -44,7 +44,7 @@ on:
         type: string
         default: "all"
       mode:
-        description: "compile, test, ignored, golden, bench or release (golden: linux-x86_64 and linux-aarch64 so far; bench and release: all five)"
+        description: "compile, test, ignored, golden, bench or release (golden: on linux-x86_64 alone; bench and release: all five)"
         type: choice
         options:
           - compile
@@ -377,18 +377,17 @@ jobs:
           bash scripts/ci/ran-some-tests.sh ignored.log "$FILTER$TEST_FILES"
 
       # The checker's and the prover's reports on every program, recorded. target/ is cached
-      # whole, the recordings and their build cache included, so both go first: a restored old
-      # recording would be compared with silently. One test at a time: the prover's recordings run
-      # under fixed time budgets, and tests run side by side would make "out of time" differ
-      # between the two legs. (Two filters cover the four tests;
-      # the helper explains_a_mutant matches neither.)
+      # whole, the recordings included, so they go first: a restored old recording would be
+      # compared with silently. One test at a time: the prover's recordings run under fixed time
+      # budgets, and tests run side by side would make "out of time" differ between the two legs.
+      # (The two filters are the two goldens' tests; the helper explains_a_mutant matches neither.)
       - name: The goldens, recorded
         if: ${{ matrix.mode == 'golden' }}
         env:
           RUST_TEST_THREADS: "1"
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
         run: |
-          rm -rf target/golden target/golden-cache
+          rm -rf target/golden
           set -o pipefail
           LENGUA_GOLDEN=write cargo test --release --locked --lib -- --ignored \
             every_report_is_as_recorded every_run_and_proof_is_as_recorded 2>&1 | tee golden.log

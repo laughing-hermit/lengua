@@ -3,11 +3,3 @@
 #
 # A line goes here only for a difference that is expected and understood, with a comment saying
 # which step expects it and why. An empty list means every recorded line must be identical.
-
-# round 2: examples/sha256's B5 is not proven, and why depends on the memory the computer has free
-# (src/prove/watch.rs): "the test function sha256, which the proof doesn't model yet", or a memory
-# stop. The folder alone on an idle runner stops proofs for memory, at 10 to 20 million terms, at
-# the base (run 42191806673) as at the head (run 42181180890), so the difference is the machine's
-# load and not the code. The line is left out of both sides while it says "not proven": a proof
-# that came through would still show.
-^examples/sha256/main\.s B5: .*not proven: 
