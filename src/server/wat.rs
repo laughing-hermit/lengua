@@ -589,7 +589,7 @@ fn runnable(
     folder: &ProgramFolder,
     env: &BTreeMap<String, String>,
 ) -> Result<Runnable, String> {
-    let (state, files) = state_for_run(data_dir, folder)?;
+    let (state, snapshot, files) = state_for_run(data_dir, folder)?;
     if state != State::Ready {
         return Err(format!(
             "lengua runs a program only when its idea and code match lengua.lock, and {folder} \
@@ -597,11 +597,9 @@ fn runnable(
             state.next_step(folder)
         ));
     }
-    let key = Key::load(data_dir)
-        .map_err(|error| error.to_string())?
-        .ok_or("lengua's signing key is missing; call check")?;
-    let lock = lock::read(folder.path(), Some(&key))
-        .map_err(|error| format!("lengua.lock can't be trusted: {error}"))?
+    // The lock the state's read verified with lengua's key: a run reads and verifies it once.
+    let lock = snapshot
+        .valid_lock()
         .ok_or("lengua.lock is missing; call check")?;
     let stamp = lock
         .code

@@ -312,11 +312,6 @@ fn sign_body(body: &str, key: &Key) -> String {
     format!("{body}{SIGNATURE_START}{}{SIGNATURE_END}", key.sign(body))
 }
 
-#[derive(Deserialize)]
-struct VersionOnly {
-    version: Option<i64>,
-}
-
 /// The `dialect` a lock says: main.wat's, a name, or the native lengua's, a number.
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -330,7 +325,7 @@ enum DialectField {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LockFile {
-    /// Already checked through `VersionOnly`; declared so `deny_unknown_fields` accepts it.
+    /// Already checked, from the body's table; declared so `deny_unknown_fields` accepts it.
     #[serde(rename = "version")]
     _version: u32,
     dialect: DialectField,
@@ -432,9 +427,14 @@ impl CodeTable {
 
 pub(crate) fn parse_body(body: &str) -> Result<Lock, LockError> {
     let malformed = |detail: &str| LockError::Malformed(detail.to_owned());
-    let found = toml::from_str::<VersionOnly>(body)
-        .map_err(|_| malformed("it isn't valid TOML"))?
-        .version;
+    // The body's TOML is parsed once: its version is read from the table, which then gives the
+    // whole, so an unsupported version is said before any field lengua doesn't write.
+    let table: toml::Table = body.parse().map_err(|_| malformed("it isn't valid TOML"))?;
+    let found = match table.get("version") {
+        None => None,
+        Some(toml::Value::Integer(version)) => Some(*version),
+        Some(_) => return Err(malformed("it isn't valid TOML")),
+    };
     let version = found.and_then(|version| u32::try_from(version).ok());
     // A format from before main.wat is the native lengua's, whatever else it records.
     if version.is_some_and(|version| (1..OLDEST_VERSION).contains(&version)) {
@@ -446,8 +446,9 @@ pub(crate) fn parse_body(body: &str) -> Result<Lock, LockError> {
             found.map_or_else(|| "none".to_owned(), |version| version.to_string()),
         ));
     };
-    let file: LockFile =
-        toml::from_str(body).map_err(|_| malformed("it has fields lengua doesn't write"))?;
+    let file: LockFile = table
+        .try_into()
+        .map_err(|_| malformed("it has fields lengua doesn't write"))?;
     // The native lengua's code, or its dialect beside code, is what this lengua no longer checks.
     if file.code.as_ref().is_some_and(CodeTable::native) {
         return Err(LockError::Native);
@@ -1151,6 +1152,15 @@ mod tests {
         assert_eq!(
             Lock::from_signed_text(&later, &key(1)),
             Err(LockError::UnsupportedWasmDialect("webassembly 2".into()))
+        );
+        // A later version is a later lengua's whatever fields it writes: its version is said
+        // before any field this lengua doesn't write.
+        let newer = body
+            .replace("version = 7", "version = 8")
+            .replace("[idea]", "[idea]\nextra = 1");
+        assert_eq!(
+            Lock::from_signed_text(&forge(&newer, &key(1)), &key(1)),
+            Err(LockError::UnsupportedVersion("8".into()))
         );
     }
 
