@@ -137,6 +137,12 @@ pub fn config(setup: Setup, cache: Option<&Path>) -> Result<Config, String> {
     if let Some(folder) = cache {
         let mut settings = CacheConfig::new();
         settings.with_directory(folder);
+        // A module is never compressed again at zstd's higher level, which the cache's worker
+        // does at a module's 256th use by default, during whichever run that is: a run's exit
+        // can cut that short and leave its lock behind, and while the lock lasts every later use
+        // of the module lists the cache's folder. Modules stay at the baseline level, so the
+        // folder holds more.
+        settings.with_optimized_compression_usage_counter_threshold(u64::MAX);
         let cache = Cache::new(settings).map_err(|error| {
             format!(
                 "lengua can't keep compiled modules in {}: {error}",
