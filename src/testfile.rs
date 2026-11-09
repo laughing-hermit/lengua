@@ -3169,8 +3169,16 @@ The program prints the UTC hour of the day, from `0` to `23`, for a reader numbe
             .expect("a case")
             .expect("its values");
         assert_eq!(case.env.keys().collect::<Vec<_>>(), ["NAME"]);
+        // Without its parameter, which comes from the environment too: the parse would refuse
+        // the idea for it before its tests could say what the `- Uses:` line doesn't name.
+        let plain = edit(
+            &greet,
+            "parameters:\n  - { name: name, type: text, required: false, from: environment \
+             NAME }\n",
+            "",
+        );
         assert_problem(
-            &edit(&greet, "- Uses: the environment", "- Uses: standard input"),
+            &edit(&plain, "- Uses: the environment", "- Uses: standard input"),
             "doesn't name `the environment`",
         );
         assert_problem(
