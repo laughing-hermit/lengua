@@ -1,6 +1,7 @@
 //! The WebAssembly model on its own: WebAssembly's integer, float and SIMD128 semantics, each trap
 //! at its line of main.wat, lengua's library, the host's calls, what the model refuses to run, a
-//! branch, a division, a load and counts of bits the input decides, `$fill` read as a whole,
+//! branch, a division, a load and counts of bits the input decides, a run with nothing to decide
+//! that still ends with the proof's time and the computer's memory, `$fill` read as a whole,
 //! where a read loop is, and what an induction's step can't take there: a read before the loop's
 //! head, and a time round that changes the working folder. Then, with the solvers, the echo and
 //! greet fixtures proven for every input, add for numbers of up to three digits (for every input
@@ -873,6 +874,102 @@ fn a_listing_is_taken_in_both_orders() {
         };
         assert_eq!(ran(text, files, &given).end, Ended::Exit(name));
     }
+}
+
+/// An oracle with no branch to decide, which says the proof's time is up the fourth time it's
+/// asked.
+struct TimeUpAtTheFourthLook(std::cell::Cell<u32>);
+
+impl Oracle for TimeUpAtTheFourthLook {
+    fn possible(&mut self, _: &Pool, _: &[Term], _: Term) -> Result<bool, String> {
+        Err("a concrete run reached a branch that depends on something unknown".into())
+    }
+
+    fn in_time(&self) -> Result<(), String> {
+        self.0.set(self.0.get() + 1);
+        if self.0.get() > 3 {
+            Err("time is up".into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// An oracle with no branch to decide, which says the computer has no memory left the first
+/// time it's asked.
+struct NoRoomAtTheFirstLook(std::cell::Cell<u32>);
+
+impl Oracle for NoRoomAtTheFirstLook {
+    fn possible(&mut self, _: &Pool, _: &[Term], _: Term) -> Result<bool, String> {
+        Err("a concrete run reached a branch that depends on something unknown".into())
+    }
+
+    fn has_room(&self) -> Result<(), String> {
+        self.0.set(self.0.get() + 1);
+        Err("no room".into())
+    }
+}
+
+/// A loop `times` times round with nothing to decide, each round a new number, then an exit
+/// with 0.
+fn counted_loop(times: u32) -> String {
+    format!(
+        "(module\n  (import \"wasi_snapshot_preview1\" \"proc_exit\" (func $exit (param i32)))\n  \
+         (memory (export \"memory\") 1 1)\n  (func (export \"_start\") (local $left i32)\n    \
+         (local.set $left (i32.const {times}))\n    (loop $round\n      (local.set $left \
+         (i32.sub (local.get $left) (i32.const 1)))\n      (br_if $round (local.get $left)))\n    \
+         (call $exit (i32.const 0))))\n"
+    )
+}
+
+/// A run of 100,000 times round a loop ends with the proof's time, though it never asks the
+/// oracle about a branch: this is how a hash of the input, all straight-line code over unknown
+/// values, stays within the proof's time. `explore` asks every few thousand steps.
+#[test]
+fn a_run_with_no_branch_on_its_inputs_keeps_the_proofs_time() {
+    let module = module(&counted_loop(100_000), Policy::default());
+    let mut pool = Pool::default();
+    let start = begin(&module, &mut pool, &[], &[], Vec::new());
+    let mut oracle = TimeUpAtTheFourthLook(std::cell::Cell::new(0));
+    let result = exec::explore(&module, start, &mut pool, &mut oracle, 2);
+    assert_eq!(result.err().as_deref(), Some("time is up"));
+    assert_eq!(oracle.0.get(), 4);
+}
+
+/// A run that makes a new number every round ends with the computer's memory, though it never
+/// asks the oracle about a branch: a hash of the input, all straight-line code over unknown
+/// values, makes terms by the million, and the steps alone don't bound them. `explore` asks each
+/// time its pool has grown by tens of thousands of terms.
+#[test]
+fn a_run_that_fills_the_pool_keeps_the_memory() {
+    let module = module(&counted_loop(1_000_000), Policy::default());
+    let mut pool = Pool::default();
+    let start = begin(&module, &mut pool, &[], &[], Vec::new());
+    let mut oracle = NoRoomAtTheFirstLook(std::cell::Cell::new(0));
+    let result = exec::explore(&module, start, &mut pool, &mut oracle, 2);
+    assert_eq!(result.err().as_deref(), Some("no room"));
+    assert_eq!(oracle.0.get(), 1);
+}
+
+/// A run on a pool that found the memory short ends at its next step, though the oracle never
+/// has to ask: one step can make the terms by the million in a single extraction, far between
+/// two looks of the loop's, and what the pool made after that is nothing to go on.
+#[test]
+fn a_run_on_a_pool_that_found_the_memory_short_ends_at_its_next_step() {
+    let module = module(&exits_with("", "(i32.const 0)"), Policy::default());
+    let _no_memory = crate::prove::watch::NoMemoryForTest::pretend();
+    let mut pool = Pool::default();
+    let start = begin(&module, &mut pool, &[], &[], Vec::new());
+    let one = pool.bv(32, 1);
+    while !pool.out_of_room() {
+        let next = pool.var(32, &format!("b{}", pool.len()));
+        let _ = pool.add(next, one);
+    }
+    let result = exec::explore(&module, start, &mut pool, &mut exec::Concrete, 2);
+    assert_eq!(
+        result.err().as_deref(),
+        Some(crate::prove::watch::OUT_OF_MEMORY)
+    );
 }
 
 /// Whether z3 is installed, which every proof needs: a test without it says so and passes.
