@@ -18,7 +18,7 @@
 //! through lengua's `$fill` ([`Module::reads_whole`]): each such `$fill` is then read as a whole,
 //! every place it can stop a run of its own, for input of any length (`fill`). And a program
 //! whose read loop calls `$fill` is proven for every length by induction, as the native prover
-//! proves one ([`hooked`]): its loop's head is that call, and its slots the globals, the calls'
+//! proved one ([`hooked`]): its loop's head is that call, and its slots the globals, the calls'
 //! locals and the operands.
 
 mod fill;

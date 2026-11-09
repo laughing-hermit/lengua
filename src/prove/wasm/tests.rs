@@ -1002,7 +1002,7 @@ fn proves_greet_and_echo_and_add_to_three_digits() {
 }
 
 /// add's first block as its idea has it: every pair of numbers from -10^9 to 10^9, all of
-/// `$parse_i64`'s digits and `$write_i64`'s scales. Slow, as the native add's is, so the slow
+/// `$parse_i64`'s digits and `$write_i64`'s scales. Slow, as the native add's was, so the slow
 /// ignored tests run it: `cargo test --release -- --ignored`.
 #[test]
 #[ignore = "slow: proves 4×10^18 pairs of inputs"]
@@ -1421,7 +1421,7 @@ fn finds_the_bytes_a_folder_removed_in_the_read_loop_drops() {
 }
 
 /// The stream template with a buffer of 256 bytes, so the base's lengths go by quickly, as the
-/// native prover's own tests shrink theirs.
+/// native prover's own tests shrank theirs.
 const STREAM_AT_256: [(&str, &str); 1] = [(
     "(global $buffer.size i32 (i32.const 65536))",
     "(global $buffer.size i32 (i32.const 256))",
@@ -1435,7 +1435,7 @@ const LETTERS: (&str, &str) = (
 
 /// The stream template, which capitalizes its input a buffer-full at a time through `$fill`, is
 /// proven for every length its loop's bound allows, far past what a proof by length reaches, as
-/// the native template is; capitals that stop at `y` are still found.
+/// the native template was; capitals that stop at `y` are still found.
 #[test]
 fn proves_the_stream_template_for_every_length_by_induction() {
     if !solvers_installed() {

@@ -1,5 +1,5 @@
 //! lengua's library's `$fill`, read as a whole where a proof takes every way the input can be
-//! cut, as the native prover reads its own `fill` ([`crate::prove::exec`]'s fill).
+//! cut, as the native prover read its own `fill`.
 //!
 //! `$fill(fd, ptr, cap, stop)` reads until its `cap` bytes are full, the input ends, or a read
 //! ends with the stop byte. A read can end after any byte, so `$fill` of standard input can stop

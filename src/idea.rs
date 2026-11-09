@@ -4756,7 +4756,7 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
                 line - 1
             ),
         );
-        // main.s's checker follows no secret.
+        // An idea of the native lengua has no secret: only main.wat's checker follows one.
         let native = ADD.replace("- Uses: nothing", "- Uses: nothing\n- Secret: argument `1`");
         assert_problem(
             &native,
