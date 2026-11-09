@@ -374,4 +374,3 @@
         (local.set $k (i32.add (local.get $k) (i32.const 1)))
         (local.set $left (i32.sub (local.get $left) (i32.const 1)))
         (br_if $byte (local.get $left))))))
-)

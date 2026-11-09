@@ -455,6 +455,9 @@
           ;; The output takes the next part, or goes out first.
           (if (i32.gt_u (local.get $taken) (global.get $LAST_COPY))
             (then
+              ;; What the output holds, which is never more than its size.
+              (if (i32.gt_u (local.get $taken) (global.get $out.size))
+                (then (call $assert_fail (i32.const 35)) unreachable))
               (local.set $err
                 (call $write_all (global.get $STDOUT) (global.get $out) (local.get $taken)))
               (br_if $failed (local.get $err))
