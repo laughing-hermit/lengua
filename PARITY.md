@@ -331,7 +331,7 @@ the twin, the prover's fixture.
 
 `examples/greet`, and the twin's, `tests/fixtures/greet`. Since W11, `examples/greet` holds a
 second WebAssembly port, whose idea is the native one but the frontmatter (5a013b6); this section
-is of the twin, the prover's fixture.
+is of the twin, the prover's fixture, but for its last line, of that port.
 
 - **Idea:** smaller limits. A name has `1` to `8` characters, and the too-long names are `9` to
   `16`, where the native ones are `1` to `64` and `65` to `100`; B2's range goes to 9 characters,
@@ -344,6 +344,13 @@ is of the twin, the prover's fixture.
   `a_program_gets_only_the_environment_its_test_or_run_gives`, both Linux runners in run
   42361995155). WebAssembly: every block proven for every input, of the twin before b761dd3 (run
   42361995155, as for echo). b761dd3 changed it, and no finished run has proven the new one.
+- **The port in `examples/greet`:** the native idea's limits, and up to 256 environment variables
+  with 128 KiB of their text in all. More variables, or more text, get the usage line even where
+  `NAME` is among the first 256, where the native program looks through the first 256 of any
+  number of variables, of any size, and greets the name it finds there. WASI's `environ_get`
+  writes the place of every variable and all their text, so a module's fixed regions can't take
+  an environment of any size; 5a013b6's "as the native program does" holds only up to those
+  limits. No test of either program gives more than a few variables.
 
 ### hypotenuse
 

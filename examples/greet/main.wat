@@ -1,7 +1,9 @@
 ;; greet: greets the person that the NAME environment variable names, in the WebAssembly dialect 1
 ;; (references/power-of-10-webassembly.md), in the layout of the compile skill's
 ;; main-template.wat: every rule passes, and lengua's library gives $assert_fail and $write_all.
-;; It looks for NAME among up to 256 variables, and greets a name of 1 to 64 characters. Each
+;; It looks for NAME among up to 256 variables, 128 KiB of text in all, and greets a name of 1 to
+;; 64 characters. environ_get writes every variable, so a larger environment gets the usage line,
+;; where the native greet looked for NAME among the first 256 of any number of variables. Each
 ;; variable ends where the next one starts, so no byte of a name is compared to find its end.
 (module
   (import "wasi_snapshot_preview1" "environ_sizes_get"
