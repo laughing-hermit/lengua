@@ -893,13 +893,15 @@ mod tests {
         assert!(named.starts_with(wasm), "{shown}");
         let kept = sections(wasm).expect("wasmparser reads the module");
         let all = sections(named).expect("wasmparser reads the module with its names");
-        assert!(kept.iter().all(|(_, _, name)| name.is_none()), "{shown}: {kept:?}");
+        let customs = kept.iter().filter(|(_, _, name)| name.is_some()).count();
+        assert_eq!(customs, 0, "{shown}: {kept:?}");
         let Some((last, before)) = all.split_last() else {
             panic!("{shown}: no sections");
         };
         assert_eq!(before, kept.as_slice(), "{shown}");
         assert_eq!((last.0, last.2.as_deref()), (0, Some("name")), "{shown}");
-        assert_eq!(usize::try_from(last.1.end).ok(), Some(named.len()), "{shown}");
+        let end = usize::try_from(last.1.end).ok();
+        assert_eq!(end, Some(named.len()), "{shown}");
         assert!(crate::wasm::engine::validate(wasm).is_ok(), "{shown}");
         let size = u64::try_from(wasm.len()).expect("a module's size");
         assert!(built.lines.keys().all(|offset| *offset < size), "{shown}");
@@ -956,8 +958,9 @@ mod tests {
                 .find(|(found, _, name)| *found == id && name.as_deref() == custom)
                 .map(|(_, range, _)| range.end - range.start)
         };
-        assert!(size(10, None).is_some_and(|code| code >= 16_384), "{all:?}");
-        assert!(size(0, Some("name")).is_some_and(|names| names >= 16_384), "{all:?}");
+        let (code, names) = (size(10, None), size(0, Some("name")));
+        assert!(code.is_some_and(|code| code >= 16_384), "{all:?}");
+        assert!(names.is_some_and(|names| names >= 16_384), "{all:?}");
         assert_cut("a large main.wat", &built);
         let nameless = build("(module (memory (export \"memory\") 1) (func (export \"_start\")))")
             .expect("it builds");

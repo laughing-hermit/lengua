@@ -513,7 +513,8 @@ mod tests {
         let (snapshot, files) = read();
         assert_eq!(files.idea.as_deref(), Some(idea.as_bytes()));
         assert_eq!(files.code.as_deref(), Some(wat.as_bytes()));
-        assert_eq!(snapshot.idea, Some(crate::trust::idea_hash(idea.as_bytes())));
+        let hash = crate::trust::idea_hash(idea.as_bytes());
+        assert_eq!(snapshot.idea, Some(hash));
         assert_eq!(snapshot.code, Some(digest(wat)));
         assert_eq!(snapshot, Snapshot::read(&program, None).expect("read it"));
     }
