@@ -43,8 +43,9 @@ const MAX_MUTANTS: usize = 300;
 /// The most checks that run at once, each on a thread of its own.
 const AT_ONCE: usize = 16;
 
-/// The fewest programs the goldens take: the 29 that the repository ships.
-const AT_LEAST: usize = 29;
+/// The fewest programs the goldens take: the 43 that the repository ships, the 15 examples and
+/// the 28 fixtures.
+const AT_LEAST: usize = 43;
 
 /// Where the programs are, from the repository's root: every folder beneath these that holds an
 /// idea.md and a main.wat.
