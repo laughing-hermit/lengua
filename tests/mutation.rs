@@ -31,9 +31,15 @@ const PROGRAMS: &[(&str, &str)] = &[
     ("tests/fixtures/add/idea.md", "tests/fixtures/add/main.wat"),
     ("examples/upcase/idea.md", "examples/upcase/main.wat"),
     ("examples/fetch/idea.md", "examples/fetch/main.wat"),
-    ("tests/fixtures/echo/idea.md", "tests/fixtures/echo/main.wat"),
+    (
+        "tests/fixtures/echo/idea.md",
+        "tests/fixtures/echo/main.wat",
+    ),
     ("tests/fixtures/cat/idea.md", "tests/fixtures/cat/main.wat"),
-    ("tests/fixtures/cat-stream/idea.md", "tests/fixtures/cat-stream/main.wat"),
+    (
+        "tests/fixtures/cat-stream/idea.md",
+        "tests/fixtures/cat-stream/main.wat",
+    ),
     (
         "plugin/skills/compile/assets/main-template-idea.md",
         "plugin/skills/compile/assets/main-template.wat",
@@ -76,10 +82,7 @@ fn last_const(code: &str) -> Option<(usize, usize, i64)> {
     for prefix in ["i32.const ", "i64.const "] {
         for (at, _) in code.match_indices(prefix) {
             let start = at + prefix.len();
-            let digits = code[start..]
-                .bytes()
-                .take_while(u8::is_ascii_digit)
-                .count();
+            let digits = code[start..].bytes().take_while(u8::is_ascii_digit).count();
             let end = start + digits;
             if let Ok(number) = code[start..end].parse::<i64>()
                 && found.is_none_or(|(known, _, _)| start > known)
@@ -119,7 +122,10 @@ fn mutants(code: &str) -> Vec<(String, String)> {
             if let Some((start, end, number)) = at_const {
                 found.push((
                     format!("L{}:const+1", index + 1),
-                    with(index, format!("{}{}{}", &line[..start], number + 1, &line[end..])),
+                    with(
+                        index,
+                        format!("{}{}{}", &line[..start], number + 1, &line[end..]),
+                    ),
                 ));
             }
             continue;
@@ -145,7 +151,10 @@ fn mutants(code: &str) -> Vec<(String, String)> {
         {
             found.push((
                 format!("L{}:imm+1", index + 1),
-                with(index, format!("{}{}{}", &line[..start], number + 1, &line[end..])),
+                with(
+                    index,
+                    format!("{}{}{}", &line[..start], number + 1, &line[end..]),
+                ),
             ));
         }
     }
@@ -259,6 +268,9 @@ fn a_comparison_turns_only_where_it_stands_whole() {
     assert_eq!(operator_at("(i32.lt_s (local.get $a)", "i32.lt_s"), Some(1));
     assert_eq!(operator_at("(i32.lt_s_x)", "i32.lt_s"), None);
     assert_eq!(operator_at("i64.eqz", "i64.eq"), None);
-    assert_eq!(last_const("(i32.const 4) (i64.const 70)"), Some((25, 27, 70)));
+    assert_eq!(
+        last_const("(i32.const 4) (i64.const 70)"),
+        Some((25, 27, 70))
+    );
     assert_eq!(last_const("(local.get $n)"), None);
 }

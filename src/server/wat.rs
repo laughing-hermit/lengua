@@ -603,8 +603,8 @@ fn runnable(
              variables; leave env out, or add `the environment` to its `- Uses:` line"
         ));
     }
-    let built = text::build(&code)
-        .map_err(|problem| format!("{CODE_FILE} doesn't build: {problem}"))?;
+    let built =
+        text::build(&code).map_err(|problem| format!("{CODE_FILE} doesn't build: {problem}"))?;
     if Sha256Hex::of(&built.wasm) != stamp.module_sha256 {
         return Err(format!(
             "This build of {CODE_FILE} differs from the module check tested, as after lengua \
@@ -939,7 +939,8 @@ impl LenguaServer {
         match self.recorded_proofs(folder, checking, &code.suite) {
             None => self.prove_all(folder, checking, &code, seed, &[]).await,
             Some(further) if !further.is_empty() => {
-                self.prove_all(folder, checking, &code, seed, &further).await;
+                self.prove_all(folder, checking, &code, seed, &further)
+                    .await;
             }
             Some(_) => {}
         }
@@ -958,9 +959,10 @@ impl LenguaServer {
     /// Writes lengua's entry into idea.md's `verified` for a job whose tests all passed, which
     /// stamped the code, and whose proofs found no input wrong.
     async fn verify_once_passed(&self, folder: &ProgramFolder, checking: &Checking) {
-        let passed = checking.found.lock().is_ok_and(|found| {
-            found.passed.is_some() && found.failures.is_empty() && !found.wrong
-        });
+        let passed = checking
+            .found
+            .lock()
+            .is_ok_and(|found| found.passed.is_some() && found.failures.is_empty() && !found.wrong);
         if passed {
             self.write_verified(folder, checking).await;
         }
@@ -1531,7 +1533,9 @@ mod tests {
 
     /// The add idea as an idea of the native lengua's type, whose line 2 says the type.
     fn native_idea() -> String {
-        let (_, body) = IDEA.split_once("\n---\n").expect("the add idea's frontmatter");
+        let (_, body) = IDEA
+            .split_once("\n---\n")
+            .expect("the add idea's frontmatter");
         format!(
             "---\ntype: {}\ntitle: add\ndescription: Adds two numbers.\n---\n{body}",
             idea::IDEA_TYPE

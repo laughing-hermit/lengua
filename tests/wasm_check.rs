@@ -454,8 +454,13 @@ async fn an_attested_computation_s_code_is_main_wat_alone() {
     let report = session.check(&program).await;
     assert_eq!(report["state"], "code_problems", "{report}");
     assert!(
-        any_line(&report["problems"], "lengua compiles an idea to main.wat since 0.2.0")
-            && any_line(&report["problems"], "the tag native-final keeps the native lengua"),
+        any_line(
+            &report["problems"],
+            "lengua compiles an idea to main.wat since 0.2.0"
+        ) && any_line(
+            &report["problems"],
+            "the tag native-final keeps the native lengua"
+        ),
         "{report}"
     );
     // There's no main.wat to keep: the next step compiles it first.
@@ -476,7 +481,10 @@ async fn an_attested_computation_s_code_is_main_wat_alone() {
     let report = session.record(&fresh).await;
     assert_eq!(report["state"], "code_problems", "{report}");
     assert!(
-        any_line(&report["problems"], "the tag native-final keeps the native lengua"),
+        any_line(
+            &report["problems"],
+            "the tag native-final keeps the native lengua"
+        ),
         "{report}"
     );
     std::fs::remove_file(fresh.file("main.s")).expect("remove main.s");

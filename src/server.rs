@@ -1913,7 +1913,11 @@ fn cost_line(cost: &testrun::Cost) -> String {
         let _ = write!(line, ", {} WebAssembly operations each", operations.median);
     }
     if let Some(wall) = cost.wall_time_us {
-        let _ = write!(line, "; {}: median {} µs on the clock", cost.timed, wall.median);
+        let _ = write!(
+            line,
+            "; {}: median {} µs on the clock",
+            cost.timed, wall.median
+        );
     }
     line
 }

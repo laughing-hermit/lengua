@@ -144,8 +144,8 @@ async fn a_server_from_a_shell_serves_until_it_is_stopped() {
         stream.read_to_string(&mut back).expect("receive");
         assert_eq!(back, line);
     }
-    let pid = rustix::process::Pid::from_raw(i32::try_from(child.id()).expect("a pid"))
-        .expect("a pid");
+    let pid =
+        rustix::process::Pid::from_raw(i32::try_from(child.id()).expect("a pid")).expect("a pid");
     rustix::process::kill_process(pid, rustix::process::Signal::TERM).expect("stop it");
     let status = child.wait().expect("lengua-mcp ends");
     assert_eq!(status.signal(), Some(15), "{status:?}");

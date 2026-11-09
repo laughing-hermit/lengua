@@ -684,7 +684,13 @@ fn mutants(text: &str) -> Vec<(String, String)> {
                     .is_some_and(|before| forms.tokens[before].kind == Kind::Open);
                 if word == "br_if" && !folded {
                     let before = (token.start, token.start);
-                    found.push(single("brif", at, token.line, before, "i32.eqz ".to_owned()));
+                    found.push(single(
+                        "brif",
+                        at,
+                        token.line,
+                        before,
+                        "i32.eqz ".to_owned(),
+                    ));
                 }
             }
             Kind::Close | Kind::Text => {}
@@ -958,7 +964,11 @@ fn each_mutant_changes_what_it_is_named_for() {
             .find(|(name, _)| name == id)
             .expect("the mutant");
         let number = named_line(id).expect("a line in its name");
-        mutant.lines().nth(number - 1).unwrap_or_default().to_owned()
+        mutant
+            .lines()
+            .nth(number - 1)
+            .unwrap_or_default()
+            .to_owned()
     };
     assert_eq!(line("L2:const"), "  (global $x.size i32 (i32.const 17))");
     assert_eq!(
@@ -993,9 +1003,18 @@ fn each_mutant_changes_what_it_is_named_for() {
 fn a_constant_moves_by_one_as_it_is_written() {
     assert_eq!(moved("41", I32_RANGE.0, I32_RANGE.1).as_deref(), Some("42"));
     assert_eq!(moved("-1", I32_RANGE.0, I32_RANGE.1).as_deref(), Some("0"));
-    assert_eq!(moved("0x7f", I32_RANGE.0, I32_RANGE.1).as_deref(), Some("0x80"));
-    assert_eq!(moved("-0x10", I32_RANGE.0, I32_RANGE.1).as_deref(), Some("-0xf"));
-    assert_eq!(moved("1_000", I64_RANGE.0, I64_RANGE.1).as_deref(), Some("1001"));
+    assert_eq!(
+        moved("0x7f", I32_RANGE.0, I32_RANGE.1).as_deref(),
+        Some("0x80")
+    );
+    assert_eq!(
+        moved("-0x10", I32_RANGE.0, I32_RANGE.1).as_deref(),
+        Some("-0xf")
+    );
+    assert_eq!(
+        moved("1_000", I64_RANGE.0, I64_RANGE.1).as_deref(),
+        Some("1001")
+    );
     assert_eq!(
         moved("0xffffffff", I32_RANGE.0, I32_RANGE.1).as_deref(),
         Some("0xfffffffe")
@@ -1012,7 +1031,12 @@ fn the_goldens_take_every_program_folder_once() {
     assert_eq!(names.len(), found.len(), "{names:?}");
     for program in &found {
         assert!(program.name.ends_with("/main.wat"), "{}", program.name);
-        assert!(program.idea.is_ok(), "{}: {:?}", program.name, program.idea.as_ref().err());
+        assert!(
+            program.idea.is_ok(),
+            "{}: {:?}",
+            program.name,
+            program.idea.as_ref().err()
+        );
     }
 }
 

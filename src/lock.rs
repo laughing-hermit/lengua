@@ -960,10 +960,7 @@ mod tests {
             .next()
             .expect("a body")
             .replacen(
-                &format!(
-                    "module_sha256 = \"{}\"\nproven",
-                    Sha256Hex::of(b"module")
-                ),
+                &format!("module_sha256 = \"{}\"\nproven", Sha256Hex::of(b"module")),
                 &format!("module_sha256 = \"{}\"\nproven", Sha256Hex::of(b"other")),
                 1,
             );
@@ -1138,7 +1135,10 @@ mod tests {
         let body = full_lock().body();
         // No lengua wrote a format 0, and 8 is a later lengua's.
         for unknown in ["0", "8"] {
-            let text = forge(&body.replace("version = 7", &format!("version = {unknown}")), &key(1));
+            let text = forge(
+                &body.replace("version = 7", &format!("version = {unknown}")),
+                &key(1),
+            );
             assert_eq!(
                 Lock::from_signed_text(&text, &key(1)),
                 Err(LockError::UnsupportedVersion(unknown.into()))
@@ -1187,12 +1187,12 @@ mod tests {
                     Sha256Hex::of(b"tests")
                 ),
             ),
-            body.replace(
-                "[\"bulk-memory\", \"simd\"]",
-                "[\"bulk-memory\",\"simd\"]",
-            ),
+            body.replace("[\"bulk-memory\", \"simd\"]", "[\"bulk-memory\",\"simd\"]"),
             body.replace("target = \"webassembly\"\n", ""),
-            body.replace("engine = \"wasmtime 50.0.1 \\\"quoted\\\" \\\\ tab\\t\"\n", ""),
+            body.replace(
+                "engine = \"wasmtime 50.0.1 \\\"quoted\\\" \\\\ tab\\t\"\n",
+                "",
+            ),
         ];
         for body in cases {
             assert!(

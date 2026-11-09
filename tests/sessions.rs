@@ -184,7 +184,10 @@ async fn run_needs_matching_files_and_the_tested_build() {
     let code = template();
     program.write("main.wat", &code);
     let error = session.call_error("run", program.arguments()).await;
-    assert!(error.contains("doesn't"), "run refuses unchecked code: {error}");
+    assert!(
+        error.contains("doesn't"),
+        "run refuses unchecked code: {error}"
+    );
     done(&session, &program).await;
 
     let report = session.call_ok("run", with_args(&program, &["7"])).await;
@@ -292,7 +295,10 @@ async fn new_words_in_the_middle_of_a_build_never_hide_a_change() {
     let program = checked_template(&session).await;
     // The build isn't finished: no code has passed yet. Changing the idea and recording it with
     // other words keeps the first idea as what changes are shown against.
-    let edited = changed(&template_idea(), &[("# Purpose\n", "# Purpose\nIt is quick. ")]);
+    let edited = changed(
+        &template_idea(),
+        &[("# Purpose\n", "# Purpose\nIt is quick. ")],
+    );
     program.write("idea.md", &edited);
     session
         .call_ok("check", program.request("Also make it quick"))
@@ -402,7 +408,11 @@ async fn an_edit_mid_proof_starts_over_and_the_old_proof_never_lands() {
     );
     let lock = program.read("lengua.lock").expect("the lock");
     assert!(module_in(&lock, "code").is_some(), "{lock}");
-    assert_eq!(module_in(&lock, "code"), module_in(&lock, "proofs"), "{lock}");
+    assert_eq!(
+        module_in(&lock, "code"),
+        module_in(&lock, "proofs"),
+        "{lock}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 

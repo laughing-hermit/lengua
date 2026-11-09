@@ -198,7 +198,11 @@ fn fingerprint(run: &State<Wasm>, pool: &Pool) -> String {
         .connections
         .iter()
         .map(|connection| {
-            let how = if connection.accepted { "accepted" } else { "made" };
+            let how = if connection.accepted {
+                "accepted"
+            } else {
+                "made"
+            };
             format!("{how} {}={}", connection.exchange, bytes(&connection.sent))
         })
         .collect();
@@ -326,9 +330,7 @@ fn induction(module: &Module, block: &Generated, listens: bool) -> String {
     }
     let within = Budget {
         within: true,
-        max_paths: budget(listens)
-            .max_paths
-            .saturating_mul(AT_ONCE_PATHS),
+        max_paths: budget(listens).max_paths.saturating_mul(AT_ONCE_PATHS),
         ..budget(listens)
     };
     if let Ok(proven @ Verdict::Proven { bound: None, .. }) =
