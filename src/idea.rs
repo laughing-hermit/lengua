@@ -946,14 +946,7 @@ pub fn parse(text: &str) -> Result<Idea, Vec<Problem>> {
     let lines: Vec<&str> = text.lines().collect();
     let mut parser = Parser::default();
     let Some(end) = frontmatter_end(&lines) else {
-        parser.problem(
-            Some(1),
-            format!(
-                "idea.md must start with YAML frontmatter: a line with ---, then `type: \
-                 {ATTESTED_TYPE}`, `title: <name>` and `description: <one sentence>`, then a \
-                 line with ---"
-            ),
-        );
+        parser.problem(Some(1), no_frontmatter());
         return Err(parser.into_problems());
     };
     let blocks = crate::trust::blocks(&lines, 1, end);
@@ -975,39 +968,109 @@ pub fn parse(text: &str) -> Result<Idea, Vec<Problem>> {
             parser.prose.text(number, description);
         }
     }
+    let unclosed = walk(&lines, end, |met| match met {
+        // A code block ends the prose before it, and its own lines aren't prose.
+        Met::Opens => parser.prose.end(),
+        Met::Closes(start, language, body) => {
+            parser.prose.end();
+            parser.block(start, &language, &body);
+        }
+        Met::Line(number, line) => {
+            parser.portable(number, line, &subject);
+            parser.ste(number, line);
+            parser.line(number, line);
+            parser.links_line(number, line);
+        }
+    });
+    parser.finish_behavior();
+    if let Some(line) = unclosed {
+        parser.problem(Some(line), UNCLOSED);
+    }
+    parser.finish(header)
+}
+
+/// What a code block that is never closed is told.
+const UNCLOSED: &str = "this ``` code block is never closed";
+
+/// What an idea with no frontmatter is told.
+fn no_frontmatter() -> String {
+    format!(
+        "idea.md must start with YAML frontmatter: a line with ---, then `type: {ATTESTED_TYPE}`, \
+         `title: <name>` and `description: <one sentence>`, then a line with ---"
+    )
+}
+
+/// What the walk over an idea's lines after its frontmatter meets, one line at a time.
+enum Met<'t> {
+    /// A fence that opens a code block.
+    Opens,
+    /// A fence that closes the code block that opened on line `.0`, in the language `.1`, with
+    /// `.2` its lines.
+    Closes(usize, String, Vec<&'t str>),
+    /// A line outside code blocks, by its number from 1.
+    Line(usize, &'t str),
+}
+
+/// The walk [`parse`] and [`grants`] make over `lines` after the frontmatter that closes on line
+/// `end` (from 0): `met` hears of each line, as a fence that opens or closes a code block or as
+/// a line outside code blocks, so both readers take the very same lines. Gives the line of a code
+/// block that is never closed.
+fn walk<'t>(lines: &[&'t str], end: usize, mut met: impl FnMut(Met<'t>)) -> Option<usize> {
     // An open code block: the line it starts on, its language, and its lines so far.
-    let mut fence: Option<(usize, String, Vec<&str>)> = None;
-    for (index, line) in lines.iter().enumerate().skip(end + 1) {
+    let mut fence: Option<(usize, String, Vec<&'t str>)> = None;
+    for (index, &line) in lines.iter().enumerate().skip(end + 1) {
         let number = index + 1;
         let trimmed = line.trim_start();
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            // A code block ends the prose before it, and its own lines aren't prose.
-            parser.prose.end();
             match fence.take() {
-                Some((start, language, body)) => parser.block(start, &language, &body),
+                Some((start, language, body)) => met(Met::Closes(start, language, body)),
                 None => {
                     let language = trimmed.trim_start_matches(['`', '~']).trim();
                     let language = language.split_whitespace().next().unwrap_or("");
                     fence = Some((number, language.to_ascii_lowercase(), Vec::new()));
+                    met(Met::Opens);
                 }
             }
             continue;
         }
         match fence.as_mut() {
             Some((_, _, body)) => body.push(line),
-            None => {
-                parser.portable(number, line, &subject);
-                parser.ste(number, line);
-                parser.line(number, line);
-                parser.links_line(number, line);
-            }
+            None => met(Met::Line(number, line)),
         }
     }
-    parser.finish_behavior();
-    if let Some((line, ..)) = fence {
-        parser.problem(Some(line), "this ``` code block is never closed");
+    fence.map(|(start, ..)| start)
+}
+
+/// What an idea grants a run: its `- Uses:` line's capabilities and its `- Network:` line's
+/// network, read from the same lines [`parse`] reads, by the same code, and nothing else of the
+/// idea: no YAML, no plain-English rules, no behaviors or tests. A run takes them from the idea
+/// whose hash its lock records, which check has parsed in full.
+///
+/// # Errors
+///
+/// Any problem of the frontmatter's end, of a code block that is never closed, or of a line of
+/// `# Constraints`, as [`parse`] reports it.
+pub fn grants(text: &str) -> Result<(Vec<Use>, Network), Vec<Problem>> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut parser = Parser::default();
+    let Some(end) = frontmatter_end(&lines) else {
+        parser.problem(Some(1), no_frontmatter());
+        return Err(parser.into_problems());
+    };
+    let unclosed = walk(&lines, end, |met| {
+        if let Met::Line(number, line) = met {
+            parser.grants_line(number, line);
+        }
+    });
+    if let Some(line) = unclosed {
+        parser.problem(Some(line), UNCLOSED);
     }
-    parser.finish(header)
+    let uses = parser.uses.take().unwrap_or_default();
+    if parser.problems.is_empty() {
+        Ok((uses, parser.network))
+    } else {
+        Err(parser.into_problems())
+    }
 }
 
 fn frontmatter_end(lines: &[&str]) -> Option<usize> {
@@ -1970,6 +2033,17 @@ impl Parser {
             }
             Section::Constraints => self.constraint_line(number, line),
             Section::Preamble | Section::Other => {}
+        }
+    }
+
+    /// A line outside code blocks as [`grants`] reads it: a `#` heading enters its section, as
+    /// [`Self::line`] does, and a line of `# Constraints` is read as there; every other line is
+    /// left as it is.
+    fn grants_line(&mut self, number: usize, line: &str) {
+        if let Some(name) = heading(line, 1) {
+            self.enter_section(number, name);
+        } else if self.section == Section::Constraints {
+            self.constraint_line(number, line);
         }
     }
 
@@ -4768,5 +4842,88 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
             &native,
             "`- Secret:` is for an idea that lengua compiles to main.wat",
         );
+    }
+
+    /// The ideas of the programs the repository ships, in examples/ and tests/fixtures, each by
+    /// its path.
+    fn shipped_ideas() -> Vec<(String, String)> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut ideas = Vec::new();
+        for place in ["examples", "tests/fixtures"] {
+            for entry in std::fs::read_dir(root.join(place)).expect("a folder of programs") {
+                let path = entry.expect("an entry").path().join("idea.md");
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    ideas.push((path.display().to_string(), text));
+                }
+            }
+        }
+        ideas.sort();
+        ideas
+    }
+
+    /// A run's grants are what check's parse finds: for every idea the repository ships that
+    /// parses, grants gives exactly its uses and its network.
+    #[test]
+    fn grants_are_the_uses_and_the_network_parse_finds() {
+        let mut compared = 0;
+        for (name, text) in shipped_ideas() {
+            let Ok(idea) = parse(&text) else {
+                continue;
+            };
+            assert_eq!(grants(&text), Ok((idea.uses, idea.network)), "{name}");
+            compared += 1;
+        }
+        assert!(compared >= 43, "only {compared} ideas parsed");
+    }
+
+    /// grants takes a `- Uses:` line only where parse does, in `# Constraints` outside code
+    /// blocks: the same line in a code block of `# Constraints`, in `# Purpose`, under a `###`
+    /// heading of `# Behaviors` or inside `verified:` in the frontmatter grants nothing.
+    #[test]
+    fn grants_take_only_the_lines_parse_takes() {
+        let files = |text: &str| parse(text).is_ok_and(|idea| idea.uses.contains(&Use::Files));
+        let granted = |text: &str| grants(text).map(|(uses, _)| uses);
+        let constraints = ATTESTED.replace("- Uses: nothing", "- Uses: files");
+        assert_eq!(granted(&constraints), Ok(vec![Use::Files]));
+        assert!(files(&constraints));
+        let places = [
+            (
+                "- Uses: nothing",
+                "- Uses: nothing\n\n```text\n- Uses: files\n```",
+            ),
+            ("# Behaviors\n", "- Uses: files\n\n# Behaviors\n"),
+            (
+                "### For any `a` and `b`\n",
+                "### For any `a` and `b`\n- Uses: files\n",
+            ),
+            (
+                "type: Attested Computation\n",
+                "type: Attested Computation\nverified:\n- Uses: files\n",
+            ),
+        ];
+        for (from, to) in places {
+            let text = ATTESTED.replace(from, to);
+            assert_ne!(text, ATTESTED, "{from:?}");
+            assert_eq!(granted(&text), Ok(Vec::new()), "{to:?}");
+            assert!(!files(&text), "{to:?}");
+        }
+    }
+
+    /// grants refuses what parse refuses in `# Constraints`, with parse's own problems: two
+    /// `- Uses:` lines, and a use lengua doesn't know.
+    #[test]
+    fn grants_refuse_what_parse_refuses_in_constraints() {
+        for to in ["- Uses: nothing\n- Uses: files", "- Uses: telepathy"] {
+            let text = ATTESTED.replace("- Uses: nothing", to);
+            let refused = grants(&text).expect_err("grants refuses it");
+            let parsed = parse(&text).expect_err("parse refuses it");
+            assert!(!refused.is_empty(), "{to:?}");
+            for problem in &refused {
+                assert!(
+                    parsed.contains(problem),
+                    "{problem}, not parse's: {parsed:?}"
+                );
+            }
+        }
     }
 }

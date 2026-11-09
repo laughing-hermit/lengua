@@ -564,12 +564,14 @@ fn text_of(
 }
 
 /// What `run` may run in a folder once its checks pass: main.wat as the state's read kept it,
-/// its idea, and the module check tested, by the hash lengua.lock records.
+/// what its idea grants, and the module check tested, by the hash lengua.lock records.
 struct Runnable {
     /// main.wat's text, the very bytes whose hash the lock was held to.
     code: String,
-    /// The idea.
-    idea: Idea,
+    /// What the idea lets the program use, from its `- Uses:` line.
+    uses: Vec<Use>,
+    /// What it may do on the network, from its `- Network:` line.
+    network: idea::Network,
     /// The SHA-256 of the module check tested.
     module: Sha256Hex,
 }
@@ -579,8 +581,9 @@ struct Runnable {
 /// tested wrong. Environment variables reach only a program whose idea uses the environment.
 /// Gives what may run; the bytes that run are held to its module hash, by the MCP tool's build
 /// ([`built_as_tested`]) or by a shell's run ([`kept_or_built`]). idea.md and main.wat are read
-/// once, by the state's own read: what is built, compared and parsed are the very bytes whose
-/// hashes the lock was held to.
+/// once, by the state's own read: what is built and compared, and the idea's grants, come from
+/// the very bytes whose hashes the lock was held to. Of the idea, a run reads only its grants
+/// ([`idea::grants`]): check judged the rest of this very text.
 fn runnable(
     data_dir: &DataDir,
     folder: &ProgramFolder,
@@ -626,8 +629,9 @@ fn runnable(
     let idea_text = text_of(folder, IDEA_FILE, files.idea)?.ok_or_else(|| {
         format!("There's no {IDEA_FILE} in {folder}. Write it with the write-idea skill first.")
     })?;
-    let idea = idea::parse(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
-    if !env.is_empty() && !idea.uses.contains(&Use::Environment) {
+    let (uses, network) =
+        idea::grants(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
+    if !env.is_empty() && !uses.contains(&Use::Environment) {
         return Err(format!(
             "{IDEA_FILE} doesn't use the environment, so the program gets no environment \
              variables; leave env out, or add `the environment` to its `- Uses:` line"
@@ -635,7 +639,8 @@ fn runnable(
     }
     Ok(Runnable {
         code,
-        idea,
+        uses,
+        network,
         module: stamp.module_sha256.clone(),
     })
 }
@@ -757,8 +762,8 @@ pub(super) fn run_from_shell(
         ),
         ToRun::Built(built) => (built.wasm.as_slice(), Source::Built(built)),
     };
-    let idea = &ready.idea;
-    let connections: Vec<Made> = reaches(&idea.network)
+    let network = &ready.network;
+    let connections: Vec<Made> = reaches(network)
         .iter()
         .map(|reach| made(reach, &request.args))
         .collect();
@@ -767,11 +772,10 @@ pub(super) fn run_from_shell(
         args: &request.args,
         env: &request.env,
         folder: workspace,
-        policy: Policy::of(&idea.uses, &idea.network),
-        listen: idea
-            .network
+        policy: Policy::of(&ready.uses, network),
+        listen: network
             .listens
-            .map(|port| (port, idea.network.serves_anywhere)),
+            .map(|port| (port, network.serves_anywhere)),
         connections: &connections,
         cache: Some(cache.as_path()),
         source,
@@ -1196,7 +1200,7 @@ impl LenguaServer {
         // The tool's reply and its worker need the build's assertions and lines: it builds
         // main.wat, held to the module check tested.
         let built = built_as_tested(folder, &ready)?;
-        let idea = ready.idea;
+        let (uses, network) = (ready.uses, ready.network);
         if let Some(wrong) = self.proven_wrong(folder).await {
             return Err(format!(
                 "The proof found inputs where {CODE_FILE} is wrong, so it won't run: \
@@ -1220,21 +1224,20 @@ impl LenguaServer {
             Program::new(built)
                 .map_err(|error| format!("lengua couldn't keep the module: {error}"))?,
         );
-        let connections = reaches(&idea.network);
+        let connections = reaches(&network);
         let spec = Spec {
             folder: workspace.as_deref(),
             env: &params.env,
             connections: &connections,
-            listen: idea
-                .network
+            listen: network
                 .listens
-                .map(|port| (port, idea.network.serves_anywhere)),
+                .map(|port| (port, network.serves_anywhere)),
             setup: Setup::Run,
             max_written: None,
             alone: true,
-            ..Spec::new(&params.args, &stdin, Policy::of(&idea.uses, &idea.network))
+            ..Spec::new(&params.args, &stdin, Policy::of(&uses, &network))
         };
-        if idea.network.listens.is_some() {
+        if network.listens.is_some() {
             return self
                 .serve_wasm_in_background(folder, &program, spec, assertions)
                 .await;

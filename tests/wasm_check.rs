@@ -330,6 +330,18 @@ async fn a_shell_runs_and_attests_the_checked_program() {
     let usage = run_from_shell(&session, program.path(), &[]);
     assert_eq!(usage.stderr, b"usage: add <a> <b>\n", "{usage:?}");
     assert_eq!(usage.status.code(), Some(1), "{usage:?}");
+    // add's idea uses no environment, so a run that gives it some is refused, as its grants
+    // say.
+    let given = run_from_shell(&session, program.path(), &["--env", "NAME=you", "2", "3"]);
+    assert_eq!(given.status.code(), Some(125), "{given:?}");
+    let reason = String::from_utf8_lossy(&given.stderr);
+    assert!(
+        reason.contains(
+            "idea.md doesn't use the environment, so the program gets no environment variables"
+        ),
+        "{reason}"
+    );
+    assert!(given.stdout.is_empty(), "{given:?}");
 
     // The attester needs no data folder: it writes nothing and reads no lock.
     let lock = program.read("lengua.lock");
