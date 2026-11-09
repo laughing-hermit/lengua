@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use lengua::data_dir::DataDir;
-use lengua::runner;
 use lengua::server::{LenguaServer, ShellRun};
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
@@ -19,7 +18,6 @@ const USAGE: &str = "usage: lengua-mcp [--data-dir <absolute path>] [--version]
 [--env NAME=value]... [[--] <argument>...]
        lengua-mcp check <program folder>
        lengua-mcp [--data-dir <absolute path>] doctor
-       lengua-mcp link <main.s>
        lengua-mcp wasm <main.wat> [-o <main.wasm>]
        lengua-mcp [--data-dir <absolute path>] measure [--in <folder>] [--stdin <file>] \
 [--stdout <file>] [--stderr <file>] [--env NAME=value]... [--uses <words>] [--network <line>] \
@@ -37,12 +35,7 @@ const PROBLEMS_FOUND: u8 = 1;
 const REFUSED: u8 = 125;
 
 fn main() -> ExitCode {
-    // Launcher mode runs before anything else, with no threads, and replaces this process.
     let mut raw = std::env::args_os().skip(1).peekable();
-    if raw.peek().is_some_and(|arg| arg == runner::LAUNCH_FLAG) {
-        raw.next();
-        return runner::launch(raw);
-    }
     // Worker mode, hidden: a child of the server that runs WebAssembly jobs until its standard
     // input ends.
     if raw
@@ -93,7 +86,6 @@ fn main() -> ExitCode {
         Ok(Command::Run(data_dir, request)) => return run_from_shell(&data_dir, &request),
         Ok(Command::Check(path)) => return attest(&path),
         Ok(Command::Doctor(data_dir)) => return doctor(data_dir.as_ref()),
-        Ok(Command::Link(path)) => return link(&path),
         Ok(Command::Wasm(path, output)) => return wasm(&path, output),
         Ok(Command::Measure(data_dir, request)) => return measure(data_dir.as_ref(), &request),
         Ok(Command::Version) => {
@@ -173,24 +165,6 @@ fn doctor(data_dir: Option<&DataDir>) -> ExitCode {
     }
 }
 
-/// Prints the text a program is built from: main.s, and for one in the edge form lengua.s after
-/// it, so that it can be assembled outside lengua.
-fn link(path: &std::path::Path) -> ExitCode {
-    let linked = std::fs::read_to_string(path)
-        .map_err(|error| format!("can't read {}: {error}", path.display()))
-        .and_then(|text| lengua::edge::linked(&text));
-    match linked {
-        Ok(text) => {
-            print!("{text}");
-            ExitCode::SUCCESS
-        }
-        Err(message) => {
-            eprintln!("lengua-mcp: {message}");
-            ExitCode::from(REFUSED)
-        }
-    }
-}
-
 /// Writes the standard WebAssembly module main.wat at `path` builds, with lengua's library merged
 /// in, to `output`, or beside main.wat as main.wasm: a WASI preview 1 module any WebAssembly
 /// runtime runs.
@@ -253,7 +227,6 @@ enum Command {
     Run(DataDir, ShellRun),
     Check(String),
     Doctor(Option<DataDir>),
-    Link(PathBuf),
     Wasm(PathBuf, Option<PathBuf>),
     Measure(Option<DataDir>, Box<lengua::measure::Request>),
     Version,
@@ -322,13 +295,6 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
                     return Err(format!("doctor takes no more words, not {extra:?}"));
                 }
                 return Ok(Command::Doctor(data_dir.or_else(DataDir::from_env)));
-            }
-            "link" => {
-                let path = args.next().ok_or("link needs a main.s")?;
-                if let Some(extra) = args.next() {
-                    return Err(format!("link takes one file, not {extra:?}"));
-                }
-                return Ok(Command::Link(PathBuf::from(path)));
             }
             "wasm" => {
                 let path = args.next().ok_or("wasm needs a main.wat")?;

@@ -1,7 +1,7 @@
 //! Fuzzing every reader lengua has: what a person or an agent writes (idea.md and its tests, and
-//! main.s for each CPU), what lengua reads back (main.s's header, its lock, and the executable
-//! it built), the AArch64 decoder's machine words, and the test language's formulas. No reader may panic, or take long,
-//! on any input: random bytes, and the repository's own ideas and programs mutated (bytes
+//! main.wat, built and held to the WebAssembly dialect's rules), what lengua reads back (its
+//! lock, and the graph's pages), and the test language's formulas. No reader may panic, or take
+//! long, on any input: random bytes, and the repository's own ideas and programs mutated (bytes
 //! changed, lines dropped, doubled and swapped, tricky pieces put in, cut short, and spliced with
 //! each other). The runs are seeded, so a failure comes back the same; each one that fails is
 //! kept under `target/fuzz` to replay.
@@ -49,7 +49,6 @@ const TRICKY: &[&str] = &[
     "(",
     ",",
     "..",
-    ".equ ",
     "0x",
     "-",
     "999999999999999999999999999999",
@@ -59,18 +58,26 @@ const TRICKY: &[&str] = &[
     "\u{feff}",
     "\u{1f600}",
     "é",
-    ":lo12:",
     "[",
     "]",
-    "#-1",
-    "# bound: ",
-    "// bound: ",
-    "lsl #",
-    "qword ptr [",
-    "rip + ",
-    ".section .data\n",
-    ".type x, @object\n",
-    "x:\n",
+    "(module",
+    "(func $f",
+    "(param $a i32)",
+    "(result i32)",
+    "(local $i i32)",
+    "(memory 1)",
+    "(data (i32.const 1024) \"",
+    "(loop $l",
+    "br_if $l",
+    "i32.const -1",
+    "i64.const 9223372036854775807",
+    "local.get $i",
+    "i32.load offset=4",
+    "call $fill",
+    ";; bound: ",
+    ";; unsafe: ",
+    ";; end unsafe",
+    ";; from: ",
     "---\n",
     "type: lengua/program-idea\n",
     "verified:\n",
@@ -112,7 +119,7 @@ fn corpus() -> Vec<(PathBuf, Vec<u8>)> {
                 pending.push(path);
             } else if path
                 .extension()
-                .is_some_and(|extension| extension == "md" || extension == "s")
+                .is_some_and(|extension| extension == "md" || extension == "wat")
                 && let Ok(bytes) = std::fs::read(&path)
             {
                 found.push((path, bytes));
@@ -264,12 +271,20 @@ fn readers() -> Vec<Reader> {
             }),
         ),
         (
-            "main.s",
+            "main.wat",
             Box::new(|input: &[u8]| {
+                // lengua's text with its library merged in, and a module that builds held to
+                // every rule, for an idea that uses nothing.
                 let text = String::from_utf8_lossy(input);
-                let _ = crate::checker::source::parse(&text);
-                let _ = crate::checker::check_layout(&text);
-                let _ = crate::header::Header::of(&text);
+                if let Ok(built) = crate::wasm::text::build(&text) {
+                    let network = crate::idea::Network::default();
+                    let context = crate::checker::wasm::Context {
+                        uses: &[],
+                        network: &network,
+                        secrets: &[],
+                    };
+                    let _ = crate::checker::wasm::check(&text, &built, &context);
+                }
             }),
         ),
         (
@@ -306,72 +321,12 @@ fn readers() -> Vec<Reader> {
                 let _ = crate::lock::parse_body(&String::from_utf8_lossy(input));
             }),
         ),
-        (
-            "executable",
-            Box::new(|input: &[u8]| {
-                let _ = crate::checker::decode::read(input);
-            }),
-        ),
-        (
-            "broker request",
-            Box::new(|input: &[u8]| {
-                // A request whole, and its fixed part and first message on their own.
-                if let Ok(request) = crate::broker::parse_request(input) {
-                    // What the parser accepts is exactly what a client sends for it.
-                    assert_eq!(request.encode(), input, "an accepted request re-encodes");
-                }
-                let _ = crate::broker::parse_header(input);
-                let _ = crate::broker::Hello::decode(input);
-                let _ = crate::broker::parse_reply(input);
-            }),
-        ),
     ]
-}
-
-/// Executables lengua built, for the ELF reader to start from: each CPU's template, where the
-/// toolchain is installed.
-fn executables() -> Vec<Vec<u8>> {
-    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    else {
-        return Vec::new();
-    };
-    runtime.block_on(async {
-        let Ok(toolchain) = crate::toolchain::Toolchain::discover().await else {
-            return Vec::new();
-        };
-        let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/compile/assets");
-        let mut found = Vec::new();
-        for (path, profile) in [
-            ("main-template.s", crate::platform::Profile::LinuxX86_64),
-            (
-                "linux-aarch64/main-template.s",
-                crate::platform::Profile::LinuxAarch64,
-            ),
-        ] {
-            let Ok(folder) = tempfile::tempdir() else {
-                continue;
-            };
-            let (object, executable) = (folder.path().join("main.o"), folder.path().join("main"));
-            if toolchain
-                .assemble(profile, &assets.join(path), &object)
-                .await
-                .is_ok()
-                && toolchain.link(profile, &object, &executable).await.is_ok()
-                && let Ok(bytes) = std::fs::read(&executable)
-            {
-                found.push(bytes);
-            }
-        }
-        found
-    })
 }
 
 /// `count` inputs for each reader: mutations of the corpus, and a few of random bytes.
 fn fuzz(count: usize, seed: u64) {
     let corpus = corpus();
-    let executables = executables();
     assert!(corpus.len() > 20, "the repository's own ideas and programs");
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     for (reader, read) in readers() {
@@ -383,15 +338,9 @@ fn fuzz(count: usize, seed: u64) {
                 .map(|(_, bytes)| shrunk(bytes))
                 .collect(),
             "lock" => vec![LOCK.as_bytes().to_vec()],
-            "broker request" => broker_messages(),
-            "executable" if executables.is_empty() => {
-                eprintln!("llvm-mc or ld.lld isn't installed: the executable reader isn't fuzzed");
-                continue;
-            }
-            "executable" => executables.clone(),
             _ => corpus
                 .iter()
-                .filter(|(path, _)| path.extension().is_some_and(|extension| extension == "s"))
+                .filter(|(path, _)| path.extension().is_some_and(|extension| extension == "wat"))
                 .map(|(_, bytes)| bytes.clone())
                 .collect(),
         };
@@ -407,68 +356,33 @@ fn fuzz(count: usize, seed: u64) {
             survives(reader, index, &input, read.as_ref());
         }
     }
-    // The AArch64 decoder on any word at all.
-    for index in 0..count * 64 {
-        let word: u32 = rng.random();
-        survives(
-            "aarch64 decoder",
-            index,
-            &word.to_le_bytes(),
-            &|bytes: &[u8]| {
-                let word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-                let _ = crate::isa::aarch64::decode::decode(word, 0x40_0000);
-            },
-        );
-    }
 }
 
-/// The messages of the broker's protocol, each whole, for the reader of them to start from: a text
-/// file never gets past a message's first byte.
-fn broker_messages() -> Vec<Vec<u8>> {
-    use crate::broker::{Hello, Kind, Mode, Request, encode_reply};
-    let request = |kind, argument, value, first: &str, second: &str| {
-        Request {
-            kind,
-            argument,
-            value,
-            first: first.as_bytes().to_vec(),
-            second: second.as_bytes().to_vec(),
-        }
-        .encode()
-    };
-    vec![
-        request(Kind::Open, 1, 0, "out.txt", ""),
-        request(Kind::Open, 4, 0, "a/b/c", ""),
-        request(Kind::Mkdir, 0, 0, "folder/sub", ""),
-        request(Kind::Remove, 1, 0, "folder", ""),
-        request(Kind::Rename, 0, 0, "old.txt", "new.txt"),
-        request(Kind::Closed, 0, 7, "", ""),
-        request(Kind::Waiting, 0, 0, "", ""),
-        request(Kind::Listed, 0, 0, "", ""),
-        request(Kind::Resumed, 0, 0, "", ""),
-        request(Kind::Clock, 1, 0, "", ""),
-        request(Kind::Random, 0, 16, "", ""),
-        encode_reply(-2, b"payload"),
-        Hello {
-            mode: Mode::Test,
-            flags: 7,
-            file_limit: 1 << 20,
-        }
-        .encode()
-        .to_vec(),
-    ]
-}
-
-/// A lock as lengua writes one, to start mutating from.
-const LOCK: &str = "version = 1\n\
+/// A lock as lengua writes one, its signature aside, to start mutating from.
+const LOCK: &str = "# lengua.lock: written only by the lengua MCP server. Do not edit.\n\
+    version = 7\n\
+    dialect = \"webassembly 1\"\n\
+    \n\
+    [request]\n\
+    words = [\"add two numbers\"]\n\
+    idea = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\
+    \n\
     [idea]\n\
     sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n\
-    request = \"add two numbers\"\n\
+    \n\
     [code]\n\
-    target = \"linux-x86_64\"\n\
     sha256 = \"1111111111111111111111111111111111111111111111111111111111111111\"\n\
-    executable_sha256 = \"2222222222222222222222222222222222222222222222222222222222222222\"\n\
-    toolchain = \"llvm-mc 22\"\n";
+    module_sha256 = \"2222222222222222222222222222222222222222222222222222222222222222\"\n\
+    engine = \"wasmtime 50.0.1\"\n\
+    max_stack_bytes = 64\n\
+    unsafe_blocks = 0\n\
+    target = \"webassembly\"\n\
+    features = [\"bulk-memory\"]\n\
+    \n\
+    [proofs]\n\
+    module_sha256 = \"2222222222222222222222222222222222222222222222222222222222222222\"\n\
+    proven = [\"B1\"]\n\
+    solvers = \"z3 and cvc5\"\n";
 
 #[test]
 fn fuzzing_finds_nothing() {

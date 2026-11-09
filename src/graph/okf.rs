@@ -540,12 +540,12 @@ mod tests {
             "add",
             "add",
             Some("Adds two numbers,\n  given as arguments"),
-            Some("main.s"),
+            Some("main.wat"),
         );
         assert_eq!(
             entry,
             "* [add](add/idea.md) - Adds two numbers, given as arguments. \
-             Code: [main.s](add/main.s)"
+             Code: [main.wat](add/main.wat)"
         );
         assert_eq!(entry_target(&entry).as_deref(), Some("add/idea.md"));
         assert_eq!(

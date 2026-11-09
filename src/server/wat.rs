@@ -1,12 +1,13 @@
-//! main.wat's path through `check`, `run` and the command line. An idea that is an Attested
-//! Computation (OKF v0.2 §10) is compiled to main.wat, which lengua builds into one WebAssembly
+//! main.wat's path through `check`, `run` and the command line. An idea is an Attested
+//! Computation (OKF v0.2 §10), compiled to main.wat, which lengua builds into one WebAssembly
 //! module, checks against the WebAssembly dialect's rules, tests in the server's pool of workers
-//! and runs in its own WASI host, the same way on every system: no LLVM, no Linux kernel and no
-//! CPU target take part. Once its tests pass, lengua's WebAssembly prover proves each generated
-//! test as main.s's are proven, in the background, with the same budgets, replies and record in
-//! lengua.lock. At done, idea.md's `verified` list holds lengua's entry for the idea and the code
-//! it checked, until a proof finds the code wrong, and `lengua-mcp check`, the idea's attester,
-//! attests the folder on any computer, with no lock and no key, proving it too.
+//! and runs in its own WASI host, the same way on every system. Once its tests pass, lengua's
+//! WebAssembly prover proves each generated test in the background, within the proof's budget,
+//! and lengua.lock records what it proved. At done, idea.md's `verified` list holds lengua's
+//! entry for the idea and the code it checked, until a proof finds the code wrong, and
+//! `lengua-mcp check`, the idea's attester, attests the folder on any computer, with no lock and
+//! no key, proving it too. A folder that holds the native lengua's main.s, or an idea of its
+//! type, is told where the native lengua went.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -18,10 +19,10 @@ use tokio::sync::watch;
 
 use super::{
     BlockProof, CheckParams, CheckReport, Checking, ConnectionReport, FURTHER, Found, IdeaStage,
-    LenguaServer, Model, Passed, Prover, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun,
-    Stage, VERIFIED_NOTE, Witness, already_serving, background_limits, check_wait, cost_line_in,
-    counted, ended_report, idea_problems, proof_time, proven_detail, random_seed, reaches,
-    read_idea, read_optional, settled, state_of, wait_for, working_folder,
+    LenguaServer, Model, Passed, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun, Stage,
+    VERIFIED_NOTE, Witness, already_serving, background_limits, check_wait, cost_line, counted,
+    ended_report, idea_problems, proof_time, proven_detail, random_seed, reaches, read_idea,
+    read_optional, settled, state_of, wait_for, working_folder,
 };
 use crate::checker::{self, wasm::Obligation};
 use crate::connect::Reach;
@@ -34,7 +35,7 @@ use crate::lock::{self, CodeStamp, Key};
 use crate::platform::{Cache, CacheHolds, Machine};
 use crate::prove::{self, Verdict};
 use crate::runner::{End, Limits};
-use crate::state::{CODE_FILE, IDEA_FILE, ProgramFolder, State, WASM_CODE_FILE};
+use crate::state::{CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, ProgramFolder, State};
 use crate::testfile::{self, TestSuite};
 use crate::testrun;
 use crate::trust;
@@ -55,6 +56,10 @@ const MAX_STDIN_FILE: u64 = 16 * 1024 * 1024;
 /// The most of what the rules leave to the proofs that main.wat's memory line names, each on its
 /// line of main.wat; it counts the rest.
 const SHOWN_OBLIGATIONS: usize = 4;
+
+/// Where the native lengua went, as lengua says it of the native lengua's main.s and ideas.
+const NATIVE_LENGUA: &str = "lengua compiles an idea to main.wat since 0.2.0, and the tag \
+                             native-final keeps the native lengua";
 
 /// What a reply says of main.wat's memory safety once its tests pass: what the rules settle for
 /// every input, what they leave to the proofs, `obligations`, and what the proofs, `proofs`,
@@ -216,105 +221,62 @@ pub(super) async fn replay(
     };
     let ran =
         testrun::check_wasm_case(pool, program, &case, &idea.uses, &idea.network, delivery).await;
-    settled(WASM_CODE_FILE, &described, broken.as_deref(), ran, host)
+    settled(&described, broken.as_deref(), ran, host)
 }
 
-/// Whether `text`, an idea, is an Attested Computation, whose code is main.wat, as its
-/// frontmatter's `type` says: as YAML reads it, or as the key's own line writes it when the
-/// YAML can't be read, so that the idea stage says what's wrong with it the same way on every
-/// system.
-pub(super) fn attested(text: &str) -> bool {
-    let kind = match graph::okf::frontmatter(text) {
-        Some(front) => front.kind,
-        None => written_type(text).map(str::to_owned),
-    };
-    kind.is_some_and(|kind| kind.trim() == idea::ATTESTED_TYPE)
-}
-
-/// The value of the top-level `type` key of `text`'s frontmatter as its line writes it, without
-/// the comment after it or the quotes around it: read line by line, so YAML that can't be read
-/// as a whole doesn't hide it.
-fn written_type(text: &str) -> Option<&str> {
-    let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    let close = trust::closing(&lines)?;
-    let block = trust::blocks(&lines, 1, close)
-        .into_iter()
-        .find(|block| block.key == "type")?;
-    let (_, value) = lines[block.start].split_once(':')?;
-    let value = value.split_once(" #").map_or(value, |(value, _)| value);
-    Some(value.trim().trim_matches(['"', '\'']))
-}
-
-/// Whether `folder`'s idea is an Attested Computation.
-///
-/// # Errors
-///
-/// When its idea.md is there and can't be read.
-pub(super) fn attested_folder(folder: &ProgramFolder) -> Result<bool, String> {
-    Ok(read_optional(folder, IDEA_FILE)?.is_some_and(|text| attested(&text)))
-}
-
-/// What's wrong with `folder`'s code files for its idea, an Attested Computation compiled to
-/// main.wat when `wasm`, else an idea compiled to main.s: both of them, or only the other one.
-/// The reply says so, with the next step for the files that are there.
-pub(super) fn code_file_problem(folder: &ProgramFolder, wasm: bool) -> Option<CheckReport> {
-    let native = folder.file(CODE_FILE).exists();
-    let module = folder.file(WASM_CODE_FILE).exists();
-    let attested_type = format!("`type: {}`", idea::ATTESTED_TYPE);
-    let check = format!("then call check with path {folder}.");
-    let (problem, next_step) = match (wasm, native, module) {
-        (true, true, true) => (
-            format!(
-                "{folder} holds both {CODE_FILE} and {WASM_CODE_FILE}, and {IDEA_FILE} is an \
-                 Attested Computation, which lengua compiles to {WASM_CODE_FILE}: delete \
-                 {CODE_FILE}"
-            ),
-            format!("Next: delete {folder}/{CODE_FILE}, {check}"),
-        ),
-        (true, true, false) => (
-            format!(
-                "{folder} holds {CODE_FILE}, and {IDEA_FILE} is an Attested Computation, which \
-                 lengua compiles to {WASM_CODE_FILE}: compile {IDEA_FILE} into {WASM_CODE_FILE} \
-                 with the compile skill, then delete {CODE_FILE}"
-            ),
-            format!(
-                "Next: compile {folder}/{IDEA_FILE} into {folder}/{WASM_CODE_FILE} with the \
-                 compile skill, delete {folder}/{CODE_FILE}, {check}"
-            ),
-        ),
-        (false, true, true) => (
-            format!(
-                "{folder} holds both {CODE_FILE} and {WASM_CODE_FILE}, and {IDEA_FILE} is `type: \
-                 {}`, which lengua compiles to {CODE_FILE}: delete {WASM_CODE_FILE}, or make \
-                 {IDEA_FILE} an Attested Computation ({attested_type}) with the write-idea skill \
-                 and delete {CODE_FILE}",
-                idea::IDEA_TYPE
-            ),
-            format!(
-                "Next: delete {folder}/{WASM_CODE_FILE}, or make {folder}/{IDEA_FILE} an Attested \
-                 Computation with the write-idea skill and delete {folder}/{CODE_FILE}, {check}"
-            ),
-        ),
-        (false, false, true) => (
-            format!(
-                "{folder} holds {WASM_CODE_FILE}, and {IDEA_FILE} is `type: {}`, which lengua \
-                 compiles to {CODE_FILE}: make {IDEA_FILE} an Attested Computation \
-                 ({attested_type}) with the write-idea skill, or compile it into {CODE_FILE} and \
-                 delete {WASM_CODE_FILE}",
-                idea::IDEA_TYPE
-            ),
-            format!(
-                "Next: make {folder}/{IDEA_FILE} an Attested Computation with the write-idea \
-                 skill, or compile it into {folder}/{CODE_FILE} with the compile skill and delete \
-                 {folder}/{WASM_CODE_FILE}, {check}"
-            ),
-        ),
-        _ => return None,
-    };
+/// What `check` says of `folder` when it holds main.s, the native lengua's code, and no
+/// main.wat: where the native lengua went, and how to go on. Of main.s, only that it is there is
+/// read.
+pub(super) fn native_code(folder: &ProgramFolder) -> Option<CheckReport> {
+    if !folder.file(NATIVE_CODE_FILE).exists() || folder.file(CODE_FILE).exists() {
+        return None;
+    }
     Some(CheckReport::problems(
         "code_problems",
-        vec![problem],
-        next_step,
+        vec![format!(
+            "{folder} holds {NATIVE_CODE_FILE}, the native lengua's code, and no {CODE_FILE}: \
+             {NATIVE_LENGUA}"
+        )],
+        format!(
+            "Next: make {folder}/{IDEA_FILE} an Attested Computation with the write-idea skill if \
+             it isn't one, compile it into {folder}/{CODE_FILE} with the compile skill, delete \
+             {folder}/{NATIVE_CODE_FILE}, then call check with path {folder}."
+        ),
+    ))
+}
+
+/// What's wrong with `folder` when it holds main.s beside main.wat: main.s is the native lengua's
+/// code, one code file too many, which the reply says to delete.
+pub(super) fn both_code_files(folder: &ProgramFolder) -> Option<CheckReport> {
+    if !folder.file(NATIVE_CODE_FILE).exists() || !folder.file(CODE_FILE).exists() {
+        return None;
+    }
+    Some(CheckReport::problems(
+        "code_problems",
+        vec![format!(
+            "{folder} holds both {NATIVE_CODE_FILE} and {CODE_FILE}: {NATIVE_CODE_FILE} is the \
+             native lengua's code, and {NATIVE_LENGUA}: delete {NATIVE_CODE_FILE}"
+        )],
+        format!("Next: delete {folder}/{NATIVE_CODE_FILE}, then call check with path {folder}."),
+    ))
+}
+
+/// Why `idea`, read from `text`, can't be checked when it is an idea of the native lengua's
+/// type: lengua compiles an Attested Computation alone. The problem is on the line that says the
+/// type.
+pub(super) fn type_problem(text: &str, idea: &Idea) -> Option<String> {
+    if idea.attested.is_some() {
+        return None;
+    }
+    let place = text
+        .lines()
+        .position(|line| line.starts_with("type:"))
+        .map_or_else(String::new, |at| format!("line {}: ", at + 1));
+    Some(format!(
+        "{place}{IDEA_FILE} is an idea of the native lengua, which compiled it to \
+         {NATIVE_CODE_FILE}: {NATIVE_LENGUA}; make it an Attested Computation (`type: {}`) with \
+         the write-idea skill",
+        idea::ATTESTED_TYPE
     ))
 }
 
@@ -448,7 +410,7 @@ fn bytes_text(bytes: u64) -> String {
 /// The next step after main.wat's own problems.
 fn fix_code(folder: &ProgramFolder) -> String {
     format!(
-        "Next: fix {folder}/{WASM_CODE_FILE} with the compile skill (the full rules are in its \
+        "Next: fix {folder}/{CODE_FILE} with the compile skill (the full rules are in its \
          references/power-of-10-webassembly.md), then call check with path {folder}."
     )
 }
@@ -494,10 +456,10 @@ pub(super) struct WasmCode {
     obligations: Vec<Obligation>,
 }
 
-/// What keeps main.wat from building on its idea's parts, as for main.s: a part that isn't
-/// checked on this computer or has no main.wat, a function taken from one that isn't its current
-/// code word for word, a function that names a part the idea doesn't build on, and a part the
-/// idea builds on that main.wat takes nothing from.
+/// What keeps main.wat from building on its idea's parts: a part that isn't checked on this
+/// computer or has no main.wat, a function taken from one that isn't its current code word for
+/// word, a function that names a part the idea doesn't build on, and a part the idea builds on
+/// that main.wat takes nothing from.
 fn parts_problems(
     data_dir: &DataDir,
     folder: &ProgramFolder,
@@ -514,7 +476,7 @@ fn parts_problems(
         let wanted = idea::folder_of_link(from);
         let Some(part) = idea.parts.iter().find(|part| part.folder() == wanted) else {
             problems.push(format!(
-                "{WASM_CODE_FILE}'s ${} says `;; from: {from}`, a part {IDEA_FILE} doesn't build \
+                "{CODE_FILE}'s ${} says `;; from: {from}`, a part {IDEA_FILE} doesn't build \
                  on: add `[{wanted}]({wanted}/idea.md)` to its `- Builds on:` line, or drop the \
                  line",
                 function.name
@@ -544,12 +506,12 @@ fn parts_problems(
                 continue;
             }
         }
-        let Ok(theirs) = std::fs::read_to_string(part_folder.join(WASM_CODE_FILE)) else {
+        let Ok(theirs) = std::fs::read_to_string(part_folder.join(CODE_FILE)) else {
             problems.push(format!(
-                "the part [{}]({}) has no {WASM_CODE_FILE}: {WASM_CODE_FILE} takes functions only \
+                "the part [{}]({}) has no {CODE_FILE}: {CODE_FILE} takes functions only \
                  from parts in WebAssembly; make the part an Attested Computation compiled to \
-                 {WASM_CODE_FILE} and call check with path {shown} until it's done, or write ${} \
-                 in {WASM_CODE_FILE} yourself, without its `;; from:` line, and drop the part \
+                 {CODE_FILE} and call check with path {shown} until it's done, or write ${} \
+                 in {CODE_FILE} yourself, without its `;; from:` line, and drop the part \
                  from `- Builds on:`",
                 part.name, part.idea, function.name
             ));
@@ -560,12 +522,12 @@ fn parts_problems(
             .find(|their| their.name == function.name)
         {
             None => problems.push(format!(
-                "{WASM_CODE_FILE}'s ${} says `;; from: {from}`, but {shown}/{WASM_CODE_FILE} has \
+                "{CODE_FILE}'s ${} says `;; from: {from}`, but {shown}/{CODE_FILE} has \
                  no ${}: take it from the part under the name it has there",
                 function.name, function.name
             )),
             Some(their) if their.body != function.body => problems.push(format!(
-                "{WASM_CODE_FILE}'s ${} differs from {shown}/{WASM_CODE_FILE}'s, where it comes \
+                "{CODE_FILE}'s ${} differs from {shown}/{CODE_FILE}'s, where it comes \
                  from: copy it again word for word, keeping its `;; from: {from}` line",
                 function.name
             )),
@@ -575,7 +537,7 @@ fn parts_problems(
     for part in &idea.parts {
         if !used.contains(&part) {
             problems.push(format!(
-                "{IDEA_FILE} builds on [{}]({}), but {WASM_CODE_FILE} takes nothing from it: copy \
+                "{IDEA_FILE} builds on [{}]({}), but {CODE_FILE} takes nothing from it: copy \
                  each function it uses with a `;; from: {}` line above it, or drop the part from \
                  `- Builds on:`",
                 part.name,
@@ -588,10 +550,9 @@ fn parts_problems(
 }
 
 /// Checks that `folder` holds main.wat lengua may run, as `run` does from MCP and from a shell:
-/// its idea and code match lengua.lock, whose stamp is main.wat's, no proof the lock records
-/// found that module wrong, and the module built from it now is byte for byte the one check
-/// tested. Environment variables reach only a program whose idea uses the environment. Gives
-/// the build and the idea.
+/// its idea and code match lengua.lock, no proof the lock records found that module wrong, and
+/// the module built from it now is byte for byte the one check tested. Environment variables
+/// reach only a program whose idea uses the environment. Gives the build and the idea.
 fn runnable(
     data_dir: &DataDir,
     folder: &ProgramFolder,
@@ -602,7 +563,7 @@ fn runnable(
         return Err(format!(
             "lengua runs a program only when its idea and code match lengua.lock, and {folder} \
              doesn't. {}",
-            state.next_step_in(folder, WASM_CODE_FILE)
+            state.next_step(folder)
         ));
     }
     let key = Key::load(data_dir)
@@ -614,11 +575,10 @@ fn runnable(
     let stamp = lock
         .code
         .as_ref()
-        .filter(|stamp| stamp.is_wasm())
-        .ok_or_else(|| format!("{WASM_CODE_FILE} isn't checked; call check with path {folder}."))?;
+        .ok_or_else(|| format!("{CODE_FILE} isn't checked; call check with path {folder}."))?;
     // What a proof found wrong outlasts lengua's restarts: lengua.lock records it.
     if let Some(proofs) = &lock.proofs
-        && proofs.executable_sha256 == stamp.executable_sha256
+        && proofs.module_sha256 == stamp.module_sha256
         && !proofs.wrong.is_empty()
     {
         let wrong: Vec<String> = proofs
@@ -627,13 +587,13 @@ fn runnable(
             .map(|(id, found)| format!("generated {id}: {found}"))
             .collect();
         return Err(format!(
-            "The proof found inputs where {WASM_CODE_FILE} is wrong, so it won't run: {}. Call \
-             check with path {folder} to see them, then fix {WASM_CODE_FILE}.",
+            "The proof found inputs where {CODE_FILE} is wrong, so it won't run: {}. Call \
+             check with path {folder} to see them, then fix {CODE_FILE}.",
             wrong.join("; ")
         ));
     }
-    let code = read_optional(folder, WASM_CODE_FILE)?.ok_or_else(|| {
-        format!("There's no {WASM_CODE_FILE} in {folder}. Write it with the compile skill.")
+    let code = read_optional(folder, CODE_FILE)?.ok_or_else(|| {
+        format!("There's no {CODE_FILE} in {folder}. Write it with the compile skill.")
     })?;
     let idea = read_idea(folder)
         .and_then(|text| idea::parse(&text).map_err(|problems| idea_problems(folder, &problems)))?;
@@ -644,10 +604,10 @@ fn runnable(
         ));
     }
     let built = text::build(&code)
-        .map_err(|problem| format!("{WASM_CODE_FILE} doesn't build: {problem}"))?;
-    if Sha256Hex::of(&built.wasm) != stamp.executable_sha256 {
+        .map_err(|problem| format!("{CODE_FILE} doesn't build: {problem}"))?;
+    if Sha256Hex::of(&built.wasm) != stamp.module_sha256 {
         return Err(format!(
-            "This build of {WASM_CODE_FILE} differs from the module check tested, as after lengua \
+            "This build of {CODE_FILE} differs from the module check tested, as after lengua \
              itself changed, so it won't run. Call check with path {folder} to test this build."
         ));
     }
@@ -751,11 +711,11 @@ pub(super) fn run_from_shell(
 
 impl LenguaServer {
     /// `check`'s stages for an Attested Computation, `idea_text`, up to the first that needs
-    /// work, as for main.s: the idea stage; main.wat built, held to its parts and checked against
-    /// every rule; its tests, then its proofs, in the background; and at done, lengua's entry in
-    /// idea.md's `verified`, which every check takes away first once the idea or the code no
-    /// longer is what it names ([`Self::keep_verified`]), and a proof that finds main.wat wrong
-    /// takes away at once ([`Self::unverify`]).
+    /// work: the idea stage; main.wat built, held to its parts and checked against every rule;
+    /// its tests, then its proofs, in the background; and at done, lengua's entry in idea.md's
+    /// `verified`, which every check takes away first once the idea or the code no longer is what
+    /// it names ([`Self::keep_verified`]), and a proof that finds main.wat wrong takes away at
+    /// once ([`Self::unverify`]).
     pub(super) async fn check_wasm(
         &self,
         folder: &ProgramFolder,
@@ -764,23 +724,17 @@ impl LenguaServer {
         (began, machine): (Instant, &Machine),
         idea_text: &str,
     ) -> Result<CheckReport, String> {
-        let (idea, suite) = match self
-            .idea_stage(folder, params, events, idea_text, WASM_CODE_FILE)
-            .await?
-        {
+        let (idea, suite) = match self.idea_stage(folder, params, events, idea_text).await? {
             IdeaStage::Recorded(recorded) => *recorded,
             IdeaStage::Stops(report) => return Ok(*report),
         };
-        if let Some(report) = code_file_problem(folder, true) {
+        if let Some(report) = both_code_files(folder) {
             return Ok(report);
         }
-        let Some(code) = read_optional(folder, WASM_CODE_FILE)? else {
+        let Some(code) = read_optional(folder, CODE_FILE)? else {
             return Ok(CheckReport {
                 machine: Some(machine_line(machine)),
-                ..CheckReport::new(
-                    "write_code",
-                    State::CodeMissing.next_step_in(folder, WASM_CODE_FILE),
-                )
+                ..CheckReport::new("write_code", State::CodeMissing.next_step(folder))
             });
         };
         let idea_hash = trust::idea_hash(idea_text.as_bytes());
@@ -804,7 +758,7 @@ impl LenguaServer {
         };
         wait_for(&checking, began + check_wait()).await;
         if *checking.stage.borrow() == Stage::Ended {
-            self.write_header(folder, &checking).await;
+            self.verify_once_passed(folder, &checking).await;
         }
         let mut report = self.checking_report(folder, &checking);
         // lengua's entry as the reply says done, though proofs may still be running. When it
@@ -884,8 +838,7 @@ impl LenguaServer {
             .collect();
         let checking = Arc::new(Checking {
             files,
-            code: WASM_CODE_FILE,
-            executable: code.module.clone(),
+            module: code.module.clone(),
             cancel: Arc::default(),
             found: std::sync::Mutex::new(Found {
                 proofs,
@@ -912,11 +865,10 @@ impl LenguaServer {
         checking
     }
 
-    /// The job itself for main.wat, as for main.s: every test, in the pool's workers; once they
-    /// all pass, the code's stamp in lengua.lock, then the proofs, each generated test proven
-    /// with lengua's WebAssembly prover, or taken from what lengua.lock records of this very
-    /// module; and once they end with no input found wrong, lengua's entry in idea.md's
-    /// `verified`.
+    /// The job itself for main.wat: every test, in the pool's workers; once they all pass, the
+    /// code's stamp in lengua.lock, then the proofs, each generated test proven with lengua's
+    /// WebAssembly prover, or taken from what lengua.lock records of this very module; and once
+    /// they end with no input found wrong, lengua's entry in idea.md's `verified`.
     async fn test_and_prove_wasm(
         &self,
         folder: &ProgramFolder,
@@ -940,7 +892,7 @@ impl LenguaServer {
             seed,
             &code.idea.uses,
             &code.idea.network,
-            testrun::workers(None),
+            testrun::workers(),
         )
         .await
         {
@@ -952,13 +904,11 @@ impl LenguaServer {
         }
         let stamp = CodeStamp {
             sha256: code_hash,
-            executable_sha256: checking.executable.clone(),
-            toolchain: engine::ENGINE.to_owned(),
+            module_sha256: checking.module.clone(),
+            engine: engine::ENGINE.to_owned(),
             max_stack_bytes: code.max_stack_bytes,
             unsafe_blocks: u32::try_from(code.unsafe_blocks).unwrap_or(u32::MAX),
-            target: lock::WASM_TARGET.to_owned(),
             features: code.features.clone(),
-            emulator: None,
         };
         if let Err(error) = self.stamp_code(folder, &idea_hash, stamp).await {
             return fail(vec![error]);
@@ -973,32 +923,20 @@ impl LenguaServer {
                     .map(|text| format!("generated {} tried {text}", block.id))
             })
             .collect();
-        let performance: Vec<String> = outcome
-            .costs
-            .iter()
-            .map(|cost| cost_line_in(cost, "WebAssembly operations"))
-            .collect();
+        let performance: Vec<String> = outcome.costs.iter().map(cost_line).collect();
         if let Ok(mut found) = checking.found.lock() {
             found.passed = Some(Passed {
                 runs: outcome.runs,
                 every_value,
                 performance,
                 shown: outcome.shown,
-                header: None,
-                under: None,
             });
         }
         checking.stage.send_replace(Stage::Proving(Instant::now()));
-        let executable = checking.executable.clone();
-        let prover = Prover::Wasm(&code);
-        match self.recorded_proofs(folder, checking, &code.suite, &executable) {
-            None => {
-                self.prove_all(folder, checking, prover, seed, &executable, &[])
-                    .await;
-            }
+        match self.recorded_proofs(folder, checking, &code.suite) {
+            None => self.prove_all(folder, checking, &code, seed, &[]).await,
             Some(further) if !further.is_empty() => {
-                self.prove_all(folder, checking, prover, seed, &executable, &further)
-                    .await;
+                self.prove_all(folder, checking, &code, seed, &further).await;
             }
             Some(_) => {}
         }
@@ -1011,7 +949,18 @@ impl LenguaServer {
         if wrong {
             self.unverify(folder, checking).await;
         }
-        self.write_header(folder, checking).await;
+        self.verify_once_passed(folder, checking).await;
+    }
+
+    /// Writes lengua's entry into idea.md's `verified` for a job whose tests all passed, which
+    /// stamped the code, and whose proofs found no input wrong.
+    async fn verify_once_passed(&self, folder: &ProgramFolder, checking: &Checking) {
+        let passed = checking.found.lock().is_ok_and(|found| {
+            found.passed.is_some() && found.failures.is_empty() && !found.wrong
+        });
+        if passed {
+            self.write_verified(folder, checking).await;
+        }
     }
 
     /// Writes lengua's entry into idea.md's `verified` once check says main.wat is done, or its
@@ -1035,7 +984,7 @@ impl LenguaServer {
             .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
             .and_then(|lock| lock.proofs)
             .is_some_and(|proofs| {
-                proofs.executable_sha256 == checking.executable && !proofs.wrong.is_empty()
+                proofs.module_sha256 == checking.module && !proofs.wrong.is_empty()
             });
         if recorded_wrong {
             return false;
@@ -1044,7 +993,7 @@ impl LenguaServer {
         let Ok(text) = std::fs::read_to_string(&path) else {
             return false;
         };
-        let current = std::fs::read(folder.file(WASM_CODE_FILE))
+        let current = std::fs::read(folder.file(CODE_FILE))
             .ok()
             .map(|bytes| Sha256Hex::of(&bytes));
         if trust::idea_hash(text.as_bytes()) != *idea || current.as_ref() != Some(code) {
@@ -1086,7 +1035,7 @@ impl LenguaServer {
             return text;
         }
         let idea = trust::idea_hash(text.as_bytes());
-        let code = std::fs::read(folder.file(WASM_CODE_FILE))
+        let code = std::fs::read(folder.file(CODE_FILE))
             .ok()
             .map(|bytes| Sha256Hex::of(&bytes));
         let current =
@@ -1144,8 +1093,7 @@ impl LenguaServer {
 
     /// `run` for main.wat: in a worker of its own, in the engine's configuration for runs (a
     /// deadline, nothing counted), reaching only what its idea allows, in `folder` or a fresh
-    /// one; a server stays serving in the background. Its reply is native's, and as for main.s,
-    /// a build a proof found wrong doesn't run.
+    /// one; a server stays serving in the background. A build a proof found wrong doesn't run.
     pub(super) async fn run_wasm(
         &self,
         folder: &ProgramFolder,
@@ -1154,8 +1102,8 @@ impl LenguaServer {
         let (built, idea) = runnable(&self.data_dir, folder, &params.env)?;
         if let Some(wrong) = self.proven_wrong(folder).await {
             return Err(format!(
-                "The proof found inputs where {WASM_CODE_FILE} is wrong, so it won't run: \
-                 {wrong}. Call check with path {folder} to see them, then fix {WASM_CODE_FILE}."
+                "The proof found inputs where {CODE_FILE} is wrong, so it won't run: \
+                 {wrong}. Call check with path {folder} to see them, then fix {CODE_FILE}."
             ));
         }
         let workspace = params.folder.as_deref().map(working_folder).transpose()?;
@@ -1204,12 +1152,11 @@ impl LenguaServer {
             .run(&program, spec, limits)
             .await
             .map_err(|error| format!("couldn't run the program: {error}"))?;
-        Ok(ended_report(&run, &assertions, limits, WASM_CODE_FILE))
+        Ok(ended_report(&run, &assertions, limits))
     }
 
     /// Starts main.wat's server in a worker of its own and leaves it serving, at most one per
-    /// program folder, as `run` does a native one; one that never came to serve is stopped, and
-    /// the reply says how it ended.
+    /// program folder; one that never came to serve is stopped, and the reply says how it ended.
     async fn serve_wasm_in_background(
         &self,
         folder: &ProgramFolder,
@@ -1231,21 +1178,18 @@ impl LenguaServer {
                 .stop()
                 .await
                 .map_err(|error| format!("couldn't stop the program: {error}"))?;
-            return Ok(ended_report(&run, &assertions, limits, WASM_CODE_FILE));
+            return Ok(ended_report(&run, &assertions, limits));
         }
         let connections = running
             .connections()
             .iter()
             .map(ConnectionReport::of)
             .collect();
-        let server = Serving::Wasm(Box::new(running), Arc::clone(program));
-        Ok(self.keep_serving(
-            &mut background,
-            folder,
-            server,
-            (assertions, WASM_CODE_FILE),
-            connections,
-        ))
+        let server = Serving {
+            running: Box::new(running),
+            program: Arc::clone(program),
+        };
+        Ok(self.keep_serving(&mut background, folder, server, assertions, connections))
     }
 }
 
@@ -1295,11 +1239,11 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     };
     let (idea_text, code) = match (
         read_optional(&folder, IDEA_FILE),
-        read_optional(&folder, WASM_CODE_FILE),
+        read_optional(&folder, CODE_FILE),
     ) {
         (Ok(Some(idea_text)), Ok(Some(code))) => (idea_text, code),
         (idea_text, code) => {
-            for (name, read) in [(IDEA_FILE, idea_text), (WASM_CODE_FILE, code)] {
+            for (name, read) in [(IDEA_FILE, idea_text), (CODE_FILE, code)] {
                 match read {
                     Ok(Some(_)) => {}
                     Ok(None) => lines.push(format!("{name}: {folder} has none")),
@@ -1322,15 +1266,9 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
             return false;
         }
     };
-    if idea.attested.is_none() {
-        lines.push(format!(
-            "{IDEA_FILE} is `type: {}`, compiled to {CODE_FILE}: lengua-mcp check attests an \
-             Attested Computation, compiled to {WASM_CODE_FILE}",
-            idea::IDEA_TYPE
-        ));
-        return false;
-    }
-    if let Some(problem) = threads_problem(&idea_text, &idea) {
+    if let Some(problem) =
+        type_problem(&idea_text, &idea).or_else(|| threads_problem(&idea_text, &idea))
+    {
         lines.push(format!("{IDEA_FILE} {problem}"));
         return false;
     }
@@ -1353,7 +1291,7 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
         }
     };
     lines.push(format!(
-        "{WASM_CODE_FILE}: builds into a module of {} bytes, sha256:{}",
+        "{CODE_FILE}: builds into a module of {} bytes, sha256:{}",
         built.wasm.len(),
         Sha256Hex::of(&built.wasm)
     ));
@@ -1368,7 +1306,7 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
         return false;
     }
     lines.push(format!(
-        "{WASM_CODE_FILE}: follows every rule of lengua's WebAssembly dialect"
+        "{CODE_FILE}: follows every rule of lengua's WebAssembly dialect"
     ));
     let launcher = match std::env::current_exe() {
         Ok(launcher) => launcher,
@@ -1400,7 +1338,7 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
         seed,
         &idea.uses,
         &idea.network,
-        testrun::workers(None),
+        testrun::workers(),
     )
     .await
     {
@@ -1450,7 +1388,10 @@ async fn attest_proofs(
     suite: &TestSuite,
     seed: u64,
 ) -> Vec<BlockProof> {
-    let model = Model::Wasm(Arc::clone(program), Policy::of(&idea.uses, &idea.network));
+    let model = Model {
+        program: Arc::clone(program),
+        policy: Policy::of(&idea.uses, &idea.network),
+    };
     let listens = idea.network.listens.is_some();
     let deadline = Instant::now() + proof_time();
     let blocks = suite.generated.len();
@@ -1507,7 +1448,6 @@ async fn attest_proofs(
                             cut_any_way,
                             &unreached,
                             induction.map(|chunk| (chunk, lookback)),
-                            WASM_CODE_FILE,
                         );
                         // Proving on from where a proof stopped is check's, which keeps a lock.
                         (detail.replace(FURTHER, ""), false)
@@ -1552,7 +1492,7 @@ fn verified_lines(idea_text: &str, code: &str, lines: &mut Vec<String>) -> bool 
             }
             if entry.code != code {
                 lines.push(format!(
-                    "verified: {}'s entry names the code {}, and {WASM_CODE_FILE} is {} now",
+                    "verified: {}'s entry names the code {}, and {CODE_FILE} is {} now",
                     entry.by,
                     entry.code.label(),
                     code.label()
@@ -1561,7 +1501,7 @@ fn verified_lines(idea_text: &str, code: &str, lines: &mut Vec<String>) -> bool 
             }
             if named {
                 lines.push(format!(
-                    "verified: {} checked this {IDEA_FILE} and this {WASM_CODE_FILE} at {}",
+                    "verified: {} checked this {IDEA_FILE} and this {CODE_FILE} at {}",
                     entry.by, entry.at
                 ));
             }
@@ -1577,66 +1517,64 @@ mod tests {
     /// The add idea as an Attested Computation.
     const IDEA: &str = include_str!("../../tests/fixtures-wasm/add/idea.md");
 
+    /// An idea of the native lengua's type still parses, and check refuses it on its type's
+    /// line, saying where the native lengua went; an Attested Computation has no such problem.
     #[test]
-    fn an_attested_computation_s_code_is_main_wat() {
-        assert!(attested(IDEA));
-        let native = IDEA.replace(
-            "type: Attested Computation",
-            &format!("type: {}", idea::IDEA_TYPE),
+    fn an_idea_of_the_native_lengua_s_type_is_told_where_it_went() {
+        let (_, body) = IDEA.split_once("\n---\n").expect("the add idea's frontmatter");
+        let native = format!(
+            "---\ntype: {}\ntitle: add\ndescription: Adds two numbers.\n---\n{body}",
+            idea::IDEA_TYPE
         );
-        assert!(!attested(&native));
-        assert!(!attested("# Purpose\n"));
-        // YAML that can't be read still says which code the idea asks for, so the idea stage
-        // reports the YAML's problem on every system.
-        let unreadable = IDEA.replace("title: add", "title: [add");
-        assert!(graph::okf::frontmatter(&unreadable).is_none());
-        assert!(attested(&unreadable));
-        assert!(!attested(&native.replace("title: add", "title: [add")));
-        let quoted = unreadable.replace(
-            "type: Attested Computation",
-            "type: \"Attested Computation\" # OKF",
+        let parsed = idea::parse(&native).unwrap_or_else(|problems| panic!("{problems:#?}"));
+        let problem = type_problem(&native, &parsed).expect("the native lengua's type");
+        assert!(
+            problem.starts_with("line 2: idea.md is an idea of the native lengua"),
+            "{problem}"
         );
-        assert!(attested(&quoted));
+        assert!(
+            problem.contains("main.wat since 0.2.0") && problem.contains("native-final"),
+            "{problem}"
+        );
+        let idea = idea::parse(IDEA).expect("the add idea");
+        assert_eq!(type_problem(IDEA, &idea), None);
     }
 
+    /// main.s, the native lengua's code, is never read: alone, the reply says where the native
+    /// lengua went and how to go on; beside main.wat, it is one code file too many.
     #[test]
-    fn one_code_file_and_the_idea_s_own() {
+    fn main_s_is_the_native_lengua_s_code() {
         let program = tempfile::tempdir().expect("a folder");
         let folder = ProgramFolder::new(program.path().to_str().expect("UTF-8")).expect("absolute");
-        assert!(code_file_problem(&folder, true).is_none());
-        std::fs::write(folder.file(WASM_CODE_FILE), "(module)").expect("write main.wat");
-        assert!(code_file_problem(&folder, true).is_none());
-        let other = code_file_problem(&folder, false).expect("main.wat for main.s's idea");
-        assert_eq!(other.state, "code_problems");
+        assert!(native_code(&folder).is_none());
+        assert!(both_code_files(&folder).is_none());
+        std::fs::write(folder.file(CODE_FILE), "(module)").expect("write main.wat");
+        assert!(native_code(&folder).is_none());
+        assert!(both_code_files(&folder).is_none());
+        std::fs::write(folder.file(NATIVE_CODE_FILE), "_start:\n").expect("write main.s");
+        assert!(native_code(&folder).is_none());
+        let both = both_code_files(&folder).expect("both code files");
+        assert_eq!(both.state, "code_problems");
         assert!(
-            other.problems[0].contains("make idea.md an Attested Computation"),
-            "{other:?}"
+            both.problems[0].contains("holds both main.s and main.wat"),
+            "{both:?}"
         );
-        assert!(
-            other.next_step.contains("Attested Computation"),
-            "{other:?}"
-        );
-        std::fs::write(folder.file(CODE_FILE), "_start:\n").expect("write main.s");
-        for wasm in [true, false] {
-            let both = code_file_problem(&folder, wasm).expect("both code files");
-            assert!(
-                both.problems[0].contains("holds both main.s and main.wat"),
-                "{both:?}"
-            );
-        }
-        let both = code_file_problem(&folder, true).expect("both code files");
         let wanted = format!("Next: delete {folder}/main.s, then call check");
         assert!(both.next_step.starts_with(&wanted), "{both:?}");
         // With main.s alone, the next step makes main.wat first: there is none to keep.
-        std::fs::remove_file(folder.file(WASM_CODE_FILE)).expect("remove main.wat");
-        let other = code_file_problem(&folder, true).expect("main.s for main.wat's idea");
+        std::fs::remove_file(folder.file(CODE_FILE)).expect("remove main.wat");
+        assert!(both_code_files(&folder).is_none());
+        let alone = native_code(&folder).expect("main.s alone");
+        assert_eq!(alone.state, "code_problems");
         assert!(
-            other.problems[0].contains("compile idea.md into main.wat"),
-            "{other:?}"
+            alone.problems[0].contains("main.wat since 0.2.0")
+                && alone.problems[0].contains("the tag native-final keeps the native lengua"),
+            "{alone:?}"
         );
-        let wanted = format!("Next: compile {folder}/idea.md into {folder}/main.wat");
-        assert!(other.next_step.starts_with(&wanted), "{other:?}");
-        assert!(code_file_problem(&folder, false).is_none());
+        let wanted = format!(
+            "compile it into {folder}/main.wat with the compile skill, delete {folder}/main.s"
+        );
+        assert!(alone.next_step.contains(&wanted), "{alone:?}");
     }
 
     #[test]

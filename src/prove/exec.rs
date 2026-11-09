@@ -295,9 +295,6 @@ pub fn explore<C: Core>(
     oracle: &mut dyn Oracle,
     max_runs: usize,
 ) -> Result<Vec<State<C>>, String> {
-    // The states poll comes back in are this exploration's own.
-    let mut start = start;
-    start.world.polled = Rc::default();
     let mut pending = vec![start];
     let mut finished = Vec::new();
     let mut looked = pool.len();

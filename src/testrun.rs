@@ -1,12 +1,12 @@
-//! Runs a program's tests: every example, then every generated block with fresh inputs from a
-//! new seed, boundary values first, as many at once as the machine has cores. Failures say what
-//! was expected and what happened, down to the line of a failed assertion. Once everything
-//! passes, each test's largest input runs again alone, for times the other runs can't disturb.
+//! Runs a program's tests, main.wat's module in lengua's pool of workers: every example, then
+//! every generated block with fresh inputs from a new seed, boundary values first, as many at
+//! once as the machine has cores. Failures say what was expected and what happened, down to the
+//! line of a failed assertion. Once everything passes, each test's largest input runs again
+//! alone, for times the other runs can't disturb.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -14,12 +14,10 @@ use tokio::io::AsyncWriteExt as _;
 
 use serde::Serialize;
 
-use crate::checker::source::{Item, Operand, Source};
 use crate::connect::Reach;
 use crate::idea::ASSERTION_EXIT_CODE;
 use crate::idea::{Network, Use};
-use crate::platform::Allowed;
-use crate::runner::{self, End, Job, Limits, Net, Run};
+use crate::runner::{End, Limits, Run};
 use crate::testfile::{Case, Example, Exchange, Reply};
 use crate::testfile::{TestSuite, describe_inputs};
 
@@ -32,13 +30,10 @@ pub const MAX_FAILURES: usize = 10;
 /// How many times each test's largest input runs alone for its times.
 pub const TIMED_RUNS: usize = 5;
 
-/// How many runs go at once for a program that may start `threads` threads: as many as keep
-/// every core busy, and at least one.
+/// How many runs go at once: one for each core, so every core is busy, and at least one.
 #[must_use]
-pub fn workers(threads: Option<u32>) -> usize {
-    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    let each = threads.map_or(1, |threads| usize::try_from(threads).unwrap_or(1).max(1));
-    (cores / each).max(1)
+pub fn workers() -> usize {
+    std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
 }
 
 /// The smallest, middle and largest of a measurement over runs.
@@ -63,28 +58,20 @@ impl Spread {
     }
 }
 
-/// What one test, or all runs of a generated block, cost. Each measure is missing when the
-/// system doesn't allow the CPU's performance counters.
+/// What one test, or all runs of a generated block, cost.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct Cost {
     /// The test, such as `example B1` or `generated B1`.
     pub test: String,
     /// Runs made, with other tests running at the same time.
     pub runs: usize,
-    /// Instructions executed in the program's own code over those runs: the steadiest measure of
-    /// its work, which other runs don't change.
+    /// The WebAssembly operations the program executed over those runs, as the engine counts
+    /// them: the steadiest measure of its work, which other runs don't change.
     pub instructions: Option<Spread>,
     /// What the times below measured, such as "its largest input, 1048576 bytes, run alone 5
     /// times".
     pub timed: String,
-    /// CPU cycles in the program's own code: its time, with slow instructions such as division
-    /// weighing more.
-    pub cycles: Option<Spread>,
-    /// CPU time in microseconds over all threads, including what the kernel does for its system
-    /// calls.
-    pub cpu_time_us: Option<Spread>,
-    /// Time on the clock in microseconds, from start to end: threads shorten it while CPU time
-    /// stays.
+    /// Time on the clock in microseconds, from start to end.
     pub wall_time_us: Option<Spread>,
 }
 
@@ -93,8 +80,6 @@ pub struct Cost {
 struct Samples {
     runs: usize,
     instructions: Vec<u64>,
-    cycles: Vec<u64>,
-    cpu_time_us: Vec<u64>,
     wall_time_us: Vec<u64>,
 }
 
@@ -102,21 +87,16 @@ impl Samples {
     fn add(&mut self, run: &Run) {
         self.runs += 1;
         self.instructions.extend(run.instructions);
-        self.cycles.extend(run.cycles);
-        self.cpu_time_us
-            .extend(run.cpu_time_ns.map(|nanoseconds| nanoseconds / 1000));
         self.wall_time_us.push(run.wall_time_ns / 1000);
     }
 
-    /// The cost of a test: instructions from every run, times from the runs made alone.
+    /// The cost of a test: operations from every run, times from the runs made alone.
     fn cost(self, test: String, timed: Self, what: &str) -> Cost {
         Cost {
             test,
             runs: self.runs,
             instructions: Spread::of(self.instructions),
             timed: format!("{what}, run alone {} times", timed.runs),
-            cycles: Spread::of(timed.cycles),
-            cpu_time_us: Spread::of(timed.cpu_time_us),
             wall_time_us: Spread::of(timed.wall_time_us),
         }
     }
@@ -129,21 +109,10 @@ pub struct Outcome {
     pub runs: usize,
     /// Failures, at most [`MAX_FAILURES`].
     pub failures: Vec<String>,
-    /// Instruction counts per test, when the CPU's counters are available.
+    /// What each test cost, operations and times.
     pub costs: Vec<Cost>,
     /// The first example as it ran, in one line, for a report to show.
     pub shown: Option<String>,
-}
-
-/// Where the tests run. lengua's broker supplies a test's random bytes and clock, ends its sleeps at
-/// once and checks the names it uses, over a channel the program inherits, on any CPU and under
-/// QEMU too. Under QEMU the runs aren't timed: their instructions are QEMU's.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Setting {
-    /// Whether QEMU's user mode runs the program, for the target's CPU.
-    pub emulated: bool,
-    /// What lengua's broker does for the program, when it serves it over a channel.
-    pub channel: Option<crate::broker::Permit>,
 }
 
 impl Outcome {
@@ -152,38 +121,6 @@ impl Outcome {
     pub fn passed(&self) -> bool {
         self.failures.is_empty()
     }
-}
-
-/// The source line of each assertion, by number.
-#[must_use]
-pub fn assertion_lines(source: &Source) -> BTreeMap<i64, usize> {
-    let mut lines = BTreeMap::new();
-    for function in &source.functions {
-        let instructions: Vec<_> = function
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                Item::Instruction(instruction) => Some(instruction),
-                Item::Label(_) => None,
-            })
-            .collect();
-        for pair in instructions.windows(2) {
-            // x86-64 calls with `call`, AArch64 with `bl`.
-            let calls_assert = matches!(pair[1].mnemonic.as_str(), "call" | "bl")
-                && pair[1].operands == [Operand::Target("assert_fail".into())];
-            if let (
-                true,
-                [
-                    Operand::Register(_),
-                    Operand::Immediate { value, name: None },
-                ],
-            ) = (calls_assert, pair[0].operands.as_slice())
-            {
-                lines.insert(*value, pair[0].line);
-            }
-        }
-    }
-    lines
 }
 
 /// Shows expected text as a quoted string, with its rules written as `{any(lo, hi)}`.
@@ -203,20 +140,9 @@ fn show(bytes: &[u8]) -> String {
     }
 }
 
-/// How a run ended, naming the line of a failed assertion in main.s.
+/// How a run ended, naming the line of a failed assertion in main.wat.
 #[must_use]
 pub fn explain_end(run: &Run, assertions: &BTreeMap<i64, usize>, limits: Limits) -> String {
-    explain_end_in(run, assertions, limits, NATIVE_CODE)
-}
-
-/// [`explain_end`] for a program whose code file is `code`: main.s, or main.wat.
-#[must_use]
-pub fn explain_end_in(
-    run: &Run,
-    assertions: &BTreeMap<i64, usize>,
-    limits: Limits,
-    code: &str,
-) -> String {
     match run.end {
         End::Exited(status) if status == i32::from(ASSERTION_EXIT_CODE) => {
             let none = BTreeMap::new();
@@ -233,7 +159,6 @@ pub fn explain_end_in(
                 now: 0,
                 random_supplied: None,
                 serves: false,
-                code,
             };
             compare(run, &expected, assertions).unwrap_or_else(|| run.end.describe(limits))
         }
@@ -262,12 +187,7 @@ struct Expected<'a> {
     random_supplied: Option<usize>,
     /// Whether the program must still be serving at the end, instead of exiting.
     serves: bool,
-    /// The code file a failed assertion's line is in: main.s or main.wat.
-    code: &'a str,
 }
-
-/// A native program's code file, which a failed assertion's line is in.
-const NATIVE_CODE: &str = "main.s";
 
 /// Why a run's files don't match, if they don't.
 fn compare_files(run: &Run, expected: &Expected<'_>, problems: &mut Vec<String>) {
@@ -376,10 +296,10 @@ fn compare(
         exit_code,
         now,
         serves,
-        code: code_file,
         ..
     } = *expected;
-    // A broker that stopped serving the program is the failure to report; running out of the
+    let code_file = crate::wasm::CODE_FILE;
+    // A host that couldn't run the program as asked is the failure to report; running out of the
     // test's random bytes stops nothing (the rest are zeros), and a failing test says so below.
     if let Some(problem) = &run.supplied {
         return Some(problem.clone());
@@ -452,43 +372,8 @@ fn compare(
     (!problems.is_empty()).then(|| problems.join("; "))
 }
 
-/// Runs `program` on one generated case and says what's wrong, if anything.
-///
-/// # Errors
-///
-/// Fails when the program can't be started.
-#[allow(clippy::too_many_arguments)]
-pub async fn check_case(
-    launcher: &Path,
-    program: &Path,
-    source: &Source,
-    case: &crate::testfile::Case,
-    syscalls: &[Allowed],
-    network: &Network,
-    delivery: Delivery,
-    channel: Option<crate::broker::Permit>,
-) -> io::Result<Option<String>> {
-    let target = Target::Native {
-        launcher,
-        executable: program,
-        syscalls,
-        emulated: false,
-        channel,
-    };
-    let (_, problem) = check_one(
-        target,
-        &Test::of_case(case),
-        network,
-        delivery,
-        &assertion_lines(source),
-    )
-    .await?;
-    Ok(problem)
-}
-
 /// Runs the WebAssembly program `module` on one generated case, in `pool`'s workers, and says
-/// what's wrong, if anything, as [`check_case`] does a native program: its idea's `uses` and
-/// `network` say what its host gives it.
+/// what's wrong, if anything: its idea's `uses` and `network` say what its host gives it.
 ///
 /// # Errors
 ///
@@ -501,7 +386,7 @@ pub async fn check_wasm_case(
     network: &Network,
     delivery: Delivery,
 ) -> io::Result<Option<String>> {
-    let target = Target::Wasm {
+    let target = Target {
         pool,
         module,
         policy: crate::wasm::Policy::of(uses, network),
@@ -517,86 +402,15 @@ pub async fn check_wasm_case(
     Ok(problem)
 }
 
-/// What a test runs: a native executable through lengua's launcher, or a WebAssembly module in
-/// lengua's pool of workers.
+/// What a test runs: a WebAssembly module in lengua's pool of workers.
 #[derive(Clone, Copy)]
-enum Target<'a> {
-    /// A native program.
-    Native {
-        /// This server's own binary, which launches it.
-        launcher: &'a Path,
-        /// The executable.
-        executable: &'a Path,
-        /// The system calls it may make.
-        syscalls: &'a [Allowed],
-        /// Whether QEMU's user mode runs it.
-        emulated: bool,
-        /// What lengua's broker does for it.
-        channel: Option<crate::broker::Permit>,
-    },
-    /// A WebAssembly program.
-    Wasm {
-        /// The workers it runs in.
-        pool: &'a crate::wasm::Pool,
-        /// The module.
-        module: &'a crate::wasm::Program,
-        /// What its idea lets it reach.
-        policy: crate::wasm::Policy,
-    },
-}
-
-impl Target<'_> {
-    /// The code file a failed assertion's line is in.
-    const fn code(&self) -> &'static str {
-        match self {
-            Self::Native { .. } => NATIVE_CODE,
-            Self::Wasm { .. } => crate::wasm::CODE_FILE,
-        }
-    }
-}
-
-/// A test's program that is running, native or WebAssembly.
-enum Started {
-    /// A native program.
-    Native(Box<runner::Started>),
-    /// A WebAssembly program.
-    Wasm(Box<crate::wasm::Running>),
-}
-
-impl Started {
-    /// A native program that started.
-    fn native(started: runner::Started) -> Self {
-        Self::Native(Box::new(started))
-    }
-
-    /// A WebAssembly program that started.
-    fn wasm(running: crate::wasm::Running) -> Self {
-        Self::Wasm(Box::new(running))
-    }
-
-    /// The loopback port it serves on, when it serves.
-    fn port(&self) -> Option<u16> {
-        match self {
-            Self::Native(started) => started.port(),
-            Self::Wasm(running) => running.port(),
-        }
-    }
-
-    /// Waits for it to end.
-    async fn wait(self) -> io::Result<Run> {
-        match self {
-            Self::Native(started) => started.wait().await,
-            Self::Wasm(running) => running.wait().await,
-        }
-    }
-
-    /// Stops it now, as lengua does a server that's still serving.
-    async fn stop(self) -> io::Result<Run> {
-        match self {
-            Self::Native(started) => started.stop().await,
-            Self::Wasm(running) => running.stop().await,
-        }
-    }
+struct Target<'a> {
+    /// The workers it runs in.
+    pool: &'a crate::wasm::Pool,
+    /// The module.
+    module: &'a crate::wasm::Program,
+    /// What its idea lets it reach.
+    policy: crate::wasm::Policy,
 }
 
 /// Starts the test's own servers on the program's connections, each from the start: `peers` are
@@ -860,7 +674,7 @@ async fn check_one_way(
     let stdin = test.stdin;
     // A test's program reaches only the test's own servers: each connection its idea names is
     // answered by the test's server for it, or handed over ended when the test has none.
-    let connections = (0..network.connections.len())
+    let connections: Vec<Reach> = (0..network.connections.len())
         .map(|number| {
             if test.server.iter().any(|reply| reply.connection == number) {
                 Reach::Peer
@@ -869,12 +683,8 @@ async fn check_one_way(
             }
         })
         .collect();
-    let net = Net {
-        connections,
-        listen: network.listens.map(|_| 0),
-        // Tests serve on the loopback, whoever the idea serves.
-        serve_anywhere: false,
-    };
+    // A server listens on a port of its own, on the loopback, whoever the idea serves.
+    let listen = network.listens.map(|_| (0, false));
     // Standard input arrives as the run's delivery cuts it: whole, in the pieces every other
     // generated run sends, or where a proof found a cut that matters. So a program that reads it
     // as if it came whole fails, even where its proof doesn't finish.
@@ -888,55 +698,25 @@ async fn check_one_way(
             Delivery::Pieces | Delivery::FirstTwo | Delivery::LastTwo
         );
     let now = crate::expect::now();
-    let mut started = match target {
-        Target::Native {
-            launcher,
-            executable,
-            syscalls,
-            emulated,
-            channel,
-        } => {
-            let job = Job {
-                files: test.files,
-                folders: test.folders,
-                env: test.env,
-                supply: Some(&supply),
-                net: Some(&net),
-                stdin_pieces: &stdin_pieces,
-                emulated,
-                reversed,
-                channel,
-                stdout_closed: test.stdout_closed,
-                ..Job::new(executable, &args, stdin.as_bytes(), syscalls)
-            };
-            Started::native(runner::start(launcher, job, Limits::default()).await?)
-        }
-        Target::Wasm {
-            pool,
-            module,
-            policy,
-        } => {
-            let spec = crate::wasm::Spec {
-                stdin_pieces: &stdin_pieces,
-                files: test.files,
-                folders: test.folders,
-                env: test.env,
-                supply: Some(&supply),
-                connections: &net.connections,
-                listen: net.listen.map(|port| (port, false)),
-                reversed,
-                stdout_closed: test.stdout_closed,
-                ..crate::wasm::Spec::new(&args, stdin.as_bytes(), policy)
-            };
-            Started::wasm(pool.start(module, spec, Limits::default()).await?)
-        }
+    let spec = crate::wasm::Spec {
+        stdin_pieces: &stdin_pieces,
+        files: test.files,
+        folders: test.folders,
+        env: test.env,
+        supply: Some(&supply),
+        connections: &connections,
+        listen,
+        reversed,
+        stdout_closed: test.stdout_closed,
+        ..crate::wasm::Spec::new(&args, stdin.as_bytes(), target.policy)
     };
+    let mut started = target
+        .pool
+        .start(target.module, spec, Limits::default())
+        .await?;
     let mut problem = None;
     // The test's servers speak on the program's own connections, each from the start.
-    let servers = match &mut started {
-        Started::Native(native) => spawn_servers(native.take_peers(), test, network, delivery),
-        Started::Wasm(running) => spawn_servers(running.take_peers(), test, network, delivery),
-    };
+    let servers = spawn_servers(started.take_peers(), test, network, delivery);
     let run = if let Some(port) = started
         .port()
         .filter(|_| !test.client.is_empty() || test.serves)
@@ -947,10 +727,7 @@ async fn check_one_way(
             talk(port, test.client, delivery, now).await.err()
         };
         if test.serves {
-            let waiting = match &started {
-                Started::Native(native) => waiting_for_connections(native).await,
-                Started::Wasm(running) => wasm_waiting_for_connections(running).await,
-            };
+            let waiting = waiting_for_connections(&started).await;
             if problem.is_none() && !waiting {
                 problem = Some(
                     "after its connections the program wasn't waiting for the next one, as a \
@@ -985,7 +762,6 @@ async fn check_one_way(
         now,
         random_supplied: supply.random.as_ref().map(Vec::len),
         serves: test.serves,
-        code: target.code(),
     };
     let problem = match (problem, compare(&run, &expected, assertions)) {
         (Some(network), Some(rest)) => Some(format!("{network}; {rest}")),
@@ -1263,33 +1039,8 @@ async fn talk_at_once(port: u16, exchanges: &[Exchange], now: i128) -> Result<()
 }
 
 /// Whether the program is waiting for the next connection, checked for up to half a second: its
-/// broker has been told that it waits in `os_accept` or `os_poll`, or, where it has none, it is in
-/// `accept4` on file descriptor 3 or, serving clients at once, in `poll` or `ppoll`. The numbers
-/// are this computer's: an AArch64 server here, emulated, waits in QEMU's own calls.
-async fn waiting_for_connections(started: &runner::Started) -> bool {
-    if started.waiting().is_some() {
-        for _ in 0..100 {
-            if started.waiting() == Some(true) {
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        return false;
-    }
-    let path = format!("/proc/{}/syscall", started.pid());
-    for _ in 0..100 {
-        match tokio::fs::read_to_string(&path).await {
-            Ok(call) if waits_for_connections(&call) => return true,
-            Ok(_) => tokio::time::sleep(Duration::from_millis(5)).await,
-            Err(_) => return false,
-        }
-    }
-    false
-}
-
-/// Whether a WebAssembly program is waiting for the next connection, checked for up to half a
-/// second: its host says so while it waits in `sock_accept` or `poll_oneoff`.
-async fn wasm_waiting_for_connections(running: &crate::wasm::Running) -> bool {
+/// host says so while it waits in `sock_accept` or `poll_oneoff`.
+async fn waiting_for_connections(running: &crate::wasm::Running) -> bool {
     for _ in 0..100 {
         if running.waiting() {
             return true;
@@ -1297,16 +1048,6 @@ async fn wasm_waiting_for_connections(running: &crate::wasm::Running) -> bool {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     false
-}
-
-/// Whether `call`, a line of `/proc/PID/syscall`, is a wait for connections: `accept4` on
-/// descriptor 3, or `poll` or `ppoll`, by this computer's numbers.
-fn waits_for_connections(call: &str) -> bool {
-    use crate::syscalls::host;
-    call.starts_with(&format!("{} 0x3 ", host::ACCEPT4))
-        || host::WAITS
-            .iter()
-            .any(|number| call.starts_with(&format!("{number} ")))
 }
 
 /// How long a shown text may be.
@@ -1392,34 +1133,17 @@ fn record(outcome: &mut Outcome, message: String) {
     }
 }
 
-/// What every run of a check shares.
+/// What every run of a check shares: the module, in lengua's pool of workers, what its idea lets
+/// it reach, and its assertions' lines in main.wat.
 struct Shared {
-    program: Program,
+    /// The workers.
+    pool: crate::wasm::Pool,
+    /// The module.
+    module: Arc<crate::wasm::Program>,
+    /// What its idea lets it reach.
+    policy: crate::wasm::Policy,
     network: Network,
     assertions: BTreeMap<i64, usize>,
-    setting: Setting,
-}
-
-/// The program a check's runs run.
-enum Program {
-    /// A native executable, through lengua's launcher.
-    Native {
-        /// This server's own binary.
-        launcher: PathBuf,
-        /// The executable.
-        executable: PathBuf,
-        /// The system calls it may make.
-        syscalls: Vec<Allowed>,
-    },
-    /// A WebAssembly module, in lengua's pool of workers.
-    Wasm {
-        /// The workers.
-        pool: crate::wasm::Pool,
-        /// The module.
-        module: Arc<crate::wasm::Program>,
-        /// What its idea lets it reach.
-        policy: crate::wasm::Policy,
-    },
 }
 
 /// A test a run owns, so runs can go at once.
@@ -1442,27 +1166,10 @@ async fn run_one(
     test: &Owned,
     delivery: Delivery,
 ) -> io::Result<(Run, Option<String>)> {
-    let target = match &shared.program {
-        Program::Native {
-            launcher,
-            executable,
-            syscalls,
-        } => Target::Native {
-            launcher,
-            executable,
-            syscalls,
-            emulated: shared.setting.emulated,
-            channel: shared.setting.channel,
-        },
-        Program::Wasm {
-            pool,
-            module,
-            policy,
-        } => Target::Wasm {
-            pool,
-            module,
-            policy: *policy,
-        },
+    let target = Target {
+        pool: &shared.pool,
+        module: &shared.module,
+        policy: shared.policy,
     };
     check_one(
         target,
@@ -1510,41 +1217,10 @@ fn timed_out() -> String {
     format!("the tests took longer than {TOTAL_TIMEOUT:?}")
 }
 
-/// Runs every test of `suite` against `program`, drawing generated inputs from `seed`, up to
-/// `workers` runs at once. The kernel lets the program make only the system calls in
-/// `syscalls`. The failures reported are the ones running the tests one at a time would give:
-/// every failing example, and each block's lowest-numbered failing run.
-///
-/// # Errors
-///
-/// Fails when the program can't be started at all.
-#[allow(clippy::too_many_arguments)]
-pub async fn run_tests(
-    suite: &TestSuite,
-    launcher: &Path,
-    program: &Path,
-    source: &Source,
-    seed: u64,
-    syscalls: &[Allowed],
-    network: &Network,
-    workers: usize,
-    setting: Setting,
-) -> io::Result<Outcome> {
-    let shared = Arc::new(Shared {
-        program: Program::Native {
-            launcher: launcher.to_owned(),
-            executable: program.to_owned(),
-            syscalls: syscalls.to_vec(),
-        },
-        network: network.clone(),
-        assertions: assertion_lines(source),
-        setting,
-    });
-    run_all(suite, shared, seed, workers).await
-}
-
-/// Runs every test of `suite` against the WebAssembly program `module`, in `pool`'s workers, as
-/// [`run_tests`] runs a native one: its idea's `uses` and `network` say what its host gives it.
+/// Runs every test of `suite` against the WebAssembly program `module`, in `pool`'s workers,
+/// drawing generated inputs from `seed`, up to `workers` runs at once: its idea's `uses` and
+/// `network` say what its host gives it. The failures reported are the ones running the tests one
+/// at a time would give: every failing example, and each block's lowest-numbered failing run.
 ///
 /// # Errors
 ///
@@ -1560,25 +1236,21 @@ pub async fn run_wasm_tests(
 ) -> io::Result<Outcome> {
     let shared = Arc::new(Shared {
         assertions: module.built().assertions.clone(),
-        program: Program::Wasm {
-            pool: pool.clone(),
-            module,
-            policy: crate::wasm::Policy::of(uses, network),
-        },
+        pool: pool.clone(),
+        module,
+        policy: crate::wasm::Policy::of(uses, network),
         network: network.clone(),
-        setting: Setting::default(),
     });
     run_all(suite, shared, seed, workers).await
 }
 
-/// [`run_tests`]' work, for either kind of program.
+/// [`run_wasm_tests`]' work.
 async fn run_all(
     suite: &TestSuite,
     shared: Arc<Shared>,
     seed: u64,
     workers: usize,
 ) -> io::Result<Outcome> {
-    let setting = shared.setting;
     let workers = workers.max(1);
     let deadline = Instant::now() + TOTAL_TIMEOUT;
     let mut outcome = Outcome::default();
@@ -1737,7 +1409,7 @@ async fn run_all(
             (None, None) => {}
         }
     }
-    if !outcome.passed() || setting.emulated {
+    if !outcome.passed() {
         return Ok(outcome);
     }
 
@@ -1777,8 +1449,6 @@ mod tests {
             stderr: stderr.as_bytes().to_vec(),
             end: End::Exited(code),
             instructions: Some(100),
-            cycles: Some(300),
-            cpu_time_ns: Some(1000),
             wall_time_ns: 2000,
             files: Ok(BTreeMap::new()),
             folders: BTreeSet::new(),
@@ -1808,7 +1478,6 @@ mod tests {
             now: 1_735_689_600,
             random_supplied: None,
             serves: false,
-            code: NATIVE_CODE,
         }
     }
 
@@ -1867,14 +1536,19 @@ mod tests {
         let run = finished("", "lengua: assertion 007 failed\n", 134);
         assert_eq!(
             compare(&run, &nothing, &lines),
-            Some("assertion 7 failed at main.s:42".to_owned())
+            Some("assertion 7 failed at main.wat:42".to_owned())
         );
-        let killed = Run {
-            end: End::Signaled(11),
+        // A trap names its line of main.wat too.
+        let trapped = Run {
+            end: End::Trapped(crate::runner::Trap::OutOfBounds, Some(12)),
             ..finished("", "", 0)
         };
-        assert!(
-            compare(&killed, &nothing, &lines).is_some_and(|problem| problem.contains("SIGSEGV"))
+        assert_eq!(
+            compare(&trapped, &nothing, &lines),
+            Some(
+                "the program was trapped at main.wat line 12: it reached memory outside its own"
+                    .to_owned()
+            )
         );
     }
 
@@ -1970,36 +1644,6 @@ mod tests {
         );
     }
 
-    /// The shipped main template of x86-64.
-    const TEMPLATE: &str = include_str!("../plugin/skills/compile/assets/main-template.s");
-
-    /// The shipped main template of AArch64.
-    const AARCH64_TEMPLATE: &str =
-        include_str!("../plugin/skills/compile/assets/linux-aarch64/main-template.s");
-
-    #[test]
-    fn finds_assertion_lines_in_the_source() {
-        let (source, _) = crate::checker::source::parse(TEMPLATE);
-        let lines = assertion_lines(&source);
-        assert_eq!(lines.len(), 11);
-        let line = lines[&4];
-        let text = TEMPLATE.lines().nth(line - 1).expect("the line");
-        assert_eq!(text.trim(), "mov edi, 4");
-    }
-
-    #[test]
-    fn finds_assertion_lines_in_the_aarch64_source_as_in_the_x86_64_one() {
-        let (source, _) = crate::checker::source::parse(AARCH64_TEMPLATE);
-        let lines = assertion_lines(&source);
-        // As many as the x86-64 template's, one at each place its code calls assert_fail.
-        assert_eq!(lines.len(), 11);
-        let text = AARCH64_TEMPLATE
-            .lines()
-            .nth(lines[&4] - 1)
-            .expect("the line");
-        assert_eq!(text.trim(), "mov w0, #4");
-    }
-
     #[test]
     fn summarizes_measurements() {
         assert_eq!(
@@ -2019,15 +1663,14 @@ mod tests {
         });
         let mut timed = Samples::default();
         timed.add(&Run {
-            cycles: Some(250),
+            wall_time_ns: 250_000,
             ..finished("", "", 0)
         });
         let cost = samples.cost("generated B1".into(), timed, "its largest input, 3 bytes");
         assert_eq!(cost.runs, 2);
         assert_eq!(cost.instructions.map(|spread| spread.median), Some(100));
         // Times come from the runs made alone.
-        assert_eq!(cost.cycles.map(|spread| spread.max), Some(250));
-        assert_eq!(cost.cpu_time_us.map(|spread| spread.max), Some(1));
+        assert_eq!(cost.wall_time_us.map(|spread| spread.max), Some(250));
         assert_eq!(cost.timed, "its largest input, 3 bytes, run alone 1 times");
     }
 }

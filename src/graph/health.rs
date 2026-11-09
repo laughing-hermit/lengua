@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use super::{Finding, Graph, Health, Node, Severity, Stale, Stop};
-use crate::state::{CODE_FILE, CODE_FILES, IDEA_FILE};
+use crate::state::{CODE_FILE, IDEA_FILE};
 
 /// The most folders a search for a cycle goes through.
 const MAX_VISITS: usize = 20_000;
@@ -85,10 +85,7 @@ fn about(graph: &Graph, node: &Node, linked: &BTreeSet<PathBuf>, findings: &mut 
     if node.code.is_none() {
         say(
             Severity::Note,
-            format!(
-                "{shown} is not built yet: it has no {}",
-                CODE_FILES.join(" or ")
-            ),
+            format!("{shown} is not built yet: it has no {CODE_FILE}"),
         );
     }
     if let Some(changed) = node.stale {

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use crate::data_dir::DataDir;
 use crate::lock::{self, Key};
-use crate::state::{CODE_FILES, IDEA_FILE};
+use crate::state::{CODE_FILE, IDEA_FILE};
 
 pub use okf::Day;
 pub use scan::{Bounds, Root, Stop};
@@ -55,7 +55,7 @@ pub struct Node {
     pub path: String,
     /// Its idea.md.
     pub idea: PathBuf,
-    /// Its code file's name, when it holds one: the first of [`CODE_FILES`] there.
+    /// Its code file's name, [`CODE_FILE`], when it holds one.
     pub code: Option<&'static str>,
     /// The idea's title, or the folder's name when it has none.
     pub title: String,
@@ -296,9 +296,7 @@ impl Node {
         let bytes = std::fs::read(&idea).unwrap_or_default();
         let text = String::from_utf8_lossy(&bytes);
         let front = okf::frontmatter(&text).unwrap_or_default();
-        let code = CODE_FILES
-            .into_iter()
-            .find(|name| folder.join(name).is_file());
+        let code = folder.join(CODE_FILE).is_file().then_some(CODE_FILE);
         let links = okf::idea_links(&text);
         let follow = |(line, target): (usize, String)| Link {
             path: resolve(root, folder, &target),
@@ -362,7 +360,7 @@ fn folder_of(path: &Path) -> &Path {
     let names_a_file = path
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name == IDEA_FILE || CODE_FILES.contains(&name));
+        .is_some_and(|name| name == IDEA_FILE || name == CODE_FILE);
     match path.parent() {
         Some(folder) if names_a_file => folder,
         _ => path,
@@ -413,7 +411,7 @@ fn stale(folder: &Path, idea: &[u8], code: Option<&str>, key: Option<&Key>) -> O
     let stamp = recorded.code?;
     let name = code?;
     let bytes = std::fs::read(folder.join(name)).ok()?;
-    (stamp.sha256 != crate::state::code_hash(name, &bytes)).then_some(Stale::Code)
+    (stamp.sha256 != crate::hash::Sha256Hex::of(&bytes)).then_some(Stale::Code)
 }
 
 /// `count` things, in the plural unless there's one.

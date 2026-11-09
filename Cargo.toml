@@ -31,9 +31,9 @@ path = "src/bin/lengua-spawn.rs"
 cap-std = "=4.0.3"
 getrandom = "0.4"
 hmac = "0.13"
-# The calls that need unsafe code, each in a safe function (this crate forbids unsafe code): on a
-# Unix, the signal a file's size limit sends; on Windows, a process's times and peak memory, which
-# `lengua-mcp measure` reads, and the CPU's caches.
+# The calls that need unsafe code, each in a safe function (this crate forbids unsafe code): on
+# Linux, the fork lengua-spawn runs a program in, and its counts; on Windows, a process's times and
+# peak memory, which `lengua-mcp measure` reads, and the CPU's caches.
 lengua-os = { path = "crates/lengua-os" }
 rand = { version = "0.10", default-features = false, features = ["chacha"] }
 rmcp = { version = "3.8.0", features = ["transport-io"] }

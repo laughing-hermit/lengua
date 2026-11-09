@@ -45,13 +45,6 @@ pub struct Client {
     pub held: bool,
 }
 
-/// The states a run came back from poll in, the latest first.
-#[derive(Debug)]
-pub struct History {
-    key: Vec<u64>,
-    before: Option<Rc<History>>,
-}
-
 /// Where one of the test's clients stands, for a server that waits on its connections with
 /// poll: the steps it has taken, connecting and then each piece of what it sends arriving, and
 /// whether it has closed its side. Between two polls each client takes any of the steps open
@@ -127,76 +120,6 @@ impl World {
         })
     }
 
-    /// Whether the client's next step can come now: connecting, after the client before it has
-    /// connected (at once) or has its answer; each piece of what it sends, its held last piece
-    /// once every client after it has its answer; then closing its side once its answer has
-    /// begun, or at once when it waits for none.
-    fn can_step(&self, client: usize) -> bool {
-        let network = &self.network;
-        let Some(peer) = self.peers.as_ref().map(|peers| peers[client]) else {
-            return false;
-        };
-        let them = &network.client[client];
-        let pieces = them.pieces.len();
-        if peer.closed {
-            return false;
-        }
-        match peer.steps {
-            0 if client == 0 => true,
-            0 if network.at_once => self
-                .peers
-                .as_ref()
-                .is_some_and(|peers| peers[client - 1].steps >= 1),
-            0 => self.answered(client - 1),
-            steps if steps <= pieces => {
-                !(them.held && steps == pieces)
-                    || (client + 1..network.client.len()).all(|newer| self.answered(newer))
-            }
-            _ => {
-                !them.waits
-                    || self.connections.iter().any(|connection| {
-                        connection.accepted
-                            && connection.exchange == client
-                            && !connection.sent.is_empty()
-                    })
-            }
-        }
-    }
-
-    /// The client's next step.
-    fn step_client(&mut self, client: usize) {
-        let pieces = self.network.client[client].pieces.len();
-        if let Some(peers) = self.peers.as_mut() {
-            let peer = &mut peers[client];
-            if peer.steps <= pieces {
-                peer.steps += 1;
-            } else {
-                peer.closed = true;
-            }
-        }
-    }
-
-    /// Whether a read of `fd` has something: the listener a client that has connected and isn't
-    /// taken, a connection bytes that have arrived and aren't read, or its client's side closed.
-    pub(in crate::prove) fn readable(&self, fd: u64) -> bool {
-        let Some(peers) = self.peers.as_ref() else {
-            return false;
-        };
-        if self.network.listening && fd == 3 {
-            return (0..peers.len()).any(|client| peers[client].steps >= 1 && !self.taken(client));
-        }
-        let Some(Some(number)) = self.sockets.get(&fd) else {
-            return false;
-        };
-        let connection = &self.connections[*number];
-        if !connection.accepted {
-            return false;
-        }
-        let peer = peers[connection.exchange];
-        let arrived = peer.steps.saturating_sub(1);
-        peer.closed || arrived > connection.piece
-    }
-
     /// How a server that polls ends when nothing it waits on can come any more: serving, once
     /// every client has its whole answer, or stuck, where one is still waiting.
     pub(in crate::prove) fn idle(&self) -> End {
@@ -220,95 +143,6 @@ impl World {
     #[must_use]
     pub const fn polled(&self) -> bool {
         self.peers.is_some()
-    }
-
-    /// The test's clients, each before its first step, the first time the program waits on its
-    /// connections with poll.
-    ///
-    /// # Errors
-    ///
-    /// Where the program took connections before it first polled, which the model doesn't
-    /// follow.
-    pub(in crate::prove) fn start_polling(&mut self) -> Result<(), Stop> {
-        if self.peers.is_none() {
-            if !self.connections.is_empty() {
-                return Err(unsupported(
-                    "poll over connections taken before the program first polled",
-                ));
-            }
-            self.peers = Some(vec![Peer::default(); self.network.client.len()]);
-        }
-        Ok(())
-    }
-
-    /// Every way the test's clients can stand when a poll comes back, the world as each leaves
-    /// it: each client in turn takes none, some or all of the steps open to it; or, for a
-    /// sample's eager clients, all of them.
-    pub(in crate::prove) fn polls(&self) -> Vec<Self> {
-        let eager = self.network.eager;
-        let mut worlds = vec![self.clone()];
-        for client in 0..self.network.client.len() {
-            let mut next = Vec::new();
-            for world in worlds {
-                let mut moved = world.clone();
-                if !eager {
-                    next.push(world);
-                }
-                while moved.can_step(client) {
-                    moved.step_client(client);
-                    if !eager {
-                        next.push(moved.clone());
-                    }
-                }
-                if eager {
-                    next.push(moved);
-                }
-            }
-            worlds = next;
-        }
-        worlds
-    }
-
-    /// Whether a run that came back from poll in the state `key` stands for goes on from it. One
-    /// back where it came back from before, with no client able to take a step, goes round its
-    /// loop forever while a client waits: it ends stuck there; with a client able to, the runs
-    /// where one does go on instead. Where the clients took steps since the last poll
-    /// (`advanced`), a run that comes to a state another run already came to goes no further:
-    /// that one goes on for both. A loop can't take in such a state, as the clients' steps only
-    /// add up, so every loop is still found on one run. A run with no key, with files or threads
-    /// in hand, is always followed.
-    pub(in crate::prove) fn come_back(&mut self, key: Option<Vec<u64>>, advanced: bool) -> bool {
-        let Some(key) = key else {
-            return true;
-        };
-        let mut before = self.history.as_deref();
-        while let Some(history) = before {
-            if history.key == key {
-                let clients = self.network.client.len();
-                if (0..clients).any(|client| self.can_step(client)) {
-                    return false;
-                }
-                self.end = Some(match self.idle() {
-                    End::Serving => End::Stuck(
-                        "it goes round its loop forever, poll saying a connection is ready that \
-                         it never reads"
-                            .into(),
-                    ),
-                    End::Stuck(why) => End::Stuck(format!("{why}, going round its loop forever")),
-                    other => other,
-                });
-                return true;
-            }
-            before = history.before.as_deref();
-        }
-        if advanced && !self.polled.borrow_mut().insert(key.clone()) {
-            return false;
-        }
-        self.history = Some(Rc::new(History {
-            key,
-            before: self.history.take(),
-        }));
-        true
     }
 
     /// The lowest file descriptor nothing holds.
@@ -569,71 +403,6 @@ impl World {
         }
         host.world().consume(number, taken as usize);
         Ok(taken)
-    }
-
-    /// Everything yet to arrive on a connection, and whether the peer then waits with its side
-    /// open: the test's client, before the program has answered anything.
-    ///
-    /// # Errors
-    ///
-    /// How the run ends: a read of a connection of a server that polls, which the model doesn't
-    /// follow, or one of the test server's reply before sending all it must receive.
-    pub(in crate::prove) fn unread(&self, number: usize) -> Result<(Vec<Term>, bool), Stop> {
-        let connection = &self.connections[number];
-        if connection.ended {
-            return Ok((Vec::new(), false));
-        }
-        if self.peers.is_some() && connection.accepted {
-            return Err(unsupported(
-                "fill on a connection of a server that polls, which waits on that client alone",
-            ));
-        }
-        let network = &self.network;
-        let (pieces, waits) = if connection.accepted {
-            let client = &network.client[connection.exchange];
-            (&client.pieces, client.waits && connection.sent.is_empty())
-        } else {
-            let (receives, reply) = &network.server[connection.exchange];
-            if connection.sent.len() < receives.len() {
-                return Err(End::Stuck(format!(
-                    "it reads the test server's reply after sending {} of the {} bytes the \
-                     server waits for",
-                    connection.sent.len(),
-                    receives.len()
-                )));
-            }
-            (reply, false)
-        };
-        let mut left = Vec::new();
-        for (index, piece) in pieces.iter().enumerate().skip(connection.piece) {
-            let start = if index == connection.piece {
-                connection.taken
-            } else {
-                0
-            };
-            left.extend_from_slice(&piece[start.min(piece.len())..]);
-        }
-        Ok((left, waits))
-    }
-
-    /// How many bytes of what the peer sends on a connection the program has read so far.
-    pub(in crate::prove) fn consumed(&self, number: usize) -> usize {
-        let connection = &self.connections[number];
-        if connection.ended {
-            return 0;
-        }
-        let network = &self.network;
-        let pieces = if connection.accepted {
-            &network.client[connection.exchange].pieces
-        } else {
-            &network.server[connection.exchange].1
-        };
-        pieces
-            .iter()
-            .take(connection.piece)
-            .map(Vec::len)
-            .sum::<usize>()
-            + connection.taken
     }
 
     /// Marks `count` more bytes of a connection read, across its pieces.
