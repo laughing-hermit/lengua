@@ -340,8 +340,7 @@ async fn done_comes_once_the_tests_pass_while_the_proofs_go_on() {
     arguments["stdin"] = json!("abc");
     let run = session.call_ok("run", arguments).await;
     assert_eq!(
-        run["stdout"],
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n",
+        run["stdout"], "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n",
         "{run}"
     );
     session.service.cancel().await.expect("close the session");
