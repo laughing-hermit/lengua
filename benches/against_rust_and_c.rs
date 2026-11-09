@@ -1449,15 +1449,25 @@ fn grown_in_history(root: &Path, now: &str) -> Vec<String> {
 }
 
 /// lengua's program in the folder `path` as commit `commit` had it, taken from its idea to done.
+/// Before W11 each was in tests/fixtures-wasm, under the last name of its folder now, and `path`
+/// held the native program or nothing: a commit with no main.wat in `path` has it there.
 async fn checked_at(
     session: &Session,
     root: &Path,
     commit: &str,
     path: &str,
 ) -> Result<Program, String> {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let before = format!("tests/fixtures-wasm/{name}");
+    let has = |folder: &str| at_commit(root, commit, &format!("{folder}/main.wat")).is_some();
+    let folder = if !has(path) && has(&before) {
+        before.as_str()
+    } else {
+        path
+    };
     let read = |file: &str| {
-        let shown = at_commit(root, commit, &format!("{path}/{file}"));
-        shown.ok_or_else(|| format!("{commit} has no {path}/{file}"))
+        let shown = at_commit(root, commit, &format!("{folder}/{file}"));
+        shown.ok_or_else(|| format!("{commit} has no {folder}/{file}"))
     };
     checked(session, &read("idea.md")?, &read("main.wat")?).await
 }
