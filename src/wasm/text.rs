@@ -330,12 +330,12 @@ fn own_imports<'a>(fields: &[ModuleField<'a>]) -> BTreeMap<&'a str, Id<'a>> {
                 ImportItems::Single { module, name, sig }
                     if matches!(sig.kind, ItemKind::Func(_)) =>
                 {
-                    keep(module, *name, sig.id);
+                    keep(*module, *name, sig.id);
                 }
                 ImportItems::Group1 { module, items } => {
                     for item in items {
                         if matches!(item.sig.kind, ItemKind::Func(_)) {
-                            keep(module, item.name, item.sig.id);
+                            keep(*module, item.name, item.sig.id);
                         }
                     }
                 }
@@ -376,8 +376,8 @@ fn library_import<'a>(field: &ModuleField<'a>) -> Option<(&'a str, Id<'a>)> {
 /// What's wrong with the text, on its line when it has one.
 pub fn build(text: &str) -> Result<Built, Problem> {
     let mut shared = false;
-    match merged(text, true, &mut shared) {
-        Err(_) if shared => merged(text, false, &mut shared),
+    match merge(text, true, &mut shared) {
+        Err(_) if shared => merge(text, false, &mut shared),
         built => built,
     }
 }
@@ -385,7 +385,7 @@ pub fn build(text: &str) -> Result<Built, Problem> {
 /// [`build`]'s work: main.wat's `text` built with the library merged in, sharing main.wat's own
 /// imports of WASI's functions with the library when `share` says so, and saying in `shared`
 /// whether it shared any.
-fn merged(text: &str, share: bool, shared: &mut bool) -> Result<Built, Problem> {
+fn merge(text: &str, share: bool, shared: &mut bool) -> Result<Built, Problem> {
     let starts = line_starts(text);
     let mut main_buffer =
         ParseBuffer::new(text).map_err(|error| parse_problem(text, &starts, &error))?;
