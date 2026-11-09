@@ -674,7 +674,8 @@ mod tests {
     fn a_trap_takes_its_line_from_a_build_of_the_module_that_ran() {
         let built = crate::wasm::text::build(TRAPS).expect("it builds");
         let folder = tempfile::tempdir().expect("a folder");
-        let (args, env) = (Vec::new(), BTreeMap::new());
+        let args: Vec<String> = Vec::new();
+        let env: BTreeMap<String, String> = BTreeMap::new();
         let ended = |module: &Sha256Hex| {
             let here = Here {
                 args: &args,
