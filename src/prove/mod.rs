@@ -4604,3 +4604,5 @@ fn agrees_with<P: Program>(
 mod golden;
 #[cfg(test)]
 mod outputs;
+#[cfg(test)]
+mod tests;
