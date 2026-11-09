@@ -1,14 +1,13 @@
 //! The proof step: for a generated test over whole-number ranges, proves that the program prints
 //! exactly what the formulas say for every input in range, not only the sampled ones.
 //!
-//! It splits the inputs into shapes (each variable's sign and digit count), runs the machine
-//! code on terms for each shape ([`exec`]), and asks an SMT solver ([`smt`]) whether any input
-//! on any path could make the output differ from the formulas ([`formula`]). A printed number is
-//! matched through its digits' common root, so "prints the formula's value" becomes one linear
-//! question instead of twenty divisions. What a run did beyond its machine, its output, files and
-//! network, and the conditions it met, is its [`world`], which the checks of a finished run read.
-//! A WebAssembly program is proven the same way on its own core, [`wasm`]: the driver explores
-//! either kind of program and checks their runs alike.
+//! It splits the inputs into shapes (each variable's sign and digit count), runs the program on
+//! terms for each shape ([`exec`]), the WebAssembly model's runs ([`wasm`]), and asks an SMT
+//! solver ([`smt`]) whether any input on any path could make the output differ from the formulas
+//! ([`formula`]). A printed number is matched through its digits' common root, so "prints the
+//! formula's value" becomes one linear question instead of twenty divisions. What a run did
+//! beyond its machine, its output, files and network, and the conditions it met, is its
+//! [`world`], which the checks of a finished run read.
 
 pub mod exec;
 pub mod formula;
@@ -27,13 +26,12 @@ use std::time::{Duration, Instant};
 use rand::rngs::ChaCha8Rng;
 use rand::{RngExt, SeedableRng};
 
-use crate::checker::decode::Machine;
 use crate::expr::{Generator, HexPart, PatternPart, Piece, Template, Value};
 use crate::testfile::{ExitCode, Generated};
 use crate::testrun::Delivery;
 
 use exec::induction::Slot;
-use exec::{End, Image, Oracle, State};
+use exec::{End, Oracle, State};
 use formula::{Formula, Number, WIDTH};
 use smt::{Answer, Solver};
 use term::{Node, Pool, Term};
@@ -2560,10 +2558,9 @@ fn same_terms(pool: &mut Pool, a: &[Term], b: &[Term]) -> Term {
     pool.all(&checks)
 }
 
-/// A program a proof runs: native machine code ([`Image`]) or a WebAssembly module
-/// ([`wasm::Module`]), each with the core its runs take their steps on. The driver lays out the
-/// inputs, explores the runs and checks each against the block the same way for both, and proves
-/// a read loop for every length by induction the same way too.
+/// A program a proof runs, a WebAssembly module ([`wasm::Module`]), with the core its runs take
+/// their steps on. The driver lays out the inputs, explores the runs and checks each against the
+/// block, and proves a read loop for every length by induction.
 trait Program: Sync + Sized {
     /// The core its runs take their steps on, and the read loop's head with them.
     type Core: exec::Core<Image = Self> + exec::induction::Looping;
@@ -2601,40 +2598,6 @@ trait Program: Sync + Sized {
     ///
     /// Why the program has no read loop the induction takes.
     fn read_loop(&self) -> Result<u64, String>;
-}
-
-impl Program for Image {
-    type Core = exec::Native;
-
-    fn begin(
-        &self,
-        pool: &mut Pool,
-        args: &[Vec<Term>],
-        env: &[Vec<Term>],
-        stdin: Vec<Term>,
-    ) -> State {
-        State::start(self, pool, args, env, stdin)
-    }
-
-    fn fills(&self) -> bool {
-        self.has_fill()
-    }
-
-    fn uncalled(&self) -> Vec<String> {
-        self.unreached()
-    }
-
-    fn hooked(state: State, hook: std::rc::Rc<exec::induction::Hook>) -> Result<State, String> {
-        Ok(state.with_hook(hook))
-    }
-
-    /// fill's own loop, which every read of the program's goes through.
-    fn read_loop(&self) -> Result<u64, String> {
-        if !self.has_fill() {
-            return Err("it doesn't read with fill".into());
-        }
-        self.fill_head().ok_or_else(|| "it has no fill".into())
-    }
 }
 
 impl Program for wasm::Module {
@@ -2678,19 +2641,12 @@ impl Program for wasm::Module {
 /// Why a block that uses `now` isn't proven.
 const USES_NOW: &str = "it uses now, the second a run starts, which a proof can't fix";
 
-/// Proves `block` about the program `machine` holds, within `budget`.
-#[must_use]
-pub fn prove(machine: &Machine, block: &Generated, budget: &Budget) -> Verdict {
-    attempt(machine, block, budget).unwrap_or_else(Verdict::NotProven)
-}
-
 /// Proves `block` about the WebAssembly program `built`, whose idea lets it reach what `policy`
-/// allows, within `budget`, as [`prove`] proves a native program: the same shapes of the inputs,
-/// the same paths, solvers and checks of every run, on the WebAssembly model's runs, and the
-/// same verdicts. A trap the engine would stop at is a counterexample that names main.wat's
-/// line. A program that streams its input through a read loop is proven for every length by
-/// induction where its step holds, as a native one is; texts are otherwise proven up to a
-/// length, a [`Bound`].
+/// allows, within `budget`: every shape of the inputs, each path of the WebAssembly model's runs
+/// held to the formulas by the solvers. A trap the engine would stop at is a counterexample that
+/// names main.wat's line. A program that streams its input through a read loop is proven for
+/// every length by induction where its step holds; texts are otherwise proven up to a length, a
+/// [`Bound`].
 #[must_use]
 pub fn prove_wasm(
     built: &crate::wasm::Built,
@@ -2712,14 +2668,6 @@ fn attempt_wasm(
     }
     let module = wasm::Module::new(built, policy)?;
     either_way(&module, block, budget)
-}
-
-fn attempt(machine: &Machine, block: &Generated, budget: &Budget) -> Result<Verdict, String> {
-    if block.uses_now() {
-        return Err(USES_NOW.into());
-    }
-    let image = Image::new(machine).ok_or("the program has no _start")?;
-    either_way(&image, block, budget)
 }
 
 /// Proves `block` about `image`: a streaming filter for every length at once where its read
@@ -4272,7 +4220,6 @@ fn check_runs(
                 pool.bool_and(output, talked)
             }
             Some(End::Serving | End::Stuck(_)) => pool.boolean(false),
-            Some(End::Signal(_)) => pool.boolean(false),
             // Only the step of a proof by induction stops at the read loop's head.
             Some(End::Looped) => {
                 return Err(Stop::Unproven("a run stopped at its read loop".into()));
@@ -4495,27 +4442,6 @@ fn sample_start<P: Program>(
         .with_stdout_closed(case.stdout_closed)
 }
 
-/// Runs the prover's model of the code on concrete inputs that the real program has passed, and
-/// says where the model disagrees: then the model can't be trusted for a proof. A sample on
-/// which the program breaks a memory rule, which a real run can pass without showing it, is the
-/// verdict already: its inputs, with what broke.
-///
-/// # Errors
-///
-/// Describes the first disagreement, or what the model can't run.
-pub fn agrees(
-    machine: &Machine,
-    cases: &[crate::testfile::Case],
-    listens: bool,
-) -> Result<Option<Verdict>, String> {
-    agrees_until(
-        machine,
-        cases,
-        listens,
-        Instant::now() + Duration::from_secs(24 * 60 * 60),
-    )
-}
-
 /// A concrete run's oracle that also keeps the proof's time: a run through code with no branch on
 /// its inputs, such as a hash of them, asks it nothing else.
 struct ConcreteUntil(Instant);
@@ -4533,24 +4459,12 @@ impl Oracle for ConcreteUntil {
     }
 }
 
-/// [`agrees`], giving up at `deadline`: the model's runs of the samples are part of the proof's
-/// time, and a hash of a long sample takes minutes of it.
-///
-/// # Errors
-///
-/// Describes the first disagreement, what the model can't run, or that the time is up.
-pub fn agrees_until(
-    machine: &Machine,
-    cases: &[crate::testfile::Case],
-    listens: bool,
-    deadline: Instant,
-) -> Result<Option<Verdict>, String> {
-    let image = Image::new(machine).ok_or("the program has no _start")?;
-    agrees_with(&image, cases, listens, deadline)
-}
-
-/// [`agrees_until`] for the WebAssembly program `built`, whose idea lets it reach what `policy`
-/// allows: its model's runs of the samples against what the real program did on them.
+/// Runs the prover's model of the WebAssembly program `built`, whose idea lets it reach what
+/// `policy` allows, on `cases`, concrete inputs that the real program has passed, and says where
+/// the model disagrees: then the model can't be trusted for a proof. A sample on which the model
+/// meets what the engine would stop at, which a real run can pass without showing it, is the
+/// verdict already: its inputs, with what it met. It gives up at `deadline`: the model's runs of
+/// the samples are part of the proof's time, and a hash of a long sample takes minutes of it.
 ///
 /// # Errors
 ///
@@ -4566,7 +4480,7 @@ pub fn agrees_wasm(
     agrees_with(&module, cases, listens, deadline)
 }
 
-/// [`agrees_until`]'s work, for either kind of program.
+/// [`agrees_wasm`]'s work.
 ///
 /// # Errors
 ///
@@ -4690,5 +4604,3 @@ fn agrees_with<P: Program>(
 mod golden;
 #[cfg(test)]
 mod outputs;
-#[cfg(test)]
-mod tests;

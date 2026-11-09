@@ -27,8 +27,8 @@
 //! keeps it. The base likewise reads a buffer-full from any state at the head before each final
 //! piece, and the shortest inputs are proven from the program's start.
 //!
-//! Machine code and WebAssembly are proven alike ([`Program`]): each finds its own read loop and
-//! takes its head its own way ([`Looping`]), and what follows is the same for both.
+//! A program ([`Program`]) finds its own read loop and its core takes the loop's head its own way
+//! ([`Looping`]); what follows is the same for any core.
 //!
 //! [`Looping`]: super::exec::induction::Looping
 
@@ -463,8 +463,8 @@ where
     })
 }
 
-/// `value`, a slot's, widened without its sign to the formulas' width: a CPU register's 64
-/// bits, or a WebAssembly local's own.
+/// `value`, a slot's, widened without its sign to the formulas' width from a WebAssembly
+/// value's own.
 fn widened(pool: &mut Pool, value: Term) -> Term {
     let width = pool.width(value);
     pool.zero_extend(value, WIDTH - width)
@@ -752,8 +752,6 @@ pub(super) fn step<P: Program>(
                 }
             }
             grown.memory.extend(changes.memory);
-            grown.vectors.extend(changes.vectors);
-            grown.masks.extend(changes.masks);
             chunk = Some(taken);
         }
         if let Some(found) = candidates {
