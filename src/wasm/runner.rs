@@ -664,8 +664,8 @@ mod tests {
     use crate::hash::Sha256Hex;
 
     /// A main.wat whose `_start` reaches `unreachable` on its line 4.
-    const TRAPS: &str = "(module\n  (memory (export \"memory\") 1)\n  (func (export \"_start\")\n    \
-                         unreachable))\n";
+    const TRAPS: &str = "(module\n  (memory (export \"memory\") 1)\n  (func (export \"_start\")\
+                         \n    unreachable))\n";
 
     /// A run from a shell with no build of its module, only main.wat's text, builds main.wat once
     /// the program traps, and places the trap on main.wat's line only when that build hashes to
