@@ -241,9 +241,13 @@ Each merges to main when green on the runners it names; [ROADMAP.md](ROADMAP.md)
 - **W15. The documents, the finish-line run, and the report.**
 - **W16. The repository tidied and presentable on GitHub** (the owner, 2026-11-07: "when
   finished with lengua please tidy up the repo and make it presentable please in github"): a
-  README that presents lengua, the top level pruned, the merged work branches deleted (never
-  `wip/routes-ci`, `wip/r2-8a-snap` or `wip/r2-base-check`, which are the owner's), and the
-  repository's description and topics on GitHub.
+  README that presents lengua, the top level pruned, and the repository's description and
+  topics on GitHub.
+  - **Only main remains** (the owner, 2026-11-09: "remember at the end only main branch shoudl
+    remain"). Every other branch goes, on GitHub and on the owner's computer, including
+    `wip/routes-ci`, `wip/r2-8a-snap` and `wip/r2-base-check`.
+  - First, a branch whose commits main doesn't hold keeps its tip as a tag `archive/<branch>`,
+    so nothing is lost. A tag isn't a branch, and the tag `native-final` stays as it is.
 - **W12b. lengua's run made lean.** The first gate run (42661776298, all five runners) found
   lengua's program ahead on module size nearly everywhere, and on time where the work is large
   (wc, files, readings, part of sort). It is behind on time and memory wherever starting dominates,
