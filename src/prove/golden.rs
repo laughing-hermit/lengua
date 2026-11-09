@@ -1,36 +1,41 @@
-//! Round 9's guard G3: the prover on every program in the repository, x86-64's and ARM64's,
-//! recorded before its machine model moves onto per-CPU tables, so each step of the move can be
-//! shown to change nothing: each generated block's samples run through the concrete model (how
-//! each ended, its steps, registers, flags and output), and each block's proofs. A CPU's
-//! programs are the checker golden's list for it ([`crate::checker::golden::PLACES`]); the
-//! programs that use SVE are recorded at vectors of 16 bytes, so the recording does not depend
-//! on the computer that makes it.
+//! Round 9's guard G3, for the WebAssembly lengua: the prover on every program in the repository,
+//! recorded at one commit and compared with the recording made at another, so that a change to
+//! the prover that moves any run or proof shows. For each generated block it records its samples'
+//! runs through the concrete model (how each ended, its steps, and hashes of what it wrote) and
+//! its proofs. The programs are the checker golden's ([`crate::checker::golden::programs`]). The
+//! native lengua's guard, on the x86-64 and ARM64 models, is at the tag `native-final`.
 //!
 //! The server's proofs go as far as their time allows, which differs from one run to the next, so
 //! here each block is proven in ways that always end the same: by induction, its step over the
 //! read loop as the idea gives the block and its base over the shortest final pieces (with a
 //! smaller buffer for the programs in [`SMALLER`]); and by length over part of its ranges, the
 //! widest of [`CUTS`] with at most [`COMBINATIONS`] input combinations (from a narrower one for
-//! the blocks in [`NARROW`]), so that every combination is proven. The samples keep the idea's
-//! ranges, edges included, but for texts longer than [`SAMPLE_TEXT`]. A proof that still runs
-//! out of time is marked `~`, since how far it gets depends on the machine.
+//! the blocks in [`NARROW`]), so that every combination is proven. Each proof has a model of its
+//! own, so that the functions one proof's runs reached say nothing of another's. The samples keep
+//! the idea's ranges, edges included, but for texts longer than [`SAMPLE_TEXT`]. A proof that
+//! still runs out of time is marked `~`, since how far it gets depends on the machine.
 //!
 //! `LENGUA_GOLDEN=write cargo test --release --lib prove::golden -- --ignored` records them under
-//! `target/golden/`; without the variable the test compares (see [`crate::checker::golden`]).
+//! `target/golden/`, in prover-wasm.txt; without the variable the test compares. The recording
+//! isn't committed: [`crate::checker::golden`] says how a baseline is made.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
-use super::exec::{self, Image};
-use super::term::Pool;
-use super::{Budget, Verdict, by_length, sample_start};
-use crate::checker::decode::Machine;
-use crate::checker::golden::{PLACES, built, compare_or_record, programs};
+use super::exec::{self, End, State};
+use super::term::{Pool, Term};
+use super::wasm::{Module, Wasm};
+use super::{AT_ONCE_PATHS, Budget, Verdict, by_length, sample_start, size};
+use crate::checker::golden::{Program, compare_or_record, programs};
 use crate::expr::Generator;
-use crate::platform::Profile;
-use crate::targets::PerCpu;
+use crate::hash::Sha256Hex;
 use crate::testfile::Generated;
-use crate::toolchain::Toolchain;
+use crate::wasm::Policy;
+use crate::wasm::text::{Built, build};
+
+/// The recording's name, under `target/golden/`.
+const RECORDING: &str = "prover-wasm.txt";
 
 /// Each proof's time: far more than any proof here takes, so only one that never ends runs out.
 const PROOF_SECONDS: u64 = 300;
@@ -38,9 +43,9 @@ const PROOF_SECONDS: u64 = 300;
 /// The samples a block's model runs, as the server takes them.
 const SAMPLES: usize = 24;
 
-/// The longest text a sample runs with: two of the smallest buffer the programs read into, and
-/// two pipe writes, so loops go round many times, without a megabyte's run through the model.
-/// Longer texts take the same instructions round again; induction proves the idea's lengths.
+/// The longest text a sample runs with: two buffer-fulls of the 4096 bytes that most of the read
+/// loops take, so loops go round many times, without a megabyte's run through the model. Longer
+/// texts take the same operators round again; induction proves the idea's lengths.
 const SAMPLE_TEXT: usize = 1 << 13;
 
 /// The parts of a block's ranges a proof by length here may go through, widest first: each text
@@ -54,108 +59,159 @@ const COMBINATIONS: usize = 1024;
 /// How many bytes past the shortest the base of a proof by induction goes here.
 const BASE_LENGTHS: usize = 3;
 
-/// The length of the SVE vectors the programs that use them are recorded at, in bytes.
-const SVE_BYTES: u16 = 16;
+/// The blocks, by program folder and number, whose proofs by length take minutes over the wider
+/// parts of their ranges, with where in [`CUTS`] each starts: calc's 64-bit products, and
+/// histogram's table of counts, as the native golden narrowed them.
+const NARROW: [(&str, usize, usize); 2] = [("calc", 3, 2), ("histogram", 1, 1)];
 
-/// The blocks, by program and number, whose proofs by length take minutes over the wider parts
-/// of their ranges, with where in [`CUTS`] each starts: calc's 64-bit products, and histogram's
-/// table of counts, which the solvers take a minute and a half over at texts of 3 bytes. Each
-/// target's own programs.
-const NARROW: PerCpu<&[(&str, usize, usize)]> = PerCpu {
-    x86_64: &[
-        ("tests/fixtures/calc/main.s", 3, 2),
-        ("plugin/skills/compile/assets/fast/histogram/main.s", 1, 1),
-    ],
-    aarch64: &[
-        ("tests/fixtures/linux-aarch64/calc/main.s", 3, 2),
-        (
-            "plugin/skills/compile/assets/linux-aarch64/fast/histogram/main.s",
-            1,
-            1,
-        ),
-    ],
-};
-
-/// A program and the changes to its main.s that give the smaller buffer its proof by induction
-/// is proven with.
+/// A program folder, and the changes to its main.wat that give the smaller buffer its proof by
+/// induction is proven with.
 type Smaller = (&'static str, &'static [(&'static str, &'static str)]);
 
-/// The programs proven by induction here with a smaller buffer than their own, as the prover's
-/// tests prove them: the step over a buffer-full of 4096 symbolic bytes takes the solvers
-/// minutes. Each change is a line of main.s and what it becomes, a loop's bound with its
-/// buffer's where it counts the buffer's steps. Each target's own programs.
-const SMALLER: PerCpu<&[Smaller]> = PerCpu {
-    x86_64: &[
-        (
-            "tests/fixtures/lines/main.s",
-            &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
-        ),
-        (
-            "tests/fixtures/words/main.s",
-            &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
-        ),
-        (
-            "plugin/skills/compile/assets/fast/wc/main.s",
-            &[
-                (".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n"),
-                ("  # bound: 4096\n", "  # bound: 16\n"),
-            ],
-        ),
-        (
-            "plugin/skills/compile/assets/fast/wc-avx512/main.s",
-            &[
-                (".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n"),
-                ("  # bound: 1024\n", "  # bound: 4\n"),
-            ],
-        ),
-    ],
-    aarch64: &[
-        (
-            "tests/fixtures/linux-aarch64/lines/main.s",
-            &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
-        ),
-        (
-            "tests/fixtures/linux-aarch64/words/main.s",
-            &[(".equ BUF_LEN, 4096\n", ".equ BUF_LEN, 256\n")],
-        ),
-        (
-            "plugin/skills/compile/assets/linux-aarch64/fast/wc/main.s",
-            &[
-                (".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n"),
-                ("  // bound: 4096\n", "  // bound: 16\n"),
-            ],
-        ),
-        (
-            "plugin/skills/compile/assets/linux-aarch64/fast/wc-sve/main.s",
-            &[
-                (".equ BUF_LEN, 65536\n", ".equ BUF_LEN, 256\n"),
-                ("  // bound: 4096\n", "  // bound: 16\n"),
-            ],
-        ),
-    ],
-};
+/// The programs proven by induction here with a smaller buffer than their own, by folder, as the
+/// prover's own tests prove lines and count: a step over a buffer-full of thousands of symbolic
+/// bytes takes the solvers minutes. Each change is a line of main.wat and what it becomes: the
+/// buffer's size, and where the program counts the steps a buffer-full takes, their count and
+/// where the last one starts, so its loops still go over the whole of the smaller buffer.
+const SMALLER: [Smaller; 5] = [
+    (
+        "count",
+        &[
+            (
+                "(global $buffer.size i32 (i32.const 65536))",
+                "(global $buffer.size i32 (i32.const 64))",
+            ),
+            (
+                "(global $CHUNKS i32 (i32.const 4096))",
+                "(global $CHUNKS i32 (i32.const 4))",
+            ),
+            (
+                "(global $LAST_CHUNK i32 (i32.const 65520))",
+                "(global $LAST_CHUNK i32 (i32.const 48))",
+            ),
+        ],
+    ),
+    (
+        "lines",
+        &[
+            (
+                "(global $buffer.size i32 (i32.const 4096))",
+                "(global $buffer.size i32 (i32.const 64))",
+            ),
+            (
+                "(global $CHUNKS i32 (i32.const 256))",
+                "(global $CHUNKS i32 (i32.const 4))",
+            ),
+            (
+                "(global $LAST_CHUNK i32 (i32.const 4080))",
+                "(global $LAST_CHUNK i32 (i32.const 48))",
+            ),
+        ],
+    ),
+    (
+        "padded",
+        &[
+            (
+                "(global $buffer.size i32 (i32.const 65536))",
+                "(global $buffer.size i32 (i32.const 64))",
+            ),
+            (
+                "(global $CHUNKS i32 (i32.const 4096))",
+                "(global $CHUNKS i32 (i32.const 4))",
+            ),
+            (
+                "(global $LAST_CHUNK i32 (i32.const 65520))",
+                "(global $LAST_CHUNK i32 (i32.const 48))",
+            ),
+        ],
+    ),
+    (
+        "upcase-stdin",
+        &[
+            (
+                "(global $buffer.size i32 (i32.const 65536))",
+                "(global $buffer.size i32 (i32.const 256))",
+            ),
+            (
+                "(global $BLOCKS i32 (i32.const 1024))",
+                "(global $BLOCKS i32 (i32.const 4))",
+            ),
+            (
+                "(global $LAST_BLOCK i32 (i32.const 65472))",
+                "(global $LAST_BLOCK i32 (i32.const 192))",
+            ),
+            (
+                "(global $LAST_CHUNK i32 (i32.const 65520))",
+                "(global $LAST_CHUNK i32 (i32.const 240))",
+            ),
+        ],
+    ),
+    (
+        "words",
+        &[(
+            "(global $buffer.size i32 (i32.const 4096))",
+            "(global $buffer.size i32 (i32.const 256))",
+        )],
+    ),
+];
 
-/// The machine code of `text` for `profile`'s CPU, with what main.s names and its jump tables,
-/// as the server passes them to the prover.
-fn machine_of(profile: Profile, text: &str, bytes: &[u8]) -> Machine {
-    let mut machine = crate::checker::decode::read(bytes).expect("decode");
-    let (parsed, _) = crate::checker::check_layout(text);
-    let lengua = crate::checker::lengua_source(profile, text);
-    if let Some(program) = crate::checker::decode::map(
-        &parsed,
-        lengua.as_ref(),
-        &machine,
-        crate::platform::CpuFeatures::all(),
-        &mut Vec::new(),
-    ) {
-        machine.named = program.named_symbols();
-        let jumps = crate::checker::tables::every(&program, &mut Vec::new());
-        machine.tables = crate::checker::tables::addresses(&program, &jumps);
-    }
-    if profile == Profile::LinuxAarch64 {
-        machine.sve_bytes = SVE_BYTES;
-    }
-    machine
+/// What a run of the model left, for the recording: how it ended, its steps, and hashes of what
+/// it wrote to standard output and error, to files and on its connections, with the folders it
+/// made and removed. A value that isn't a constant prints as `?`.
+fn fingerprint(run: &State<Wasm>, pool: &Pool) -> String {
+    let value = |term: Term| {
+        pool.constant(term)
+            .map_or_else(|| "?".to_owned(), |value| format!("{value:x}"))
+    };
+    let bytes = |terms: &[Term]| -> String {
+        let known: Option<Vec<u8>> = terms
+            .iter()
+            .map(|term| {
+                pool.constant(*term)
+                    .and_then(|byte| u8::try_from(byte).ok())
+            })
+            .collect();
+        match known {
+            Some(known) => Sha256Hex::of(&known).as_str()[..16].to_owned(),
+            None => format!("?{}", terms.len()),
+        }
+    };
+    let folders = |names: &BTreeSet<String>| {
+        names
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let world = &run.world;
+    let end = match &world.end {
+        Some(End::Exit(status)) => format!("exit {}", value(*status)),
+        Some(other) => format!("{other:?}"),
+        None => "running".to_owned(),
+    };
+    let written: Vec<String> = world
+        .written
+        .iter()
+        .map(|(name, contents)| format!("{name}={}", bytes(contents)))
+        .collect();
+    let sent: Vec<String> = world
+        .connections
+        .iter()
+        .map(|connection| {
+            let how = if connection.accepted { "accepted" } else { "made" };
+            format!("{how} {}={}", connection.exchange, bytes(&connection.sent))
+        })
+        .collect();
+    format!(
+        "{end}; {} steps; out {}; err {}; written [{}]; made [{}]; removed [{}]; sent [{}]",
+        world.steps,
+        bytes(&world.stdout),
+        bytes(&world.stderr),
+        written.join(","),
+        folders(&world.made),
+        folders(&world.removed),
+        sent.join(",")
+    )
 }
 
 /// `why` a proof stopped, or `~` where it's only that the time ran out.
@@ -231,9 +287,7 @@ fn cut_to(block: &Generated, lengths: usize, magnitude: i128) -> Generated {
 fn shortened(block: &Generated, from: usize) -> (Generated, (usize, i128)) {
     let fits = CUTS[from..]
         .iter()
-        .find(|(lengths, magnitude)| {
-            super::size(&cut_to(block, *lengths, *magnitude)) <= COMBINATIONS
-        })
+        .find(|(lengths, magnitude)| size(&cut_to(block, *lengths, *magnitude)) <= COMBINATIONS)
         .unwrap_or(&CUTS[CUTS.len() - 1]);
     (cut_to(block, fits.0, fits.1), *fits)
 }
@@ -254,12 +308,12 @@ fn budget(listens: bool) -> Budget {
     Budget::until(Instant::now() + Duration::from_secs(PROOF_SECONDS), listens)
 }
 
-/// The proof by induction of `block` as the idea gives it: its step over the read loop, and,
-/// where that holds, its base from the loop's head over the shortest final pieces, as far as
-/// [`BASE_LENGTHS`] bytes past the shortest. The base the server proves goes on to a whole
-/// buffer-full, as far as its time allows.
-fn induction(image: &Image, block: &Generated, listens: bool) -> String {
-    let found = match super::induction::step(image, block, &budget(listens)) {
+/// The proof by induction of `block` on `module` as the idea gives it: its step over the read
+/// loop, and, where that holds, its base from the loop's head over every final piece at once,
+/// or else over the shortest, as far as [`BASE_LENGTHS`] bytes past the shortest. The base the
+/// server proves goes on to a whole buffer-full, as far as its time allows.
+fn induction(module: &Module, block: &Generated, listens: bool) -> String {
+    let found = match super::induction::step(module, block, &budget(listens)) {
         Ok(found) => found,
         Err(refused) => return format!("none: {}", reason(&refused.why)),
     };
@@ -274,11 +328,11 @@ fn induction(image: &Image, block: &Generated, listens: bool) -> String {
         within: true,
         max_paths: budget(listens)
             .max_paths
-            .saturating_mul(super::AT_ONCE_PATHS),
+            .saturating_mul(AT_ONCE_PATHS),
         ..budget(listens)
     };
     if let Ok(proven @ Verdict::Proven { bound: None, .. }) =
-        by_length(image, &whole, &within, Some(&found.hook))
+        by_length(module, &whole, &within, Some(&found.hook))
     {
         return format!(
             "step holds: {} bytes a time round, reach {}, {} paths, {} questions, lookback {}; \
@@ -298,7 +352,7 @@ fn induction(image: &Image, block: &Generated, listens: bool) -> String {
         *max = (*max).min(*min + BASE_LENGTHS).min(found.chunk);
         longest = *max;
     }
-    let proven = by_length(image, &base, &budget(listens), Some(&found.hook))
+    let proven = by_length(module, &base, &budget(listens), Some(&found.hook))
         .unwrap_or_else(Verdict::NotProven);
     format!(
         "step holds: {} bytes a time round, reach {}, {} paths, {} questions, lookback {}; base \
@@ -312,12 +366,13 @@ fn induction(image: &Image, block: &Generated, listens: bool) -> String {
     )
 }
 
-/// `block`'s proofs: by induction as the idea gives it, of `induced`, the program or its
-/// [`SMALLER`] buffer's build; then by length over part of its ranges, from the `from`th of
-/// [`CUTS`]; with how long each took, for whoever watches the recording.
+/// `block`'s proofs, each on a model of its own whose idea lets it reach what `policy` allows: by
+/// induction as the idea gives it, of `induced`, the program's build or its [`SMALLER`]
+/// buffer's; then by length over part of its ranges, of `built`, from the `from`th of [`CUTS`];
+/// with how long each took, for whoever watches the recording.
 fn proofs(
-    machine: &Machine,
-    induced: &Machine,
+    (built, induced): (&Built, &Built),
+    policy: Policy,
     block: &Generated,
     listens: bool,
     from: usize,
@@ -325,14 +380,18 @@ fn proofs(
     if block.uses_now() {
         return ("uses now".to_owned(), [Duration::ZERO; 2]);
     }
-    let (Some(image), Some(smaller)) = (Image::new(machine), Image::new(induced)) else {
-        return ("no _start".to_owned(), [Duration::ZERO; 2]);
+    let (module, smaller) = match (Module::new(built, policy), Module::new(induced, policy)) {
+        (Ok(module), Ok(smaller)) => (module, smaller),
+        (Err(why), _) | (_, Err(why)) => {
+            return (format!("the model refuses it: {why}"), [Duration::ZERO; 2]);
+        }
     };
     let began = Instant::now();
     let induction = induction(&smaller, block, listens);
     let inducted = began.elapsed();
     let (cut, (lengths, magnitude)) = shortened(block, from);
-    let length = by_length(&image, &cut, &budget(listens), None).unwrap_or_else(Verdict::NotProven);
+    let length =
+        by_length(&module, &cut, &budget(listens), None).unwrap_or_else(Verdict::NotProven);
     (
         format!(
             "by induction {induction}; by length, texts +{lengths} and numbers to {magnitude}, {}",
@@ -342,52 +401,74 @@ fn proofs(
     )
 }
 
+/// The build of `program` that its proofs by induction take, with a smaller buffer where
+/// [`SMALLER`] gives it one, which `recording` notes; none where it has none, or where the
+/// changes don't apply, which `recording` says.
+fn smaller(program: &Program, recording: &mut String) -> Option<Built> {
+    let (_, changes) = SMALLER
+        .iter()
+        .find(|(folder, _)| *folder == program.folder)?;
+    let mut text = program.text.clone();
+    for (line, smaller) in *changes {
+        if !text.contains(line) {
+            let _ = writeln!(recording, "  no smaller buffer: main.wat has no {line:?}");
+            return None;
+        }
+        text = text.replacen(line, smaller, 1);
+    }
+    match build(&text) {
+        Ok(built) => {
+            let _ = writeln!(recording, "  by induction with {}", changes[0].1);
+            Some(built)
+        }
+        Err(problem) => {
+            let _ = writeln!(recording, "  no smaller buffer: {problem}");
+            None
+        }
+    }
+}
+
 /// The recording: per program and generated block, each sample's run and the proofs.
-async fn record(profile: Profile) -> String {
-    let toolchain = Toolchain::discover()
-        .await
-        .expect("llvm-mc and ld.lld are installed");
+fn record() -> String {
     let mut recording = String::new();
-    for program in programs(profile) {
+    for program in programs() {
         let _ = writeln!(recording, "== {}", program.name);
-        let Ok(bytes) = built(profile, &toolchain, &program.text).await else {
-            let _ = writeln!(recording, "  doesn't build");
-            continue;
+        let idea = match &program.idea {
+            Ok(idea) => idea,
+            Err(why) => {
+                let _ = writeln!(recording, "  the idea doesn't parse: {why}");
+                continue;
+            }
         };
-        let machine = machine_of(profile, &program.text, &bytes);
-        let Some(image) = Image::new(&machine) else {
-            let _ = writeln!(recording, "  no _start");
-            continue;
+        let built = match build(&program.text) {
+            Ok(built) => built,
+            Err(problem) => {
+                let _ = writeln!(recording, "  doesn't build: {problem}");
+                continue;
+            }
+        };
+        let policy = Policy::of(&idea.uses, &idea.network);
+        // The samples' model; each proof takes one of its own.
+        let module = match Module::new(&built, policy) {
+            Ok(module) => module,
+            Err(why) => {
+                let _ = writeln!(recording, "  the model refuses it: {why}");
+                continue;
+            }
         };
         // The build its proofs by induction take, with a smaller buffer where it has one.
-        let induced = match SMALLER
-            .get(profile)
-            .iter()
-            .find(|(name, _)| *name == program.name)
-        {
-            Some((_, changes)) => {
-                let mut text = program.text.clone();
-                for (line, smaller) in *changes {
-                    assert!(text.contains(line), "{} has {line:?}", program.name);
-                    text = text.replace(line, smaller);
-                }
-                let bytes = built(profile, &toolchain, &text)
-                    .await
-                    .expect("the smaller buffer builds");
-                let _ = writeln!(recording, "  by induction with {}", changes[0].1.trim_end());
-                machine_of(profile, &text, &bytes)
-            }
-            None => machine.clone(),
-        };
-        let suite = match crate::testfile::check(&program.idea) {
+        let smaller = smaller(&program, &mut recording);
+        let induced = smaller.as_ref().unwrap_or(&built);
+        let suite = match crate::testfile::check(idea) {
             Ok(suite) => suite,
             Err(problems) => {
                 let _ = writeln!(recording, "  the idea's tests don't check: {problems:?}");
                 continue;
             }
         };
-        let listens = program.idea.network.listens.is_some();
+        let listens = idea.network.listens.is_some();
         for (index, block) in suite.generated.iter().enumerate() {
+            let number = index + 1;
             let began = Instant::now();
             let sampled = sampled(block);
             let samples: Vec<_> = sampled
@@ -397,54 +478,69 @@ async fn record(profile: Profile) -> String {
                 .collect();
             for (sample, case) in samples.iter().enumerate() {
                 let mut pool = Pool::default();
-                let start = sample_start(&image, &mut pool, case, listens);
-                let runs = exec::explore(&image, start, &mut pool, &mut exec::Concrete, 2);
+                let start = sample_start(&module, &mut pool, case, listens);
+                let runs = exec::explore(&module, start, &mut pool, &mut exec::Concrete, 2);
                 let found = match runs {
                     Ok(runs) => runs
                         .iter()
-                        .map(|run| run.fingerprint(&pool))
+                        .map(|run| fingerprint(run, &pool))
                         .collect::<Vec<_>>()
                         .join(" | "),
                     Err(why) => format!("the model stopped: {why}"),
                 };
-                let _ = writeln!(recording, "  B{} sample {sample}: {found}", index + 1);
+                let _ = writeln!(recording, "  B{number} sample {sample}: {found}");
             }
             let ran = began.elapsed();
             let from = NARROW
-                .get(profile)
                 .iter()
-                .find(|(name, number, _)| *name == program.name && *number == index + 1)
+                .find(|(folder, at, _)| *folder == program.folder && *at == number)
                 .map_or(0, |(.., from)| *from);
-            let (found, [inducted, proven]) = proofs(&machine, &induced, block, listens, from);
+            let (found, [inducted, proven]) =
+                proofs((&built, induced), policy, block, listens, from);
             eprintln!(
-                "{} B{}: samples {:.1} s, induction {:.1} s, length {:.1} s: {found}",
+                "{} B{number}: samples {:.1} s, induction {:.1} s, length {:.1} s: {found}",
                 program.name,
-                index + 1,
                 ran.as_secs_f64(),
                 inducted.as_secs_f64(),
                 proven.as_secs_f64()
             );
-            let _ = writeln!(recording, "  B{} proofs: {found}", index + 1);
+            let _ = writeln!(recording, "  B{number} proofs: {found}");
         }
     }
     recording
 }
 
-/// The guard on `profile`'s programs: their samples' runs and their proofs are as recorded (or
-/// recorded, where there is nothing to compare with: see [`compare_or_record`]).
-async fn runs_and_proofs_are_as_recorded(profile: Profile) {
-    let found = record(profile).await;
-    compare_or_record(&format!("prover-{}.txt", PLACES.get(profile).label), &found);
+/// The guard: every program's samples run and its blocks are proven as recorded (or recorded,
+/// where there is nothing to compare with: see [`compare_or_record`]).
+#[test]
+#[ignore = "the prover's golden: run with --ignored around a change to the prover"]
+fn every_run_and_proof_is_as_recorded() {
+    compare_or_record(RECORDING, &record());
 }
 
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "Round 9's guard: run with --ignored around the prover's refactor"]
-async fn every_run_and_proof_is_as_recorded() {
-    runs_and_proofs_are_as_recorded(Profile::LinuxX86_64).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "Round 9's guard: run with --ignored around the prover's refactor"]
-async fn every_run_and_proof_is_as_recorded_on_aarch64() {
-    runs_and_proofs_are_as_recorded(Profile::LinuxAarch64).await;
+/// A run is recorded by how it ended, its steps and what it wrote: here an exit with code 3 and
+/// nothing written, whose outputs' hashes are the empty text's.
+#[test]
+fn a_run_is_recorded_by_its_end_its_steps_and_what_it_wrote() {
+    let text = "(module
+  (import \"wasi_snapshot_preview1\" \"proc_exit\" (func $exit (param i32)))
+  (memory (export \"memory\") 1 1)
+  (func (export \"_start\")
+    (call $exit (i32.const 3))))
+";
+    let built = build(text).expect("it builds");
+    let module = Module::new(&built, Policy::default()).expect("the model takes it");
+    let mut pool = Pool::default();
+    let start = super::wasm::begin(&module, &mut pool, &[], &[], Vec::new());
+    let runs =
+        exec::explore(&module, start, &mut pool, &mut exec::Concrete, 2).expect("the model runs");
+    let [run] = runs.as_slice() else {
+        panic!("{} runs", runs.len());
+    };
+    let found = fingerprint(run, &pool);
+    assert!(found.starts_with("exit 3; "), "{found}");
+    assert!(
+        found.contains(" steps; out e3b0c44298fc1c14; err e3b0c44298fc1c14; written []; made []"),
+        "{found}"
+    );
 }
