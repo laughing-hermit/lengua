@@ -2128,7 +2128,7 @@ mod tests {
         let server = LenguaServer::new(DataDir::new(data.path().to_path_buf()));
         let path = program.path().to_str().expect("UTF-8 path");
         let folder = ProgramFolder::new(path).expect("absolute path");
-        let idea = include_str!("../tests/fixtures-wasm/add/idea.md");
+        let idea = include_str!("../tests/fixtures/add/idea.md");
         let first = server.record(&folder, idea, Some("an adder")).await;
         assert!(matches!(first, Ok(Recording::Recorded)));
         let hash = trust::idea_hash(idea.as_bytes());

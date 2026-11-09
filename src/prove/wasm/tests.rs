@@ -895,12 +895,18 @@ fn both_solvers() -> bool {
         .is_ok()
 }
 
-/// A file of the WebAssembly fixture `name`.
+/// A file of the program `name`: the fixture of that name in tests/fixtures, or else the example
+/// in examples/. add, echo and greet are in both, and these tests take the fixtures, the
+/// prover's small ones; count and hypotenuse are examples.
 fn fixture(name: &str, file: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures-wasm")
-        .join(name)
-        .join(file);
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let in_fixtures = root.join("tests/fixtures").join(name);
+    let folder = if in_fixtures.is_dir() {
+        in_fixtures
+    } else {
+        root.join("examples").join(name)
+    };
+    let path = folder.join(file);
     std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 

@@ -84,12 +84,12 @@ async fn checked_template(session: &Session) -> Program {
     program
 }
 
-/// A program folder holding the WebAssembly fixture `name`'s idea.md and main.wat, its idea
-/// recorded.
+/// A program folder holding the fixture `name`'s idea.md and main.wat, from tests/fixtures, its
+/// idea recorded.
 async fn shipped(session: &Session, name: &str) -> Program {
     let program = Program::new();
     for file in ["idea.md", "main.wat"] {
-        program.write(file, &read(&format!("tests/fixtures-wasm/{name}/{file}")));
+        program.write(file, &read(&format!("tests/fixtures/{name}/{file}")));
     }
     session.record(&program).await;
     program
@@ -393,7 +393,7 @@ async fn an_edit_mid_proof_starts_over_and_the_old_proof_never_lands() {
     }
     program.write(
         "main.wat",
-        &changed(&read("tests/fixtures-wasm/cat/main.wat"), &[NOP]),
+        &changed(&read("tests/fixtures/cat/main.wat"), &[NOP]),
     );
     let report = done(&session, &program).await;
     assert!(

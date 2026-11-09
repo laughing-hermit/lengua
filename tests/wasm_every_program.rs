@@ -1,9 +1,9 @@
-//! Every WebAssembly program in tests/fixtures-wasm goes through the server from the user's
-//! request to done, the same on every system: its idea, an Attested Computation, is recorded with
-//! the user's words; its main.wat follows every rule of the WebAssembly dialect and passes every
-//! test of its idea; and lengua's entry in the idea's `verified` names the main.wat it checked.
-//! The test takes every folder there, so a program added to it is checked with the rest, and a
-//! program that fails is named while the others still go through.
+//! Every program of the repository, in examples/ and tests/fixtures, goes through the server from
+//! the user's request to done, the same on every system: its idea, an Attested Computation, is
+//! recorded with the user's words; its main.wat follows every rule of the WebAssembly dialect and
+//! passes every test of its idea; and lengua's entry in the idea's `verified` names the main.wat
+//! it checked. The test takes every folder of both, so a program added to either is checked with
+//! the rest, and a program that fails is named while the others still go through.
 
 mod common;
 
@@ -14,12 +14,13 @@ use lengua::hash::Sha256Hex;
 use lengua::trust;
 use serde_json::Value;
 
-/// The folder of the WebAssembly programs, relative to the repository: a program is a folder with
-/// an idea.md and a main.wat.
-const FOLDER: &str = "tests/fixtures-wasm";
+/// The folders of the programs, relative to the repository: a program is a folder in one of them
+/// with an idea.md and a main.wat.
+const FOLDERS: [&str; 2] = ["examples", "tests/fixtures"];
 
-/// The fewest programs the folder holds: add, echo and greet, and the nine of W9's first batch.
-const AT_LEAST: usize = 12;
+/// The fewest programs the two folders hold: the 15 examples, and the 28 fixtures, the prover's
+/// small add, echo and greet and the benchmark's ten among them.
+const AT_LEAST: usize = 43;
 
 /// A value of a reply as text, or none.
 fn text(value: &Value) -> &str {
@@ -33,18 +34,21 @@ fn any_line(lines: &Value, needle: &str) -> bool {
         .is_some_and(|lines| lines.iter().any(|line| text(line).contains(needle)))
 }
 
-/// Every program folder of tests/fixtures-wasm, each with an idea.md and a main.wat: its name and
-/// path, in order.
+/// Every program folder of [`FOLDERS`], each with an idea.md and a main.wat: its name, its path
+/// from the repository's root, such as `tests/fixtures/add` beside `examples/add`, and its path,
+/// in order.
 fn programs() -> Vec<(String, PathBuf)> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(FOLDER);
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut found = Vec::new();
-    for entry in std::fs::read_dir(root).expect("the folder of WebAssembly programs") {
-        let path = entry.expect("an entry").path();
-        if path.join("idea.md").is_file()
-            && path.join("main.wat").is_file()
-            && let Some(name) = path.file_name().and_then(|name| name.to_str())
-        {
-            found.push((name.to_owned(), path.clone()));
+    for place in FOLDERS {
+        for entry in std::fs::read_dir(root.join(place)).expect("a folder of programs") {
+            let path = entry.expect("an entry").path();
+            if path.join("idea.md").is_file()
+                && path.join("main.wat").is_file()
+                && let Some(name) = path.file_name().and_then(|name| name.to_str())
+            {
+                found.push((format!("{place}/{name}"), path.clone()));
+            }
         }
     }
     found.sort();
@@ -88,15 +92,15 @@ async fn from_request_to_done(session: &Session, name: &str, folder: &Path) -> R
     Ok(())
 }
 
-/// Every program of tests/fixtures-wasm goes from the user's request to done, one after another
-/// in one session, whose pool gives each program's tests every worker of the machine.
+/// Every program of examples/ and tests/fixtures goes from the user's request to done, one after
+/// another in one session, whose pool gives each program's tests every worker of the machine.
 #[tokio::test]
 async fn every_webassembly_program_goes_from_its_request_to_done() {
     let found = programs();
     let names: Vec<&str> = found.iter().map(|(name, _)| name.as_str()).collect();
     assert!(
         found.len() >= AT_LEAST,
-        "{FOLDER} holds {} programs: {names:?}",
+        "{FOLDERS:?} hold {} programs: {names:?}",
         found.len()
     );
     let session = Session::start(Protocol::Discover).await;

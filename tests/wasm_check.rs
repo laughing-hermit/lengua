@@ -22,10 +22,10 @@ use lengua::trust;
 use serde_json::{Value, json};
 
 /// The add program's idea, an Attested Computation.
-const IDEA: &str = include_str!("fixtures-wasm/add/idea.md");
+const IDEA: &str = include_str!("fixtures/add/idea.md");
 
 /// Its code, in WebAssembly text.
-const CODE: &str = include_str!("fixtures-wasm/add/main.wat");
+const CODE: &str = include_str!("fixtures/add/main.wat");
 
 /// add's generated test as its idea has it: every pair of numbers up to 10^9, a longer proof
 /// than a test waits for.
@@ -68,10 +68,10 @@ const PROOF_SECONDS: u64 = 600;
 
 /// The cat program's idea, whose texts run to 5000 bytes, and its code: it reads its whole input
 /// with one `$fill`, so its proof goes one length after another.
-const CAT_IDEA: &str = include_str!("fixtures-wasm/cat/idea.md");
+const CAT_IDEA: &str = include_str!("fixtures/cat/idea.md");
 
 /// cat's main.wat.
-const CAT_CODE: &str = include_str!("fixtures-wasm/cat/main.wat");
+const CAT_CODE: &str = include_str!("fixtures/cat/main.wat");
 
 /// How long the session that proves cat gives its proofs: a few seconds, far less than every
 /// length of its 5000 bytes takes (src/prove/wasm/tests.rs gives the whole proof 900), so B1's
@@ -88,10 +88,10 @@ const TEMPLATE_IDEA: &str = include_str!("../plugin/skills/compile/assets/main-t
 const TEMPLATE_CODE: &str = include_str!("../plugin/skills/compile/assets/main-template.wat");
 
 /// The greet program's idea, which reads the `NAME` environment variable, and its code.
-const GREET_IDEA: &str = include_str!("fixtures-wasm/greet/idea.md");
+const GREET_IDEA: &str = include_str!("fixtures/greet/idea.md");
 
 /// greet's main.wat.
-const GREET_CODE: &str = include_str!("fixtures-wasm/greet/main.wat");
+const GREET_CODE: &str = include_str!("fixtures/greet/main.wat");
 
 /// What `run` says of a build a proof found wrong.
 const WRONG_BUILD: &str = "The proof found inputs where main.wat is wrong";
@@ -879,10 +879,10 @@ async fn a_program_the_model_refuses_stays_tested_not_proven() {
 }
 
 /// secret-equal's idea, whose `- Secret:` line names standard input.
-const SECRET_IDEA: &str = include_str!("fixtures-wasm/secret-equal/idea.md");
+const SECRET_IDEA: &str = include_str!("../examples/secret-equal/idea.md");
 
 /// Its code, which compares the two lines with no branch on their bytes.
-const SECRET_CODE: &str = include_str!("fixtures-wasm/secret-equal/main.wat");
+const SECRET_CODE: &str = include_str!("../examples/secret-equal/main.wat");
 
 /// How secret-equal chooses its answer: a mask made from the differences, with no branch.
 const MASKED: &str = "          (local.set $mask\n            (i32.sub (i32.const 0) (i32.eqz \

@@ -706,7 +706,7 @@ fn a_loop_that_runs_forever_must_take_connections() {
 
 /// secret-equal, whose idea names standard input as secret: the program the secret attempts
 /// change.
-const SECRET_EQUAL: &str = include_str!("fixtures-wasm/secret-equal/main.wat");
+const SECRET_EQUAL: &str = include_str!("../examples/secret-equal/main.wat");
 
 /// Where secret-equal has made its answer's mask, and its newline: the secret attempts put their
 /// code after it.

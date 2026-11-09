@@ -1,7 +1,7 @@
 //! The gate: lengua's programs against the same programs in C, C++ and Rust, on the runner it
 //! runs on (todo.md's finish line, point 4): `cargo bench --bench against_rust_and_c`.
 //!
-//! A workload has lengua's program, a folder of tests/fixtures-wasm that the bench takes from its
+//! A workload has lengua's program, its folder in `PROGRAMS`, which the bench takes from its
 //! idea to done as an agent does, and six other versions from benches/programs/<workload>: C,
 //! C++ and Rust compiled to WebAssembly by scripts/ci/bench-wasm.sh (once, on linux-x86_64, for
 //! every runner), and the same three built natively here with this system's own compilers. Every
@@ -80,25 +80,25 @@ const LANGUAGES: [(&str, &str); 3] = [("c", "main.c"), ("cpp", "main.cpp"), ("ru
 /// The other versions built natively, by the gate's names.
 const NATIVE: [&str; 3] = ["c", "cpp", "rust"];
 
-/// Each workload's lengua program: its folder in tests/fixtures-wasm.
+/// Each workload's lengua program: its folder, from the repository's root.
 const PROGRAMS: [(&str, &str); 14] = [
-    ("empty", "empty"),
-    ("add", "add"),
-    ("hypotenuse", "hypotenuse"),
-    ("upcase", "upcase"),
-    ("upcase-stdin", "upcase-stdin"),
-    ("shout", "shout"),
-    ("wc", "count"),
-    ("histogram", "histogram"),
-    ("crc32c", "crc32c"),
-    ("sort", "sort-large"),
-    ("tally", "tally"),
-    ("server", "shout-server"),
-    ("files", "files"),
-    ("readings", "readings"),
+    ("empty", "tests/fixtures/empty"),
+    ("add", "tests/fixtures/add"),
+    ("hypotenuse", "examples/hypotenuse"),
+    ("upcase", "examples/upcase"),
+    ("upcase-stdin", "tests/fixtures/upcase-stdin"),
+    ("shout", "tests/fixtures/shout"),
+    ("wc", "examples/count"),
+    ("histogram", "tests/fixtures/histogram"),
+    ("crc32c", "tests/fixtures/crc32c"),
+    ("sort", "tests/fixtures/sort-large"),
+    ("tally", "tests/fixtures/tally"),
+    ("server", "tests/fixtures/shout-server"),
+    ("files", "tests/fixtures/files"),
+    ("readings", "tests/fixtures/readings"),
 ];
 
-/// lengua's program for workload `name`: its folder in tests/fixtures-wasm.
+/// lengua's program for workload `name`: its folder, from the repository's root.
 fn program_of(name: &str) -> &'static str {
     PROGRAMS
         .iter()
@@ -1226,7 +1226,7 @@ fn lengua_made(
         Some(Ok(checked)) => Ok(Version {
             name: name.to_owned(),
             program: checked.path().to_path_buf(),
-            made: format!("lengua-mcp {release} run, {engine}, tests/fixtures-wasm/{program}{at}"),
+            made: format!("lengua-mcp {release} run, {engine}, {program}{at}"),
         }),
         Some(Err(problem)) => Err(format!("lengua's program{at} isn't done: {problem}")),
         None => Err(format!("lengua's program{at} wasn't checked")),
@@ -1283,7 +1283,7 @@ fn measure_versions(
 /// Measures the `made` versions of workload `name` on its input, made in a folder of its own.
 fn outcome_of(context: &Context, name: &str, made: Vec<Made>) -> Outcome {
     let workload = workload(name).expect("each of the gate's workloads has its input here");
-    let program = format!("tests/fixtures-wasm/{}", program_of(name));
+    let program = program_of(name).to_owned();
     let idea = std::fs::read_to_string(context.root.join(&program).join("idea.md"));
     let mut outcome = Outcome {
         name: name.to_owned(),
@@ -1957,11 +1957,11 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
     let session = Session::start(Protocol::Discover).await;
     let (mut now, mut then) = (Checked::new(), Checked::new());
     for &name in &names {
-        let path = format!("tests/fixtures-wasm/{}", program_of(name));
+        let path = program_of(name);
         eprintln!("checking {path}");
-        now.insert(name, checked_here(&session, root, &path).await);
+        now.insert(name, checked_here(&session, root, path).await);
         if let Some(commit) = &against {
-            then.insert(name, checked_at(&session, root, commit, &path).await);
+            then.insert(name, checked_at(&session, root, commit, path).await);
         }
     }
     let data_dir = session.data_dir.path().to_path_buf();

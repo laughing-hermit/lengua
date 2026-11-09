@@ -28,12 +28,12 @@ const EQUIVALENT: &[(&str, &str)] = &[];
 
 /// The programs whose mutants are checked: each idea, then its main.wat.
 const PROGRAMS: &[(&str, &str)] = &[
-    ("tests/fixtures-wasm/add/idea.md", "tests/fixtures-wasm/add/main.wat"),
-    ("tests/fixtures-wasm/upcase/idea.md", "tests/fixtures-wasm/upcase/main.wat"),
-    ("tests/fixtures-wasm/fetch/idea.md", "tests/fixtures-wasm/fetch/main.wat"),
-    ("tests/fixtures-wasm/echo/idea.md", "tests/fixtures-wasm/echo/main.wat"),
-    ("tests/fixtures-wasm/cat/idea.md", "tests/fixtures-wasm/cat/main.wat"),
-    ("tests/fixtures-wasm/cat-stream/idea.md", "tests/fixtures-wasm/cat-stream/main.wat"),
+    ("tests/fixtures/add/idea.md", "tests/fixtures/add/main.wat"),
+    ("examples/upcase/idea.md", "examples/upcase/main.wat"),
+    ("examples/fetch/idea.md", "examples/fetch/main.wat"),
+    ("tests/fixtures/echo/idea.md", "tests/fixtures/echo/main.wat"),
+    ("tests/fixtures/cat/idea.md", "tests/fixtures/cat/main.wat"),
+    ("tests/fixtures/cat-stream/idea.md", "tests/fixtures/cat-stream/main.wat"),
     (
         "plugin/skills/compile/assets/main-template-idea.md",
         "plugin/skills/compile/assets/main-template.wat",

@@ -106,7 +106,6 @@ fn corpus() -> Vec<(PathBuf, Vec<u8>)> {
     let mut pending = vec![
         root.join("examples"),
         root.join("tests/fixtures"),
-        root.join("tests/fixtures-wasm"),
         root.join("plugin/skills/compile/assets"),
     ];
     while let Some(folder) = pending.pop() {

@@ -102,7 +102,7 @@ A mask chooses between two values with no branch, `$x` where it's all ones and `
 - **A secret's end:** find it from a public length, never by looking for a byte. A line's
   newline, found with `br_if` on each byte, is a branch on the secret.
 
-secret-equal (lengua's `tests/fixtures-wasm/secret-equal`) is a whole program by these rules: it
+secret-equal (lengua's `examples/secret-equal`) is a whole program by these rules: it
 reads two lines from standard input, which is secret, finds them from the input's length, folds
 the `xor` of every pair of bytes into one word in a loop of public count, and chooses its answer
 from that word with a mask:

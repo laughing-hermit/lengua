@@ -11,7 +11,7 @@
 //!   solvers beside the server, where the archive keeps them;
 //! - starts the archive's own lengua-mcp as an MCP server over stdio with rmcp's client, as an
 //!   agent harness does, giving it a `PLUGIN_DATA`, lists its tools, `check` and `run`, and takes
-//!   add (tests/fixtures-wasm/add) from the user's request to done through `check`: its idea.md,
+//!   add (tests/fixtures/add) from the user's request to done through `check`: its idea.md,
 //!   then its main.wat, with the archive's solvers proving it in the background;
 //! - runs add through `run`, through `lengua-mcp run` from a shell, and on Unix through the done
 //!   reply's own shell command, given to `sh`;
@@ -32,10 +32,10 @@ use rmcp::{ClientHandler, RoleClient, ServiceExt};
 use serde_json::{Value, json};
 
 /// add's idea, an Attested Computation.
-const IDEA: &str = include_str!("fixtures-wasm/add/idea.md");
+const IDEA: &str = include_str!("fixtures/add/idea.md");
 
 /// add's main.wat.
-const CODE: &str = include_str!("fixtures-wasm/add/main.wat");
+const CODE: &str = include_str!("fixtures/add/main.wat");
 
 /// What a user says to ask for add.
 const REQUEST: &str = "Make me a program that adds two numbers";

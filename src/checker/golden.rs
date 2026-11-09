@@ -1016,7 +1016,7 @@ fn the_goldens_take_every_program_folder_once() {
 }
 
 /// Prints the report on one program or mutant, for a golden that differs:
-/// `LENGUA_GOLDEN_MUTANT="tests/fixtures-wasm/sort/main.wat L217:cmp"` (or `base`), with the
+/// `LENGUA_GOLDEN_MUTANT="examples/sort/main.wat L217:cmp"` (or `base`), with the
 /// mutant's line beside the program's. Without the variable it notes so and ends, as in a run of
 /// every ignored test.
 #[test]

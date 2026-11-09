@@ -1515,7 +1515,7 @@ mod tests {
     use super::*;
 
     /// The add idea as an Attested Computation.
-    const IDEA: &str = include_str!("../../tests/fixtures-wasm/add/idea.md");
+    const IDEA: &str = include_str!("../../tests/fixtures/add/idea.md");
 
     /// An idea of the native lengua's type still parses, and check refuses it on its type's
     /// line, saying where the native lengua went; an Attested Computation has no such problem.

@@ -1,10 +1,10 @@
 //! The prover's model of WebAssembly against what lengua's host and engine do, on every system:
 //! every case of `tests/host-cases/` run in the model gives what its file says, as the host's own
-//! runs do (tests/host.rs); on every test of the ideas of the fixtures the model follows in full,
-//! their floats and SIMD128 among them, and of the other WebAssembly fixtures and the compile
-//! skill's WebAssembly templates where the model follows what they do, the model and the engine
-//! do the same; and each float and SIMD128 operator the model follows gives the engine's bits on
-//! chosen and random operands.
+//! runs do (tests/host.rs); on every test of the ideas of the programs the model follows in full,
+//! their floats and SIMD128 among them, and of the other programs of examples/ and tests/fixtures
+//! and the compile skill's WebAssembly templates where the model follows what they do, the model
+//! and the engine do the same; and each float and SIMD128 operator the model follows gives the
+//! engine's bits on chosen and random operands.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -283,21 +283,35 @@ fn launcher() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_lengua-mcp"))
 }
 
-/// The fixtures the model must follow on every test of their ideas, their floats and SIMD128
-/// among them. Of every other WebAssembly program, the fixtures W9 ports and the templates, a run
-/// the model doesn't follow yet, such as one too long for it, is listed with its reason rather
-/// than failed: the engine runs every test of theirs in tests/wasm_every_program.rs and
-/// tests/wasm_templates.rs.
+/// The programs the model must follow on every test of their ideas, their floats and SIMD128
+/// among them, by their folders from the repository's root. add, echo and greet here are the
+/// prover's small fixtures in tests/fixtures; the full ports of the native ideas in examples/ are
+/// compared as every other program is. Of every other WebAssembly program, the ports and the
+/// templates, a run the model doesn't follow yet, such as one too long for it, is listed with its
+/// reason rather than failed: the engine runs every test of theirs in tests/wasm_every_program.rs
+/// and tests/wasm_templates.rs.
 const FOLLOWED_IN_FULL: [&str; 8] = [
-    "add",
-    "aes",
-    "count",
-    "echo",
-    "greet",
-    "hypotenuse",
-    "lines",
-    "padded",
+    "examples/aes",
+    "examples/count",
+    "examples/hypotenuse",
+    "tests/fixtures/add",
+    "tests/fixtures/echo",
+    "tests/fixtures/greet",
+    "tests/fixtures/lines",
+    "tests/fixtures/padded",
 ];
+
+/// The fewest programs of examples/ and tests/fixtures that [`programs`] finds: the 15 examples
+/// and the 28 fixtures. The templates come besides.
+const AT_LEAST: usize = 43;
+
+/// Whether the program in `folder` is one of [`FOLLOWED_IN_FULL`].
+fn followed_in_full(folder: &Path) -> bool {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    folder
+        .strip_prefix(root)
+        .is_ok_and(|relative| FOLLOWED_IN_FULL.map(Path::new).contains(&relative))
+}
 
 /// The most input, in bytes, a test here runs in the model and on the engine to compare them: a
 /// mebibyte's run takes the model seconds, and the tests of the programs that read that much
@@ -306,19 +320,24 @@ const FOLLOWED_IN_FULL: [&str; 8] = [
 const MODEL_INPUT: usize = 65_536;
 
 /// Every WebAssembly program whose ideas' tests the model must run as the engine does: each
-/// fixture of `tests/fixtures-wasm/` with a main.wat, and each of the compile skill's templates
-/// `*-template.wat` with its `*-template-idea.md`.
+/// folder of `examples/` and `tests/fixtures/` with an idea.md and a main.wat, and each of the
+/// compile skill's templates `*-template.wat` with its `*-template-idea.md`.
 fn programs() -> Vec<(PathBuf, PathBuf)> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut found = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(root.join("tests/fixtures-wasm")) {
-        for entry in entries.flatten() {
-            let folder = entry.path();
+    for place in ["examples", "tests/fixtures"] {
+        for entry in std::fs::read_dir(root.join(place)).expect("a folder of programs") {
+            let folder = entry.expect("an entry").path();
             if folder.join("main.wat").is_file() && folder.join("idea.md").is_file() {
                 found.push((folder.join("idea.md"), folder.join("main.wat")));
             }
         }
     }
+    assert!(
+        found.len() >= AT_LEAST,
+        "examples/ and tests/fixtures hold {} programs",
+        found.len()
+    );
     let assets = root.join("plugin/skills/compile/assets");
     if let Ok(entries) = std::fs::read_dir(&assets) {
         for entry in entries.flatten() {
@@ -517,17 +536,12 @@ fn samples(suite: &TestSuite) -> Vec<Sample> {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
     let programs = programs();
-    assert!(
-        programs.len() >= 3,
-        "found only {} WebAssembly programs",
-        programs.len()
-    );
     let pool = Pool::new(launcher(), None);
     let mut failures = Vec::new();
-    // What the model doesn't follow in a program but add, echo and greet, such as the vector
-    // template's SIMD or a port's floats, is listed here and not failed: the engine runs every
-    // test of theirs in tests/wasm_every_program.rs and tests/wasm_templates.rs. Every test of
-    // add, echo and greet the model must follow.
+    // What the model doesn't follow in a program but those of FOLLOWED_IN_FULL, such as the
+    // vector template's SIMD or a port's floats, is listed here and not failed: the engine runs
+    // every test of theirs in tests/wasm_every_program.rs and tests/wasm_templates.rs. Every test
+    // of those of FOLLOWED_IN_FULL the model must follow.
     let mut not_modelled = Vec::new();
     // The tests past MODEL_INPUT, which this test leaves to the engine's own runs.
     let mut too_long = Vec::new();
@@ -535,11 +549,7 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
         let shown = wat_path.display().to_string();
         let folder = wat_path.parent();
         let template = folder.is_some_and(|folder| folder.ends_with("assets"));
-        let in_full = !template
-            && folder
-                .and_then(Path::file_name)
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| FOLLOWED_IN_FULL.contains(&name));
+        let in_full = !template && folder.is_some_and(followed_in_full);
         let idea_text = std::fs::read_to_string(idea_path).expect("the idea reads");
         let wat = std::fs::read_to_string(wat_path).expect("the program reads");
         let idea = lengua::idea::parse(&idea_text)

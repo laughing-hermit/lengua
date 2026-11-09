@@ -26,10 +26,10 @@ fn with_args(program: &Program, args: &[&str]) -> Value {
     arguments
 }
 
-/// A file of the WebAssembly fixture `name`.
+/// A file of the fixture `name`, in tests/fixtures.
 fn fixture(name: &str, file: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures-wasm")
+        .join("tests/fixtures")
         .join(name)
         .join(file);
     std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))

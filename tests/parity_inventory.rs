@@ -72,7 +72,7 @@ fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
         let path = entry.expect("an entry").path();
         if path.is_dir() {
             let name = path.file_name().and_then(|name| name.to_str());
-            if !matches!(name, Some("fixtures" | "fixtures-wasm" | "schemas")) {
+            if !matches!(name, Some("fixtures" | "schemas")) {
                 rust_files(&path, found);
             }
         } else if path.extension().is_some_and(|extension| extension == "rs") {

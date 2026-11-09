@@ -33,10 +33,10 @@ enum Proving {
 }
 
 /// A valid idea, tests included, for a program that adds two numbers: an Attested Computation.
-pub const ADD_IDEA: &str = include_str!("../fixtures-wasm/add/idea.md");
+pub const ADD_IDEA: &str = include_str!("../fixtures/add/idea.md");
 
 /// The main.wat compiled from [`ADD_IDEA`], which follows every rule and passes every test.
-pub const ADD_CODE: &str = include_str!("../fixtures-wasm/add/main.wat");
+pub const ADD_CODE: &str = include_str!("../fixtures/add/main.wat");
 
 /// What a user says to ask for a program.
 pub const REQUEST: &str = "Make me a program that adds two numbers";

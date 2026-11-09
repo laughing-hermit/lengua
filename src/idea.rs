@@ -4154,7 +4154,7 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
     }
 
     /// The add idea as an Attested Computation, which lengua compiles to main.wat.
-    const ATTESTED: &str = include_str!("../tests/fixtures-wasm/add/idea.md");
+    const ATTESTED: &str = include_str!("../tests/fixtures/add/idea.md");
 
     /// The parameters of [`ATTESTED`], on its lines 8 and 9.
     const A: &str = "{ name: a, type: integer, required: true, from: argument 1 }";

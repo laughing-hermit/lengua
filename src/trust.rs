@@ -901,7 +901,7 @@ mod tests {
     use super::*;
 
     /// The add idea as an Attested Computation, with no trust record.
-    const IDEA: &str = include_str!("../tests/fixtures-wasm/add/idea.md");
+    const IDEA: &str = include_str!("../tests/fixtures/add/idea.md");
 
     /// An entry of someone else's.
     const ANA: &str = "{ by: human:ana, at: 2026-06-25T09:00:00Z }";
