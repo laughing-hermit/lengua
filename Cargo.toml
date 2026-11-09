@@ -76,6 +76,12 @@ rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"]
 jsonschema = { version = "0.60", default-features = false }
 rmcp = { version = "3.8.0", features = ["client", "transport-child-process"] }
 
+# The build that ships and that the gate measures (`cargo bench` takes it too): lengua-mcp without
+# the symbols nothing maps, which the native rows count in lengua's size. An MSVC executable keeps
+# its symbols in the .pdb, so on Windows this changes nothing.
+[profile.release]
+strip = "symbols"
+
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
