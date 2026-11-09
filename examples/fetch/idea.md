@@ -1,7 +1,16 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: fetch
 description: Gets a page from the web server on port 8080 of this computer and prints its body.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: path, type: text, required: true, from: argument 1 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 A shell script can use this program to read a page from the web server on TCP port `8080` of this

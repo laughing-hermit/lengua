@@ -1,7 +1,17 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: sort
 description: Sorts the lines of standard input in byte order and can drop duplicate lines.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: text, type: text, required: true, from: standard input }
+  - { name: option, type: text, required: false, from: argument 1 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 The program sorts text as `LC_ALL=C sort` does, for shell pipelines. It reads standard input of

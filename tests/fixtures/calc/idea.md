@@ -1,7 +1,18 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: calc
 description: Adds, subtracts or multiplies two whole numbers from its arguments, with an operator between them.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: a, type: integer, required: true, from: argument 1 }
+  - { name: op, type: text, required: true, from: argument 2 }
+  - { name: b, type: integer, required: true, from: argument 3 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 A shell script can use this program to do one step of arithmetic. The arguments are a whole

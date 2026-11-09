@@ -1,7 +1,16 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: lines-stream
 description: Counts the newlines of standard input of any length.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: text, type: text, required: true, from: standard input }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 The program counts the lines of standard input of any length, as `wc -l` does. It reads one piece

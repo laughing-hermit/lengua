@@ -1,7 +1,17 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: mean
 description: Prints the mean of the two decimal numbers in its arguments, with two decimal places.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: a, type: decimal, required: true, from: argument 1 }
+  - { name: b, type: decimal, required: true, from: argument 2 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 A shell script can use this program to find the mean of two decimal numbers. The arguments are two

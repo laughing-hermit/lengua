@@ -1,7 +1,17 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: absdiff
 description: Prints the absolute difference of the two whole numbers in its arguments.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: a, type: integer, required: true, from: argument 1 }
+  - { name: b, type: integer, required: true, from: argument 2 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 A shell script can use this program to find how far apart two whole numbers are. The program

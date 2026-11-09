@@ -1,7 +1,14 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: nap
 description: Sleeps for half a minute and then says that it is awake.
+runtime: webassembly
+computation: main.wat
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 The program waits `30` seconds on the clock that only moves forward. Then it prints `awake`, for a

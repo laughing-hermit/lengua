@@ -1,7 +1,14 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: dice
 description: Rolls a fair six-sided die and prints the roll.
+runtime: webassembly
+computation: main.wat
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 The program rolls a fair six-sided die for a board game. It prints the roll, a whole number from

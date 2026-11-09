@@ -1,7 +1,16 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: cat-stream
 description: Prints standard input of any length back unchanged.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: text, type: text, required: true, from: standard input }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 The program copies standard input of any length to standard output without a change. It copies

@@ -1,7 +1,16 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: archive
 description: Moves a file into the archive folder and makes the folder if it does not exist.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: file, type: text, required: true, from: argument 1 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit, files]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 The one argument of the program is the name of a file, `1` to `64` characters with no `/`. The

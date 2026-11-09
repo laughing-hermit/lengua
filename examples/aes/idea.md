@@ -1,11 +1,22 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: aes
-description: Uses the AES instructions of the CPU to encrypt blocks of hexadecimal data with AES-128 in ECB mode.
+description: Encrypts blocks of hexadecimal data with AES-128 in ECB mode, in portable code.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: input, type: text, required: true, from: standard input }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
-This program encrypts data with AES-128 (FIPS 197). It also shows how lengua checks a program
-that uses the AES instructions of the CPU.
+This program encrypts data with AES-128 (FIPS 197). It computes AES in portable code, the same on
+every computer, with arithmetic on the bytes alone. It looks up no table with a byte of the key or
+of the data. So the values of the key and the data do not change which memory the encryption
+reads. The encryption has no branch that depends on them.
 
 Standard input has two lines. The first line is the 128-bit key, `32` hexadecimal digits. The
 second line is the data, from `32` to `131072` hexadecimal digits in a multiple of 32. That is 1

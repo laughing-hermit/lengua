@@ -1,7 +1,14 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: utc
 description: Prints the current UTC time of day as HH:MM:SS.
+runtime: webassembly
+computation: main.wat
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 

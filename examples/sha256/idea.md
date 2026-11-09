@@ -1,7 +1,16 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: sha256
 description: Prints the SHA-256 digest of standard input.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: text, type: text, required: true, from: standard input }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 The program prints the SHA-256 digest of standard input, as FIPS 180-4 defines it. The digest is

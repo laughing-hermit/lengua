@@ -1,7 +1,16 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: total
 description: Reads a CSV from standard input and prints the total of its amount column.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: csv, type: text, required: true, from: standard input }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 A person can use this program to find the total of the money in a CSV file, such as a bank export.

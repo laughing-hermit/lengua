@@ -1,7 +1,16 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: clock
 description: Prints the current UTC time as hh:mm:ss, or the number of days from today to the date in its argument.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: date, type: text, required: false, from: argument 1 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 This program is a small command-line clock. Without arguments, it reads the clock. Then it prints
@@ -11,7 +20,7 @@ the current time of day in UTC as hh:mm:ss, with two digits in each part. The ho
 With one date in the form YYYY-MM-DD, it prints the number of days from the UTC date today to that
 date. It prints a positive number for a date in the future and `0` for today. For a date in the
 past, it prints a negative number with a minus sign at the start. The clock reads from `0` to
-`253402300799` seconds since 1970, which is the end of the year 9999.
+`18446744073` seconds since 1970, which is a time in July of the year 2554.
 
 A date is four digits, a dash, two digits, a dash and two digits. For any other text, the program
 prints the usage message.
@@ -43,7 +52,7 @@ code 4.
 
 | t | runs |
 |---|---|
-| `int(0, 253402300799)` | 300 |
+| `int(0, 18446744073)` | 300 |
 
 ## B2: Prints the days until a date
 - Given the argument `2026-12-25`
@@ -61,13 +70,13 @@ code 4.
 
 | y | m1 | m2 | d1 | d2 | t | runs |
 |---|---|---|---|---|---|---|
-| `int(1970, 9999)` | `int(0, 0)` | `int(1, 9)` | `int(0, 0)` | `int(1, 9)` | `int(0, 253402300799)` | 150 |
-| `int(1970, 9999)` | `int(0, 0)` | `int(1, 9)` | `int(1, 2)` | `int(0, 8)` | `int(0, 253402300799)` | 150 |
-| `int(1970, 9999)` | `int(1, 1)` | `int(0, 2)` | `int(0, 0)` | `int(1, 9)` | `int(0, 253402300799)` | 150 |
-| `int(1970, 9999)` | `int(1, 1)` | `int(0, 2)` | `int(1, 2)` | `int(0, 8)` | `int(0, 253402300799)` | 150 |
-| `int(1970, 9999)` | `int(0, 0)` | `int(1, 9)` | `int(1, 1)` | `int(9, 9)` | `int(0, 253402300799)` | 150 |
-| `int(1970, 9999)` | `int(1, 1)` | `int(2, 2)` | `int(3, 3)` | `int(0, 1)` | `int(0, 253402300799)` | 150 |
-| `int(1970, 9999)` | `int(0, 0)` | `int(1, 1)` | `int(3, 3)` | `int(0, 1)` | `int(0, 253402300799)` | 150 |
+| `int(1970, 9999)` | `int(0, 0)` | `int(1, 9)` | `int(0, 0)` | `int(1, 9)` | `int(0, 18446744073)` | 150 |
+| `int(1970, 9999)` | `int(0, 0)` | `int(1, 9)` | `int(1, 2)` | `int(0, 8)` | `int(0, 18446744073)` | 150 |
+| `int(1970, 9999)` | `int(1, 1)` | `int(0, 2)` | `int(0, 0)` | `int(1, 9)` | `int(0, 18446744073)` | 150 |
+| `int(1970, 9999)` | `int(1, 1)` | `int(0, 2)` | `int(1, 2)` | `int(0, 8)` | `int(0, 18446744073)` | 150 |
+| `int(1970, 9999)` | `int(0, 0)` | `int(1, 9)` | `int(1, 1)` | `int(9, 9)` | `int(0, 18446744073)` | 150 |
+| `int(1970, 9999)` | `int(1, 1)` | `int(2, 2)` | `int(3, 3)` | `int(0, 1)` | `int(0, 18446744073)` | 150 |
+| `int(1970, 9999)` | `int(0, 0)` | `int(1, 1)` | `int(3, 3)` | `int(0, 1)` | `int(0, 18446744073)` | 150 |
 
 ## B3: Rejects text that is not a date
 - Given the argument `christmas`

@@ -1,7 +1,14 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: sweep
 description: Deletes the empty files in the current folder and says how many it deleted.
+runtime: webassembly
+computation: main.wat
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit, files]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 The program deletes each empty file that is directly in the current folder, to tidy a folder after

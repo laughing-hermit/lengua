@@ -1,7 +1,16 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: second
 description: Reads two lines from standard input and prints the second line.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: lines, type: text, required: true, from: standard input }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 The program reads two lines from standard input and prints the second line. Each line is `1` to `20`

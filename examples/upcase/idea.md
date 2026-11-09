@@ -1,7 +1,17 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: upcase
 description: Copies a text file to another file with its ASCII letters in capitals.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: input, type: text, required: true, from: argument 1 }
+  - { name: output, type: text, required: true, from: argument 2 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit, files]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 

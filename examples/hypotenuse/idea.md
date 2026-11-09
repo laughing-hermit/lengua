@@ -1,7 +1,17 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: hypotenuse
 description: Prints the length of the hypotenuse of a right triangle from the lengths of its two sides, with three decimals.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: a, type: decimal, required: true, from: argument 1 }
+  - { name: b, type: decimal, required: true, from: argument 2 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 A person at a shell can use this program to find the long side of a right triangle. The arguments

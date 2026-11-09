@@ -1,7 +1,16 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: clock
 description: Prints the current UTC time as hh:mm:ss, or the number of days until the date in its argument.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: date, type: text, required: false, from: argument 1 }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 
@@ -11,8 +20,8 @@ prints the current time of day in UTC as hh:mm:ss, with two digits in each part.
 With one date in the form YYYY-MM-DD, it prints the number of whole days from today in UTC to that
 date. It prints `0` for today and a negative number for a date in the past.
 
-The clock reads from `0` to `253402300799` seconds since 1970, which is up to the end of the year
-9999. The year of a date is from `1970` to `9999`. The month is from `1` to `12`, and the day is
+The clock reads from `0` to `18446744073` seconds since 1970, which is a time in July of the year
+2554. The year of a date is from `1970` to `9999`. The month is from `1` to `12`, and the day is
 from `1` to `31`. The year always has four digits, and the month and the day have two digits each.
 The argument has at most `131072` characters.
 
@@ -35,7 +44,7 @@ program cannot write its output, it exits with code 2.
 
 | t | runs |
 |---|---|
-| `int(0, 253402300799)` | 300 |
+| `int(0, 18446744073)` | 300 |
 
 ## B2: Prints the number of days until a date
 - Given the argument `2025-12-25`
@@ -54,7 +63,7 @@ program cannot write its output, it exits with code 2.
 
 | y | mt | mo | dt | do | t | runs |
 |---|---|---|---|---|---|---|
-| `int(1970, 9999)` | `choice(0, 1)` | `choice(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)` | `choice(0, 1, 2, 3)` | `choice(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)` | `int(0, 253402300799)` | 400 |
+| `int(1970, 9999)` | `choice(0, 1)` | `choice(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)` | `choice(0, 1, 2, 3)` | `choice(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)` | `int(0, 18446744073)` | 400 |
 
 ## B3: Counts a date in the past as negative days
 - Given the argument `2024-12-25`
@@ -73,7 +82,7 @@ program cannot write its output, it exits with code 2.
 
 | y | mt | mo | dt | do | t | runs |
 |---|---|---|---|---|---|---|
-| `int(1970, 9999)` | `choice(0, 1)` | `choice(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)` | `choice(0, 1, 2, 3)` | `choice(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)` | `int(0, 253402300799)` | 200 |
+| `int(1970, 9999)` | `choice(0, 1)` | `choice(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)` | `choice(0, 1, 2, 3)` | `choice(0, 1, 2, 3, 4, 5, 6, 7, 8, 9)` | `int(0, 18446744073)` | 200 |
 
 ## B4: Rejects text that is not a date
 - Given the argument `tomorrow`

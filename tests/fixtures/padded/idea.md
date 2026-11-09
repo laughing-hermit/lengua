@@ -1,7 +1,16 @@
 ---
-type: lengua/program-idea
+type: Attested Computation
 title: wc
 description: Counts the lines and words on standard input like `wc -lw`, as fast as possible.
+runtime: webassembly
+computation: main.wat
+parameters:
+  - { name: s, type: text, required: true, from: standard input }
+executor:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
+  receipt: [stdout, stderr, exit]
+attester:
+  resource: https://github.com/laughing-hermit/lengua/blob/main/docs/check.md
 ---
 # Purpose
 This program is a drop-in replacement for `wc -lw` on very large files. It is for people who count
