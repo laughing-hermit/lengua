@@ -922,12 +922,14 @@ fn counted_loop(times: u32) -> String {
     )
 }
 
-/// A run of 100,000 times round a loop ends with the proof's time, though it never asks the
-/// oracle about a branch: this is how a hash of the input, all straight-line code over unknown
-/// values, stays within the proof's time. `explore` asks every few thousand steps.
+/// A run of 100 times round a loop, a few hundred steps, ends with the proof's time, though it
+/// never asks the oracle about a branch: this is how a hash of the input, all straight-line code
+/// over unknown values, stays within the proof's time. `explore` asks before every step, since
+/// one step over a hash's terms can take a second: a look every few thousand steps took a proof
+/// seven times its budget.
 #[test]
 fn a_run_with_no_branch_on_its_inputs_keeps_the_proofs_time() {
-    let module = module(&counted_loop(100_000), Policy::default());
+    let module = module(&counted_loop(100), Policy::default());
     let mut pool = Pool::default();
     let start = begin(&module, &mut pool, &[], &[], Vec::new());
     let mut oracle = TimeUpAtTheFourthLook(std::cell::Cell::new(0));

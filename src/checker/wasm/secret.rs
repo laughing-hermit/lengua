@@ -20,17 +20,40 @@
 //!
 //! Memory is followed as the memory rules follow it, by region and offset: for each region, the
 //! ranges of its bytes that may hold a secret, exact where an access's offset is a constant, so a
-//! store of a value that isn't secret over secret bytes makes them public again. Each function is
-//! followed once for each way it's called (which of its arguments are secret, what the addresses
-//! they lend point to, and which bytes and globals hold a secret as it starts), and what it leaves
-//! is kept per function, so a callee's result is secret where its arguments make it so. What the
-//! rule can't tell apart it takes as secret: every argument's text when an argument is secret, as
-//! `args_get` writes them into one buffer; every variable's text when a variable is; and every
-//! file the program reads when a file is, since an opened file's descriptor comes back through
-//! memory. An access is taken to stay inside the region its address is made from, as the memory
-//! rules hold it to; one through an address they don't follow may touch any region. Lengths and
-//! counts aren't secret: what `fd_read` and `$fill` say they read, the sizes calls write, and
-//! where `args_get` puts each argument.
+//! store of a value that isn't secret over secret bytes makes them public again; a `memory.copy`,
+//! `memory.fill` or `memory.init` does so only when its length is a constant too, since one of a
+//! length that varies may write fewer bytes. Each function is followed once for each way it's
+//! called (which of its arguments are secret, what the addresses they lend point to, and which
+//! bytes and globals hold a secret as it starts), and what it leaves is kept per function, so a
+//! callee's result is secret where its arguments make it so. What the rule can't tell apart it
+//! takes as secret: every argument's text when an argument is secret, as `args_get` writes them
+//! into one buffer; every variable's text when a variable is; and every file the program reads
+//! when a file is, since an opened file's descriptor comes back through memory, so a read
+//! through any descriptor that may be an opened one's, a connection's too, while `sock_recv`,
+//! which reads no file, gives no file's bytes.
+//!
+//! An access the memory rules bound stays inside the region its address is made from. One they
+//! leave to the proof (through an address loaded from memory, at an index checked against a
+//! limit they don't follow, of a length they don't bound) the proof holds inside the memory, not
+//! inside a region: it may touch any region, and bytes outside them all, which stay secret once
+//! a secret may be there, as no store the rule follows makes them public. The buffer `args_get`
+//! or `environ_get` fills is the exception: it is taken to end with its region, as the sizes the
+//! program asked for are taken to fit.
+//!
+//! A secret that leaves may come back: once main.wat writes a secret to a descriptor that may be
+//! a file's or a connection's, or sends one with `sock_send`, anywhere in the program, what
+//! `fd_read`, `$fill` and `sock_recv` read from every file and connection is secret, in this run
+//! or a later one. What goes to standard output or standard error alone doesn't come back.
+//!
+//! Lengths and counts aren't secret: what `$fill` reads to the end says it read, what a read of
+//! a file says, the sizes calls write, and where `args_get` puts each argument. One count is:
+//! how many bytes a single `fd_read` of a secret standard input gave, since a terminal gives a
+//! line at a time, so that count says where the secret's line ends. Error numbers aren't secret.
+//!
+//! What the rule can't follow it refuses, and takes as all secret: a call that leads back to its
+//! caller, blocks and calls nested more than 256 deep, and a program of more than 4,000,000
+//! operators as it follows them. A loop that hasn't settled in 32 rounds has all it may write
+//! taken as secret: the locals it writes, every byte of memory and every global that changes.
 //!
 //! It is a rule over main.wat, like a type. The machine code the engine compiles main.wat to is
 //! trusted to keep its time as the WebAssembly does, until lengua checks that code as well
@@ -65,6 +88,9 @@ const MAX_RANGES: usize = 64;
 /// 32 bits, unsigned.
 const READ_TO_END: u64 = 0xFFFF_FFFF;
 
+/// The bytes of the count a read writes: how many bytes it gave, a 32-bit number.
+const COUNT_BYTES: u64 = 4;
+
 /// What each fix that chooses with a mask shows.
 const MASK: &str = "`(i32.sub (i32.const 0) (local.get $bit))` is all ones for 1 and 0 for 0, \
                     and `(i32.or (i32.and (local.get $a) (local.get $mask)) (i32.and (local.get \
@@ -83,6 +109,9 @@ struct Sources {
     environment: bool,
     /// An argument: every argument's text, which `args_get` writes together.
     arguments: bool,
+    /// What a file or a peer gives back: the program writes a secret to a file or sends one to
+    /// a peer, so what it reads from any file or connection may be that secret.
+    returned: bool,
 }
 
 impl Sources {
@@ -102,11 +131,16 @@ impl Sources {
 }
 
 /// The bytes of memory that may hold a secret: for each region, ranges of its bytes counted from
-/// its first, each from its start up to its end, sorted and apart.
+/// its first, each from its start up to its end, sorted and apart; and whether a byte outside
+/// every region may.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Marks {
     /// The ranges, by region.
     regions: BTreeMap<usize, Vec<(u64, u64)>>,
+    /// Whether a byte in no region may hold a secret: one a write through an address the memory
+    /// rules don't follow may have put there. No store the rule follows reaches such a byte, so
+    /// nothing makes it public again.
+    outside: bool,
 }
 
 impl Marks {
@@ -153,13 +187,14 @@ impl Marks {
             .is_some_and(|ranges| ranges.iter().any(|&(low, high)| low < end && start < high))
     }
 
-    /// Whether any byte may hold a secret.
+    /// Whether any byte may hold a secret, in a region or outside them all.
     fn any(&self) -> bool {
-        !self.regions.is_empty()
+        self.outside || !self.regions.is_empty()
     }
 
     /// Adds `other`'s marks to these: what may hold a secret where paths meet.
     fn join(&mut self, other: &Self) {
+        self.outside |= other.outside;
         for (region, ranges) in &other.regions {
             let mine = self.regions.entry(*region).or_default();
             mine.extend(ranges.iter().copied());
@@ -209,8 +244,12 @@ enum Place {
 enum Reach {
     /// This many.
     Bytes(u64),
-    /// A count the memory rules don't bound: as far as its region goes.
-    ToEnd,
+    /// As many as `args_sizes_get` or `environ_sizes_get` said: as far as its region goes, which
+    /// the sizes the program asked for are taken to fit.
+    Rest,
+    /// A count the memory rules don't bound, which they leave to the proof: the proof holds it
+    /// inside the memory, not inside the region, so it may reach anywhere.
+    Unbounded,
 }
 
 /// What the rule knows at a point of a function: which locals, bytes of memory and globals may
@@ -428,6 +467,9 @@ struct Follower<'m, 'a> {
     depth: usize,
     /// How many operators it has followed.
     steps: usize,
+    /// Whether the program may write a secret to a file or send one to a peer, where a later
+    /// read, in this run or another, may get it back.
+    sent: bool,
     /// What it refuses: each line, problem and fix, once.
     found: BTreeSet<(Option<usize>, String, String)>,
 }
@@ -1118,9 +1160,9 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
             self.report(at, Leak::Length("memory.copy"));
         }
         let values = self.operands(at);
-        let reach = values.get(2).map_or(Reach::ToEnd, reach_of);
+        let reach = values.get(2).map_or(Reach::Unbounded, reach_of);
         let from = self.places(values.get(1), reach);
-        let to = self.places(values.first(), reach);
+        let to = written(self.places(values.first(), reach), values.get(2));
         let secret = holds(&state.memory, &from) || operands.contains(&true);
         self.write(state, &to, secret);
     }
@@ -1137,8 +1179,8 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
             self.report(at, Leak::Length(name));
         }
         let values = self.operands(at);
-        let reach = values.get(2).map_or(Reach::ToEnd, reach_of);
-        let to = self.places(values.first(), reach);
+        let reach = values.get(2).map_or(Reach::Unbounded, reach_of);
+        let to = written(self.places(values.first(), reach), values.get(2));
         self.write(state, &to, operands.contains(&true));
     }
 
@@ -1211,6 +1253,15 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
             self.fill_call(at, state);
             return;
         }
+        if callee.is_library("write_all") {
+            // A secret it writes to a file or a connection may be read back.
+            let operands = self.operands(at);
+            let reach = operands.get(2).map_or(Reach::Unbounded, reach_of);
+            let data = self.places(operands.get(1), reach);
+            if holds(&state.memory, &data) && may_be_opened(operands.first()) {
+                self.follower.sent = true;
+            }
+        }
         // `$write_all` sends its buffer's bytes and gives an error number; what any other
         // gives is secret when an argument is.
         let given = !callee.is_library("write_all") && secret.contains(&true);
@@ -1231,7 +1282,7 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
             self.report(at, Leak::Stop);
         }
         if read {
-            let reach = operands.get(2).map_or(Reach::ToEnd, reach_of);
+            let reach = operands.get(2).map_or(Reach::Unbounded, reach_of);
             let places = self.places(operands.get(1), reach);
             self.taint(state, &places);
         }
@@ -1239,13 +1290,50 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
     }
 
     /// Whether a read of the descriptor `fd` may read a secret: standard input's, when it may be
-    /// 0, and a file's, when it may be one a program opens, numbered after the connections.
+    /// 0; and when it may be one a program opens or a connection's, a file's, or what the
+    /// program wrote to a file or sent to a peer.
     fn secret_read(&self, fd: Option<&Value>) -> bool {
         let sources = self.follower.sources;
-        let range = fd.map_or_else(memory::Range::full, Value::range);
-        let input = range.low == u64::from(fds::STDIN);
-        let file = range.high >= u64::from(fds::FIRST_CONNECTION);
-        (sources.standard_input && input) || (sources.files && file)
+        (sources.standard_input && may_be_input(fd))
+            || ((sources.files || sources.returned) && may_be_opened(fd))
+    }
+
+    /// The buffers the iovecs of the host call at `at` point to, each as the places it may be;
+    /// `None` when the memory rules can't say what the iovecs hold.
+    fn iovec_places(&self, at: usize) -> Option<Vec<Vec<Place>>> {
+        let records = self.records;
+        let entries = records
+            .get(at)
+            .and_then(Option::as_ref)
+            .and_then(|record| record.iovecs.as_ref())?;
+        let buffers = entries.iter().map(|(buffer, length)| {
+            let buffer = resolve(buffer, self.bindings);
+            let reach = reach_of(&resolve(length, self.bindings));
+            self.places(Some(&buffer), reach)
+        });
+        Some(buffers.collect())
+    }
+
+    /// Marks the buffers the iovecs of the host call at `at` point to as ones that may hold a
+    /// secret, which a read put there: every byte, when the rule can't say where they are.
+    fn taint_iovecs(&self, at: usize, state: &mut State) {
+        match self.iovec_places(at) {
+            Some(buffers) => {
+                for places in &buffers {
+                    self.taint(state, places);
+                }
+            }
+            None => everywhere(self.module(), &mut state.memory),
+        }
+    }
+
+    /// Whether the data the host call at `at` writes out, the buffers its iovecs point to, may
+    /// hold a secret: any secret there is, when the rule can't say where they are.
+    fn sends_secret(&self, at: usize, state: &State) -> bool {
+        match self.iovec_places(at) {
+            Some(buffers) => buffers.iter().any(|places| holds(&state.memory, places)),
+            None => state.memory.any(),
+        }
     }
 
     /// Follows the call at `at` of `callee`, a host function: the host reads no secret but the
@@ -1274,24 +1362,32 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
                     self.taint(state, &places);
                 }
             }
-            if host.name == "fd_read" && self.secret_read(operands.first()) {
-                // The buffers its iovecs point to get what it reads.
-                let records = self.records;
-                let iovecs = records
-                    .get(at)
-                    .and_then(Option::as_ref)
-                    .and_then(|record| record.iovecs.as_ref());
-                match iovecs {
-                    Some(entries) => {
-                        for (buffer, length) in entries {
-                            let buffer = resolve(buffer, self.bindings);
-                            let reach = reach_of(&resolve(length, self.bindings));
-                            let places = self.places(Some(&buffer), reach);
-                            self.taint(state, &places);
-                        }
-                    }
-                    None => everywhere(self.module(), &mut state.memory),
-                }
+            let sources = self.follower.sources;
+            // The buffers its iovecs point to get what it reads: `sock_recv` reads no file and
+            // no standard input, only what a peer sends, which is secret once the program has
+            // sent a secret.
+            let reads = match host.name {
+                "fd_read" => self.secret_read(operands.first()),
+                "sock_recv" => sources.returned,
+                _ => false,
+            };
+            if reads {
+                self.taint_iovecs(at, state);
+            }
+            // How many bytes one read of a secret standard input gave says where a line of it
+            // ends, as a terminal gives a line at a time.
+            if host.name == "fd_read" && sources.standard_input && may_be_input(operands.first()) {
+                let count = self.places(operands.get(3), Reach::Bytes(COUNT_BYTES));
+                self.taint(state, &count);
+            }
+            // A secret written to a file or sent to a peer may be read back.
+            let sends = match host.name {
+                "fd_write" => may_be_opened(operands.first()),
+                "sock_send" => true,
+                _ => false,
+            };
+            if sends && self.sends_secret(at, state) {
+                self.follower.sent = true;
             }
         }
         self.stack
@@ -1314,12 +1410,45 @@ fn holds(memory: &Marks, places: &[Place]) -> bool {
     })
 }
 
-/// Marks every byte of every region of `module` as one that may hold a secret: what a write the
-/// rule doesn't follow may reach.
+/// Marks every byte of every region of `module`, and the bytes outside them all, as ones that
+/// may hold a secret: what a write the rule doesn't follow may reach.
 fn everywhere(module: &Module<'_>, memory: &mut Marks) {
     for (index, region) in module.regions.iter().enumerate() {
         memory.mark(index, 0, region.size);
     }
+    memory.outside = true;
+}
+
+/// The places a `memory.copy`, `memory.fill` or `memory.init` of `length` bytes writes, of the
+/// `places` it may write: all their bytes on every run only when the length is one constant, so
+/// with any other length they are bytes it may write, and a value that isn't secret makes none
+/// of them public.
+fn written(mut places: Vec<Place>, length: Option<&Value>) -> Vec<Place> {
+    let constant = length.is_some_and(|length| length.range().constant().is_some());
+    if !constant {
+        for place in &mut places {
+            if let Place::Region { exact, .. } = place {
+                *exact = false;
+            }
+        }
+    }
+    places
+}
+
+/// The numbers the descriptor `fd` may be: any, for one the rule knows nothing of.
+fn descriptor(fd: Option<&Value>) -> memory::Range {
+    fd.map_or_else(memory::Range::full, Value::range)
+}
+
+/// Whether the descriptor `fd` may be standard input's, 0.
+fn may_be_input(fd: Option<&Value>) -> bool {
+    descriptor(fd).low == u64::from(fds::STDIN)
+}
+
+/// Whether the descriptor `fd` may be one a program opens, a file's, or a connection's: those
+/// are numbered from the first connection's up.
+fn may_be_opened(fd: Option<&Value>) -> bool {
+    descriptor(fd).high >= u64::from(fds::FIRST_CONNECTION)
 }
 
 /// Every global of `module` that changes.
@@ -1403,21 +1532,21 @@ fn places_of(module: &Module<'_>, address: &Value, reach: Reach, found: &mut Vec
 }
 
 /// Where an access of `reach` bytes at `offset` into region `region` of `module` goes: the bytes
-/// it may touch, when they lie inside the region; anywhere when they don't.
+/// it may touch, when the memory rules bound them inside the region; anywhere when they lie
+/// outside it, or when the rules bound them on neither side and leave them to the proof, which
+/// holds them inside the memory alone.
 fn place(module: &Module<'_>, region: usize, offset: Offset, reach: Reach) -> Place {
     inside(module, region, offset, reach).unwrap_or(Place::Anywhere)
 }
 
-/// The bytes of [`place`], when they lie inside the region.
+/// The bytes of [`place`], when the memory rules bound them inside the region.
 fn inside(module: &Module<'_>, region: usize, offset: Offset, reach: Reach) -> Option<Place> {
     let size = module.regions.get(region)?.size;
-    let start = match offset.low {
-        None => 0,
-        Some(low) => u64::try_from(low).ok()?,
-    };
-    let end = match (offset.high, reach) {
-        (Some(high), Reach::Bytes(bytes)) => u64::try_from(high).ok()?.checked_add(bytes)?,
-        _ => size,
+    let start = u64::try_from(offset.low?).ok()?;
+    let end = match reach {
+        Reach::Bytes(bytes) => u64::try_from(offset.high?).ok()?.checked_add(bytes)?,
+        Reach::Rest => size,
+        Reach::Unbounded => return None,
     };
     (start <= end && end <= size).then_some(Place::Region {
         region,
@@ -1427,14 +1556,14 @@ fn inside(module: &Module<'_>, region: usize, offset: Offset, reach: Reach) -> O
     })
 }
 
-/// How far an access of `length` bytes reaches: as many as the memory rules let it be, or to
-/// its region's end when they don't bound it.
+/// How far an access of `length` bytes reaches: as many as the memory rules let it be, or
+/// anywhere when they don't bound it.
 fn reach_of(length: &Value) -> Reach {
     let range = length.range();
     if range.high <= u64::from(u32::MAX) {
         Reach::Bytes(range.high)
     } else {
-        Reach::ToEnd
+        Reach::Unbounded
     }
 }
 
@@ -1442,14 +1571,14 @@ fn reach_of(length: &Value) -> Reach {
 fn lend_reach(bytes: Bytes, operands: &[Value]) -> Reach {
     match bytes {
         Bytes::Fixed(count) => Reach::Bytes(u64::from(count)),
-        Bytes::Argument(argument) => operands.get(argument).map_or(Reach::ToEnd, reach_of),
+        Bytes::Argument(argument) => operands.get(argument).map_or(Reach::Unbounded, reach_of),
         Bytes::Table { count, entry } => match operands.get(count).map(Value::range) {
             Some(range) if range.high <= u64::from(u32::MAX) => {
                 Reach::Bytes(range.high.saturating_mul(u64::from(entry)))
             }
-            _ => Reach::ToEnd,
+            _ => Reach::Unbounded,
         },
-        Bytes::Sized => Reach::ToEnd,
+        Bytes::Sized => Reach::Rest,
     }
 }
 
@@ -1542,33 +1671,40 @@ pub fn check(
     else {
         return;
     };
-    let mut follower = Follower {
-        module,
-        flows,
-        analysis,
-        sources: Sources::of(secrets),
-        known: BTreeMap::new(),
-        calling: Vec::new(),
-        depth: 0,
-        steps: 0,
-        found: BTreeSet::new(),
-    };
-    let call = Call {
-        secret: Vec::new(),
-        bindings: Vec::new(),
-        memory: Marks::default(),
-        globals: BTreeSet::new(),
-    };
-    follower.follow(entry, call, start.line, start.results.len());
-    violations.extend(
-        follower
-            .found
-            .into_iter()
-            .map(|(line, problem, fix)| Violation {
-                rule: Rule::Secrets,
-                line,
-                problem,
-                fix,
-            }),
-    );
+    let mut sources = Sources::of(secrets);
+    let mut found = BTreeSet::new();
+    // Followed once; and once more when it may write a secret to a file or send one to a peer,
+    // with what every file and connection gives secret, wherever in the program it reads them.
+    loop {
+        let mut follower = Follower {
+            module,
+            flows,
+            analysis,
+            sources,
+            known: BTreeMap::new(),
+            calling: Vec::new(),
+            depth: 0,
+            steps: 0,
+            sent: false,
+            found: BTreeSet::new(),
+        };
+        let call = Call {
+            secret: Vec::new(),
+            bindings: Vec::new(),
+            memory: Marks::default(),
+            globals: BTreeSet::new(),
+        };
+        follower.follow(entry, call, start.line, start.results.len());
+        found.append(&mut follower.found);
+        if sources.returned || !follower.sent {
+            break;
+        }
+        sources.returned = true;
+    }
+    violations.extend(found.into_iter().map(|(line, problem, fix)| Violation {
+        rule: Rule::Secrets,
+        line,
+        problem,
+        fix,
+    }));
 }

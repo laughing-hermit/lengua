@@ -377,7 +377,10 @@ pub struct Pool {
     split_from: HashMap<Vec<Term>, Term>,
     /// Each extraction made, by the term, its high bit and its low bit ([`Pool::extract`]).
     extracted: HashMap<(Term, u32, u32), Term>,
-    /// How many terms and extractions the pool held when the computer's free memory was last
+    /// Each widening made, by the term, the bits added and whether they copy its sign
+    /// ([`Pool::zero_extend`], [`Pool::sign_extend`]).
+    widened: HashMap<(Term, u32, bool), Term>,
+    /// How many terms, extractions and widenings the pool held when the computer's free memory was last
     /// looked at ([`Pool::out_of_room`]).
     looked_at: usize,
     /// Whether that look found free memory below the floor proofs leave.
@@ -731,7 +734,7 @@ impl Pool {
     /// Whether the computer's free memory was below the floor proofs leave, and the room the
     /// pool's own tables need to double ([`watch::is_short_for`](super::watch::is_short_for)),
     /// when the pool last looked, which it does each time it has grown by
-    /// [`TERMS_BETWEEN_MEMORY_LOOKS`] terms and extractions. From then on every extraction
+    /// [`TERMS_BETWEEN_MEMORY_LOOKS`] terms, extractions and widenings. From then on every extraction
     /// answers zeros without walking anything, so
     /// the walk through a hash's history that was filling the memory ends, and a run on the
     /// pool must end at its next step: what it has made since is nothing to rely on.
@@ -744,7 +747,7 @@ impl Pool {
     /// [`TERMS_BETWEEN_MEMORY_LOOKS`] since the last look, and keeps what it saw: a pool that
     /// found it short looks no more.
     fn look_at_the_memory(&mut self) {
-        let size = self.nodes.len() + self.extracted.len();
+        let size = self.nodes.len() + self.extracted.len() + self.widened.len();
         if !self.short_of_memory && size >= self.looked_at + TERMS_BETWEEN_MEMORY_LOOKS {
             self.looked_at = size;
             if super::watch::is_short_for(size as u64 * super::watch::BYTES_PER_TERM) {
@@ -3531,7 +3534,22 @@ impl Pool {
     }
 
     /// `a` widened by `by` zero bits.
+    ///
+    /// Each answer is kept, as [`Pool::extract`]'s is: a choice widens branch by branch, and a
+    /// value chosen by a deep shared tree of choices, such as a record a sort has moved, takes a
+    /// time exponential in the tree's depth when each way down to a term is walked again. A
+    /// proof's time is looked at between its steps, so one such widening ran for hours past it.
     pub fn zero_extend(&mut self, a: Term, by: u32) -> Term {
+        if let Some(term) = self.widened.get(&(a, by, false)) {
+            return *term;
+        }
+        let term = self.zero_extend_uncached(a, by);
+        self.widened.insert((a, by, false), term);
+        self.look_at_the_memory();
+        term
+    }
+
+    fn zero_extend_uncached(&mut self, a: Term, by: u32) -> Term {
         if by == 0 {
             return a;
         }
@@ -3642,7 +3660,19 @@ impl Pool {
     }
 
     /// `a` widened by `by` copies of its sign bit.
+    ///
+    /// Each answer is kept, as [`Pool::zero_extend`]'s is.
     pub fn sign_extend(&mut self, a: Term, by: u32) -> Term {
+        if let Some(term) = self.widened.get(&(a, by, true)) {
+            return *term;
+        }
+        let term = self.sign_extend_uncached(a, by);
+        self.widened.insert((a, by, true), term);
+        self.look_at_the_memory();
+        term
+    }
+
+    fn sign_extend_uncached(&mut self, a: Term, by: u32) -> Term {
         if by == 0 {
             return a;
         }
@@ -5317,6 +5347,42 @@ mod tests {
         assert_eq!(pool.width(bit), 1);
         let again = pool.extract(b, 0, 0);
         assert_eq!(bit, again, "the same question has the same answer");
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(5),
+            "took {:?}",
+            began.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_deep_shared_choice_widens_in_time_in_its_size_not_its_depth() {
+        // Each level chooses twice between the last level's value and a number, so the value is
+        // shared along two paths a level, as a record is that a sort has moved by what it
+        // compared. Widened path by path, level 64 is 2^64 steps; widened once a term, a few
+        // hundred.
+        let mut pool = Pool::default();
+        let zero = pool.bv(8, 0);
+        let mut value = pool.var(32, "v");
+        for level in 0..64_u128 {
+            let side = |pool: &mut Pool, name: &str, other: u128| {
+                let byte = pool.var(8, &format!("{name}{level}"));
+                let condition = pool.eq(byte, zero);
+                let other = pool.bv(32, other);
+                pool.ite(condition, value, other)
+            };
+            let left = side(&mut pool, "l", 2 * level + 1);
+            let right = side(&mut pool, "r", 2 * level + 2);
+            let byte = pool.var(8, &format!("c{level}"));
+            let condition = pool.eq(byte, zero);
+            value = pool.ite(condition, left, right);
+        }
+        let began = std::time::Instant::now();
+        let widened = pool.zero_extend(value, 32);
+        assert_eq!(pool.width(widened), 64);
+        let again = pool.zero_extend(value, 32);
+        assert_eq!(widened, again, "the same question has the same answer");
+        let signed = pool.sign_extend(value, 32);
+        assert_eq!(pool.width(signed), 64);
         assert!(
             began.elapsed() < std::time::Duration::from_secs(5),
             "took {:?}",

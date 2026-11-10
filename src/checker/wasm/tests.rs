@@ -1362,6 +1362,320 @@ fn a_secret_goes_through_calls_globals_and_memory() {
     }
 }
 
+/// Asserts that the secret rule refuses the `if` of `code`, planted in [`SECRET`] on one line,
+/// as a branch on a secret.
+fn assert_secret_branch(code: &str) {
+    let (text, report) = planted(code, true);
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(&text, code),
+        "the condition of this `if`",
+    );
+}
+
+/// A `memory.fill` or a `memory.copy` of a length that isn't one constant may write fewer bytes
+/// than the most its length may be, so it leaves a secret under it secret; one of a constant
+/// length writes them all, and makes them public.
+#[test]
+fn a_secret_stays_under_a_fill_or_a_copy_whose_length_varies() {
+    assert_secret_branch(
+        "(memory.fill (global.get $text) (i32.const 0) (i32.and (local.get $got) (i32.const 1))) \
+         (if (i32.load8_u (global.get $text)) (then (nop)))",
+    );
+    assert_secret_branch(
+        "(memory.copy (global.get $text) (global.get $out) (i32.and (local.get $got) (i32.const \
+         1))) (if (i32.load8_u (global.get $text)) (then (nop)))",
+    );
+    let (_, report) = planted(
+        "(memory.fill (global.get $text) (i32.const 0) (global.get $text.size)) (if (i32.load8_u \
+         (global.get $text)) (then (nop)))",
+        true,
+    );
+    assert_no(&report, Rule::Secrets);
+}
+
+/// A store of a secret through an index checked against a limit the memory rules don't follow
+/// may land outside the region its address is made from, so a byte of another region is secret
+/// after it: here `$out` plus 1024 is `$iovec`'s first byte.
+#[test]
+fn a_secret_stored_past_a_limit_the_rules_dont_follow_may_be_in_any_region() {
+    assert_secret_branch(
+        "(i32.store (global.get $iovec) (i32.const 1024)) (i32.store offset=4 (global.get \
+         $iovec) (i32.const 1025)) (local.set $word (i32.load (global.get $iovec))) (if \
+         (i32.lt_u (local.get $word) (i32.load offset=4 (global.get $iovec))) (then (i32.store8 \
+         (i32.add (global.get $out) (local.get $word)) (local.get $byte)))) (if (i32.load8_u \
+         (global.get $iovec)) (then (nop)))",
+    );
+}
+
+/// A secret stored through an address loaded from memory may lie outside every region, where no
+/// store at a region's constant offset reaches it: it's still secret when every region has been
+/// filled with zeros, and a load through such an address reads it.
+#[test]
+fn a_secret_stored_outside_every_region_stays_secret() {
+    assert_secret_branch(
+        "(i32.store (global.get $iovec) (i32.add (global.get $out) (i32.const 512))) (i32.store8 \
+         (i32.load (global.get $iovec)) (local.get $byte)) (memory.fill (global.get $text) \
+         (i32.const 0) (global.get $text.size)) (memory.fill (global.get $out) (i32.const 0) \
+         (global.get $out.size)) (memory.fill (global.get $iovec) (i32.const 0) (global.get \
+         $iovec.size)) (i32.store (global.get $iovec) (i32.add (global.get $out) (i32.const \
+         512))) (if (i32.load8_u (i32.load (global.get $iovec))) (then (nop)))",
+    );
+}
+
+/// A store that isn't secret makes a secret byte public only at a constant offset: at an index
+/// it may write another byte. A copy carries a secret to its destination, a fill writes its
+/// secret value, and a secret a loop's second round brings to a local is one at its start.
+#[test]
+fn a_secret_stays_where_a_store_may_miss_it_and_goes_where_a_copy_or_a_loop_takes_it() {
+    for code in [
+        "(i32.store8 (i32.add (global.get $text) (i32.and (local.get $got) (i32.const 1))) \
+         (i32.const 0)) (if (i32.load8_u (global.get $text)) (then (nop)))",
+        "(memory.copy (global.get $out) (global.get $text) (global.get $out.size)) (if \
+         (i32.load8_u (global.get $out)) (then (nop)))",
+        "(memory.fill (global.get $out) (local.get $byte) (global.get $out.size)) (if \
+         (i32.load8_u (global.get $out)) (then (nop)))",
+        "(loop $again (if (local.get $word) (then (nop))) (local.set $word (local.get $byte)) \
+         (br_if $again (i32.eqz (local.get $got))))",
+    ] {
+        assert_secret_branch(code);
+    }
+}
+
+/// A loop that takes more rounds to settle than the secret rule follows: each round moves the
+/// secret one local on, through more locals than rounds. Past its rounds the rule takes all the
+/// loop writes as secret, so the last local is secret after it.
+#[test]
+fn a_secret_a_loop_moves_for_more_rounds_than_the_rule_follows_is_still_secret() {
+    const LOCALS: usize = 40;
+    let locals: String = (0..LOCALS)
+        .map(|local| format!(" (local $l{local} i32)"))
+        .collect();
+    let moves: String = (1..LOCALS)
+        .rev()
+        .map(|local| format!("      (local.set $l{local} (local.get $l{}))\n", local - 1))
+        .collect();
+    let last = format!("(if (local.get $l{}) (then (nop)))", LOCALS - 1);
+    let text = format!(
+        r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (memory (export "memory") 1 1)
+  (global $STDIN i32 (i32.const 0))
+  (global $EXIT_OK i32 (i32.const 0))
+  (global $READ_TO_END i32 (i32.const -1))
+  (global $text i32 (i32.const 1024))
+  (global $text.size i32 (i32.const 64))
+  (func $main (export "_start")
+    (local $got i32){locals}
+    (local.set $got
+      (call $fill (global.get $STDIN) (global.get $text) (global.get $text.size)
+        (global.get $READ_TO_END)))
+    (loop $again
+{moves}      (local.set $l0 (i32.load8_u (global.get $text)))
+      (br_if $again (i32.eqz (local.get $got))))
+    {last}
+    (call $proc_exit (global.get $EXIT_OK))
+    unreachable))
+"#
+    );
+    let report = check_secret(&text, &["standard input"], "", &[Source::StandardInput]);
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(&text, &last),
+        "the condition of this `if`",
+    );
+}
+
+/// A program that reads standard input into `$key`, writes `$key` to a file, and reads the file
+/// back into `$back` through a descriptor its assertions show isn't standard input's, for the
+/// secret rule's test of a secret that comes back.
+const ROUND_TRIP: &str = r#"(module
+  (import "wasi_snapshot_preview1" "path_open"
+    (func $path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_close" (func $fd_close (param i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (memory (export "memory") 1 1)
+  (global $STDIN i32 (i32.const 0))
+  (global $FOLDER i32 (i32.const 3))
+  (global $FIRST_OPENED i32 (i32.const 5))
+  (global $MAX_OPENED i32 (i32.const 64))
+  (global $CREATE_EMPTY i32 (i32.const 9))
+  (global $EXIT_OK i32 (i32.const 0))
+  (global $READ_TO_END i32 (i32.const -1))
+  (global $name i32 (i32.const 1024))
+  (global $name.rosize i32 (i32.const 7))
+  (data (i32.const 1024) "tmp.txt")
+  (global $opened i32 (i32.const 2048))
+  (global $opened.size i32 (i32.const 4))
+  (global $key i32 (i32.const 3072))
+  (global $key.size i32 (i32.const 32))
+  (global $back i32 (i32.const 4096))
+  (global $back.size i32 (i32.const 32))
+  (func $main (export "_start")
+    (local $fd i32)
+    (drop
+      (call $fill (global.get $STDIN) (global.get $key) (global.get $key.size)
+        (global.get $READ_TO_END)))
+    (drop
+      (call $path_open (global.get $FOLDER) (i32.const 0) (global.get $name)
+        (global.get $name.rosize) (global.get $CREATE_EMPTY) (i64.const 64) (i64.const 0)
+        (i32.const 0) (global.get $opened)))
+    (local.set $fd (i32.load (global.get $opened)))
+    (drop (call $write_all (local.get $fd) (global.get $key) (global.get $key.size)))
+    (drop (call $fd_close (local.get $fd)))
+    (drop
+      (call $path_open (global.get $FOLDER) (i32.const 0) (global.get $name)
+        (global.get $name.rosize) (i32.const 0) (i64.const 2) (i64.const 0) (i32.const 0)
+        (global.get $opened)))
+    (local.set $fd (i32.load (global.get $opened)))
+    (if (i32.ge_u (local.get $fd) (global.get $MAX_OPENED))
+      (then (call $assert_fail (i32.const 1)) unreachable))
+    (if (i32.lt_u (local.get $fd) (global.get $FIRST_OPENED))
+      (then (call $assert_fail (i32.const 2)) unreachable))
+    (drop
+      (call $fill (local.get $fd) (global.get $back) (global.get $back.size)
+        (global.get $READ_TO_END)))
+    (if (i32.load8_u (global.get $back)) (then (nop)))
+    (call $proc_exit (global.get $EXIT_OK))
+    unreachable))
+"#;
+
+/// A program that reads standard input into `$key`, sends `$key` to a peer, and takes what the
+/// peer sends into `$back`, for the secret rule's test of a secret a peer sends back.
+const ECHO: &str = r#"(module
+  (import "wasi_snapshot_preview1" "sock_send"
+    (func $sock_send (param i32 i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "sock_recv"
+    (func $sock_recv (param i32 i32 i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (memory (export "memory") 1 1)
+  (global $STDIN i32 (i32.const 0))
+  (global $PEER i32 (i32.const 5))
+  (global $EXIT_OK i32 (i32.const 0))
+  (global $READ_TO_END i32 (i32.const -1))
+  (global $iovec i32 (i32.const 1024))
+  (global $iovec.size i32 (i32.const 16))
+  (global $key i32 (i32.const 2048))
+  (global $key.size i32 (i32.const 32))
+  (global $back i32 (i32.const 3072))
+  (global $back.size i32 (i32.const 32))
+  (func $main (export "_start")
+    (drop
+      (call $fill (global.get $STDIN) (global.get $key) (global.get $key.size)
+        (global.get $READ_TO_END)))
+    (i32.store (global.get $iovec) (global.get $key))
+    (i32.store offset=4 (global.get $iovec) (global.get $key.size))
+    (drop
+      (call $sock_send (global.get $PEER) (global.get $iovec) (i32.const 1) (i32.const 0)
+        (i32.add (global.get $iovec) (i32.const 8))))
+    (i32.store (global.get $iovec) (global.get $back))
+    (i32.store offset=4 (global.get $iovec) (global.get $back.size))
+    (drop
+      (call $sock_recv (global.get $PEER) (global.get $iovec) (i32.const 1) (i32.const 0)
+        (i32.add (global.get $iovec) (i32.const 8)) (i32.add (global.get $iovec) (i32.const 12))))
+    (if (i32.load8_u (global.get $back)) (then (nop)))
+    (call $proc_exit (global.get $EXIT_OK))
+    unreachable))
+"#;
+
+/// A secret a program writes to a file or sends to a peer is secret when it reads it back, from
+/// the file or from the peer: a program that writes no secret there reads what isn't secret.
+#[test]
+fn a_secret_written_to_a_file_or_sent_to_a_peer_is_secret_when_it_comes_back() {
+    let branch = "(if (i32.load8_u (global.get $back)) (then (nop)))";
+    let secret = [Source::StandardInput];
+    let report = check_secret(ROUND_TRIP, &["standard input", "files"], "", &secret);
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(ROUND_TRIP, branch),
+        "the condition of this `if`",
+    );
+    let report = check_secret(
+        ECHO,
+        &["standard input"],
+        "listens on TCP port 8080",
+        &secret,
+    );
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(ECHO, branch),
+        "the condition of this `if`",
+    );
+    // With no secret written to the file, what the file gives isn't secret.
+    let written = "    (drop (call $write_all (local.get $fd) (global.get $key) (global.get \
+                   $key.size)))\n";
+    assert!(ROUND_TRIP.contains(written));
+    let unwritten = ROUND_TRIP.replacen(written, "", 1);
+    let report = check_secret(&unwritten, &["standard input", "files"], "", &secret);
+    assert_no(&report, Rule::Secrets);
+    // And with no secret sent, what the peer sends isn't.
+    let sent = "(i32.store (global.get $iovec) (global.get $key))";
+    assert!(ECHO.contains(sent));
+    let unsent = ECHO.replacen(
+        sent,
+        "(i32.store (global.get $iovec) (global.get $back))",
+        1,
+    );
+    let report = check_secret(
+        &unsent,
+        &["standard input"],
+        "listens on TCP port 8080",
+        &secret,
+    );
+    assert_no(&report, Rule::Secrets);
+}
+
+/// A program that reads standard input with `fd_read` itself, and branches on the error number
+/// and then on how many bytes the read gave, for the secret rule's test of a read's count.
+const COUNT_READ: &str = r#"(module
+  (import "wasi_snapshot_preview1" "fd_read"
+    (func $fd_read (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (memory (export "memory") 1 1)
+  (global $STDIN i32 (i32.const 0))
+  (global $EXIT_OK i32 (i32.const 0))
+  (global $iovec i32 (i32.const 1024))
+  (global $iovec.size i32 (i32.const 12))
+  (global $line i32 (i32.const 2048))
+  (global $line.size i32 (i32.const 64))
+  (func $main (export "_start")
+    (i32.store (global.get $iovec) (global.get $line))
+    (i32.store offset=4 (global.get $iovec) (global.get $line.size))
+    (if
+      (call $fd_read (global.get $STDIN) (global.get $iovec) (i32.const 1)
+        (i32.add (global.get $iovec) (i32.const 8)))
+      (then (nop)))
+    (if (i32.load offset=8 (global.get $iovec)) (then (nop)))
+    (call $proc_exit (global.get $EXIT_OK))
+    unreachable))
+"#;
+
+/// How many bytes one `fd_read` of a secret standard input gave is secret: a terminal gives a
+/// line at a time, so the count says where the secret's line ends. Its error number isn't, and
+/// neither is what `$fill` gives when it reads to the end, which [`SECRET`]'s tests branch on.
+#[test]
+fn the_count_of_one_read_of_a_secret_standard_input_is_secret() {
+    let report = check_secret(
+        COUNT_READ,
+        &["standard input"],
+        "",
+        &[Source::StandardInput],
+    );
+    assert_eq!(
+        secret_lines(&report),
+        [line_of(
+            COUNT_READ,
+            "(if (i32.load offset=8 (global.get $iovec))"
+        )],
+        "{:#?}",
+        report.lines()
+    );
+}
+
 /// A program that reads its arguments' text, for the secret rule's test of an argument: where
 /// each argument starts isn't secret, its text is.
 const ARGUMENTS: &str = r#"(module

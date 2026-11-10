@@ -1,3 +1,5 @@
+> This file describes the native lengua's time. The tag `native-final` keeps that lengua.
+
 # lengua in real sessions
 
 The product as people use it: each request typed into a real interactive Claude Code session with

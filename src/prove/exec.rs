@@ -17,9 +17,6 @@ use super::world::{World, net};
 /// The most steps one run may take before the prover gives up on it.
 pub const MAX_STEPS: u64 = 5_000_000;
 
-/// How many steps a run takes between asking whether the proof still has its time.
-const STEPS_BETWEEN_TIME_CHECKS: u64 = 4096;
-
 /// Why a run past [`MAX_STEPS`] proves nothing.
 pub const TOO_LONG: &str = "a run took too many instructions to follow";
 
@@ -254,7 +251,7 @@ pub trait Oracle {
     /// Fails when the solver stops responding.
     fn possible(&mut self, pool: &Pool, path: &[Term], condition: Term) -> Result<bool, String>;
 
-    /// Whether the proof still has its time. [`explore`] asks every few thousand steps, so a run
+    /// Whether the proof still has its time. [`explore`] asks before every step, so a run
     /// through code with no branch on the inputs, such as a hash of them, which never asks
     /// [`Self::possible`] anything, still ends with the proof's time.
     ///
@@ -311,9 +308,10 @@ pub fn explore<C: Core>(
                 finished.push(state);
                 break;
             }
-            if state.world.steps.is_multiple_of(STEPS_BETWEEN_TIME_CHECKS) {
-                oracle.in_time()?;
-            }
+            // Before every step, not every so many: one step over a hash's terms, such as a load
+            // at an address the input chooses among hundreds of places, can take a second, and
+            // thousands of them between two looks took a proof seven times its budget.
+            oracle.in_time()?;
             if pool.len() >= looked + super::term::TERMS_BETWEEN_MEMORY_LOOKS {
                 looked = pool.len();
                 oracle.has_room()?;

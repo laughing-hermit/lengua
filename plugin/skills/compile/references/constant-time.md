@@ -27,22 +27,40 @@ them: through the operand stack, locals, globals, memory and calls.
 
 | The idea names | Secret in `main.wat` |
 |---|---|
-| `standard input` | what `fd_read` and `$fill` read from descriptor 0 |
-| ``a file `key.txt` `` | what `fd_read` and `$fill` read from any file the program opens: the rule can't tell one opened file from another, since a descriptor comes back through memory |
+| `standard input` | what `fd_read` and `$fill` read from descriptor 0, or from a descriptor the rule can't show isn't 0 |
+| ``a file `key.txt` `` | what `fd_read` and `$fill` read from any descriptor that may be an opened one's, 5 or more: the rule can't tell one opened file from another, nor from a connection, since a descriptor comes back through memory |
 | ``the environment variable `TOKEN` `` | every variable's text, as `environ_get` writes them into one buffer |
 | ``argument `2` `` | every argument's text, as `args_get` writes them into one buffer |
 
-What isn't secret: how many bytes a read gave (what `fd_read` and `$fill` return and count), the
-sizes `args_sizes_get` and `environ_sizes_get` give, and where `args_get` and `environ_get` put each
-argument or variable (the pointers). A secret's length is public: lengths, counts and positions are
-free to decide anything.
+A secret that leaves may come back. Once `main.wat` writes a secret to a descriptor that may be a
+file's or a connection's (5 or more, or one the rule can't bound), or sends one with `sock_send`,
+anywhere in the program, what `fd_read`, `$fill` and `sock_recv` read from every file and
+connection is secret too: the file or the peer may give the secret back, in this run or a later
+one. A secret written to standard output or standard error alone changes nothing. So write a secret
+to descriptor 1 or 2 by its named constant, and in a program that must send a secret to a file or a
+peer, branch on nothing it reads from one.
+
+What isn't secret: how many bytes `$fill` read when it reads to the end, how many a read of a file
+gave, every call's error number, the sizes `args_sizes_get` and `environ_sizes_get` give, and where
+`args_get` and `environ_get` put each argument or variable (the pointers). A secret's length is
+public: lengths, counts and positions are free to decide anything. One count is secret: how many
+bytes a single `fd_read` of a secret standard input gave. A terminal gives a line at a time, so
+that count says where a line of the secret ends. Read a secret standard input with `$fill` and
+`(global.get $READ_TO_END)`, whose count is the input's whole length.
 
 The rule follows memory as the memory rules do, by region and offset. A store of a secret marks the
 bytes it writes; a store of a value that isn't secret, at a constant offset, makes them public
-again. So keep secret data in regions of its own, and fill each iovec at constant offsets in the
-function that calls `fd_read`: then the rule knows which buffer the read fills. An access through an
-address the memory rules don't follow (one loaded from memory) may touch any region, so with a
-secret anywhere, what it reads is secret too.
+again, and so does a `memory.fill` or a `memory.copy` at a constant offset whose length is a
+constant too: one whose length varies may write fewer bytes, so it makes none public. So keep
+secret data in regions of its own, and fill each iovec at constant offsets in the function that
+calls `fd_read`: then the rule knows which buffer the read fills.
+
+An access the memory rules leave to the proof may touch any region, and the bytes outside every
+region: one through an address loaded from memory, one at an index checked against a limit the
+rules don't follow (a limit loaded from memory), and one of a length they don't bound. With a
+secret anywhere, what such an access reads is secret; a secret such an access stores makes every
+byte of memory secret, and no later store makes all of it public again. So reach secret data
+through a region's global and an index checked against a named constant.
 
 A function is followed for each way it's called: which arguments are secret, what the addresses
 they lend point to, and what memory holds. A helper called once with a secret and once without is
@@ -66,7 +84,11 @@ refused only where the secret reaches.
 What passes: arithmetic, `and`, `or`, `xor`, shifts and rotations by any amount, comparisons whose
 result is a value (`i32.eq`, `i32.lt_u`, `i32.eqz`), multiplication, the integer SIMD128
 operators, `v128.bitselect`, loads and stores at public addresses, and the data `fd_write`,
-`sock_send` and `$write_all` write out, secret or not.
+`sock_send` and `$write_all` write out, secret or not (a secret written to a file or sent to a peer
+makes what the program reads from files and connections secret, as above).
+
+What the rule can't follow it refuses: a call that leads back to its caller, and blocks and calls
+nested more than 256 deep.
 
 ## Masks
 

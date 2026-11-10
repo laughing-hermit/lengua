@@ -186,8 +186,8 @@ fn doctor(data_dir: Option<&DataDir>) -> ExitCode {
 }
 
 /// Writes the standard WebAssembly module main.wat at `path` builds, with lengua's library merged
-/// in, to `output`, or beside main.wat as main.wasm: a WASI preview 1 module any WebAssembly
-/// runtime runs.
+/// in, to `output`, or beside main.wat as main.wasm: a WASI preview 1 module, which another
+/// WebAssembly runtime runs when the program reaches only standard streams and files.
 fn wasm(path: &std::path::Path, output: Option<PathBuf>) -> ExitCode {
     let output = output.unwrap_or_else(|| path.with_extension("wasm"));
     let built = std::fs::read_to_string(path)
