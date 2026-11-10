@@ -1,5 +1,6 @@
 //! lengua's tooling, in Rust: the tasks CI's workflow runs, the release archive, the goldens'
-//! comparison, the bench's WebAssembly builds and z3's. `cargo xtask <task>` runs one (the alias in
+//! comparison, the bench's WebAssembly builds and z3's, and the measurement of the WebAssembly z3
+//! against native z3. `cargo xtask <task>` runs one (the alias in
 //! .cargo/config.toml); each task does what one step of ci.yml needs, or what a person runs by
 //! hand. A task that fails says why on its error output and exits 1, or with the exit code of
 //! the program it ran for the step.
@@ -13,6 +14,7 @@ mod gate;
 mod golden;
 mod http;
 mod machine;
+mod parity;
 mod plan;
 mod plugin;
 mod release;
@@ -51,10 +53,19 @@ Tasks:
   solver-wasm-key z3  the SHA-256 of what z3's module is made from, CI's cache key
   solver-wasm-check <module>
                       a solver's module checked: its features, imports and exports
+  solver-golden native|wasm <module> <folder>
+                      the prover's golden with native z3 or the WebAssembly z3 <module>, every
+                      solver's session kept in <folder>/sessions
+  solver-parity <target> <sessions> <module> <folder>
+                      z3's sessions replayed through native z3 and the WebAssembly z3 in turn,
+                      their answers compared and timed (PARITY_SECONDS)
+  solver-report <folder>
+                      every runner's two legs held to the owner's bar (TARGETS)
   golden-download     both commits' recordings (RUN, BASE_RUN)
   golden-diff raw|ledger <base dir> <head dir>
                       the two commits' recordings compared, in the job's summary
-  gate                whether the run passed (RESULTS, GOLDEN_DIFF, BENCH_WASM, INSTALL)
+  gate                whether the run passed (RESULTS, GOLDEN_DIFF, BENCH_WASM, SOLVER_WASM,
+                      SOLVER_REPORT, INSTALL)
   help                this list";
 
 fn main() -> ExitCode {
@@ -80,6 +91,9 @@ fn main() -> ExitCode {
         "solver-wasm" => solver::wasm(rest),
         "solver-wasm-key" => solver::key(rest),
         "solver-wasm-check" => solver::check(rest),
+        "solver-golden" => parity::golden(rest),
+        "solver-parity" => parity::parity(rest),
+        "solver-report" => parity::report(rest),
         "golden-download" => golden::download(rest),
         "golden-diff" => golden::diff(rest),
         "gate" => gate::task(rest),

@@ -1,7 +1,7 @@
 //! `cargo xtask gate`: the one check that says whether the whole run passed, from its jobs'
 //! results as the workflow gives them: `RESULTS`, plan's, format's and test's, which must all
-//! have succeeded; and `GOLDEN_DIFF`, `BENCH_WASM`, `SOLVER_WASM` and `INSTALL`, which run in
-//! some modes only, so may have been skipped.
+//! have succeeded; and `GOLDEN_DIFF`, `BENCH_WASM`, `SOLVER_WASM`, `SOLVER_REPORT` and `INSTALL`,
+//! which run in some modes only, so may have been skipped.
 
 use crate::ci;
 
@@ -23,14 +23,15 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
     let golden = ci::setting("GOLDEN_DIFF");
     let bench = ci::setting("BENCH_WASM");
     let solver = ci::setting("SOLVER_WASM");
+    let report = ci::setting("SOLVER_REPORT");
     let install = ci::setting("INSTALL");
     println!(
         "plan, format, test: {results}; golden diff: {golden}; bench-wasm: {bench}; \
-         solver-wasm: {solver}; install: {install}"
+         solver-wasm: {solver}; solver report: {report}; install: {install}"
     );
     Ok(u8::from(!passed(
         &results,
-        &[&golden, &bench, &solver, &install],
+        &[&golden, &bench, &solver, &report, &install],
     )))
 }
 

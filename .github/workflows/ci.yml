@@ -16,7 +16,9 @@ name: ci
 #   gate: lengua against C, C++ and Rust compiled to WebAssembly and built natively, and against
 #   an earlier commit's programs), release (each runner's archive, built there, then installed
 #   and checked on a clean runner of the same system and CPU) or solver (z3 built as WebAssembly,
-#   then taken and checked by each runner named).
+#   then measured against native z3 on each runner named, in two legs: the prover's golden with
+#   native z3, whose solver sessions are then replayed through both z3s in turn, and with the
+#   WebAssembly z3; the solver report holds each runner to the owner's bar).
 # - A bench's C, C++ and Rust are compiled to WebAssembly once, by the bench-wasm job on
 #   linux-x86_64, and every runner's bench measures those same modules.
 # - z3 is built from its source as WebAssembly once, by the solver-wasm job on linux-x86_64, and
@@ -50,7 +52,7 @@ on:
         type: string
         default: "all"
       mode:
-        description: "compile, test, ignored, golden, bench, release or solver (golden: on linux-x86_64 alone; bench and release: all five; solver: z3 built as WebAssembly on linux-x86_64, then checked on the targets named)"
+        description: "compile, test, ignored, golden, bench, release or solver (golden: on linux-x86_64 alone; bench and release: all five; solver: z3 built as WebAssembly on linux-x86_64, then measured against native z3 on the targets named)"
         type: choice
         options:
           - compile
@@ -333,8 +335,9 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
-    # A golden leg, the mutation test and the bench run longer than the suite: the first golden
-    # head leg (run 42152180357) was cut off at 120 minutes, where its base leg took 101.
+    # A golden leg, a solver leg, the mutation test and the bench run longer than the suite: the
+    # first golden head leg (run 42152180357) was cut off at 120 minutes, where its base leg took
+    # 101.
     timeout-minutes: ${{ (matrix.mode == 'test' || matrix.mode == 'compile') && 120 || 330 }}
     defaults:
       run:
@@ -414,9 +417,10 @@ jobs:
         run: cargo xtask solver-wasm-check "${{ runner.temp }}/solver-wasm/z3.wasm"
 
       # --keep-going: every target's errors in one run, not the first target's alone. A release
-      # is built from a commit whose suite already ran.
+      # is built from a commit whose suite already ran, and a golden or solver leg measures one
+      # whose compile mode did.
       - name: Clippy
-        if: ${{ matrix.mode != 'golden' && matrix.mode != 'release' }}
+        if: ${{ matrix.mode != 'golden' && matrix.mode != 'release' && matrix.mode != 'solver' }}
         run: cargo clippy --release --all-targets --locked --workspace --keep-going -- -D warnings
 
       # Built first, so that the time a test run may take (stall_seconds) is the tests' and not the
@@ -470,6 +474,39 @@ jobs:
           name: golden-${{ matrix.label }}-${{ matrix.ref || github.sha }}
           path: target/golden/*.txt
           retention-days: 30
+
+      # A solver leg: the prover's golden, the one golden that asks the solvers, recorded with
+      # native z3 or with the WebAssembly z3 hosted by this commit's lengua-mcp, every solver's
+      # session kept beside it (`cargo xtask solver-golden`). One test at a time, as for the
+      # goldens.
+      - name: The prover's golden, with native or WebAssembly z3
+        if: ${{ matrix.mode == 'solver' }}
+        env:
+          LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
+        run: cargo xtask solver-golden ${{ matrix.label }} "${{ runner.temp }}/solver-wasm/z3.wasm" "${{ runner.temp }}/solver"
+
+      # The native leg's z3 sessions asked again of native z3 and of the WebAssembly z3, in turn,
+      # one process a session: their answers compared and their times (`cargo xtask
+      # solver-parity`). It starts no session after three hours, so that the leg's time, the
+      # golden's included, stays within the job's.
+      - name: The sessions, replayed through both z3s
+        if: ${{ matrix.mode == 'solver' && matrix.label == 'native' }}
+        env:
+          PARITY_SECONDS: "10800"
+        run: cargo xtask solver-parity ${{ matrix.target }} "${{ runner.temp }}/solver/sessions" "${{ runner.temp }}/solver-wasm/z3.wasm" "${{ runner.temp }}/solver"
+
+      # The leg's recording, its summary and the replay's report, with the sessions the replay
+      # kept, but not every session, which the solver report doesn't read.
+      - name: The leg, kept
+        if: ${{ always() && matrix.mode == 'solver' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-${{ matrix.label }}-${{ matrix.target }}-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/solver/*.*
+            ${{ runner.temp }}/solver/kept
+          retention-days: 30
+          if-no-files-found: ignore
 
       - name: The WebAssembly builds of C, C++ and Rust
         if: ${{ matrix.mode == 'bench' }}
@@ -586,6 +623,44 @@ jobs:
           VIEW: ${{ inputs.golden_view }}
         run: cargo xtask golden-diff "$VIEW" golden/base golden/head
 
+  # The solver mode's legs on every runner it ran, held to the owner's bar: the two recordings'
+  # ledgers compared, a block that ran out of time or memory on one side (LIMIT) set aside and
+  # nothing else, and the replay's totals, WebAssembly's at most twice native's (`cargo xtask
+  # solver-report`). It fails only where a runner left no leg to read.
+  solver-report:
+    name: solver report
+    needs: [plan, test]
+    if: ${{ always() && inputs.mode == 'solver' && needs.plan.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Rust as rust-toolchain.toml pins it, which rustup installs when it first runs here; rustup
+      # itself where an image lacks it.
+      - name: Rust
+        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
+
+      - name: Every runner's legs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: parity-*-${{ github.run_number }}
+          path: solver
+
+      - name: The bar, runner by runner
+        env:
+          TARGETS: ${{ inputs.targets }}
+        run: cargo xtask solver-report solver
+
+      - name: The report, kept
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solver-report-${{ github.run_number }}
+          path: solver/solver-bar.md
+          retention-days: 30
+          if-no-files-found: ignore
+
   # Each runner's release archive installed on a clean runner of its own system and CPU, as a
   # user installs it: nothing of lengua's set up first (no checkout, no Rust, no solvers). The
   # release check, tests/release_check.rs built beside the archive, unpacks the archive, installs
@@ -635,12 +710,12 @@ jobs:
           if-no-files-found: ignore
 
   # One check that says whether the whole run passed: plan, format and test must succeed;
-  # golden-diff runs in the golden mode only, bench-wasm when a bench runs, solver-wasm in the
-  # solver mode only, and install in the release mode only, so each may be skipped (`cargo xtask
-  # gate`).
+  # golden-diff runs in the golden mode only, bench-wasm when a bench runs, solver-wasm and the
+  # solver report in the solver mode only, and install in the release mode only, so each may be
+  # skipped (`cargo xtask gate`).
   gate:
     name: gate
-    needs: [plan, format, bench-wasm, solver-wasm, test, golden-diff, install]
+    needs: [plan, format, bench-wasm, solver-wasm, test, golden-diff, solver-report, install]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -658,5 +733,6 @@ jobs:
           GOLDEN_DIFF: ${{ needs.golden-diff.result }}
           BENCH_WASM: ${{ needs.bench-wasm.result }}
           SOLVER_WASM: ${{ needs.solver-wasm.result }}
+          SOLVER_REPORT: ${{ needs.solver-report.result }}
           INSTALL: ${{ needs.install.result }}
         run: cargo xtask gate

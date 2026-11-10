@@ -118,6 +118,13 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
     Ok(0)
 }
 
+/// The checker's golden test, which records its report on every program.
+pub const CHECKER_GOLDEN: &str = "every_report_is_as_recorded";
+
+/// The prover's golden test, which records its runs and proofs of every program: the one golden
+/// that asks the solvers.
+pub const PROVER_GOLDEN: &str = "every_run_and_proof_is_as_recorded";
+
 /// `cargo xtask golden`: the checker's and the prover's recordings of every program, made again
 /// under target/golden/, kept in golden.log. target/ is cached whole, the recordings included, so
 /// they go first: an old recording would be compared with silently. The two filters are the two
@@ -128,25 +135,38 @@ pub fn golden(arguments: &[String]) -> Result<u8, String> {
         return Err("usage: cargo xtask golden".to_owned());
     }
     let root = ci::root()?;
+    record(&[CHECKER_GOLDEN, PROVER_GOLDEN], &[], &root.join("golden.log"))
+}
+
+/// The recordings of the golden tests `arguments` name, made again under target/golden/ with the
+/// environment variables `settings` adds, all the run prints kept in `log`, as `cargo xtask
+/// golden` makes them: its code when the run fails. The arguments go to libtest after
+/// `--ignored`: the tests' names, and any of its flags.
+pub fn record(
+    arguments: &[&str],
+    settings: &[(&str, &std::ffi::OsStr)],
+    log: &Path,
+) -> Result<u8, String> {
+    let root = ci::root()?;
     let recordings = root.join("target").join("golden");
     if let Err(error) = std::fs::remove_dir_all(&recordings)
         && error.kind() != std::io::ErrorKind::NotFound
     {
         return Err(format!("{}: {error}", recordings.display()));
     }
-    let log = root.join("golden.log");
     let mut command = ci::cargo();
     command
         .current_dir(&root)
         .env("LENGUA_GOLDEN", "write")
+        .envs(settings.iter().copied())
         .args(["test", "--release", "--locked", "--lib"])
-        .args(["--", "--ignored", "every_report_is_as_recorded"])
-        .arg("every_run_and_proof_is_as_recorded");
-    let status = ci::Logged::start(command, &log)?.wait()?;
+        .args(["--", "--ignored"])
+        .args(arguments);
+    let status = ci::Logged::start(command, log)?.wait()?;
     if !status.success() {
         return Ok(ci::code(status));
     }
-    ran_some(&log, "goldens")?;
+    ran_some(log, "goldens")?;
     let mut names = Vec::new();
     let entries = std::fs::read_dir(&recordings)
         .map_err(|error| format!("{}: {error}", recordings.display()))?;

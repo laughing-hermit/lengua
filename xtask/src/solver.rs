@@ -698,8 +698,31 @@ mod tests {
         assert!(checked("text.wasm", b"(module)").is_err());
     }
 
+    /// The definition of the constant `name` in `source`, from its name to its `;`.
+    fn definition<'a>(source: &'a str, name: &str) -> &'a str {
+        let start = source
+            .find(&format!("pub const {name}: WasmFeatures ="))
+            .unwrap_or_else(|| panic!("no {name}"));
+        let end = start + source[start..].find(';').expect("its end");
+        &source[start..end]
+    }
+
+    /// The features `text` names, each as `WasmFeatures::<NAME>`.
+    fn flags(text: &str) -> WasmFeatures {
+        let mut flags = WasmFeatures::empty();
+        for part in text.split("WasmFeatures::").skip(1) {
+            let flag: String = part
+                .chars()
+                .take_while(|character| character.is_ascii_uppercase() || *character == '_')
+                .collect();
+            flags |= WasmFeatures::from_name(&flag).expect("a feature");
+        }
+        flags
+    }
+
     /// The solver engine's features are lengua's programs' (src/wasm/engine.rs's `FEATURES`),
-    /// exceptions and the GC types, and the check names each of them.
+    /// exceptions and the GC types, as engine.rs's own `SOLVER_FEATURES` makes them, and the
+    /// check names each of them.
     #[test]
     fn the_solver_features_are_the_programs_and_exceptions() {
         let named = FEATURE_NAMES
@@ -709,23 +732,17 @@ mod tests {
             });
         assert_eq!(named, SOLVER_FEATURES);
         let engine = include_str!("../../src/wasm/engine.rs");
-        let start = engine
-            .find("pub const FEATURES: WasmFeatures =")
-            .expect("the programs' features");
-        let end = start + engine[start..].find(';').expect("their end");
-        let mut programs = WasmFeatures::empty();
-        for part in engine[start..end].split("WasmFeatures::").skip(1) {
-            let flag: String = part
-                .chars()
-                .take_while(|character| character.is_ascii_uppercase() || *character == '_')
-                .collect();
-            programs |= WasmFeatures::from_name(&flag).expect("a feature");
-        }
+        let programs = flags(definition(engine, "FEATURES"));
+        let solvers = definition(engine, "SOLVER_FEATURES");
+        let (_, made) = solvers.split_once('=').expect("its value");
+        assert!(
+            made.trim_start().starts_with("FEATURES\n"),
+            "engine.rs's SOLVER_FEATURES isn't the programs' FEATURES and more: {solvers}"
+        );
+        assert_eq!(programs.union(flags(made)), SOLVER_FEATURES);
         assert_eq!(
-            programs
-                .union(WasmFeatures::EXCEPTIONS)
-                .union(WasmFeatures::GC_TYPES),
-            SOLVER_FEATURES
+            flags(made),
+            WasmFeatures::EXCEPTIONS.union(WasmFeatures::GC_TYPES)
         );
         assert!(!programs.contains(WasmFeatures::EXCEPTIONS));
     }

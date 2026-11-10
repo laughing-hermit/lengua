@@ -6,9 +6,13 @@
 //! runner of its own so that the two run at once. A job's checkout is shallow unless it must read
 //! other commits: a bench holds each change to KNOWN_BEHIND in the history to the list before it
 //! (the list may only shrink) and reads any commit it is measured against, and a golden leg reads
-//! the commit it doesn't run. The step's outputs are `matrix`; `bench`, whether a bench runs,
-//! which needs the WebAssembly builds of C, C++ and Rust; and `solver`, whether the solver mode
-//! runs, which needs z3 built as WebAssembly.
+//! the commit it doesn't run. The solver mode runs two legs on each target it names, each on a
+//! runner of its own so that the two run at once: `native`, which records the prover's golden
+//! with native z3, keeping every solver's session, then replays z3's sessions through both z3s;
+//! and `wasm`, which records it with the WebAssembly z3 (`cargo xtask solver-golden`,
+//! `solver-parity`). The step's outputs are `matrix`; `bench`, whether a bench runs, which needs
+//! the WebAssembly builds of C, C++ and Rust; and `solver`, whether the solver mode runs, which
+//! needs z3 built as WebAssembly.
 
 use std::process::{Command, Stdio};
 
@@ -20,6 +24,10 @@ const TARGETS: &str = include_str!("../targets.json");
 /// What a golden dispatch with neither of its inputs says.
 const GOLDEN_NEEDS: &str =
     "golden needs golden_base (a commit) or golden_base_run (an earlier golden run)";
+
+/// The solver mode's legs on each target, by label: the prover's golden with native z3, its
+/// sessions then replayed, and with the WebAssembly z3.
+pub const SOLVER_LEGS: [&str; 2] = ["native", "wasm"];
 
 /// A runner: the target it is for, and the label of GitHub's runner.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,13 +145,20 @@ pub fn plan(
             continue;
         }
         for mode in &modes {
-            jobs.push(Job {
-                runner: runner.clone(),
-                mode: (*mode).to_owned(),
-                reference: String::new(),
-                label: String::new(),
-                depth: u8::from(*mode != "bench"),
-            });
+            let labels: &[&str] = if *mode == "solver" {
+                &SOLVER_LEGS
+            } else {
+                &[""]
+            };
+            for label in labels {
+                jobs.push(Job {
+                    runner: runner.clone(),
+                    mode: (*mode).to_owned(),
+                    reference: String::new(),
+                    label: (*label).to_owned(),
+                    depth: u8::from(*mode != "bench"),
+                });
+            }
         }
     }
     if mode == "golden" {
@@ -287,8 +302,9 @@ mod tests {
         assert_eq!(refused, "Nothing to run for: solaris-sparc in release");
     }
 
-    /// The solver mode runs on the targets a dispatch names, and its outputs say that it runs, so
-    /// that z3's WebAssembly build does; the suite's say neither a bench nor the solver mode runs.
+    /// The solver mode runs its two legs on each target a dispatch names, native z3's and the
+    /// WebAssembly z3's, and its outputs say that it runs, so that z3's WebAssembly build does;
+    /// the suite's say neither a bench nor the solver mode runs.
     #[test]
     fn the_solver_mode_asks_for_z3_s_build() {
         let asked = Asked {
@@ -298,13 +314,19 @@ mod tests {
             ..Asked::default()
         };
         let jobs = plan(&asked, &listed(), none).expect("a plan");
-        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs.len(), 2);
         assert_eq!(
             outputs(&jobs),
             "matrix={\"include\":[{\"target\":\"linux-x86_64\",\"runner\":\"ubuntu-24.04\",\
-             \"mode\":\"solver\",\"ref\":\"\",\"label\":\"\",\"depth\":1}]}\n\
-             bench=false\nsolver=true\n"
+             \"mode\":\"solver\",\"ref\":\"\",\"label\":\"native\",\"depth\":1},\
+             {\"target\":\"linux-x86_64\",\"runner\":\"ubuntu-24.04\",\"mode\":\"solver\",\
+             \"ref\":\"\",\"label\":\"wasm\",\"depth\":1}]}\nbench=false\nsolver=true\n"
         );
+        let all = Asked {
+            targets: "all".to_owned(),
+            ..asked
+        };
+        assert_eq!(plan(&all, &listed(), none).expect("a plan").len(), 10);
         let push = Asked {
             event: "push".to_owned(),
             ..Asked::default()

@@ -55,7 +55,38 @@ pub const RENAMES: [(&str, &str); 2] = [
 ];
 
 /// A ledger: each block's verdict, by its program and block.
-type Ledger = BTreeMap<String, String>;
+pub type Ledger = BTreeMap<String, String>;
+
+/// What a comparison of two ledgers found: what it says, and its counts of blocks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Compared {
+    /// Each block that differs, ran out of time or memory on one side, or is in one ledger only,
+    /// and the counts.
+    pub said: String,
+    /// The blocks whose verdicts agree.
+    pub same: usize,
+    /// The blocks whose verdicts differ, neither of them out of time or memory.
+    pub differ: usize,
+    /// The blocks whose verdicts differ where one side ran out of time or memory: the lines the
+    /// LIMIT rule sets aside.
+    pub limited: usize,
+    /// The blocks in one ledger only.
+    pub missing: usize,
+}
+
+impl Compared {
+    /// The exit code the comparison gives: 1 when a block differs or is missing, 2 when the only
+    /// differences ran out of time or memory on one side, and 0 when the two agree.
+    pub const fn code(&self) -> u8 {
+        if self.differ + self.missing > 0 {
+            1
+        } else if self.limited > 0 {
+            2
+        } else {
+            0
+        }
+    }
+}
 
 /// What leaves a proof's verdict out of the ledger, each a regular expression and what it
 /// becomes: the counts (shapes, paths, questions, the induction's reach and lookback), which
@@ -195,54 +226,54 @@ fn keyed(
     Ok(keyed)
 }
 
-/// Compares the two ledgers `base` and `head` of the recording `name`: what it says, and the
-/// exit code it gives.
-fn compare(name: &str, base: &Ledger, head: &Ledger) -> (String, u8) {
+/// The ledger of `recording`, a prover recording, keyed by program and block, as the ledger
+/// view reads a head's: nothing renamed and nothing left out.
+pub fn keyed_ledger(recording: &str) -> Result<Ledger, String> {
+    keyed(&ledger(recording)?, &[], &[])
+}
+
+/// Compares the two ledgers `base` and `head` of the recording `name`: what it says, and its
+/// counts.
+pub fn compare(name: &str, base: &Ledger, head: &Ledger) -> Compared {
     let limited = Regex::new(LIMITED).ok();
     let unknown = |verdict: &str| {
         limited
             .as_ref()
             .is_some_and(|regex| regex.is_match(verdict))
     };
-    let mut said = String::new();
-    let (mut same, mut differ, mut rerun, mut missing) = (0, 0, 0, 0);
+    let mut found = Compared::default();
     for (key, was) in base {
         let Some(is) = head.get(key) else {
-            let _ = writeln!(said, "{name}: only in the base: {key}");
-            missing += 1;
+            let _ = writeln!(found.said, "{name}: only in the base: {key}");
+            found.missing += 1;
             continue;
         };
         if was == is {
-            same += 1;
+            found.same += 1;
             continue;
         }
         let kind = if unknown(was) || unknown(is) {
-            rerun += 1;
+            found.limited += 1;
             "LIMIT"
         } else {
-            differ += 1;
+            found.differ += 1;
             "DIFFERS"
         };
         let _ = writeln!(
-            said,
+            found.said,
             "{name}: {kind} {key}\n    base: {was}\n    head: {is}"
         );
     }
     for key in head.keys().filter(|key| !base.contains_key(*key)) {
-        let _ = writeln!(said, "{name}: only in the head: {key}");
-        missing += 1;
+        let _ = writeln!(found.said, "{name}: only in the head: {key}");
+        found.missing += 1;
     }
     let _ = writeln!(
-        said,
-        "{name}: {same} blocks agree, {differ} differ, {rerun} ran out of time or memory on one \
-         side, {missing} missing"
+        found.said,
+        "{name}: {} blocks agree, {} differ, {} ran out of time or memory on one side, {} missing",
+        found.same, found.differ, found.limited, found.missing
     );
-    let code = if differ + missing > 0 {
-        1
-    } else {
-        u8::from(rerun > 0) * 2
-    };
-    (said, code)
+    found
 }
 
 /// The recording called `name` beneath `folder` (artifacts download into a folder of their
@@ -325,9 +356,9 @@ pub fn diff(arguments: &[String]) -> Result<u8, String> {
         } else {
             let was = keyed(&ledger(&read(was)?)?, &renames, &expected)?;
             let is = keyed(&ledger(&read(is)?)?, &[], &expected)?;
-            let (compared, code) = compare(name, &was, &is);
-            said.push_str(&compared);
-            status = status.max(code);
+            let compared = compare(name, &was, &is);
+            said.push_str(&compared.said);
+            status = status.max(compared.code());
         }
     }
     ci::print_and_summarize(&said)?;
@@ -403,16 +434,25 @@ mod tests {
     /// 1, a limit alone 2, and agreement 0.
     #[test]
     fn the_ledgers_are_compared_block_by_block() {
-        let base = keyed(&ledger(RECORDING).expect("a ledger"), &[], &[]).expect("keyed");
-        let head = keyed(&ledger(HEAD).expect("a ledger"), &[], &[]).expect("keyed");
-        let (said, code) = compare("prover-wasm.txt", &base, &head);
-        assert_eq!(said, COMPARED);
-        assert_eq!(code, 1);
+        let base = keyed_ledger(RECORDING).expect("a ledger");
+        let head = keyed_ledger(HEAD).expect("a ledger");
+        let compared = compare("prover-wasm.txt", &base, &head);
+        assert_eq!(compared.said, COMPARED);
+        assert_eq!(
+            (
+                compared.same,
+                compared.differ,
+                compared.limited,
+                compared.missing
+            ),
+            (1, 1, 1, 1)
+        );
+        assert_eq!(compared.code(), 1);
         let mut limited = base.clone();
         let key = "examples/add/main.wat B2";
         limited.insert(key.to_owned(), "proven: bound None".to_owned());
-        assert_eq!(compare("prover-wasm.txt", &base, &limited).1, 2);
-        assert_eq!(compare("prover-wasm.txt", &base, &base).1, 0);
+        assert_eq!(compare("prover-wasm.txt", &base, &limited).code(), 2);
+        assert_eq!(compare("prover-wasm.txt", &base, &base).code(), 0);
     }
 
     /// golden-expected.txt's patterns are regular expressions; comments and blank lines are no
