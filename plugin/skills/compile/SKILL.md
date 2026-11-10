@@ -163,14 +163,23 @@ alone, by the steps below: `check` refuses any other code file and says what to 
      lanes through masks, and find a byte with `i8x16.eq`, `i8x16.bitmask` and `i32.ctz`. Mask
      the lanes past the input's end so the last step is the same code, or finish with a scalar
      loop of at most 15 bytes. The engine compiles each vector instruction for this CPU's
-     vectors.
+     vectors. To count bytes, add each compare's lanes, shifted down by 7, into counters of a
+     byte, and widen them before 255 steps, as [writing main.wat](references/wasm.md) shows: no
+     bitmask, which ARM64 has no one instruction for.
    - **Large pieces:** read through `$fill` into a 64 KiB buffer, and write large pieces with
-     `$write_all`, never a line or a byte per call: each host call costs.
+     `$write_all`, never a line or a byte per call: each host call costs. A read of a file gives
+     everything up to its end, so a file shorter than the buffer is one `fd_read`, where `$fill`
+     takes a second read to find the end.
+   - **Lookups by byte:** take each byte with `i32.load8_u` at its offset from one address,
+     rather than shifting and masking a word, and lend a table's region to the function whose
+     loop uses it, as an address in a parameter, so the address stays in a register.
    - **Input of any length streams:** fill a buffer, process it, keep only what crosses into the
      next buffer-full (such as whether its last byte ended a word), and end at a count below the
      buffer's size, as [the streaming filter](assets/stream-template.wat) does.
    - **Break dependency chains:** where each step waits for the one before, as in a checksum or
-     a running sum, run two to four independent chains side by side and join them at the end.
+     a running sum, run two to four independent chains side by side and join them at the end. A
+     checksum by tables takes 16 bytes a step through 16 tables, the bytes' shares xored
+     together before the share that waits on the checksum joins them.
    - **Many cases on one small number:** one `br_table`, whose default leads to an assertion or
      an error, not a chain of compares.
    - **Memory the program touches** costs time too: work in place where the rules allow.
