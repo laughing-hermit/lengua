@@ -84,6 +84,18 @@ impl Worker {
 
     /// Runs `job` to its end.
     fn run(&mut self, job: &Job, stop: Arc<AtomicBool>, events: mpsc::Sender<Event>) -> Done {
+        // A worker runs programs, each in a program's engine: a solver's, with exceptions on, is
+        // its host's alone (`lengua-mcp --solver-wasm`).
+        if !Setup::PROGRAMS.contains(&job.setup) {
+            return runner::unstarted(
+                job.id,
+                format!(
+                    "a worker runs programs, and the {:?} configuration is no program's",
+                    job.setup
+                ),
+                Vec::new(),
+            );
+        }
         if let Some(problem) = &self.no_room {
             return runner::unstarted(job.id, problem.clone(), Vec::new());
         }

@@ -47,6 +47,15 @@ fn main() -> ExitCode {
         raw.next();
         return lengua::wasm::worker::main(raw);
     }
+    // Solver mode, hidden: a WebAssembly solver's host, which the prover starts in place of a
+    // native solver, the module and the solver's arguments after the flag.
+    if raw
+        .peek()
+        .is_some_and(|arg| arg == lengua::wasm::solver::FLAG)
+    {
+        raw.next();
+        return lengua::wasm::solver::main(raw);
+    }
     // Module mode, hidden: a child of `measure` that runs one WebAssembly module of another
     // toolchain in lengua's host, its run given as JSON.
     if raw

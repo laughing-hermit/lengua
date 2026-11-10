@@ -2,7 +2,8 @@
 //! a sentence under each problem saying what to do, the verdict last, and exit code 0 only when
 //! nothing is wrong. The engine runs WebAssembly on every runner. A data folder or `PLUGIN_DATA`
 //! that can't be written is a problem. The solvers are found where the prover finds them: in the
-//! solvers folder beside the server first, as a release archive keeps them, then on PATH.
+//! solvers folder beside the server first, as a release archive keeps them, then on PATH; and a
+//! WebAssembly z3 before either, which doctor compiles where its host finds it.
 
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::process::Command;
@@ -258,4 +259,69 @@ fn the_archive_s_layout_is_healthy() {
     }
     assert_eq!(said.lines().last(), Some("nothing is wrong"), "{said}");
     assert_eq!(code, Some(0), "{said}");
+}
+
+/// The stand-in solver of tests/fixtures/solver-wasm, a WebAssembly module with exceptions that
+/// prints a version as z3 does, as wast encodes it.
+fn stand_in_module() -> Vec<u8> {
+    let text = include_str!("fixtures/solver-wasm/stand-in.wat");
+    let buffer = wast::parser::ParseBuffer::new(text).expect("WebAssembly text");
+    let wast::Wat::Module(mut module) =
+        wast::parser::parse::<wast::Wat>(&buffer).expect("a module")
+    else {
+        panic!("the stand-in isn't a module");
+    };
+    module.encode().expect("the module's bytes")
+}
+
+/// How many files there are at any depth of `folder`.
+fn files_under(folder: &Path) -> usize {
+    std::fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| {
+            let path = entry.path();
+            if path.is_dir() { files_under(&path) } else { 1 }
+        })
+        .sum()
+}
+
+/// A WebAssembly z3 comes first, here the stand-in that `LENGUA_Z3_WASM` names: doctor names it
+/// as WebAssembly, compiles it into the cache of lengua's own data folder, which the solver's host
+/// reads, and reads its version through that host, as the prover starts it.
+#[test]
+fn a_webassembly_z3_is_compiled_where_its_host_finds_it() {
+    let root = tempfile::tempdir().expect("a folder");
+    let module = root.path().join("stand-in.wasm");
+    std::fs::write(&module, stand_in_module()).expect("the stand-in");
+    // lengua's own data folder, as each system names it, inside this test's folder.
+    let home = root.path().join("home");
+    let output = Command::new(env!("CARGO_BIN_EXE_lengua-mcp"))
+        .arg("--data-dir")
+        .arg(root.path().join("data"))
+        .arg("doctor")
+        .env(lengua::prove::smt::Z3_WASM, &module)
+        .env_remove(lengua::prove::smt::SOLVER_HOST)
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("share"))
+        .env("LOCALAPPDATA", &home)
+        .env_remove("CLAUDE_PLUGIN_DATA")
+        .env_remove("PLUGIN_DATA")
+        .output()
+        .expect("lengua-mcp runs");
+    let said = String::from_utf8_lossy(&output.stdout).into_owned();
+    let (line, problem) = line_of(&said, "z3: ");
+    let named = format!(
+        "z3: 4.16.0, the version lengua pins, WebAssembly that LENGUA_Z3_WASM names, {}, compiled \
+         for this computer and kept in ",
+        module.display()
+    );
+    assert!(line.starts_with(&named), "{said}");
+    assert_eq!(problem, None, "{said}");
+    assert!(
+        files_under(&home) > 0,
+        "nothing was kept in {}:\n{said}",
+        home.display()
+    );
 }

@@ -5,8 +5,10 @@
 //! the plugin where Claude Code finds plugins, a marketplace folder of lengua's own, which it
 //! adds to Claude Code when the claude command is installed (and says the commands that do, when
 //! it isn't); then runs the installed lengua-mcp's doctor, which says whether lengua has what it
-//! needs here, and exits with doctor's code: 0 when nothing is wrong. The archive ships every
-//! part lengua needs, the solvers included, so nothing else is installed.
+//! needs here, and exits with doctor's code: 0 when nothing is wrong. Doctor compiles a
+//! WebAssembly solver for this computer once, into the folder its host reads, so an install
+//! leaves none for a proof to wait on ([`crate::doctor`]). The archive ships every part lengua
+//! needs, the solvers included, so nothing else is installed.
 //!
 //! A folder it would replace must be lengua's (an earlier install), or not there yet, and the
 //! archive goes neither into a folder inside itself nor over the folder it runs from. A browser

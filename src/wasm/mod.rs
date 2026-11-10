@@ -4,7 +4,8 @@
 //! ARM64. Tests run in a pool of reused workers ([`pool`]), each a child process of this binary
 //! ([`worker`]) that the server talks to in length-prefixed JSON ([`job`]); a run from a shell
 //! runs in place ([`runner::run_here`]). How a run went is a [`crate::runner::Run`], which
-//! everything that compares results reads.
+//! everything that compares results reads. A WebAssembly solver runs through the same host in a
+//! process of its own, which the prover starts as it starts a native solver ([`solver`]).
 
 pub mod engine;
 pub mod host;
@@ -12,6 +13,7 @@ pub mod job;
 pub mod parts;
 pub mod pool;
 pub mod runner;
+pub mod solver;
 pub mod text;
 pub mod wasi;
 pub mod worker;

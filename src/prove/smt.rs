@@ -5,7 +5,11 @@
 //!
 //! Each solver is found as [`find`] finds it: in the `solvers` folder beside the folder that
 //! holds lengua-mcp, where a release archive keeps the versions lengua pins, and else on PATH.
-//! `lengua-mcp doctor` says where it found each, with the same function.
+//! A WebAssembly z3 comes first: the module [`Z3_WASM`] names, as tests and CI choose one, or
+//! `z3.wasm` in the solvers folder. The prover starts it in a lengua-mcp of its own
+//! (`--solver-wasm`, [`crate::wasm::solver`]) with z3's usual arguments, so that the pipes, the
+//! questions, the logs and the watchdog are the same for either. `lengua-mcp doctor` says where
+//! it found each, with the same function.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -66,29 +70,137 @@ impl Kind {
     fn file(self) -> String {
         format!("{}{}", self.name(), std::env::consts::EXE_SUFFIX)
     }
+
+    /// The file of its WebAssembly module in the solvers folder, for a solver that has a
+    /// WebAssembly build: z3's.
+    #[must_use]
+    pub const fn module_file(self) -> Option<&'static str> {
+        match self {
+            Self::Z3 => Some("z3.wasm"),
+            Self::Cvc5 => None,
+        }
+    }
+
+    /// The environment variable that names its WebAssembly module, for a solver that has a
+    /// WebAssembly build: z3's [`Z3_WASM`].
+    #[must_use]
+    pub const fn module_variable(self) -> Option<&'static str> {
+        match self {
+            Self::Z3 => Some(Z3_WASM),
+            Self::Cvc5 => None,
+        }
+    }
 }
 
 /// The folder, beside the one that holds lengua-mcp, where a release archive keeps the solvers:
 /// `<plugin>/server/lengua-mcp` and `<plugin>/solvers/z3`.
 pub const SOLVERS_FOLDER: &str = "solvers";
 
+/// The environment variable that names a WebAssembly z3, its module's file, for the prover to
+/// start in place of any other z3: tests and CI choose one with it.
+pub const Z3_WASM: &str = "LENGUA_Z3_WASM";
+
+/// The environment variable that names the lengua-mcp that hosts a WebAssembly solver, for a test
+/// whose own program isn't lengua-mcp: unset, the host is this program.
+pub const SOLVER_HOST: &str = "LENGUA_SOLVER_HOST";
+
 /// Where [`find`] found a solver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Found {
-    /// In [`solvers_folder`], beside the server, as a release archive keeps it.
+    /// Its program, in [`solvers_folder`] beside the server, as a release archive keeps it.
     Beside(PathBuf),
-    /// In a folder on PATH.
+    /// Its program, in a folder on PATH.
     OnPath(PathBuf),
+    /// Its WebAssembly module, in [`solvers_folder`] beside the server, which a lengua-mcp hosts.
+    ModuleBeside(PathBuf),
+    /// Its WebAssembly module, which its environment variable names
+    /// ([`Kind::module_variable`]).
+    ModuleNamed(PathBuf),
 }
 
 impl Found {
-    /// The solver's program.
+    /// The solver's program, or its module.
     #[must_use]
     pub fn path(&self) -> &Path {
         match self {
-            Self::Beside(path) | Self::OnPath(path) => path,
+            Self::Beside(path)
+            | Self::OnPath(path)
+            | Self::ModuleBeside(path)
+            | Self::ModuleNamed(path) => path,
         }
     }
+
+    /// Whether it is a WebAssembly module, which a lengua-mcp hosts, rather than a program.
+    #[must_use]
+    pub const fn is_module(&self) -> bool {
+        matches!(self, Self::ModuleBeside(_) | Self::ModuleNamed(_))
+    }
+
+    /// What the prover starts for it: its program, or for a module, the lengua-mcp that hosts it
+    /// ([`host`]), which keeps the module compiled where it keeps it by itself.
+    #[must_use]
+    pub fn program(&self) -> Program {
+        match self {
+            Self::Beside(path) | Self::OnPath(path) => Program::Native(path.as_os_str().to_owned()),
+            Self::ModuleBeside(module) | Self::ModuleNamed(module) => Program::Wasm {
+                host: host(),
+                module: module.clone(),
+                cache: None,
+            },
+        }
+    }
+}
+
+/// What the prover starts for a solver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Program {
+    /// A program the system runs: its path, or its bare name, which the system looks for itself.
+    Native(OsString),
+    /// A WebAssembly module, which a lengua-mcp runs as the solver (`--solver-wasm`).
+    Wasm {
+        /// The lengua-mcp that hosts it.
+        host: PathBuf,
+        /// The module's file.
+        module: PathBuf,
+        /// Where its compiled module is kept, when not where the host keeps it by itself
+        /// ([`crate::wasm::solver::cache_folder`]).
+        cache: Option<PathBuf>,
+    },
+}
+
+impl Program {
+    /// The command that starts it, before the solver's own arguments: the program, or its host
+    /// given the module, the cache's folder when one is named, and `--`.
+    #[must_use]
+    pub fn command(&self) -> Command {
+        match self {
+            Self::Native(program) => Command::new(program),
+            Self::Wasm {
+                host,
+                module,
+                cache,
+            } => {
+                let mut command = Command::new(host);
+                command.arg(crate::wasm::solver::FLAG).arg(module);
+                if let Some(cache) = cache {
+                    command.arg("--cache").arg(cache);
+                }
+                command.arg("--");
+                command
+            }
+        }
+    }
+}
+
+/// The lengua-mcp that hosts a WebAssembly solver: the one [`SOLVER_HOST`] names, else this
+/// program, which is lengua-mcp everywhere but in tests.
+#[must_use]
+pub fn host() -> PathBuf {
+    std::env::var_os(SOLVER_HOST)
+        .filter(|named| !named.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_exe().ok())
+        .unwrap_or_else(|| PathBuf::from("lengua-mcp"))
 }
 
 /// The folder where a release archive keeps the solvers, [`SOLVERS_FOLDER`] beside the folder
@@ -102,22 +214,44 @@ pub fn solvers_folder() -> Option<PathBuf> {
     Some(program.parent()?.parent()?.join(SOLVERS_FOLDER))
 }
 
-/// Finds `kind`'s program: in [`solvers_folder`] first, then in PATH's folders. The prover starts
-/// the one it finds, and `lengua-mcp doctor` says which that is.
+/// Finds `kind`'s solver: the WebAssembly module its environment variable names
+/// ([`Kind::module_variable`]) first, then [`solvers_folder`], then PATH's folders. The prover
+/// starts the one it finds, and `lengua-mcp doctor` says which that is.
 #[must_use]
 pub fn find(kind: Kind) -> Option<Found> {
-    find_in(
-        solvers_folder().as_deref(),
-        std::env::var_os("PATH").as_deref(),
-        kind,
-    )
+    let value = kind.module_variable().and_then(std::env::var_os);
+    named(kind, value.as_deref()).or_else(|| {
+        find_in(
+            solvers_folder().as_deref(),
+            std::env::var_os("PATH").as_deref(),
+            kind,
+        )
+    })
 }
 
-/// [`find`], with `beside` the solvers folder beside the server and `path` PATH's value. A file
-/// in the solvers folder counts whatever its permissions, so that one that can't run says so
-/// rather than leaving the prover to another; on PATH, as a shell looks, only a program that
-/// can run counts, and only an absolute folder.
+/// The WebAssembly module `value`, the value of `kind`'s environment variable, names, when it
+/// names one and `kind` has a WebAssembly build: it counts whether or not its file is there, so
+/// that a wrong one says so rather than leaving the prover to another solver.
+fn named(kind: Kind, value: Option<&OsStr>) -> Option<Found> {
+    kind.module_file()
+        .and(value)
+        .filter(|value| !value.is_empty())
+        .map(|value| Found::ModuleNamed(PathBuf::from(value)))
+}
+
+/// [`find`] beside the server and on PATH, with `beside` the solvers folder beside the server and
+/// `path` PATH's value. A file in the solvers folder counts whatever its permissions, so that one
+/// that can't run says so rather than leaving the prover to another, and there a WebAssembly
+/// module comes before a program; on PATH, as a shell looks, only a program that can run counts,
+/// and only an absolute folder.
 fn find_in(beside: Option<&Path>, path: Option<&OsStr>, kind: Kind) -> Option<Found> {
+    if let Some(found) = beside
+        .zip(kind.module_file())
+        .map(|(folder, file)| folder.join(file))
+        .filter(|candidate| candidate.is_file())
+    {
+        return Some(Found::ModuleBeside(found));
+    }
     let file = kind.file();
     if let Some(found) = beside
         .map(|folder| folder.join(&file))
@@ -146,12 +280,12 @@ fn runnable(path: &Path) -> bool {
     path.is_file()
 }
 
-/// The program the prover starts for `kind`: the one [`find`] finds, or else its bare name, which
-/// the system looks for itself and, finding none, makes the solver "not installed".
-fn program(kind: Kind) -> OsString {
+/// What the prover starts for `kind`: what [`find`] finds, or else its bare name, which the
+/// system looks for itself and, finding none, makes the solver "not installed".
+fn program(kind: Kind) -> Program {
     find(kind).map_or_else(
-        || OsString::from(kind.name()),
-        |found| found.path().as_os_str().to_owned(),
+        || Program::Native(OsString::from(kind.name())),
+        |found| found.program(),
     )
 }
 
@@ -226,22 +360,36 @@ impl Drop for Process {
     }
 }
 
+/// The command that starts `program` as `kind`, giving each question at most `timeout_ms`, for
+/// questions that may hold floats when `floats` says so: what starts the program, then the
+/// solver's own arguments, the same for a WebAssembly solver as for a native one.
+fn command(kind: Kind, program: &Program, timeout_ms: u64, floats: bool) -> Command {
+    let mut command = program.command();
+    match kind {
+        Kind::Z3 => command.args(["-in", "-smt2", "-memory:4096"]),
+        // Bit-blasting each question whole: lazily, cvc5 can take minutes over two copies of
+        // one small sum that eagerly take it milliseconds. It bit-blasts floats only lazily.
+        Kind::Cvc5 => command
+            .args(["--lang=smt2", "--incremental", "--produce-models"])
+            .args((!floats).then_some("--bitblast=eager"))
+            .arg(format!("--tlimit-per={timeout_ms}")),
+    };
+    command
+}
+
 impl Process {
     /// Starts `program`, which speaks like `kind`, giving each question at most `timeout_ms`, for
     /// questions that may hold floats when `floats` says so.
-    fn start(kind: Kind, program: &OsStr, timeout_ms: u64, floats: bool) -> io::Result<Self> {
-        let mut command = Command::new(program);
-        match kind {
-            Kind::Z3 => command.args(["-in", "-smt2", "-memory:4096"]),
-            // Bit-blasting each question whole: lazily, cvc5 can take minutes over two copies
-            // of one small sum that eagerly take it milliseconds. It bit-blasts floats only
-            // lazily.
-            Kind::Cvc5 => command
-                .args(["--lang=smt2", "--incremental", "--produce-models"])
-                .args((!floats).then_some("--bitblast=eager"))
-                .arg(format!("--tlimit-per={timeout_ms}")),
-        };
-        let mut child = command
+    fn start(kind: Kind, program: &Program, timeout_ms: u64, floats: bool) -> io::Result<Self> {
+        if let Program::Wasm { module, .. } = program
+            && !module.is_file()
+        {
+            return Err(io::Error::other(format!(
+                "its WebAssembly module {} isn't there",
+                module.display()
+            )));
+        }
+        let mut child = command(kind, program, timeout_ms, floats)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -536,20 +684,25 @@ impl Solver {
         Self::with_programs(&solvers, timeout_ms, false)
     }
 
-    /// [`Self::with_programs`], each program given by its name or path as text.
+    /// [`Self::with_programs`], each a native program given by its name or path as text.
     #[cfg(test)]
     fn with(solvers: &[(Kind, &str)], timeout_ms: u64, floats: bool) -> io::Result<Self> {
-        let solvers: Vec<(Kind, OsString)> = solvers
+        let solvers: Vec<(Kind, Program)> = solvers
             .iter()
-            .map(|&(kind, program)| (kind, OsString::from(program)))
+            .map(|&(kind, program)| (kind, Program::Native(OsString::from(program))))
             .collect();
         Self::with_programs(&solvers, timeout_ms, floats)
     }
 
     /// Starts the first of `solvers` that runs, to answer, and the next one that runs, to check
-    /// it. Each is a kind of solver and the program to run for it.
-    fn with_programs(
-        solvers: &[(Kind, OsString)],
+    /// it, giving each question at most `timeout_ms`, for questions that may hold floats when
+    /// `floats` says so. Each is a kind of solver and what to start for it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when none of them can start, saying why for each.
+    pub fn with_programs(
+        solvers: &[(Kind, Program)],
         timeout_ms: u64,
         floats: bool,
     ) -> io::Result<Self> {
@@ -568,7 +721,10 @@ impl Solver {
             };
             match Process::start(kind, program, limit, floats) {
                 Ok(process) => running.push(process),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Err(error)
+                    if error.kind() == io::ErrorKind::NotFound
+                        && matches!(program, Program::Native(_)) =>
+                {
                     missing.push(format!("{} isn't installed", kind.name()));
                 }
                 Err(error) => missing.push(format!("{} couldn't start: {error}", kind.name())),
@@ -1657,6 +1813,105 @@ mod tests {
         assert_eq!(
             find_in(None, Some(path.as_os_str()), Kind::Cvc5),
             Some(Found::OnPath(fresh))
+        );
+    }
+
+    /// A WebAssembly z3 comes first: the module its variable names, whether or not its file is
+    /// there, so that a wrong one says so; else `z3.wasm` in the solvers folder, before a z3
+    /// program there. cvc5, which has no WebAssembly build, takes no module.
+    #[test]
+    fn a_webassembly_z3_comes_before_a_program() {
+        let root = tempfile::tempdir().expect("a folder");
+        let folder = root.path().join("plugin").join(SOLVERS_FOLDER);
+        let program = a_program(&folder, Kind::Z3);
+        let beside = folder.as_path();
+        assert_eq!(
+            find_in(Some(beside), None, Kind::Z3),
+            Some(Found::Beside(program))
+        );
+        let module = beside.join("z3.wasm");
+        std::fs::write(&module, "").expect("a module");
+        assert_eq!(
+            find_in(Some(beside), None, Kind::Z3),
+            Some(Found::ModuleBeside(module))
+        );
+        let elsewhere = root.path().join("elsewhere").join("z3.wasm");
+        assert_eq!(
+            named(Kind::Z3, Some(elsewhere.as_os_str())),
+            Some(Found::ModuleNamed(elsewhere.clone()))
+        );
+        assert_eq!(named(Kind::Z3, Some(OsStr::new(""))), None);
+        assert_eq!(named(Kind::Z3, None), None);
+        assert_eq!(named(Kind::Cvc5, Some(elsewhere.as_os_str())), None);
+        let cvc5 = a_program(beside, Kind::Cvc5);
+        std::fs::write(beside.join("cvc5.wasm"), "").expect("a module that isn't cvc5's");
+        assert_eq!(
+            find_in(Some(beside), None, Kind::Cvc5),
+            Some(Found::Beside(cvc5))
+        );
+        assert!(Found::ModuleNamed(elsewhere).is_module());
+        assert!(!Found::OnPath(PathBuf::from("z3")).is_module());
+    }
+
+    /// The words of `command`: its program, then its arguments.
+    fn words(command: &Command) -> Vec<String> {
+        std::iter::once(command.get_program())
+            .chain(command.get_args())
+            .map(|word| word.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// A WebAssembly z3 starts in its host, given its module, the cache's folder when one is
+    /// named, and after `--` z3's usual arguments; a program starts with the same arguments.
+    #[test]
+    fn a_webassembly_z3_starts_in_its_host_with_z3_s_arguments() {
+        let hosted = Program::Wasm {
+            host: PathBuf::from("lengua-mcp"),
+            module: PathBuf::from("z3.wasm"),
+            cache: Some(PathBuf::from("cache")),
+        };
+        assert_eq!(
+            words(&command(Kind::Z3, &hosted, 20_000, false)),
+            [
+                "lengua-mcp",
+                "--solver-wasm",
+                "z3.wasm",
+                "--cache",
+                "cache",
+                "--",
+                "-in",
+                "-smt2",
+                "-memory:4096"
+            ]
+        );
+        let native = Program::Native(OsString::from("z3"));
+        assert_eq!(
+            words(&command(Kind::Z3, &native, 20_000, false)),
+            ["z3", "-in", "-smt2", "-memory:4096"]
+        );
+        // The prover leaves where the compiled module is kept to the host.
+        let found = Found::ModuleNamed(PathBuf::from("z3.wasm")).program();
+        let Program::Wasm { module, cache, .. } = &found else {
+            panic!("{found:?} is no WebAssembly solver");
+        };
+        assert_eq!((module.as_path(), cache), (Path::new("z3.wasm"), &None));
+    }
+
+    /// A WebAssembly z3 whose module isn't there says so, rather than leaving the prover to
+    /// another solver.
+    #[test]
+    fn a_missing_webassembly_z3_says_so() {
+        let hosted = Program::Wasm {
+            host: PathBuf::from("lengua-mcp"),
+            module: PathBuf::from("/nowhere/z3.wasm"),
+            cache: None,
+        };
+        let error = Solver::with_programs(&[(Kind::Z3, hosted)], 5000, false)
+            .err()
+            .expect("no solver");
+        assert_eq!(
+            error.to_string(),
+            "z3 couldn't start: its WebAssembly module /nowhere/z3.wasm isn't there"
         );
     }
 

@@ -114,8 +114,9 @@ fn offsets_of(error: &wasmtime::Error) -> Vec<u64> {
         .unwrap_or_default()
 }
 
-/// How a run that stopped with `error` ended, and what lengua has to say of it.
-fn ending_of(error: &wasmtime::Error) -> (Ending, Option<String>) {
+/// How a run that stopped with `error` ended, and what lengua has to say of it: a solver's host
+/// reads it too ([`crate::wasm::solver`]).
+pub(crate) fn ending_of(error: &wasmtime::Error) -> (Ending, Option<String>) {
     if let Some(stop) = error.downcast_ref::<Stop>() {
         return match stop {
             Stop::Exit(code) => (Ending::Exited(*code), None),
