@@ -307,17 +307,17 @@ fn sampled(block: &Generated) -> Generated {
     block
 }
 
-/// A budget that ends only a proof that never would.
-fn budget(listens: bool) -> Budget {
-    Budget::until(Instant::now() + Duration::from_secs(PROOF_SECONDS), listens)
+/// A budget of `seconds`: with [`PROOF_SECONDS`], one that ends only a proof that never would.
+fn budget(seconds: u64, listens: bool) -> Budget {
+    Budget::until(Instant::now() + Duration::from_secs(seconds), listens)
 }
 
 /// The proof by induction of `block` on `module` as the idea gives it: its step over the read
 /// loop, and, where that holds, its base from the loop's head over every final piece at once,
 /// or else over the shortest, as far as [`BASE_LENGTHS`] bytes past the shortest. The base the
 /// server proves goes on to a whole buffer-full, as far as its time allows.
-fn induction(module: &Module, block: &Generated, listens: bool) -> String {
-    let found = match super::induction::step(module, block, &budget(listens)) {
+fn induction(module: &Module, block: &Generated, listens: bool, seconds: u64) -> String {
+    let found = match super::induction::step(module, block, &budget(seconds, listens)) {
         Ok(found) => found,
         Err(refused) => return format!("none: {}", reason(&refused.why)),
     };
@@ -330,8 +330,8 @@ fn induction(module: &Module, block: &Generated, listens: bool) -> String {
     }
     let within = Budget {
         within: true,
-        max_paths: budget(listens).max_paths.saturating_mul(AT_ONCE_PATHS),
-        ..budget(listens)
+        max_paths: budget(seconds, listens).max_paths.saturating_mul(AT_ONCE_PATHS),
+        ..budget(seconds, listens)
     };
     if let Ok(proven @ Verdict::Proven { bound: None, .. }) =
         by_length(module, &whole, &within, Some(&found.hook))
@@ -354,7 +354,7 @@ fn induction(module: &Module, block: &Generated, listens: bool) -> String {
         *max = (*max).min(*min + BASE_LENGTHS).min(found.chunk);
         longest = *max;
     }
-    let proven = by_length(module, &base, &budget(listens), Some(&found.hook))
+    let proven = by_length(module, &base, &budget(seconds, listens), Some(&found.hook))
         .unwrap_or_else(Verdict::NotProven);
     format!(
         "step holds: {} bytes a time round, reach {}, {} paths, {} questions, lookback {}; base \
@@ -378,6 +378,7 @@ fn proofs(
     block: &Generated,
     listens: bool,
     from: usize,
+    seconds: u64,
 ) -> (String, [Duration; 2]) {
     if block.uses_now() {
         return ("uses now".to_owned(), [Duration::ZERO; 2]);
@@ -389,11 +390,11 @@ fn proofs(
         }
     };
     let began = Instant::now();
-    let induction = induction(&smaller, block, listens);
+    let induction = induction(&smaller, block, listens, seconds);
     let inducted = began.elapsed();
     let (cut, (lengths, magnitude)) = shortened(block, from);
     let length =
-        by_length(&module, &cut, &budget(listens), None).unwrap_or_else(Verdict::NotProven);
+        by_length(&module, &cut, &budget(seconds, listens), None).unwrap_or_else(Verdict::NotProven);
     (
         format!(
             "by induction {induction}; by length, texts +{lengths} and numbers to {magnitude}, {}",
@@ -434,82 +435,88 @@ fn smaller(program: &Program, recording: &mut String) -> Option<Built> {
 fn record() -> String {
     let mut recording = String::new();
     for program in programs() {
-        let _ = writeln!(recording, "== {}", program.name);
-        let idea = match &program.idea {
-            Ok(idea) => idea,
-            Err(why) => {
-                let _ = writeln!(recording, "  the idea doesn't parse: {why}");
-                continue;
-            }
-        };
-        let built = match build(&program.text) {
-            Ok(built) => built,
-            Err(problem) => {
-                let _ = writeln!(recording, "  doesn't build: {problem}");
-                continue;
-            }
-        };
-        let policy = Policy::of(&idea.uses, &idea.network);
-        // The samples' model; each proof takes one of its own.
-        let module = match Module::new(&built, policy) {
-            Ok(module) => module,
-            Err(why) => {
-                let _ = writeln!(recording, "  the model refuses it: {why}");
-                continue;
-            }
-        };
-        // The build its proofs by induction take, with a smaller buffer where it has one.
-        let smaller = smaller(&program, &mut recording);
-        let induced = smaller.as_ref().unwrap_or(&built);
-        let suite = match crate::testfile::check(idea) {
-            Ok(suite) => suite,
-            Err(problems) => {
-                let _ = writeln!(recording, "  the idea's tests don't check: {problems:?}");
-                continue;
-            }
-        };
-        let listens = idea.network.listens.is_some();
-        for (index, block) in suite.generated.iter().enumerate() {
-            let number = index + 1;
-            let began = Instant::now();
-            let sampled = sampled(block);
-            let samples: Vec<_> = sampled
-                .cases(1)
-                .take(SAMPLES)
-                .filter_map(Result::ok)
-                .collect();
-            for (sample, case) in samples.iter().enumerate() {
-                let mut pool = Pool::default();
-                let start = sample_start(&module, &mut pool, case, listens);
-                let runs = exec::explore(&module, start, &mut pool, &mut exec::Concrete, 2);
-                let found = match runs {
-                    Ok(runs) => runs
-                        .iter()
-                        .map(|run| fingerprint(run, &pool))
-                        .collect::<Vec<_>>()
-                        .join(" | "),
-                    Err(why) => format!("the model stopped: {why}"),
-                };
-                let _ = writeln!(recording, "  B{number} sample {sample}: {found}");
-            }
-            let ran = began.elapsed();
-            let from = NARROW
-                .iter()
-                .find(|(folder, at, _)| *folder == program.folder && *at == number)
-                .map_or(0, |(.., from)| *from);
-            let (found, [inducted, proven]) =
-                proofs((&built, induced), policy, block, listens, from);
-            eprintln!(
-                "{} B{number}: samples {:.1} s, induction {:.1} s, length {:.1} s: {found}",
-                program.name,
-                ran.as_secs_f64(),
-                inducted.as_secs_f64(),
-                proven.as_secs_f64()
-            );
-            let _ = writeln!(recording, "  B{number} proofs: {found}");
-        }
+        record_program(&program, PROOF_SECONDS, &mut recording);
     }
     recording
+}
+
+/// What the recording holds of `program`: each generated block's samples and its proofs, each
+/// proof with `seconds` of time.
+fn record_program(program: &Program, seconds: u64, recording: &mut String) {
+    let _ = writeln!(recording, "== {}", program.name);
+    let idea = match &program.idea {
+        Ok(idea) => idea,
+        Err(why) => {
+            let _ = writeln!(recording, "  the idea doesn't parse: {why}");
+            return;
+        }
+    };
+    let built = match build(&program.text) {
+        Ok(built) => built,
+        Err(problem) => {
+            let _ = writeln!(recording, "  doesn't build: {problem}");
+            return;
+        }
+    };
+    let policy = Policy::of(&idea.uses, &idea.network);
+    // The samples' model; each proof takes one of its own.
+    let module = match Module::new(&built, policy) {
+        Ok(module) => module,
+        Err(why) => {
+            let _ = writeln!(recording, "  the model refuses it: {why}");
+            return;
+        }
+    };
+    // The build its proofs by induction take, with a smaller buffer where it has one.
+    let smaller = smaller(program, recording);
+    let induced = smaller.as_ref().unwrap_or(&built);
+    let suite = match crate::testfile::check(idea) {
+        Ok(suite) => suite,
+        Err(problems) => {
+            let _ = writeln!(recording, "  the idea's tests don't check: {problems:?}");
+            return;
+        }
+    };
+    let listens = idea.network.listens.is_some();
+    for (index, block) in suite.generated.iter().enumerate() {
+        let number = index + 1;
+        let began = Instant::now();
+        let sampled = sampled(block);
+        let samples: Vec<_> = sampled
+            .cases(1)
+            .take(SAMPLES)
+            .filter_map(Result::ok)
+            .collect();
+        for (sample, case) in samples.iter().enumerate() {
+            let mut pool = Pool::default();
+            let start = sample_start(&module, &mut pool, case, listens);
+            let runs = exec::explore(&module, start, &mut pool, &mut exec::Concrete, 2);
+            let found = match runs {
+                Ok(runs) => runs
+                    .iter()
+                    .map(|run| fingerprint(run, &pool))
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+                Err(why) => format!("the model stopped: {why}"),
+            };
+            let _ = writeln!(recording, "  B{number} sample {sample}: {found}");
+        }
+        let ran = began.elapsed();
+        let from = NARROW
+            .iter()
+            .find(|(folder, at, _)| *folder == program.folder && *at == number)
+            .map_or(0, |(.., from)| *from);
+        let (found, [inducted, proven]) =
+            proofs((&built, induced), policy, block, listens, from, seconds);
+        eprintln!(
+            "{} B{number}: samples {:.1} s, induction {:.1} s, length {:.1} s: {found}",
+            program.name,
+            ran.as_secs_f64(),
+            inducted.as_secs_f64(),
+            proven.as_secs_f64()
+        );
+        let _ = writeln!(recording, "  B{number} proofs: {found}");
+    }
 }
 
 /// The guard: every program's samples run and its blocks are proven as recorded (or recorded,
@@ -518,6 +525,32 @@ fn record() -> String {
 #[ignore = "the prover's golden: run with --ignored around a change to the prover"]
 fn every_run_and_proof_is_as_recorded() {
     compare_or_record(RECORDING, &record());
+}
+
+/// The programs whose proofs the test below holds to a small budget, by folder: the two whose
+/// main.wat sorts records in place, where the recording once never ended.
+const HELD_TO_TIME: [&str; 2] = ["sort-large", "tally"];
+
+/// The time each proof of [`HELD_TO_TIME`] gets in the test below, in seconds.
+const SHORT_SECONDS: u64 = 5;
+
+/// A proof ends with its budget: every block of the programs in [`HELD_TO_TIME`], its samples
+/// run and its proofs made with [`SHORT_SECONDS`] each, is done in minutes, where one of them
+/// once ran for hours past a budget of 300 seconds.
+#[test]
+fn a_proof_ends_within_its_budget() {
+    let held: Vec<Program> = programs()
+        .into_iter()
+        .filter(|program| HELD_TO_TIME.contains(&program.folder.as_str()))
+        .collect();
+    assert_eq!(held.len(), HELD_TO_TIME.len());
+    for program in held {
+        let began = Instant::now();
+        let mut recording = String::new();
+        record_program(&program, SHORT_SECONDS, &mut recording);
+        eprintln!("{}: {:.1} s", program.name, began.elapsed().as_secs_f64());
+        assert!(recording.contains(" proofs: "), "{recording}");
+    }
 }
 
 /// A run is recorded by how it ended, its steps and what it wrote: here an exit with code 3 and
