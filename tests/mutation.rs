@@ -23,8 +23,38 @@ const MUTANTS: usize = 8;
 const PROOF_SECONDS: u64 = 60;
 
 /// Mutants that change nothing an idea can see, each with why: they come out proven, rightly.
-/// None is known of main.wat yet; a run that finds one names it here, with why.
-const EQUIVALENT: &[(&str, &str)] = &[];
+/// Each moves a region by one byte, or makes it one byte larger, into bytes that no other region
+/// holds: every read and write lands one byte along, or exactly where it did, and nothing a
+/// program prints, sends or exits with changes. A run that finds another names it here, with why.
+const EQUIVALENT: &[(&str, &str)] = &[
+    (
+        "tests/fixtures/add/main.wat L48:const+1",
+        "$argv moves from 2064 to 2065: its 12 bytes end at 2077, below $args at 2080, and \
+         WebAssembly reads a 32-bit number at any address, so args_get writes the same three \
+         addresses and main reads the same two",
+    ),
+    (
+        "tests/fixtures/echo/main.wat L21:const+1",
+        "$accepted.size grows from 4 to 5: no code reads the size, sock_accept still writes 4 \
+         bytes at 1024, and the next region, $line, starts at 65520",
+    ),
+    (
+        "tests/fixtures/cat/main.wat L22:const+1",
+        "$buffer.size grows from 5000 to 5001, inside the one page: for the 0 to 5000 bytes the \
+         idea gives, $fill reads them all and then the input's end either way. Only an input past \
+         5000 bytes, which the idea doesn't speak of, would show the one byte more",
+    ),
+    (
+        "tests/fixtures/cat-stream/main.wat L24:const+1",
+        "$buffer moves from 1024 to 1025: its 4096 bytes end at 5121, inside the one page, it is \
+         the only region, and $fill and $write_all are both lent the same address",
+    ),
+    (
+        "plugin/skills/compile/assets/main-template.wat L47:const+1",
+        "$sizes.size grows from 8 to 9: no code reads the size, args_sizes_get still writes 8 \
+         bytes at 2048, and the next region, $argv, starts at 2064",
+    ),
+];
 
 /// The programs whose mutants are checked: each idea, then its main.wat.
 const PROGRAMS: &[(&str, &str)] = &[
