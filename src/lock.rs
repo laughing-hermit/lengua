@@ -642,9 +642,10 @@ pub(crate) fn as_written(body: &str) -> Option<Lock> {
     } else {
         None
     };
-    if !text.0.is_empty() || !(1..=MAX_REQUESTS).contains(&words.len()) {
+    if !text.0.is_empty() {
         return None;
     }
+    let requested = (1..=MAX_REQUESTS).contains(&words.len());
     let about_the_stamp = match (&code, &proofs) {
         (_, None) => true,
         (Some(code), Some(proofs)) => code.module_sha256 == proofs.module_sha256,
@@ -656,7 +657,7 @@ pub(crate) fn as_written(body: &str) -> Option<Lock> {
         code,
         proofs,
     };
-    (about_the_stamp && lock.body_in(VERSION) == body).then_some(lock)
+    (requested && about_the_stamp && lock.body_in(VERSION) == body).then_some(lock)
 }
 
 /// What is left to read of a lock's body, read as [`Lock::body_in`] writes it ([`as_written`]).
@@ -748,7 +749,7 @@ impl Written<'_> {
             return Some(items);
         }
         loop {
-            items.push(item(&mut *self)?);
+            items.push(item(self)?);
             if self.eat("]").is_some() {
                 return Some(items);
             }
