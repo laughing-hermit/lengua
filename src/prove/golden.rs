@@ -330,7 +330,9 @@ fn induction(module: &Module, block: &Generated, listens: bool, seconds: u64) ->
     }
     let within = Budget {
         within: true,
-        max_paths: budget(seconds, listens).max_paths.saturating_mul(AT_ONCE_PATHS),
+        max_paths: budget(seconds, listens)
+            .max_paths
+            .saturating_mul(AT_ONCE_PATHS),
         ..budget(seconds, listens)
     };
     if let Ok(proven @ Verdict::Proven { bound: None, .. }) =
@@ -393,8 +395,8 @@ fn proofs(
     let induction = induction(&smaller, block, listens, seconds);
     let inducted = began.elapsed();
     let (cut, (lengths, magnitude)) = shortened(block, from);
-    let length =
-        by_length(&module, &cut, &budget(seconds, listens), None).unwrap_or_else(Verdict::NotProven);
+    let length = by_length(&module, &cut, &budget(seconds, listens), None)
+        .unwrap_or_else(Verdict::NotProven);
     (
         format!(
             "by induction {induction}; by length, texts +{lengths} and numbers to {magnitude}, {}",
