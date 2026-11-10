@@ -9,7 +9,6 @@ mod ci;
 mod clock;
 mod fetch;
 mod files;
-mod format;
 mod gate;
 mod golden;
 mod http;
@@ -29,8 +28,6 @@ const USAGE: &str = "usage: cargo xtask <task> [<argument>...]
 Tasks:
   plan                the jobs to run, as GitHub's matrix (EVENT, MODE, TARGETS, GOLDEN_BASE,
                       GOLDEN_BASE_RUN)
-  format              cargo fmt --check, and fmt.patch where it differs
-  lock                lock/Cargo.lock where Cargo.lock is behind Cargo.toml
   fetch <target> solvers|wasi...
                       z3 and cvc5, or wasi-sdk, as xtask/tools.tsv pins them
   machine <target>    the runner's facts, in the job's summary
@@ -61,8 +58,6 @@ fn main() -> ExitCode {
     };
     let done = match task.as_str() {
         "plan" => plan::task(rest),
-        "format" => format::format(rest),
-        "lock" => format::lock(rest),
         "fetch" => fetch::task(rest),
         "machine" => machine::task(rest),
         "test" => test::task(rest),

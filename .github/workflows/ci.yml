@@ -141,7 +141,9 @@ jobs:
 
   # Formatting is the same on every target, so it is checked once, beside the tests rather than in
   # front of them: a difference never hides a test result. When there is one, the patch that
-  # formats it is kept (fmt.patch), to apply with git.
+  # formats it is kept (fmt.patch), to apply with git. The job runs cargo and git alone and builds
+  # nothing, so that its patch and its lock come whether or not the code builds: the task crate's
+  # own build may be what waits for the lock.
   format:
     name: format
     runs-on: ubuntu-24.04
@@ -158,7 +160,18 @@ jobs:
         run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
 
       - name: Format
-        run: cargo run --package xtask -- format
+        id: format
+        run: cargo fmt --check
+
+      # The patch: the files formatted, then git's diff of them.
+      - name: Formatted
+        id: formatted
+        if: ${{ failure() && steps.format.outcome == 'failure' }}
+        run: cargo fmt
+
+      - name: The patch
+        if: ${{ failure() && steps.formatted.outcome == 'success' }}
+        run: git diff --output=fmt.patch
 
       - name: Keep the patch
         if: failure()
@@ -171,18 +184,25 @@ jobs:
 
       # Nothing builds on the owner's computer, so a new dependency's lock entries are made here:
       # when Cargo.lock is behind Cargo.toml, the resolved Cargo.lock is kept (cargo-lock), to copy
-      # into the repository, and the job fails. Both steps run the task crate without the alias's
-      # --locked, so that they run while the lock is behind.
+      # into the repository, and the job fails. cargo fetch resolves the workspace as a build does,
+      # and downloads what it resolved, but builds nothing; with --locked it fails where the lock
+      # is behind, and without, it writes the lock it made.
       - name: Lock file
+        id: lock
         if: ${{ !cancelled() }}
-        run: cargo run --package xtask -- lock
+        run: cargo fetch --locked
+
+      - name: The lock cargo makes
+        id: relock
+        if: ${{ failure() && steps.lock.outcome == 'failure' }}
+        run: cargo fetch
 
       - name: Keep the lock file
-        if: failure()
+        if: ${{ failure() && steps.relock.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: cargo-lock-${{ github.run_number }}
-          path: lock/Cargo.lock
+          path: Cargo.lock
           retention-days: 7
           if-no-files-found: ignore
 
