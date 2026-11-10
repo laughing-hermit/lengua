@@ -135,7 +135,11 @@ pub fn golden(arguments: &[String]) -> Result<u8, String> {
         return Err("usage: cargo xtask golden".to_owned());
     }
     let root = ci::root()?;
-    record(&[CHECKER_GOLDEN, PROVER_GOLDEN], &[], &root.join("golden.log"))
+    record(
+        &[CHECKER_GOLDEN, PROVER_GOLDEN],
+        &[],
+        &root.join("golden.log"),
+    )
 }
 
 /// The recordings of the golden tests `arguments` name, made again under target/golden/ with the

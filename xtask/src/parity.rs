@@ -476,16 +476,15 @@ pub fn golden(arguments: &[String]) -> Result<u8, String> {
         ));
     }
     if !wasm && hosted > 0 {
-        problems.push(format!("{hosted} z3 sessions ran through lengua-mcp's host"));
+        problems.push(format!(
+            "{hosted} z3 sessions ran through lengua-mcp's host"
+        ));
     }
     if z3_questions == 0 {
         problems.push("z3 was asked no question".to_owned());
     }
     if !problems.is_empty() {
-        let _ = writeln!(
-            summary,
-            "\nThe leg doesn't measure what it says it does:\n"
-        );
+        let _ = writeln!(summary, "\nThe leg doesn't measure what it says it does:\n");
         for problem in &problems {
             let _ = writeln!(summary, "- {problem}");
         }
@@ -648,7 +647,10 @@ pub fn blocks(printed: &str) -> Vec<Vec<&str>> {
 pub fn kind_of(block: &[&str]) -> Said {
     if block.iter().any(|line| ANSWERS.contains(line)) {
         Said::Answer
-    } else if block.iter().any(|line| line.starts_with("(:reason-unknown")) {
+    } else if block
+        .iter()
+        .any(|line| line.starts_with("(:reason-unknown"))
+    {
         Said::Reason
     } else if block.iter().any(|line| line.starts_with("(error")) {
         Said::Error
@@ -679,6 +681,13 @@ impl Differences {
     }
 }
 
+/// The answer `block` gives, or that it gives none.
+fn answer_in<'a>(block: Option<&Vec<&'a str>>) -> &'a str {
+    block
+        .and_then(|lines| lines.iter().find(|line| ANSWERS.contains(*line)))
+        .map_or("no answer", |line| *line)
+}
+
 /// What differs between `native` and `wasm`, two outputs of the same session, block by block.
 pub fn differences(native: &str, wasm: &str) -> Differences {
     let (native, wasm) = (blocks(native), blocks(wasm));
@@ -699,15 +708,13 @@ pub fn differences(native: &str, wasm: &str) -> Differences {
             _ => Said::Missing,
         };
         let joined = |block: Option<&Vec<&str>>| {
-            block.map_or_else(|| "(nothing: it had ended)".to_owned(), |lines| lines.join(" "))
+            block.map_or_else(
+                || "(nothing: it had ended)".to_owned(),
+                |lines| lines.join(" "),
+            )
         };
         if kind == Said::Answer {
-            let answer = |block: Option<&Vec<&str>>| {
-                block
-                    .and_then(|lines| lines.iter().find(|line| ANSWERS.contains(*line)))
-                    .map_or("no answer", |line| *line)
-            };
-            let turn = format!("{} → {}", answer(was), answer(is));
+            let turn = format!("{} → {}", answer_in(was), answer_in(is));
             *found.turns.entry(turn).or_default() += 1;
         }
         *found.by_kind.entry(kind).or_default() += 1;
@@ -874,7 +881,11 @@ fn parity_report(target: &str, about: &str, rows: &[Row], all: usize) -> (String
         failed.len()
     );
     for (kind, count) in &by_kind {
-        let _ = writeln!(totals, "differing_{}\t{count}", kind.name().replace(' ', "_"));
+        let _ = writeln!(
+            totals,
+            "differing_{}\t{count}",
+            kind.name().replace(' ', "_")
+        );
     }
     for (turn, count) in &turns {
         let _ = writeln!(totals, "turn\t{turn}\t{count}");
@@ -1120,10 +1131,7 @@ fn measured(folder: &Path, target: &str) -> Result<Measured, String> {
     let (Some(native), Some(wasm)) = (native, wasm) else {
         return Err("a leg left nothing to read".to_owned());
     };
-    let (was, is) = (
-        read(&native.join(RECORDING))?,
-        read(&wasm.join(RECORDING))?,
-    );
+    let (was, is) = (read(&native.join(RECORDING))?, read(&wasm.join(RECORDING))?);
     let ledger = golden::compare(
         RECORDING,
         &golden::keyed_ledger(&was)?,
@@ -1198,7 +1206,10 @@ pub fn report(arguments: &[String]) -> Result<u8, String> {
              WebAssembly z3's:\n\n```\n{}```\n",
             golden_time(&found.native),
             golden_time(&found.wasm),
-            found.totals.get("compile_seconds").map_or("?", String::as_str),
+            found
+                .totals
+                .get("compile_seconds")
+                .map_or("?", String::as_str),
             found.native.get("z3_sessions").map_or("?", String::as_str),
             found.native.get("z3_questions").map_or("?", String::as_str),
             found.wasm.get("z3_sessions").map_or("?", String::as_str),
@@ -1312,7 +1323,10 @@ mod tests {
         let mut command = ci::cargo();
         command.args(["no-such-command-here"]);
         let failed = replay(command, b"", Duration::from_secs(60)).expect("cargo runs");
-        assert!(!failed.ended_well() && !failed.errors.is_empty(), "{failed:?}");
+        assert!(
+            !failed.ended_well() && !failed.errors.is_empty(),
+            "{failed:?}"
+        );
     }
 
     /// The constants the replay shares with lengua-mcp are lengua-mcp's: the prover's arguments
