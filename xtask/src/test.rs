@@ -1,6 +1,7 @@
 //! The suite's runs, as CI's test, ignored and golden steps make them: `cargo test` over the files
 //! `TEST_FILES` names and the tests `FILTER` names, all it prints kept in a log, watched for a
-//! stall when `STALL_SECONDS` gives a time, and failed when what was asked for matched no test.
+//! stall when `STALL_SECONDS` gives a time (and then built with its functions' names, for the stall's
+//! stacks), and failed when what was asked for matched no test.
 
 use std::path::Path;
 
@@ -102,6 +103,11 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
         command.args(["--ignored", "--nocapture"]);
     }
     command.args(filter.split_whitespace());
+    if !limit.is_empty() {
+        // The release profile strips the names of functions, which the stall's stacks need to
+        // say where a test is stuck: a watched run is built with them.
+        command.env("CARGO_PROFILE_RELEASE_STRIP", "none");
+    }
     let status = if limit.is_empty() {
         ci::Logged::start(command, &log)?.wait()?
     } else {
