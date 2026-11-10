@@ -9,9 +9,10 @@
 //! xtask/tools.tsv pins for the target, LICENSE and licenses/ (the licences of everything it
 //! ships: lengua's, the solvers' with those of the parts cvc5 links in, and those of the Rust
 //! crates in lengua-mcp, which licenses/README.md lists), TARGET (the system and CPU it is for),
-//! INSTALL.md, and install.sh (install.ps1 on Windows), which checks that the computer is that
-//! system and CPU and puts the plugin where Claude Code finds plugins. CI installs and checks each
-//! archive on a clean runner of its own system and CPU (release mode, .github/workflows/ci.yml).
+//! and INSTALL.md, which says how the archive's own `lengua-mcp install` checks that the computer
+//! is that system and CPU and puts the plugin where Claude Code finds plugins, and what the
+//! system prints when it won't start lengua-mcp at all. CI installs and checks each archive on a
+//! clean runner of its own system and CPU (release mode, .github/workflows/ci.yml).
 //! It runs git, cargo, readelf or otool (for what z3 links), and Claude Code's own check of the
 //! plugin where `claude` is installed. Nothing is published, signed or pushed.
 //!
@@ -136,36 +137,76 @@ const CVC5_PARTS: [Part; 6] = [
 /// prompt: their copyright files hold the notices.
 const UBUNTU_PACKAGES: [&str; 4] = ["libc6", "libedit2", "libbsd0", "libtinfo6"];
 
-/// INSTALL.md's way to install, on Windows.
-const INSTALL_WINDOWS: &str = "In PowerShell, in this folder, run `powershell -ExecutionPolicy \
-                               Bypass -File .\\install.ps1`.";
+/// What INSTALL.md says of one system.
+struct Words {
+    /// How to install.
+    install: &'static str,
+    /// The install's options.
+    options: &'static str,
+    /// Where the install puts the plugin.
+    destination: &'static str,
+    /// What the system prints when it won't start lengua-mcp at all, before the install can
+    /// check the computer.
+    loader: &'static str,
+    /// How to load the plugin for one session, without installing it.
+    try_it: &'static str,
+}
 
-/// The install script's options, on Windows.
-const OPTIONS_WINDOWS: &str = "`-Check` only checks, and `-Prefix <folder>` makes `<folder>` \
-                               lengua's marketplace folder, with the plugin in a `lengua` folder \
-                               in it, where what it replaces must be an earlier lengua install.";
+/// INSTALL.md's words on Windows.
+const WINDOWS: Words = Words {
+    install: "In PowerShell, in this folder, run `.\\server\\lengua-mcp.exe install`.",
+    options: "`--check` only checks, and `--prefix <folder>` makes `<folder>` lengua's \
+              marketplace folder, with the plugin in a `lengua` folder in it, where what it \
+              replaces must be an earlier lengua install.",
+    destination: "`%LOCALAPPDATA%\\lengua\\plugins\\lengua`",
+    loader: "\
+If this computer isn't the system and CPU this archive is for, Windows may refuse to start
+`server\\lengua-mcp.exe` before lengua can check it: for a program of another CPU, as an ARM64
+program is on an x86-64 computer, PowerShell prints `The specified executable is not a valid
+application for this OS platform.` Windows on ARM64 runs an x86-64 program through its own
+emulation, and then `lengua-mcp install` itself says which archive to use.",
+    try_it: "load this folder for one session:",
+};
 
-/// The way to install, on Linux and macOS.
-const INSTALL_UNIX: &str = "In this folder, run `./install.sh`.";
+/// INSTALL.md's words on Linux.
+const LINUX: Words = Words {
+    install: "In this folder, run `server/lengua-mcp install`.",
+    options: "`--check` only checks, `--prefix <folder>` makes `<folder>` lengua's marketplace \
+              folder, with the plugin in its `lengua/` folder, where what it replaces must be an \
+              earlier lengua install, and `--link` also puts `lengua-mcp` in `~/.local/bin`, to \
+              run programs from a shell.",
+    destination: "`~/.local/share/lengua/plugins/lengua` (under `$XDG_DATA_HOME` when it is set)",
+    loader: "\
+If this computer isn't the system and CPU this archive is for, its system may refuse to start
+`server/lengua-mcp` before lengua can check it, and the shell prints the system's own message:
+`cannot execute binary file: Exec format error` for a program of another CPU or system,
+``version `GLIBC_2.39' not found`` for a C library older than glibc 2.39, which lengua's
+programs and solvers are built against (Ubuntu 24.04, Debian 13, Fedora 40 and later have it),
+and `No such file or directory` or `not found`, of a program that is there, on a system without
+glibc, such as Alpine. Use the archive for this computer's system and CPU.",
+    try_it: "load this folder for one session:",
+};
 
-/// The install script's options, on Linux and macOS.
-const OPTIONS_UNIX: &str = "`./install.sh --check` only checks, `--prefix=<folder>` makes \
-                            `<folder>` lengua's marketplace folder, with the plugin in its \
-                            `lengua/` folder, where what it replaces must be an earlier lengua \
-                            install, and `--link` also puts `lengua-mcp` in `~/.local/bin`, to \
-                            run programs from a shell.";
-
-/// What INSTALL.md adds on macOS: a browser marks what it downloads, and macOS won't start an
-/// unsigned program so marked, and whether to trust the archive is the user's, so the install
-/// script only says how.
-const MARK_MACOS: &str = " On macOS a browser marks what it downloads, and macOS won't start \
-                          the unsigned server or solvers so marked: the script says so, with \
-                          the command that clears the mark, and clears nothing itself, since \
-                          whether to trust this unsigned archive is yours to decide.";
-
-/// How to try the plugin for one session, on macOS.
-const TRY_MACOS: &str = "clear that mark from this folder first (`xattr -dr \
-                         com.apple.quarantine <this folder>`), then load it for one session:";
+/// INSTALL.md's words on macOS. A browser marks what it downloads, and macOS won't start an
+/// unsigned program so marked; whether to trust the archive is the user's, so lengua only says
+/// how to clear the mark.
+const MACOS: Words = Words {
+    install: "In this folder, run `server/lengua-mcp install`.",
+    options: "`--check` only checks, `--prefix <folder>` makes `<folder>` lengua's marketplace \
+              folder, with the plugin in its `lengua/` folder, where what it replaces must be an \
+              earlier lengua install, and `--link` also puts `lengua-mcp` in `~/.local/bin`, to \
+              run programs from a shell. On macOS a browser marks what it downloads, and macOS \
+              won't start the unsigned server or solvers so marked, the install included: if \
+              you trust this archive, clear the mark from this folder first, with `xattr -dr \
+              com.apple.quarantine <this folder>`. lengua clears nothing itself, since whether \
+              to trust this unsigned archive is yours to decide.",
+    destination: "`~/Library/Application Support/lengua/plugins/lengua`",
+    loader: "\
+This archive is for Apple silicon. On an Intel Mac, macOS refuses to start `server/lengua-mcp`
+before lengua can check the computer, and the shell prints `bad CPU type in executable`.",
+    try_it: "clear that mark from this folder first (`xattr -dr com.apple.quarantine <this \
+             folder>`), then load it for one session:",
+};
 
 /// The target Rust's host `host` builds for, and how people say it.
 pub fn target_of(host: &str) -> Option<(&'static str, &'static str)> {
@@ -708,35 +749,20 @@ compiler-rt,
     }
 }
 
-/// INSTALL.md, and the install script it names, which goes into `out` beside it.
-fn install(
-    root: &Path,
-    out: &Path,
-    target: &str,
-    version: &str,
-    described: &str,
-) -> Result<(), String> {
+/// INSTALL.md: what the archive holds, how its own lengua-mcp installs it, and what the system
+/// prints when it won't start lengua-mcp at all.
+fn install_md(out: &Path, target: &str, version: &str, described: &str) -> Result<(), String> {
     let windows = target.starts_with("windows-");
     let exe = if windows { ".exe" } else { "" };
-    let (install, mut options, mut destination) = if windows {
-        let script = root.join("scripts").join("install.ps1");
-        files::copy(&script, &out.join("install.ps1"))?;
-        let destination = "`%LOCALAPPDATA%\\lengua\\plugins\\lengua`";
-        (INSTALL_WINDOWS, OPTIONS_WINDOWS.to_owned(), destination)
+    let words = if windows {
+        &WINDOWS
+    } else if target.starts_with("macos-") {
+        &MACOS
     } else {
-        let script = out.join("install.sh");
-        files::copy(&root.join("scripts").join("install.sh"), &script)?;
-        ci::executable(&script)?;
-        let destination =
-            "`~/.local/share/lengua/plugins/lengua` (under `$XDG_DATA_HOME` when it is set)";
-        (INSTALL_UNIX, OPTIONS_UNIX.to_owned(), destination)
+        &LINUX
     };
-    let mut how = "load this folder for one session:";
-    if target.starts_with("macos-") {
-        destination = "`~/Library/Application Support/lengua/plugins/lengua`";
-        options.push_str(MARK_MACOS);
-        how = TRY_MACOS;
-    }
+    let (install, options, destination) = (words.install, words.options, words.destination);
+    let (loader, how) = (words.loader, words.try_it);
     let text = format!(
         "# lengua {version} for {described}
 
@@ -748,6 +774,8 @@ proofs need, in `solvers/`, and the licences of all of it, in `LICENSE` and `lic
 it to Claude Code when the `claude` command is installed (or says the two commands that do),
 and runs `lengua-mcp doctor`, which says whether lengua has what it needs here and what to do
 about anything missing. {options}
+
+{loader}
 
 To try it without installing, {how} `claude --plugin-dir <this folder>`. Other agent
 harnesses load it as an Agent Plugins plugin, from `plugin.json` and `mcp.json`. The archive
@@ -945,10 +973,10 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
     };
     write(&licences.join("README.md"), readme.text())?;
 
-    // What the archive is for, which the install script holds the computer to, and how to
+    // What the archive is for, which `lengua-mcp install` holds the computer to, and how to
     // install it.
     write(&out.join("TARGET"), format!("{target}\n"))?;
-    install(&root, &out, target, &version, described)?;
+    install_md(&out, target, &version, described)?;
 
     // Claude Code's own check of the plugin as the archive holds it, where claude is installed
     // (CI's runners have none; tests/manifests.rs holds the manifests to the Agent Plugins

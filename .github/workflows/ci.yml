@@ -523,14 +523,11 @@ jobs:
         run: bash scripts/ci/golden-diff.sh "$VIEW" golden/base golden/head | tee -a "$GITHUB_STEP_SUMMARY"
 
   # Each runner's release archive installed on a clean runner of its own system and CPU, as a
-  # user installs it: nothing of lengua's set up first (no checkout, no Rust, no solvers), the
-  # archive checked against its SHA-256 and unpacked in a fresh folder, installed by its own
-  # install script (Windows PowerShell's on Windows) where it installs for any user, then
-  # lengua-mcp doctor, and the release check, tests/release_check.rs built beside the archive,
-  # through a plain MCP client. Doctor and the check run with PATH cut to the system's own
-  # folders, so that nothing the runner's image adds there (Git for Windows' MinGW libraries,
-  # say) stands in for a library the archive should ship. The install script must also refuse
-  # to replace a folder that isn't lengua's, with --prefix.
+  # user installs it: nothing of lengua's set up first (no checkout, no Rust, no solvers). The
+  # release check, tests/release_check.rs built beside the archive, unpacks the archive, installs
+  # it with its own `lengua-mcp install` and checks it through a plain MCP client. Doctor and the
+  # check run with PATH cut to the system's own folders, so that nothing the runner's image adds
+  # there (Git for Windows' MinGW libraries, say) stands in for a library the archive should ship.
   install:
     name: install (${{ matrix.target }})
     needs: [plan, test]
@@ -551,99 +548,17 @@ jobs:
           path: downloaded
           merge-multiple: true
 
-      - name: Unpacked in a fresh folder
-        run: |
-          temp="$RUNNER_TEMP"
-          if [ "$RUNNER_OS" = Windows ]; then temp=$(cygpath -u "$RUNNER_TEMP"); fi
-          cd downloaded
-          ls -l
-          archive=$(ls lengua-*.tar.gz lengua-*.zip 2> /dev/null | head -n 1) || true
-          if [ -z "$archive" ]; then
-            echo "no archive was downloaded" >&2
-            exit 1
-          fi
-          if command -v sha256sum > /dev/null; then
-            sha256sum -c "$archive.sha256"
-          else
-            shasum -a 256 -c "$archive.sha256"
-          fi
-          mkdir -p "$temp/unpacked"
-          case "$archive" in
-            *.zip)
-              powershell -NoProfile -Command "Expand-Archive -LiteralPath '$(cygpath -w "$PWD/$archive")' -DestinationPath '$(cygpath -w "$temp/unpacked")'"
-              ;;
-            *) tar -C "$temp/unpacked" -xzf "$archive" ;;
-          esac
-          name=${archive%.tar.gz}
-          name=${name%.zip}
-          echo "UNPACKED=$temp/unpacked/$name" >> "$GITHUB_ENV"
-          # Where the install script puts the plugin for any user: lengua's own marketplace
-          # folder, in the user's data folder.
-          case "$RUNNER_OS" in
-            Windows) installed="$(cygpath -u "$LOCALAPPDATA")/lengua/plugins/lengua" ;;
-            macOS) installed="$HOME/Library/Application Support/lengua/plugins/lengua" ;;
-            *) installed="${XDG_DATA_HOME:-$HOME/.local/share}/lengua/plugins/lengua" ;;
-          esac
-          echo "INSTALLED=$installed" >> "$GITHUB_ENV"
-          # The system's own folders, and no others, for the programs the archive ships.
-          if [ "$RUNNER_OS" = Windows ]; then
-            windows=$(cygpath -u "${SYSTEMROOT:-C:\\Windows}")
-            echo "BARE_PATH=$windows/System32:$windows" >> "$GITHUB_ENV"
-          else
-            echo "BARE_PATH=/usr/bin:/bin" >> "$GITHUB_ENV"
-          fi
-          ls -la "$temp/unpacked/$name"
-
-      # --prefix (-Prefix) names lengua's marketplace folder: a lengua folder there that isn't
-      # an earlier install stays as it was, and the install fails.
-      - name: A folder that isn't lengua's, kept
-        run: |
-          temp="$RUNNER_TEMP"
-          if [ "$RUNNER_OS" = Windows ]; then temp=$(cygpath -u "$RUNNER_TEMP"); fi
-          mkdir -p "$temp/someone/lengua"
-          echo mine > "$temp/someone/lengua/notes.txt"
-          if [ "$RUNNER_OS" = Windows ]; then
-            if powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$UNPACKED/install.ps1")" \
-              -Prefix "$(cygpath -w "$temp/someone")"; then
-              echo "install.ps1 replaced a lengua folder that wasn't lengua's" >&2
-              exit 1
-            fi
-          elif "$UNPACKED/install.sh" --prefix="$temp/someone"; then
-            echo "install.sh replaced a lengua folder that wasn't lengua's" >&2
-            exit 1
-          fi
-          test "$(cat "$temp/someone/lengua/notes.txt")" = mine
-
-      # The install script ends with lengua-mcp doctor, whose exit code it keeps.
-      - name: Installed with its install script
-        run: |
-          if [ "$RUNNER_OS" = Windows ]; then
-            powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$UNPACKED/install.ps1")"
-          else
-            "$UNPACKED/install.sh"
-          fi
-          ls -la "$INSTALLED"
-
-      - name: lengua-mcp doctor
-        run: |
-          exe=""
-          if [ "$RUNNER_OS" = Windows ]; then exe=".exe"; fi
-          PATH="$BARE_PATH" "$INSTALLED/server/lengua-mcp$exe" doctor
-
-      - name: The release check, through a plain MCP client
-        run: |
-          exe=""
-          plugin="$INSTALLED"
-          if [ "$RUNNER_OS" = Windows ]; then
-            exe=".exe"
-            plugin=$(cygpath -w "$INSTALLED")
-          fi
-          check="downloaded/release-check$exe"
-          chmod +x "$check"
-          PATH="$BARE_PATH" LENGUA_RELEASE="$plugin" "$check" --ignored --exact \
-            the_archive_works_as_a_user_gets_it --nocapture 2>&1 | tee release-check.log
-          # It ran, rather than noting it had no archive.
-          grep -q "^release check: ${{ matrix.target }} passed" release-check.log
+      # The release check does what a user does, in order: it checks the archive against its
+      # SHA-256 and unpacks it in a fresh folder; has the archive's own `lengua-mcp install
+      # --prefix` refuse to replace a lengua folder that isn't lengua's; installs it with
+      # `lengua-mcp install` where it installs for any user, which ends with doctor, whose exit
+      # code it keeps; then runs doctor and checks the installed plugin through a plain MCP client
+      # (tests/release_check.rs, which also holds this step to its name).
+      - name: Unpacked, installed and checked as a user does
+        env:
+          LENGUA_RELEASE: downloaded
+          CHECK: downloaded/release-check${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: chmod +x "$CHECK" && "$CHECK" --ignored --exact the_archive_works_as_a_user_gets_it --nocapture 2>&1 | tee release-check.log
 
       - name: Keep the release check's log
         if: always()

@@ -24,6 +24,7 @@ pub mod gate;
 pub mod graph;
 pub mod hash;
 pub mod idea;
+pub mod install;
 pub mod lock;
 pub mod measure;
 pub mod names;

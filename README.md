@@ -135,11 +135,11 @@ the task crate in `xtask/`, with the Rust that `rust-toolchain.toml` pins (rustu
 `cargo xtask release` builds the release archive of the computer it runs on, one of the five lengua
 is built for: `dist/lengua-<version>-<target>.tar.gz` for `linux-x86_64`, `linux-aarch64` and
 `macos-aarch64`, or a `.zip` for `windows-x86_64` and `windows-aarch64`. It holds the plugin with
-its server built, the z3 and cvc5 that CI pins for that system and CPU, the licences of all of it,
-and `install.sh` (`install.ps1` on Windows), which refuses another system or CPU, copies the
-plugin into a marketplace folder of lengua's own, adds it to Claude Code when `claude` is
-installed, and ends with `lengua-mcp doctor`: one line for each thing lengua needs, and what to do
-about anything missing. CI's `release` run builds each archive on its own runner, then installs
+its server built, the z3 and cvc5 that CI pins for that system and CPU, and the licences of all
+of it. Its own server installs it: `server/lengua-mcp install` refuses another system or CPU,
+copies the plugin into a marketplace folder of lengua's own, adds it to Claude Code when `claude`
+is installed, and ends with `lengua-mcp doctor`: one line for each thing lengua needs, and what to
+do about anything missing. CI's `release` run builds each archive on its own runner, then installs
 it on a clean runner of the same system and CPU and checks it there through a plain MCP client
 (`tests/release_check.rs`). The archives are unsigned, and nothing is published.
 

@@ -1,7 +1,8 @@
 //! `lengua-mcp`: the lengua MCP server, speaking MCP over stdio; `lengua-mcp run`, which runs a
 //! checked program from a shell; `lengua-mcp check`, which attests a WebAssembly program's folder
-//! on any computer, as its idea's attester; and `lengua-mcp measure`, which runs a program in a
-//! process of its own and prints what it cost.
+//! on any computer, as its idea's attester; `lengua-mcp measure`, which runs a program in a
+//! process of its own and prints what it cost; and `lengua-mcp install`, which installs lengua
+//! from its unpacked release archive.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -18,6 +19,7 @@ const USAGE: &str = "usage: lengua-mcp [--data-dir <absolute path>] [--version]
 [--env NAME=value]... [[--] <argument>...]
        lengua-mcp check <program folder>
        lengua-mcp [--data-dir <absolute path>] doctor
+       lengua-mcp [--data-dir <absolute path>] install [--check] [--link] [--prefix <folder>]
        lengua-mcp wasm <main.wat> [-o <main.wasm>]
        lengua-mcp [--data-dir <absolute path>] measure [--in <folder>] [--stdin <file>] \
 [--stdout <file>] [--stderr <file>] [--env NAME=value]... [--uses <words>] [--network <line>] \
@@ -84,6 +86,9 @@ fn main() -> ExitCode {
         Ok(Command::Run(data_dir, request)) => return run_from_shell(&data_dir, &request),
         Ok(Command::Check(path)) => return attest(&path),
         Ok(Command::Doctor(data_dir)) => return doctor(data_dir.as_ref()),
+        Ok(Command::Install(data_dir, options)) => {
+            return ExitCode::from(lengua::install::install(&options, data_dir.as_ref()));
+        }
         Ok(Command::Wasm(path, output)) => return wasm(&path, output),
         Ok(Command::Measure(data_dir, request)) => return measure(data_dir.as_ref(), &request),
         Ok(Command::Version) => {
@@ -233,6 +238,7 @@ enum Command {
     Run(DataDir, ShellRun),
     Check(String),
     Doctor(Option<DataDir>),
+    Install(Option<DataDir>, lengua::install::Options),
     Wasm(PathBuf, Option<PathBuf>),
     Measure(Option<DataDir>, Box<lengua::measure::Request>),
     Version,
@@ -301,6 +307,10 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
                     return Err(format!("doctor takes no more words, not {extra:?}"));
                 }
                 return Ok(Command::Doctor(data_dir.or_else(DataDir::from_env)));
+            }
+            "install" => {
+                let options = lengua::install::Options::parse(args)?;
+                return Ok(Command::Install(data_dir, options));
             }
             "wasm" => {
                 let path = args.next().ok_or("wasm needs a main.wat")?;
@@ -394,5 +404,15 @@ mod tests {
             Ok(Command::Doctor(Some(data_dir))) if data_dir.path() == std::path::Path::new(folder)
         ));
         assert!(parse_args(words(&["doctor", "now"])).is_err());
+    }
+
+    /// `install` takes its own words, and the data folder `--data-dir` names before it.
+    #[test]
+    fn install_takes_its_own_words() {
+        assert!(matches!(
+            parse_args(words(&["install", "--check"])),
+            Ok(Command::Install(None, options)) if options.check
+        ));
+        assert!(parse_args(words(&["install", "--now"])).is_err());
     }
 }
