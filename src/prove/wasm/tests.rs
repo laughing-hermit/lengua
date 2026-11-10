@@ -924,7 +924,7 @@ fn counted_loop(times: u32) -> String {
 
 /// A run of 100,000 times round a loop ends with the proof's time, though it never asks the
 /// oracle about a branch: this is how a hash of the input, all straight-line code over unknown
-/// values, stays within the proof's time. `explore` asks every few thousand steps.
+/// values, stays within the proof's time. `explore` asks before every step.
 #[test]
 fn a_run_with_no_branch_on_its_inputs_keeps_the_proofs_time() {
     let module = module(&counted_loop(100_000), Policy::default());
