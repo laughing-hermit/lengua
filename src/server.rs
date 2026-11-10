@@ -972,7 +972,8 @@ impl LenguaServer {
 
     /// The checking job for these files, running or ended, unless it ended with failed tests,
     /// which run again, or passed them but lengua.lock no longer records the code it checked,
-    /// or ended with proofs that stopped short and `further` asks to prove on.
+    /// or ended with proofs that stopped short and `further` asks to prove on, or ended without
+    /// finding wrong the module lengua.lock records as found wrong, which a new job replays.
     async fn current_checking(
         &self,
         folder: &ProgramFolder,
@@ -1013,6 +1014,18 @@ impl LenguaServer {
                         && proofs.bounded.iter().any(|bounded| bounded.more)
                 });
             if further && ended && short {
+                return None;
+            }
+            // A wrong verdict on this very module that the lock records and the ended job never
+            // found, as another server's proof records one, or another build's of these files: a
+            // new job replays it, so check says what run does.
+            let recorded_wrong = lock
+                .as_ref()
+                .and_then(|lock| lock.proofs.as_ref())
+                .is_some_and(|proofs| {
+                    proofs.module_sha256 == checking.module && !proofs.wrong.is_empty()
+                });
+            if ended && recorded_wrong && !checking.found.lock().is_ok_and(|found| found.wrong) {
                 return None;
             }
         }

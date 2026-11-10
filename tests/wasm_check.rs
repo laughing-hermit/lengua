@@ -8,8 +8,9 @@
 //! main.wat's proofs through check: add's proof named in the reply and kept in the lock, a proof
 //! by length that stops short kept as far as it went and proven on with prove_further, a planted
 //! wrong constant found as a counterexample, a wrong verdict that outlasts a change of lengua's
-//! own build, one found once another build stamped the same files, which goes on to that build's
-//! module, and a program the model refuses left tested, not proven, with the reason.
+//! own build, one recorded after done, which the next check replays, one found once another
+//! build stamped the same files, which goes on to that build's module, and a program the model
+//! refuses left tested, not proven, with the reason.
 
 mod common;
 
@@ -1072,6 +1073,45 @@ async fn a_wrong_verdict_outlasts_a_change_of_lengua_s_build() {
     let hash = Sha256Hex::of(&module);
     let proofs = format!("\n[proofs]\nmodule_sha256 = \"{hash}\"\n");
     assert!(lock.contains(&proofs), "{lock}");
+    let ran = run_from_shell(&session, program.path(), &["2", "3"]);
+    assert!(refused_as_wrong(&ran), "{ran:?}");
+    session.service.cancel().await.expect("close the session");
+}
+
+/// A wrong verdict lengua.lock comes to record about the very module a check took to done, as
+/// another server's proof of the same folder, or another build's, records one, is news to that
+/// check: the next check, in the same session, starts over and replays the lock's record, says
+/// tests_failed with B1's line and takes lengua's entry out of idea.md, where the ended job alone
+/// would say done while run refuses.
+#[tokio::test]
+async fn a_wrong_verdict_recorded_after_done_is_the_next_check_s_news() {
+    let session = Session::start(Protocol::Discover).await;
+    let program = add(&session).await;
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let idea = program.read("idea.md").expect("idea.md");
+    assert_eq!(trust::lengua_entries(&idea).len(), 1, "{idea}");
+    let key = signing_key(&session);
+    let mut lock = lengua::lock::read(program.path(), Some(&key))
+        .expect("a valid lock")
+        .expect("a lock");
+    let stamp = lock.code.as_ref().expect("the code's stamp");
+    let module = stamp.module_sha256.clone();
+    lock.proofs = Some(Box::new(lengua::lock::ProofStamp {
+        module_sha256: module,
+        proven: Vec::new(),
+        bounded: Vec::new(),
+        solvers: "z3 and cvc5".to_owned(),
+        wrong: vec![("B1".to_owned(), FOUND.to_owned())],
+        unproven: Vec::new(),
+    }));
+    lengua::lock::write(program.path(), &lock, &key).expect("write the lock");
+    let again = session.settle(&program).await;
+    assert_eq!(again["state"], "tests_failed", "{again}");
+    let replayed = format!("generated B1: {FOUND}");
+    assert!(any_line(&again["problems"], &replayed), "{again}");
+    let idea = program.read("idea.md").expect("idea.md");
+    assert!(trust::lengua_entries(&idea).is_empty(), "{idea}");
     let ran = run_from_shell(&session, program.path(), &["2", "3"]);
     assert!(refused_as_wrong(&ran), "{ran:?}");
     session.service.cancel().await.expect("close the session");
