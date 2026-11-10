@@ -6,8 +6,9 @@
 //! runner of its own so that the two run at once. A job's checkout is shallow unless it must read
 //! other commits: a bench holds each change to KNOWN_BEHIND in the history to the list before it
 //! (the list may only shrink) and reads any commit it is measured against, and a golden leg reads
-//! the commit it doesn't run. The step's outputs are `matrix`, and `bench`, whether a bench runs,
-//! which needs the WebAssembly builds of C, C++ and Rust.
+//! the commit it doesn't run. The step's outputs are `matrix`; `bench`, whether a bench runs,
+//! which needs the WebAssembly builds of C, C++ and Rust; and `solver`, whether the solver mode
+//! runs, which needs z3 built as WebAssembly.
 
 use std::process::{Command, Stdio};
 
@@ -175,6 +176,16 @@ pub fn plan(
     Ok(jobs)
 }
 
+/// The step's outputs for `jobs`: the matrix, whether a bench runs and whether the solver mode
+/// runs, which need the bench-wasm and the solver-wasm jobs.
+pub fn outputs(jobs: &[Job]) -> String {
+    let listed: Vec<String> = jobs.iter().map(Job::json).collect();
+    let include = listed.join(",");
+    let bench = jobs.iter().any(|job| job.mode == "bench");
+    let solver = jobs.iter().any(|job| job.mode == "solver");
+    format!("matrix={{\"include\":[{include}]}}\nbench={bench}\nsolver={solver}\n")
+}
+
 /// The full hash of `commit`, as GitHub's API gives it, through gh (with `GH_TOKEN`).
 fn full_hash(commit: &str) -> Result<String, String> {
     let repository = ci::setting("GITHUB_REPOSITORY");
@@ -201,10 +212,7 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
         golden_base_run: ci::setting("GOLDEN_BASE_RUN"),
     };
     let jobs = plan(&asked, &runners(TARGETS)?, full_hash)?;
-    let listed: Vec<String> = jobs.iter().map(Job::json).collect();
-    let include = listed.join(",");
-    let bench = jobs.iter().any(|job| job.mode == "bench");
-    let outputs = format!("matrix={{\"include\":[{include}]}}\nbench={bench}\n");
+    let outputs = outputs(&jobs);
     print!("{outputs}");
     ci::append("GITHUB_OUTPUT", &outputs)?;
     Ok(0)
@@ -277,6 +285,32 @@ mod tests {
         };
         let refused = plan(&nothing, &listed(), none).expect_err("nothing to run");
         assert_eq!(refused, "Nothing to run for: solaris-sparc in release");
+    }
+
+    /// The solver mode runs on the targets a dispatch names, and its outputs say that it runs, so
+    /// that z3's WebAssembly build does; the suite's say neither a bench nor the solver mode runs.
+    #[test]
+    fn the_solver_mode_asks_for_z3_s_build() {
+        let asked = Asked {
+            event: "workflow_dispatch".to_owned(),
+            mode: "solver".to_owned(),
+            targets: "linux-x86_64".to_owned(),
+            ..Asked::default()
+        };
+        let jobs = plan(&asked, &listed(), none).expect("a plan");
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(
+            outputs(&jobs),
+            "matrix={\"include\":[{\"target\":\"linux-x86_64\",\"runner\":\"ubuntu-24.04\",\
+             \"mode\":\"solver\",\"ref\":\"\",\"label\":\"\",\"depth\":1}]}\n\
+             bench=false\nsolver=true\n"
+        );
+        let push = Asked {
+            event: "push".to_owned(),
+            ..Asked::default()
+        };
+        let suite = outputs(&plan(&push, &listed(), none).expect("a plan"));
+        assert!(suite.ends_with("\nbench=false\nsolver=false\n"), "{suite}");
     }
 
     /// The goldens run a head and a base leg on linux-x86_64, the base at its full hash, or the

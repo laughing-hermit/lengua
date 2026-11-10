@@ -1,7 +1,10 @@
 # What every runner installs, pinned by SHA-256 (`cargo xtask fetch` and the release read this).
-# Columns: tool, target, url, sha256. The digests are the ones GitHub shows for each release asset.
+# Columns: tool, target, url, sha256. The digests are the ones GitHub shows for each release asset,
+# and for z3's source the archive's, as sha256sum gives it.
 # z3 4.16.0 and cvc5 1.3.4, both native builds on all five targets; and wasi-sdk 34, which compiles
-# the benchmark's C and C++ to WebAssembly once, on linux-x86_64, for every runner (`cargo xtask bench-wasm`).
+# the benchmark's C and C++ to WebAssembly once, on linux-x86_64, for every runner (`cargo xtask bench-wasm`),
+# and z3 too (`cargo xtask solver-wasm z3`): from z3-source, the archive of the commit z3's tag
+# z3-4.16.0 names, ddb49568d3520e99799e364fb22f35fc67d887b1.
 z3	linux-x86_64	https://github.com/Z3Prover/z3/releases/download/z3-4.16.0/z3-4.16.0-x64-glibc-2.39.zip	7288c49a5bd6dbafd7b0b0d1f65956b91672da24b08f09242919af159be3418e
 z3	linux-aarch64	https://github.com/Z3Prover/z3/releases/download/z3-4.16.0/z3-4.16.0-arm64-glibc-2.38.zip	87fcd963d3eecb0f12cf1c3ef0ad74e84a3a7bd3caed5d94445645ef94ae6274
 z3	macos-aarch64	https://github.com/Z3Prover/z3/releases/download/z3-4.16.0/z3-4.16.0-arm64-osx-15.7.3.zip	41828fa07d5cb77bfaee326e8e6dac074f26329c09c633f9e66012bb917cf8ae
@@ -13,3 +16,4 @@ cvc5	macos-aarch64	https://github.com/cvc5/cvc5/releases/download/cvc5-1.3.4/cvc
 cvc5	windows-x86_64	https://github.com/cvc5/cvc5/releases/download/cvc5-1.3.4/cvc5-Win64-x86_64-static.zip	279fe7e95810cfb62433fcfc2932f35325a665f32d3697ff33f75e31d5c6a179
 cvc5	windows-aarch64	https://github.com/cvc5/cvc5/releases/download/cvc5-1.3.4/cvc5-Win64-arm64-static.zip	2fd3e9c9aa6deb64fd1cd07ff20fe074985c306394d9003f8e278e10fc372360
 wasi-sdk	linux-x86_64	https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz	b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
+z3-source	wasm32-wasip1	https://github.com/Z3Prover/z3/archive/ddb49568d3520e99799e364fb22f35fc67d887b1.tar.gz	34deac6d0d46002b1040c56a51c4385ebb4ea56baa95fa8dd66e315a25b0cfa6

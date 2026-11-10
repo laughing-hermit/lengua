@@ -27,6 +27,9 @@ sha2 = "0.10.9"
 tar = { version = "0.4.46", default-features = false }
 # The release's staging folder, and the tests' folders.
 tempfile = "3"
+# The solvers' WebAssembly modules checked as lengua-mcp's engine reads them: the validator
+# Wasmtime 50.0.1 uses, at lengua-mcp's pin and with its features.
+wasmparser = { version = "=0.261.0", default-features = false, features = ["std", "validate", "features", "simd"] }
 # zip archives, deflated only: the solvers' downloads, and Windows's release archive.
 zip = { version = "9.5", default-features = false, features = ["deflate-flate2"] }
 

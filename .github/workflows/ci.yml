@@ -14,10 +14,13 @@ name: ci
 #   suite), ignored (the slow ignored tests, optionally one folder's check), golden (the checker's
 #   and the prover's recordings of every program, made at two commits and compared), bench (the
 #   gate: lengua against C, C++ and Rust compiled to WebAssembly and built natively, and against
-#   an earlier commit's programs) or release (each runner's archive, built there, then installed
-#   and checked on a clean runner of the same system and CPU).
+#   an earlier commit's programs), release (each runner's archive, built there, then installed
+#   and checked on a clean runner of the same system and CPU) or solver (z3 built as WebAssembly,
+#   then taken and checked by each runner named).
 # - A bench's C, C++ and Rust are compiled to WebAssembly once, by the bench-wasm job on
 #   linux-x86_64, and every runner's bench measures those same modules.
+# - z3 is built from its source as WebAssembly once, by the solver-wasm job on linux-x86_64, and
+#   every runner of the solver mode takes that same module.
 # - `filter` matches test *names* only (libtest's filters, after `--`). To run a test *file*, name
 #   it in `test_files` (`lib` is the library's own tests): each becomes `--test <name>`. A run with
 #   a filter or files that matched no test fails, so a gate cannot pass by running nothing.
@@ -47,7 +50,7 @@ on:
         type: string
         default: "all"
       mode:
-        description: "compile, test, ignored, golden, bench or release (golden: on linux-x86_64 alone; bench and release: all five)"
+        description: "compile, test, ignored, golden, bench, release or solver (golden: on linux-x86_64 alone; bench and release: all five; solver: z3 built as WebAssembly on linux-x86_64, then checked on the targets named)"
         type: choice
         options:
           - compile
@@ -56,6 +59,7 @@ on:
           - golden
           - bench
           - release
+          - solver
         default: compile
       filter:
         description: "Only the tests whose names contain this (libtest's filters: several, separated by spaces)"
@@ -121,6 +125,7 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       bench: ${{ steps.matrix.outputs.bench }}
+      solver: ${{ steps.matrix.outputs.solver }}
     steps:
       - uses: actions/checkout@v4
 
@@ -245,12 +250,85 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
+  # z3 built from its source as a WebAssembly module of WASI preview 1, which lengua-mcp's solver
+  # engine runs, with the source, wasi-sdk and the patches xtask pins and keeps (`cargo xtask
+  # solver-wasm z3`), once, on linux-x86_64, when the solver mode runs. A build takes about 25
+  # minutes. The module is kept in the cache under the SHA-256 of what it is made from (`cargo
+  # xtask solver-wasm-key z3`: the source, wasi-sdk, the patches, the options and the flags), so
+  # that a later run of the same recipe takes it from there, and as an artifact, which the solver
+  # mode's runners take.
+  solver-wasm:
+    name: solver-wasm
+    needs: plan
+    if: ${{ needs.plan.outputs.solver == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust
+        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
+
+      - name: The module's key
+        id: key
+        run: key=$(cargo xtask solver-wasm-key z3) && echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: The module, kept
+        id: kept
+        uses: actions/cache@v4
+        with:
+          path: ~/solver-wasm
+          key: solver-wasm-z3-${{ steps.key.outputs.key }}
+
+      # wasi-sdk, which only a build needs.
+      - uses: actions/cache@v4
+        if: ${{ steps.kept.outputs.cache-hit != 'true' }}
+        with:
+          path: ~/wasi-sdk
+          key: wasi-sdk-${{ hashFiles('xtask/tools.tsv') }}
+
+      - name: wasi-sdk
+        if: ${{ steps.kept.outputs.cache-hit != 'true' }}
+        run: cargo xtask fetch linux-x86_64 wasi
+
+      # Built, or kept when the cache had it; then checked: the solver engine's features, WASI
+      # preview 1's functions alone, `_start` and a memory that may grow to 4 GiB.
+      - name: z3 as WebAssembly
+        run: cargo xtask solver-wasm z3 ~/solver-wasm
+
+      # A run's every attempt keeps one module, the last built.
+      - name: Keep the module
+        uses: actions/upload-artifact@v4
+        with:
+          name: solver-wasm-${{ github.run_number }}
+          path: |
+            ~/solver-wasm/z3.wasm
+            ~/solver-wasm/z3.recipe
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Keep the build's logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solver-wasm-logs-${{ github.run_number }}
+          path: |
+            target/solver-build/z3/configure.log
+            target/solver-build/z3/build.log
+            target/solver-build/z3/build/CMakeFiles/CMakeConfigureLog.yaml
+          retention-days: 7
+          if-no-files-found: ignore
+
   test:
     name: ${{ matrix.mode }} (${{ matrix.target }})${{ matrix.label && format(' {0}', matrix.label) || '' }}
-    # A bench needs the WebAssembly builds; every other job only waits for bench-wasm to be
-    # skipped, and none runs when it failed.
-    needs: [plan, bench-wasm]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.bench-wasm.result != 'failure' }}
+    # A bench needs the WebAssembly builds, and the solver mode z3's; every other job only waits
+    # for bench-wasm and solver-wasm to be skipped, and none runs when one failed.
+    needs: [plan, bench-wasm, solver-wasm]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.bench-wasm.result != 'failure' && needs.solver-wasm.result != 'failure' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -321,6 +399,19 @@ jobs:
       - name: z3 and cvc5, pinned by checksum
         if: ${{ matrix.mode != 'compile' && matrix.mode != 'release' }}
         run: cargo xtask fetch ${{ matrix.target }} solvers
+
+      # z3 as WebAssembly, the one module the solver-wasm job built for every runner, checked here
+      # as it was there.
+      - name: z3 as WebAssembly, from the solver-wasm job
+        if: ${{ matrix.mode == 'solver' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: solver-wasm-${{ github.run_number }}
+          path: ${{ runner.temp }}/solver-wasm
+
+      - name: z3's module, checked on this runner
+        if: ${{ matrix.mode == 'solver' }}
+        run: cargo xtask solver-wasm-check "${{ runner.temp }}/solver-wasm/z3.wasm"
 
       # --keep-going: every target's errors in one run, not the first target's alone. A release
       # is built from a commit whose suite already ran.
@@ -544,11 +635,12 @@ jobs:
           if-no-files-found: ignore
 
   # One check that says whether the whole run passed: plan, format and test must succeed;
-  # golden-diff runs in the golden mode only, bench-wasm when a bench runs, and install in the
-  # release mode only, so each may be skipped (`cargo xtask gate`).
+  # golden-diff runs in the golden mode only, bench-wasm when a bench runs, solver-wasm in the
+  # solver mode only, and install in the release mode only, so each may be skipped (`cargo xtask
+  # gate`).
   gate:
     name: gate
-    needs: [plan, format, bench-wasm, test, golden-diff, install]
+    needs: [plan, format, bench-wasm, solver-wasm, test, golden-diff, install]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -565,5 +657,6 @@ jobs:
           RESULTS: ${{ needs.plan.result }} ${{ needs.format.result }} ${{ needs.test.result }}
           GOLDEN_DIFF: ${{ needs.golden-diff.result }}
           BENCH_WASM: ${{ needs.bench-wasm.result }}
+          SOLVER_WASM: ${{ needs.solver-wasm.result }}
           INSTALL: ${{ needs.install.result }}
         run: cargo xtask gate

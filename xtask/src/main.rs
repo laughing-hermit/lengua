@@ -1,5 +1,5 @@
 //! lengua's tooling, in Rust: the tasks CI's workflow runs, the release archive, the goldens'
-//! comparison and the bench's WebAssembly builds. `cargo xtask <task>` runs one (the alias in
+//! comparison, the bench's WebAssembly builds and z3's. `cargo xtask <task>` runs one (the alias in
 //! .cargo/config.toml); each task does what one step of ci.yml needs, or what a person runs by
 //! hand. A task that fails says why on its error output and exits 1, or with the exit code of
 //! the program it ran for the step.
@@ -17,6 +17,7 @@ mod plan;
 mod plugin;
 mod release;
 mod skips;
+mod solver;
 mod stall;
 mod test;
 
@@ -44,6 +45,12 @@ Tasks:
   bench               the gate against C, C++ and Rust (LENGUA_BENCH_*)
   bench-report <report>
                       the bench's report, in the job's summary
+  solver-wasm z3 <folder>
+                      z3 built from its source as WebAssembly (WASI_SDK), or kept when the
+                      folder holds the module of the same recipe; then checked
+  solver-wasm-key z3  the SHA-256 of what z3's module is made from, CI's cache key
+  solver-wasm-check <module>
+                      a solver's module checked: its features, imports and exports
   golden-download     both commits' recordings (RUN, BASE_RUN)
   golden-diff raw|ledger <base dir> <head dir>
                       the two commits' recordings compared, in the job's summary
@@ -70,6 +77,9 @@ fn main() -> ExitCode {
         "bench-wasm" => bench::wasm(rest),
         "bench" => bench::bench(rest),
         "bench-report" => bench::report(rest),
+        "solver-wasm" => solver::wasm(rest),
+        "solver-wasm-key" => solver::key(rest),
+        "solver-wasm-check" => solver::check(rest),
         "golden-download" => golden::download(rest),
         "golden-diff" => golden::diff(rest),
         "gate" => gate::task(rest),
