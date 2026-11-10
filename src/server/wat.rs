@@ -711,8 +711,7 @@ fn runnable(
     })?;
     let (uses, network) =
         idea::grants(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
-    let secrets =
-        idea::secrets(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
+    let secrets = idea::secrets(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
     if !env.is_empty() && !uses.contains(&Use::Environment) {
         return Err(format!(
             "{IDEA_FILE} doesn't use the environment, so the program gets no environment \

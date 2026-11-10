@@ -16,10 +16,9 @@ fn made(word: u32) -> Option<(Made, &'static str)> {
         // Reserved, unallocated, and SVE, which the engine doesn't make.
         0b0000..=0b0011 => Some((Made::Unread, "a word outside the instructions lengua reads")),
         // Data processing with an immediate: `adr` and `adrp` give an address in the code.
-        0b1000 | 0b1001 if word & 0x1F00_0000 == 0x1000_0000 => Some((
-            Made::Table,
-            if word >> 31 == 0 { "adr" } else { "adrp" },
-        )),
+        0b1000 | 0b1001 if word & 0x1F00_0000 == 0x1000_0000 => {
+            Some((Made::Table, if word >> 31 == 0 { "adr" } else { "adrp" }))
+        }
         0b1010 | 0b1011 => branch(word),
         // Data processing with registers: the divisions.
         0b0101 | 0b1101 if word & 0x7FE0_F800 == 0x1AC0_0800 => Some((

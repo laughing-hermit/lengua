@@ -202,7 +202,9 @@ impl Code {
             .map(Iterator::collect)
             .unwrap_or_default();
         if map.is_empty() {
-            return Err("the engine kept no map from its code to the module's operators".to_owned());
+            return Err(
+                "the engine kept no map from its code to the module's operators".to_owned(),
+            );
         }
         Ok(Self {
             text: module.text().to_vec(),
@@ -252,7 +254,8 @@ const fn allowed(takes: Takes, made: Made) -> bool {
 /// not have.
 #[must_use]
 pub fn judge(cpu: Cpu, code: &Code, taken: &[Taken]) -> Judged {
-    let by_offset: BTreeMap<u64, &Taken> = taken.iter().map(|taken| (taken.offset, taken)).collect();
+    let by_offset: BTreeMap<u64, &Taken> =
+        taken.iter().map(|taken| (taken.offset, taken)).collect();
     let mut with_code = BTreeSet::new();
     let mut found: BTreeMap<(u64, Made), String> = BTreeMap::new();
     let mut instructions = 0_usize;

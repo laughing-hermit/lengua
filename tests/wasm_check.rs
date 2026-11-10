@@ -1351,7 +1351,10 @@ async fn the_machine_code_of_a_secret_idea_is_checked_on_this_cpu() {
         // no longer is what lengua.lock names.
         let (code, said) = attest(program.path());
         assert_ne!(code, Some(0), "{said}");
-        assert!(said.contains("on x86-64, the engine compiles this `i8x16.shl`"), "{said}");
+        assert!(
+            said.contains("on x86-64, the engine compiles this `i8x16.shl`"),
+            "{said}"
+        );
     } else {
         assert_eq!(report["state"], "done", "{report}");
         assert!(any_line(&report["tests"], &kept), "{report}");

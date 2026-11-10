@@ -56,10 +56,7 @@ fn aarch64_code() -> Code {
 /// operator, and only then: the same code passes when no operator takes one, or another does.
 #[test]
 fn a_branch_is_refused_for_the_operator_it_was_made_for() {
-    for (cpu, code) in [
-        (Cpu::X86_64, x86_64_code()),
-        (Cpu::Aarch64, aarch64_code()),
-    ] {
+    for (cpu, code) in [(Cpu::X86_64, x86_64_code()), (Cpu::Aarch64, aarch64_code())] {
         assert!(refused(cpu, &code, &[]).is_empty(), "{cpu:?}");
         assert_eq!(
             refused(cpu, &code, &[taken(10, Takes::Plain)]),
@@ -90,10 +87,7 @@ fn a_branch_is_refused_for_the_operator_it_was_made_for() {
 /// code of a call of main.wat's own function may not, and nor may code that computes.
 #[test]
 fn an_operators_code_may_do_what_the_secret_rule_holds_of_it() {
-    for (cpu, code) in [
-        (Cpu::X86_64, x86_64_code()),
-        (Cpu::Aarch64, aarch64_code()),
-    ] {
+    for (cpu, code) in [(Cpu::X86_64, x86_64_code()), (Cpu::Aarch64, aarch64_code())] {
         for takes in [Takes::Choice, Takes::Memory] {
             assert!(
                 refused(cpu, &code, &[taken(10, takes)]).is_empty(),
@@ -315,7 +309,10 @@ fn a_lane_shift_by_a_secret_amount_is_refused_where_its_code_reads_a_table() {
         Some(Cpu::Aarch64) => {
             let passed = result.unwrap_or_else(|refused| panic!("{:#?}", shown(&refused)));
             assert_eq!(passed.cpu, Cpu::Aarch64);
-            assert!(passed.with_code > 0 && passed.instructions > 0, "{passed:?}");
+            assert!(
+                passed.with_code > 0 && passed.instructions > 0,
+                "{passed:?}"
+            );
         }
         None => panic!("lengua is built for x86-64 and ARM64"),
     }
@@ -331,7 +328,10 @@ fn a_lane_shift_by_a_constant_passes() {
          3)))",
     );
     let passed = constant.unwrap_or_else(|refused| panic!("{:#?}", shown(&refused)));
-    assert!(passed.with_code > 0 && passed.instructions > 0, "{passed:?}");
+    assert!(
+        passed.with_code > 0 && passed.instructions > 0,
+        "{passed:?}"
+    );
     let (_, varying) = planted(
         "(v128.store (global.get $text) (i8x16.shl (v128.load (global.get $text)) (local.get \
          $got)))",
@@ -421,7 +421,14 @@ fn secret_equal_s_machine_code_passes() {
         .iter()
         .map(|taken| taken.name.as_str())
         .collect();
-    for name in ["i32.xor", "i32.or", "i32.eqz", "i32.sub", "i32.and", "i32.store"] {
+    for name in [
+        "i32.xor",
+        "i32.or",
+        "i32.eqz",
+        "i32.sub",
+        "i32.and",
+        "i32.store",
+    ] {
         assert!(names.contains(&name), "{name} isn't in {names:?}");
     }
     assert!(
@@ -441,8 +448,15 @@ fn secret_equal_s_machine_code_passes() {
     .unwrap_or_else(|refused| panic!("{:#?}", shown(&refused)));
     assert_eq!(Some(passed.cpu), Cpu::here());
     assert_eq!(passed.operators, report.secret_operators.len());
-    assert!(passed.with_code > 0 && passed.instructions > 0, "{passed:?}");
-    assert!(passed.line().contains(passed.cpu.name()), "{}", passed.line());
+    assert!(
+        passed.with_code > 0 && passed.instructions > 0,
+        "{passed:?}"
+    );
+    assert!(
+        passed.line().contains(passed.cpu.name()),
+        "{}",
+        passed.line()
+    );
     let (_, public) = checked(text, &[]);
     assert!(public.secret_operators.is_empty());
 }
