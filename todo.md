@@ -411,7 +411,7 @@ Runs, as they land:
 | W12 | 42393960971 (the benchmark, its workloads and the gate, at 9a549b3: the suite on all five runners and the gate, green); 42661776298 (the first gate run on all five runners: each runner's KNOWN_BEHIND, from its own KNOWN_BEHIND-<runner>.txt, at 2bad55a); on main with W11 |
 | W13 | Stopped by the safety filter, left for the owner (below) |
 | W14 | 42387284972 (the suite on all five runners and the gate at 83641b5); 42387777039 (release at 7835d9a: the five archives built, each installed on a clean runner of its system and CPU, doctor and the release check, green); main at 7835d9a. The agent's test in this session, 2026-11-07, with that Linux x86-64 archive: below |
-| W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
+| W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](docs/history/PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
 
 ## Superseded by the pivot
 
