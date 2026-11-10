@@ -28,7 +28,11 @@ Given such a folder, it:
    differs doesn't run until `check` tests it;
 2. runs it on Wasmtime, in lengua's own WASI host, in this process, with this shell's standard
    input, output and error. The working folder is the current one, or the existing folder `--in`
-   names, from the current folder when it isn't absolute, never `/`. The words after the program
+   names, from the current folder when it isn't absolute, never `/`. For a program whose idea uses
+   `files`, it is never lengua's data folder or its folder of compiled modules, a folder that
+   holds one of them, such as the home folder, or one inside them, and on Linux never `/proc`,
+   `/sys` or `/dev` or a folder beneath them: such a program reads and writes everything in its
+   working folder. The words after the program
    folder are the program's arguments, and one that starts with `-` goes after `--`.
 
 Any other folder it refuses, saying why on standard error, and exits with 125. To check a folder

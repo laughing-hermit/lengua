@@ -295,11 +295,11 @@ pub const MAX_AT_ONCE: u32 = 4096;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Network {
     /// The connections it gets, in order. lengua makes each before the program starts and
-    /// hands it over as file descriptors 4, 5 and on, so the program never connects by itself
+    /// hands it over as file descriptors 5, 6 and on, so the program never connects by itself
     /// and holds no network of its own, on every kind of computer.
     pub connections: Vec<Endpoint>,
     /// The port it serves on. lengua binds it and hands the program the listening socket as
-    /// file descriptor 3, so the program never binds or listens itself.
+    /// file descriptor 4, so the program never binds or listens itself.
     pub listens: Option<u16>,
     /// Whether other computers may connect to the port it serves on, which its idea says with
     /// `for any computer`: lengua then listens on every address of this computer, not only the
@@ -414,7 +414,7 @@ pub enum HostKind {
 #[must_use]
 pub fn host_kind(host: &str) -> HostKind {
     if let Ok(address) = host.parse::<std::net::IpAddr>() {
-        return if address.is_loopback() || address.is_unspecified() {
+        return if crate::connect::this_computer(address) {
             HostKind::ThisComputer
         } else {
             HostKind::Other
@@ -422,6 +422,18 @@ pub fn host_kind(host: &str) -> HostKind {
     }
     if host == "localhost" || host.ends_with(".localhost") {
         return HostKind::ThisComputer;
+    }
+    // A name's last label is never a number: a system's older parsing reads `2130706433`,
+    // `127.1`, `0x7f.1` and `0177.0.0.1` as addresses, the loopback's here, where DNS has no
+    // such names.
+    let number = |label: &str| {
+        let hex = label.strip_prefix("0x");
+        (!label.is_empty() && label.bytes().all(|byte| byte.is_ascii_digit()))
+            || hex.is_some_and(|digits| digits.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    };
+    let last = host.strip_suffix('.').unwrap_or(host).rsplit('.').next();
+    if last.is_some_and(number) {
+        return HostKind::NotAName;
     }
     let label_ok = |label: &str| {
         (1..=63).contains(&label.len())
@@ -1375,7 +1387,19 @@ impl Parser {
     /// Returns the title and description when the frontmatter is valid. `end` is the line of its
     /// closing `---`, from 0.
     fn frontmatter(&mut self, keys: &Keys, end: usize) -> Option<(String, Option<String>)> {
-        let yaml = keys.lines[1..end].join("\n");
+        // What the idea's hash leaves out, lengua's own record of trust, is no part of what
+        // lengua reads: left out here too, an alias of an anchor there names nothing, and the
+        // YAML is refused, so nothing read can change with the hash staying as it is.
+        let unhashed = |line: &usize| {
+            keys.blocks.iter().any(|block| {
+                crate::trust::TRUST_KEYS.contains(&block.key.as_str()) && block.holds(*line)
+            })
+        };
+        let yaml = (1..end)
+            .filter(|line| !unhashed(line))
+            .map(|line| keys.lines[line])
+            .collect::<Vec<_>>()
+            .join("\n");
         // Only `true` and `false` are booleans, so a parameter may be called `n` or `y`.
         let parsed = if yaml.trim().is_empty() {
             Ok(Frontmatter::default())

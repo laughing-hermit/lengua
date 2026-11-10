@@ -285,12 +285,14 @@ impl Socket {
         }
     }
 
-    /// `sock_shutdown`: `how` holds `SHUT_RD`, `SHUT_WR` or both.
+    /// `sock_shutdown`: `how` holds `SHUT_RD`, `SHUT_WR` or both. Over TLS, the end of what the
+    /// program sends waits for the connection to take it for two seconds at most, and never
+    /// past the run's deadline in `limits`.
     ///
     /// # Errors
     ///
     /// `INVAL` for anything else.
-    pub fn shutdown(&mut self, how: u8) -> Result<(), Fail> {
+    pub fn shutdown(&mut self, how: u8, limits: &Limits) -> Result<(), Fail> {
         if how == 0 || how & !(sock::SHUT_RD | sock::SHUT_WR) != 0 {
             return Err(Fail::Errno(errno::INVAL));
         }
@@ -305,9 +307,12 @@ impl Socket {
                     let _ = stream.shutdown(Shutdown::Write);
                 }
                 Link::Place(place, runtime) => {
-                    let _ = runtime.block_on(async {
-                        tokio::time::timeout(Duration::from_secs(2), place.shutdown()).await
-                    });
+                    // Past the deadline, or stopped, it gets a moment and no more.
+                    let wait = limits
+                        .slice(Duration::from_secs(2))
+                        .unwrap_or(Duration::from_millis(1));
+                    let _ = runtime
+                        .block_on(async { tokio::time::timeout(wait, place.shutdown()).await });
                 }
                 Link::Ended => {}
             }
@@ -316,8 +321,8 @@ impl Socket {
     }
 
     /// Closes it: what the program sent ends there, and what has arrived unread is dropped.
-    pub fn close(&mut self) {
-        let _ = self.shutdown(sock::SHUT_RD | sock::SHUT_WR);
+    pub fn close(&mut self, limits: &Limits) {
+        let _ = self.shutdown(sock::SHUT_RD | sock::SHUT_WR, limits);
         self.drain();
     }
 
@@ -556,8 +561,8 @@ pub fn sock_send(
 ///
 /// `INVAL` for a `how` that isn't one.
 pub fn sock_shutdown(host: &mut Host, fd: u32, how: u8) -> Result<(), Fail> {
-    let (socket, _) = socket(host, fd)?;
-    socket.shutdown(how)
+    let (socket, limits) = socket(host, fd)?;
+    socket.shutdown(how, limits)
 }
 
 #[cfg(test)]
@@ -633,7 +638,7 @@ mod tests {
             ended.write(b"x", &limits),
             Err(Fail::Errno(errno::PIPE))
         ));
-        assert!(matches!(ended.shutdown(9), Err(Fail::Errno(errno::INVAL))));
+        assert!(matches!(ended.shutdown(9, &limits), Err(Fail::Errno(errno::INVAL))));
     }
 
     /// A write over TLS that waits on its socket longer than a slice sends its bytes once: TLS
@@ -702,7 +707,7 @@ mod tests {
             sent += socket.write(&bytes[sent..], &limits).expect("a write");
         }
         // Its end, and the connection gone, so the server's reading ends however the end went.
-        socket.close();
+        socket.close(&limits);
         drop(socket);
         assert_eq!(counted.join().expect("the server"), bytes.len());
     }
@@ -730,7 +735,7 @@ mod tests {
         let bytes = vec![7_u8; 16 << 20];
         assert_eq!(socket.write(&bytes, &limits).ok(), Some(bytes.len()));
         // Its end, so the other end's reading ends.
-        socket.close();
+        socket.close(&limits);
         drop(socket);
         assert_eq!(counted.join().expect("the other end"), bytes.len());
     }

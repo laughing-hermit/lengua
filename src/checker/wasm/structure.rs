@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use wasmparser::{BlockType, CompositeInnerType, ExternalKind, Operator, ValType};
 
-use super::model::{FIRST_ADDRESS, Function, Kind, Module, Named, Region, to_usize};
+use super::model::{FIRST_ADDRESS, Function, Kind, MAX_PAGES, Module, Named, Region, to_usize};
 use crate::checker::{Rule, Violation};
 use crate::wasm::Policy;
 use crate::wasm::text::{Built, LIBRARY_FUNCTIONS, RESERVED};
@@ -375,7 +375,8 @@ impl Checker<'_, '_, '_> {
         }
     }
 
-    /// Rule 3: one memory, declared once with its minimum equal to its maximum; no `memory.grow`.
+    /// Rule 3: one memory, declared once with its minimum equal to its maximum, of at most
+    /// [`MAX_PAGES`]; no `memory.grow`.
     fn memory(&mut self) {
         let module = self.module;
         let defined: Vec<_> = module
@@ -409,6 +410,21 @@ impl Checker<'_, '_, '_> {
                         "declare it with both sizes equal, such as `(memory (export \"memory\") \
                          {0} {0})`",
                         memory.ty.initial.max(1)
+                    ),
+                );
+            }
+            if memory.ty.initial > MAX_PAGES {
+                self.violation(
+                    Rule::Resources,
+                    memory.line,
+                    format!(
+                        "the memory has {} pages, and a program's memory holds at most \
+                         {MAX_PAGES} pages, 1 GiB",
+                        memory.ty.initial
+                    ),
+                    format!(
+                        "declare at most `(memory (export \"memory\") {MAX_PAGES} {MAX_PAGES})`, \
+                         and read what is larger from a file or standard input a part at a time"
                     ),
                 );
             }

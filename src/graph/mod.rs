@@ -185,7 +185,7 @@ impl Graph {
     fn listed_nodes(&self) -> BTreeSet<PathBuf> {
         let mut listed = BTreeSet::new();
         for index in &self.indexes {
-            let (Some(base), Ok(text)) = (index.parent(), std::fs::read_to_string(index)) else {
+            let (Some(base), Ok(Some(text))) = (index.parent(), crate::state::read_text(index)) else {
                 continue;
             };
             listed.extend(
@@ -293,7 +293,10 @@ impl Node {
     /// Reads the node at `folder` of the bundle at `root`, its lock checked with `key`.
     fn read(root: &Path, folder: &Path, key: Option<&Key>) -> Self {
         let idea = folder.join(IDEA_FILE);
-        let bytes = std::fs::read(&idea).unwrap_or_default();
+        let bytes = crate::state::read_file(&idea)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         let text = String::from_utf8_lossy(&bytes);
         let front = okf::frontmatter(&text).unwrap_or_default();
         let code = folder.join(CODE_FILE).is_file().then_some(CODE_FILE);
@@ -410,7 +413,7 @@ fn stale(folder: &Path, idea: &[u8], code: Option<&str>, key: Option<&Key>) -> O
     }
     let stamp = recorded.code?;
     let name = code?;
-    let bytes = std::fs::read(folder.join(name)).ok()?;
+    let bytes = crate::state::read_file(&folder.join(name)).ok()??;
     (stamp.sha256 != crate::hash::Sha256Hex::of(&bytes)).then_some(Stale::Code)
 }
 
@@ -429,7 +432,10 @@ fn counted(count: usize, thing: &str) -> String {
 pub fn builds_on_cycle(folder: &Path) -> Option<String> {
     let root = scan::bundle_root(folder).path;
     let parts_of = |at: &Path| -> Vec<PathBuf> {
-        let text = std::fs::read_to_string(at.join(IDEA_FILE)).unwrap_or_default();
+        let text = crate::state::read_text(&at.join(IDEA_FILE))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         okf::idea_links(&text)
             .parts
             .into_iter()

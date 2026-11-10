@@ -44,6 +44,86 @@ pub fn tested_module(data_dir: &Path, builder: u64, module: &Sha256Hex) -> PathB
         .join(format!("{}.wasm", module.as_str()))
 }
 
+/// Where lengua keeps what a proof found wrong about the module `module` of the idea `idea`
+/// (lengua's hash of idea.md): a file that is there as long as that module stays refused for
+/// that idea, whatever lengua.lock in the program's folder says, so that an earlier lock put back
+/// there doesn't let it run.
+#[must_use]
+pub fn wrong_record(data_dir: &Path, idea: &Sha256Hex, module: &Sha256Hex) -> PathBuf {
+    data_dir
+        .join("wrong")
+        .join(format!("{}-{}", idea.as_str(), module.as_str()))
+}
+
+/// The most bytes lengua reads of one file of a program folder, such as idea.md, main.wat or a
+/// bundle's index.md: 32 MiB, far past what a program's idea and code hold. A larger file is
+/// refused, not read.
+pub const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// What a file of a program folder that lengua won't read is refused with.
+fn refused(path: &Path, why: &str) -> io::Error {
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    io::Error::new(io::ErrorKind::InvalidData, format!("{name} {why}"))
+}
+
+/// The bytes of the file at `path`, a file of a program folder, which may come from anyone:
+/// `None` when nothing has that name. Only a regular file is read, and at most
+/// [`MAX_FILE_BYTES`] of it: a link isn't followed, so a folder's file never stands for one
+/// elsewhere on this computer; a named pipe, a device or a folder isn't opened, so no read waits
+/// for ever or never ends; and a file past the size isn't read at all. The file that opens is
+/// looked at again, since another may have taken the name in between.
+///
+/// # Errors
+///
+/// What the system says, and why lengua won't read what has that name.
+pub fn read_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    use std::io::Read as _;
+    let irregular = "isn't a regular file: lengua follows no link in a program's folder, and \
+                     reads no folder, pipe or device as one of its files";
+    let large = format!(
+        "holds more than {} MiB, the most lengua reads of a program's file",
+        MAX_FILE_BYTES / 1024 / 1024
+    );
+    let named = match std::fs::symlink_metadata(path) {
+        Ok(named) => named,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if !named.file_type().is_file() {
+        return Err(refused(path, irregular));
+    }
+    if named.len() > MAX_FILE_BYTES {
+        return Err(refused(path, &large));
+    }
+    let file = std::fs::File::open(path)?;
+    let opened = file.metadata()?;
+    if !opened.is_file() {
+        return Err(refused(path, irregular));
+    }
+    let room = usize::try_from(opened.len().min(MAX_FILE_BYTES)).unwrap_or(0);
+    let mut bytes = Vec::with_capacity(room);
+    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(refused(path, &large));
+    }
+    Ok(Some(bytes))
+}
+
+/// The text of the file at `path`, read as [`read_file`] reads it: `None` when nothing has that
+/// name.
+///
+/// # Errors
+///
+/// As [`read_file`], and when the file isn't UTF-8 text.
+pub fn read_text(path: &Path) -> io::Result<Option<String>> {
+    read_file(path)?
+        .map(|bytes| String::from_utf8(bytes).map_err(|_| refused(path, "isn't UTF-8 text")))
+        .transpose()
+}
+
 /// A program folder, given as an absolute path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProgramFolder(PathBuf);
@@ -146,11 +226,8 @@ impl Snapshot {
     ///
     /// Fails when a file exists but can't be read.
     pub fn read_with_files(folder: &ProgramFolder, key: Option<&Key>) -> io::Result<(Self, Files)> {
-        let read = |name: &str| match std::fs::read(folder.file(name)) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error),
-        };
+        // Each as a regular file of a bounded size: a program folder may come from anyone.
+        let read = |name: &str| read_file(&folder.file(name));
         let idea = read(IDEA_FILE)?;
         let code = read(CODE_FILE)?;
         let snapshot = Self {
@@ -517,5 +594,37 @@ mod tests {
         assert_eq!(snapshot.idea, Some(hash));
         assert_eq!(snapshot.code, Some(digest(wat)));
         assert_eq!(snapshot, Snapshot::read(&program, None).expect("read it"));
+    }
+
+    /// A file of a program folder is read only when it is a regular file of at most
+    /// [`MAX_FILE_BYTES`]: nothing is no file, a folder and a link are refused, and so is a file
+    /// one byte past the size.
+    #[test]
+    fn a_program_s_file_is_read_only_as_a_regular_file_of_a_bounded_size() {
+        let folder = tempfile::tempdir().expect("temporary folder");
+        let at = |name: &str| folder.path().join(name);
+        assert_eq!(read_file(&at("none")).expect("no file"), None);
+        std::fs::write(at("notes.md"), "hello").expect("a file");
+        assert_eq!(read_text(&at("notes.md")).expect("a file"), Some("hello".to_owned()));
+        std::fs::create_dir(at("sub")).expect("a folder");
+        let refused = |name: &str| {
+            read_file(&at(name))
+                .expect_err("lengua won't read it")
+                .to_string()
+        };
+        assert!(refused("sub").contains("sub isn't a regular file"));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(at("notes.md"), at("link.md")).expect("a link");
+            assert!(refused("link.md").contains("link.md isn't a regular file"));
+        }
+        std::fs::write(at("bytes.md"), [0xff_u8]).expect("a file");
+        let not_text = read_text(&at("bytes.md")).expect_err("no text");
+        assert!(not_text.to_string().contains("isn't UTF-8 text"));
+        let most = usize::try_from(MAX_FILE_BYTES).expect("a size");
+        std::fs::write(at("most.md"), vec![b' '; most]).expect("a file");
+        assert_eq!(read_file(&at("most.md")).expect("it").map(|bytes| bytes.len()), Some(most));
+        std::fs::write(at("large.md"), vec![b' '; most + 1]).expect("a file");
+        assert!(refused("large.md").contains("holds more than 32 MiB"));
     }
 }

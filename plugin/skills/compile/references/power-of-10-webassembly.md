@@ -49,7 +49,8 @@ its own memory, and it reaches the computer only through the calls its idea allo
   [the host](host.md) says which each `- Uses:` and `- Network:` line grants. `check` refuses any
   other import, so a program can't even name a call it isn't allowed.
 - **Exports** are exactly the function `_start` and the memory `memory`.
-- **One memory**, declared once with its minimum equal to its maximum (rule 3). No `memory.grow`.
+- **One memory**, declared once with its minimum equal to its maximum (rule 3), of at most 16,384
+  pages, 1 GiB. No `memory.grow`.
 - **No start function, no tables, no element segments**, so no `call_indirect` (rule 9).
 - **lengua's library** is merged into the module by `check`: `$assert_fail`, `$fill` and
   `$write_all`. Call them; never define them. Names beginning `$lengua.` are lengua's. Name every

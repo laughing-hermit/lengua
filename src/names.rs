@@ -47,12 +47,17 @@ impl Broken {
 /// The characters Windows refuses in a name, besides the controls below 32.
 const REFUSED: &[char] = &['<', '>', ':', '"', '\\', '|', '?', '*'];
 
-/// The device names Windows reserves in every folder, alone or with any extension.
+/// The device names Windows reserves in every folder, alone or with any extension: the classic
+/// ones, `COM0` and `LPT0`, which Microsoft's list has too, and the console's input and output.
 const DEVICES: &[&str] = &[
     "CON",
     "PRN",
     "AUX",
     "NUL",
+    "CONIN$",
+    "CONOUT$",
+    "COM0",
+    "LPT0",
     "COM1",
     "COM2",
     "COM3",
@@ -149,7 +154,8 @@ fn broken_name(name: &[u8]) -> Option<Broken> {
             ),
         ));
     }
-    let stem = text.split('.').next().unwrap_or(text);
+    // Windows's older parsing drops the spaces before the dot, so `aux .txt` is the device too.
+    let stem = text.split('.').next().unwrap_or(text).trim_end_matches(' ');
     if let Some(device) = DEVICES
         .iter()
         .find(|device| stem.to_uppercase() == **device)

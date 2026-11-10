@@ -346,13 +346,11 @@ fn lock_file(data_dir: &DataDir, root: &Path) -> io::Result<std::fs::File> {
     Ok(file)
 }
 
-/// A file's text, or `None` when there's no file.
+/// A file's text, or `None` when there's no file: read only as a regular file of a bounded size
+/// ([`crate::state::read_file`]).
 fn read_optional(path: &Path) -> Result<Option<String>, String> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("couldn't read {}: {error}", path.display())),
-    }
+    crate::state::read_text(path)
+        .map_err(|error| format!("couldn't read {}: {error}", path.display()))
 }
 
 /// Writes `text` to `path` whole or not at all: into a hidden file beside it, renamed over it.

@@ -273,7 +273,7 @@ pub(crate) struct Block {
 
 impl Block {
     /// Whether the line `line` is one of the block's.
-    fn holds(&self, line: usize) -> bool {
+    pub(crate) fn holds(&self, line: usize) -> bool {
         (self.start..self.end).contains(&line)
     }
 }

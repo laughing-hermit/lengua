@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use wasmtime::{Engine, Linker, Module, Store, UpdateDeadline, WasmBacktrace};
 
-use crate::connect::{CONNECT_TIMEOUT, Made, Reach};
+use crate::connect::{CONNECT_TIMEOUT, CONNECT_TOTAL, Made, Reach};
 use crate::runner::{End, Run, Trap};
 use crate::supply::Time;
 use crate::wasm::engine::Setup;
@@ -226,8 +226,21 @@ pub fn execute(
     }
 }
 
-/// The connection `connection` names, made now, and why it couldn't be when it couldn't.
-fn connect(connection: &Connection) -> (Link, Option<String>) {
+/// The connection `connection` names, made now, and why it couldn't be when it couldn't. A run's
+/// connections began at `connecting`, and one that would begin once they have taken
+/// [`CONNECT_TOTAL`] in all isn't tried: a program doesn't wait on every place that doesn't
+/// answer, one after another, before it starts.
+fn connect(connection: &Connection, connecting: Instant) -> (Link, Option<String>) {
+    if !matches!(connection, Connection::Ended(_)) && connecting.elapsed() >= CONNECT_TOTAL {
+        return (
+            Link::Ended,
+            Some(format!(
+                "the connections before it took the {} seconds lengua gives a run's connections \
+                 in all",
+                CONNECT_TOTAL.as_secs()
+            )),
+        );
+    }
     match connection {
         Connection::Test(port) => {
             let address = SocketAddr::from((Ipv4Addr::LOCALHOST, *port));
@@ -276,8 +289,9 @@ pub fn world(
     let random = job.random.as_deref().map(job::unhex).transpose()?;
     let mut connections = Vec::new();
     let mut reached = Vec::new();
+    let connecting = Instant::now();
     for made in &job.connections {
-        let (link, problem) = connect(&made.connection);
+        let (link, problem) = connect(&made.connection, connecting);
         connections.push(Socket::new(link));
         reached.push(Reached {
             place: made.place.clone(),
@@ -671,8 +685,9 @@ fn run_on_this_thread(
 ) -> io::Result<End> {
     let module = Module::from_binary(engine, wasm).map_err(io::Error::other)?;
     let mut connections = Vec::new();
+    let connecting = Instant::now();
     for made in here.connections {
-        let (link, problem) = connect(&made.connection);
+        let (link, problem) = connect(&made.connection, connecting);
         if let Some(problem) = problem {
             eprintln!(
                 "lengua-mcp: couldn't connect to {} ({problem}), so the program got that \

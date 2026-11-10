@@ -9,14 +9,19 @@
 //!   through a link, which is `ACCES`;
 //! - a file or folder the program holds open isn't renamed or removed: `BUSY`;
 //! - a folder lists sorted by name, turned round in a test's second run, without `.` and `..`;
+//! - the listings lengua holds for a program are lengua's memory, not the program's, so they are
+//!   held to [`LISTED`] entries in all: a folder's listing is read once and shared by every
+//!   descriptor that lists it, and a listing that would take the entries the program's
+//!   descriptors hold past that, as a folder with more entries itself does, is `IO`;
 //! - a write that takes a file past its limit, or the files past their total, is cut short and
 //!   the next fails with `FBIG`; the total counts a block for each file or folder made, which
 //!   fails with `FBIG` past it too, and the gap a write past a file's end leaves, which some
 //!   systems fill.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use cap_std::fs::{Dir, File, FileType, OpenOptions};
 
@@ -77,9 +82,17 @@ pub struct Entry {
 pub struct Folder {
     /// Its names from the working folder: none for the working folder itself.
     pub path: Vec<String>,
-    /// Its entries as `fd_readdir` last began listing them.
-    pub listing: Option<Vec<Entry>>,
+    /// Its entries as `fd_readdir` last began listing them, sorted by name: shared with every
+    /// other descriptor that began listing the folder while it was the same.
+    pub listing: Option<Arc<Vec<Entry>>>,
 }
+
+/// The most entries the listings a program's descriptors keep while they list have in all, each
+/// listing counted once however many descriptors share it; and the most the listings lengua
+/// keeps to find names in have. About a hundred bytes an entry with its name, so some hundred
+/// megabytes of the worker's own memory at the very most. A listing that would pass it among the
+/// descriptors, and a folder with more entries, is refused with `IO`.
+pub const LISTED: usize = 1 << 20;
 
 /// A file the program holds open.
 #[derive(Debug)]
@@ -101,8 +114,9 @@ pub struct Open {
 pub struct Files {
     /// The folder, beneath which every path is resolved.
     root: Dir,
-    /// The entries of each folder read since the program last changed one, by its path.
-    listings: BTreeMap<String, Vec<Entry>>,
+    /// The entries of each folder read since the program last changed one, by its path: at most
+    /// [`LISTED`] in all.
+    listings: BTreeMap<String, Arc<Vec<Entry>>>,
     /// Whether folders list turned round, as in a test's second run.
     reversed: bool,
 }
@@ -218,6 +232,10 @@ fn read_folder(root: &Dir, folder: &[String]) -> Result<Vec<Entry>, u16> {
         if name == "." || name == ".." {
             continue;
         }
+        // A folder with more entries than lengua holds for a program isn't listed at all.
+        if found.len() == LISTED {
+            return Err(errno::IO);
+        }
         let kind = entry.file_type().map_or(Kind::Other, Kind::of);
         found.push(Entry { name, kind });
     }
@@ -247,13 +265,30 @@ impl Files {
     }
 
     /// The entries of the folder at `folder`, sorted by name: read once, and kept until the
-    /// program changes something.
-    fn listing(&mut self, folder: &[String]) -> Result<&Vec<Entry>, u16> {
-        use std::collections::btree_map::Entry as Slot;
-        match self.listings.entry(folder.join("/")) {
-            Slot::Occupied(kept) => Ok(kept.into_mut()),
-            Slot::Vacant(empty) => Ok(empty.insert(read_folder(&self.root, folder)?)),
+    /// program changes something, or until the listings kept would hold more than [`LISTED`]
+    /// entries, when the others go first.
+    ///
+    /// # Errors
+    ///
+    /// What the system says, and `IO` for a folder of more than [`LISTED`] entries.
+    fn listing(&mut self, folder: &[String]) -> Result<&Arc<Vec<Entry>>, u16> {
+        let key = folder.join("/");
+        let unread = !self.listings.contains_key(&key);
+        if unread {
+            let read = read_folder(&self.root, folder)?;
+            let kept: usize = self.listings.values().map(|listing| listing.len()).sum();
+            if kept.saturating_add(read.len()) > LISTED {
+                self.listings.clear();
+            }
+            self.listings.insert(key.clone(), Arc::new(read));
         }
+        self.listings.get(&key).ok_or(errno::IO)
+    }
+
+    /// The listing of the folder at `folder`, as [`Self::listing`] keeps it, for a descriptor
+    /// to share.
+    fn shared(&mut self, folder: &[String]) -> Result<Arc<Vec<Entry>>, u16> {
+        self.listing(folder).map(Arc::clone)
     }
 
     /// What `names` is, or `None` when its folder has no such entry, byte for byte. Every name
@@ -301,15 +336,44 @@ impl Files {
         self.listings.clear();
     }
 
-    /// The folder at `folder`'s entries as `fd_readdir` gives them.
+    /// The folder at `folder`'s entries in the order `fd_readdir` gives them.
+    #[cfg(test)]
     fn ordered(&mut self, folder: &[String]) -> Result<Vec<Entry>, u16> {
-        let reversed = self.reversed;
-        let mut entries = self.listing(folder)?.clone();
-        if reversed {
-            entries.reverse();
-        }
-        Ok(entries)
+        let listing = self.shared(folder)?;
+        Ok((0..listing.len())
+            .filter_map(|place| entry_at(&listing, place, self.reversed).cloned())
+            .collect())
     }
+}
+
+/// The entry `fd_readdir` gives at `place`, from 0, of a folder's `listing`, which is sorted by
+/// name: counted from its end when the run lists folders turned round.
+fn entry_at(listing: &[Entry], place: usize, reversed: bool) -> Option<&Entry> {
+    if reversed {
+        listing.get(listing.len().checked_sub(1)?.checked_sub(place)?)
+    } else {
+        listing.get(place)
+    }
+}
+
+/// How many entries the listings the program's descriptors hold have in all, each listing
+/// counted once however many descriptors share it, but for the descriptor `but` and for `new`,
+/// the listing it is about to hold.
+fn held(fds: &Table, but: u32, new: &Arc<Vec<Entry>>) -> usize {
+    let mut counted = BTreeSet::from([Arc::as_ptr(new)]);
+    let mut total: usize = 0;
+    for (fd, descriptor) in fds.iter() {
+        if fd != but
+            && let Descriptor::Folder(Folder {
+                listing: Some(listing),
+                ..
+            }) = descriptor
+            && counted.insert(Arc::as_ptr(listing))
+        {
+            total = total.saturating_add(listing.len());
+        }
+    }
+    total
 }
 
 /// The working folder, which a path call needs, or `NOTCAPABLE`.
@@ -486,12 +550,18 @@ pub fn read(open: &mut Open, buffer: &mut [u8]) -> Result<usize, Fail> {
     open.file.read(buffer).map_err(|error| failed(&error))
 }
 
-/// Writes `bytes` to `open`, as far as its limits let it. A write past the file's end counts the
-/// gap it leaves against the total as well, as some systems fill it.
+/// The most bytes a write to a file gives the system between two looks at the run's deadline and
+/// at lengua's stop.
+const WRITE_PIECE: usize = 1024 * 1024;
+
+/// Writes `bytes` to `open`, as far as its limits let it, a [`WRITE_PIECE`] at a time. A write
+/// past the file's end counts the gap it leaves against the total as well, as some systems fill
+/// it.
 ///
 /// # Errors
 ///
-/// `BADF` for a file not open to write, `FBIG` at a limit, and what the system says.
+/// `BADF` for a file not open to write, `FBIG` at a limit, what the system says, and a stop at
+/// the deadline.
 pub fn write(open: &mut Open, limits: &mut Limits, bytes: &[u8]) -> Result<usize, Fail> {
     if !open.write {
         return Err(Fail::Errno(errno::BADF));
@@ -509,10 +579,22 @@ pub fn write(open: &mut Open, limits: &mut Limits, bytes: &[u8]) -> Result<usize
         (position, gap)
     };
     let room = limits.file_write(position, gap, bytes.len())?;
-    let wrote = open
-        .file
-        .write(&bytes[..room])
-        .map_err(|error| failed(&error))?;
+    // A piece at a time, with a look at the run's deadline before each: a program may give as
+    // many bytes as its memory holds in one write.
+    let mut wrote = 0;
+    for piece in bytes[..room].chunks(WRITE_PIECE) {
+        limits.check()?;
+        let count = match open.file.write(piece) {
+            Ok(count) => count,
+            // What the pieces before it wrote stays written, and counted.
+            Err(_) if wrote > 0 => break,
+            Err(error) => return Err(failed(&error)),
+        };
+        wrote += count;
+        if count < piece.len() {
+            break;
+        }
+    }
     // A write that wrote nothing left no gap.
     if wrote > 0 {
         limits.wrote(gap, wrote);
@@ -593,11 +675,13 @@ pub fn path_filestat_get(
 }
 
 /// `fd_readdir(fd, buf, len, cookie, used)`: the folder's entries from the `cookie`th on, each a
-/// `dirent` and its name, as many as fit, the last cut short when it doesn't.
+/// `dirent` and its name, as many as fit, the last cut short when it doesn't. A call with cookie 0
+/// begins a listing, which the descriptor holds until its next.
 ///
 /// # Errors
 ///
-/// A buffer outside memory.
+/// A buffer outside memory, and `IO` for a listing that would take the entries the program's
+/// descriptors hold past [`LISTED`].
 pub fn fd_readdir(
     host: &mut Host,
     memory: &mut [u8],
@@ -611,19 +695,37 @@ pub fn fd_readdir(
     let Some(files) = host.files.as_mut() else {
         return Err(Fail::Errno(errno::NOTCAPABLE));
     };
-    let folder = match host.fds.get_mut(fd) {
-        Some(Descriptor::Folder(folder)) => folder,
+    let (path, begun) = match host.fds.get(fd) {
+        Some(Descriptor::Folder(folder)) => (folder.path.clone(), folder.listing.is_some()),
         Some(_) => return Err(Fail::Errno(errno::NOTDIR)),
         None => return Err(Fail::Errno(errno::BADF)),
     };
-    if cookie == 0 || folder.listing.is_none() {
-        folder.listing = Some(files.ordered(&folder.path).map_err(Fail::Errno)?);
+    if cookie == 0 || !begun {
+        // The folder's one listing, shared with every descriptor that lists it as it is now,
+        // within the entries lengua holds for a program.
+        let listing = files.shared(&path).map_err(Fail::Errno)?;
+        if held(&host.fds, fd, &listing).saturating_add(listing.len()) > LISTED {
+            return Err(Fail::Errno(errno::IO));
+        }
+        if let Some(Descriptor::Folder(folder)) = host.fds.get_mut(fd) {
+            folder.listing = Some(listing);
+        }
     }
     host.notes.listed = true;
-    let entries = folder.listing.as_deref().unwrap_or_default();
+    let reversed = files.reversed;
+    let entries: &[Entry] = match host.fds.get(fd) {
+        Some(Descriptor::Folder(Folder {
+            listing: Some(listing),
+            ..
+        })) => listing,
+        _ => &[],
+    };
     let start = usize::try_from(cookie).unwrap_or(usize::MAX);
     let mut bytes = Vec::new();
-    for (index, entry) in entries.iter().enumerate().skip(start) {
+    for index in start..entries.len() {
+        let Some(entry) = entry_at(entries, index, reversed) else {
+            break;
+        };
         if bytes.len() >= range.len() {
             break;
         }

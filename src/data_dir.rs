@@ -8,6 +8,9 @@
 //! - `tested/<builder>/<sha256>.wasm`, each module whose tests passed, by the build that made it
 //!   and the module's SHA-256, which a run from a shell runs once its bytes hash to the module
 //!   hash its lock records ([`crate::state::tested_module`]);
+//! - `wrong/<idea's hash>-<module's hash>`, what a proof found wrong about a module of an idea,
+//!   which keeps `run` from running it whatever lock its folder holds
+//!   ([`crate::state::wrong_record`]);
 //! - `cache/`, the engine's compiled modules, unless the agent's harness gives the plugin a data
 //!   folder of its own ([`crate::wasm::engine::cache_folder`]);
 //! - `graph/<sha256>.lock`, which keeps lengua's processes from writing one bundle's index.md and

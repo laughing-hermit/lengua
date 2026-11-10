@@ -27,6 +27,11 @@ pub const MAX_CONNECTIONS: usize = 16;
 /// How long lengua tries to make a connection before the program starts without it.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long lengua goes on making a run's connections, one after another: a connection that
+/// would begin after this long is handed over already ended, untried. With the last one's own
+/// [`CONNECT_TIMEOUT`], a program starts at most 15 seconds after its connections began.
+pub const CONNECT_TOTAL: Duration = Duration::from_secs(10);
+
 /// Where one connection goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reach {
@@ -114,21 +119,55 @@ pub(crate) fn client_config(roots: rustls::RootCertStore) -> rustls::ClientConfi
 /// Makes the connection `reach` names, trying each of its addresses in turn and, over TLS,
 /// checking the computer's certificate, until [`CONNECT_TIMEOUT`] has passed, or says why it
 /// couldn't.
+///
+/// A named computer is another computer: when any address its name resolves to is this
+/// computer's loopback, or the unspecified address, written as IPv4 inside IPv6 too, the
+/// connection isn't made, whatever the name is ([`this_computer`]). This computer is reached by
+/// a port alone ([`Reach::ThisComputer`]).
 pub(crate) async fn make(reach: &Reach) -> Result<Box<dyn Place>, String> {
-    make_with(reach, tls_config()).await
+    make_as(reach, tls_config(), false).await
 }
 
-/// [`make`], with `tls` checking certificates.
+/// [`make`], with `tls` checking certificates, for lengua's own tests, whose servers listen on
+/// this computer's loopback under a name: the one way a named computer may be this one.
+#[cfg(test)]
 pub(crate) async fn make_with(
     reach: &Reach,
     tls: Arc<rustls::ClientConfig>,
+) -> Result<Box<dyn Place>, String> {
+    make_as(reach, tls, true).await
+}
+
+/// Whether `address` is this computer's own: its loopback, or the unspecified address, which
+/// a system takes as this computer's, each also when written as an IPv4 address inside an IPv6
+/// one (`::ffff:127.0.0.1`), which a system connects to as to the IPv4 address.
+#[must_use]
+pub fn this_computer(address: std::net::IpAddr) -> bool {
+    let own = |address: std::net::IpAddr| address.is_loopback() || address.is_unspecified();
+    match address {
+        std::net::IpAddr::V4(_) => own(address),
+        std::net::IpAddr::V6(six) => {
+            own(address)
+                || six
+                    .to_ipv4_mapped()
+                    .is_some_and(|four| own(std::net::IpAddr::V4(four)))
+        }
+    }
+}
+
+/// [`make`]'s work, with `tls` checking certificates; a named computer may be this one only
+/// when `own`.
+async fn make_as(
+    reach: &Reach,
+    tls: Arc<rustls::ClientConfig>,
+    own: bool,
 ) -> Result<Box<dyn Place>, String> {
     match reach {
         Reach::Tls(host, port) => {
             let name = rustls::pki_types::ServerName::try_from(host.clone())
                 .map_err(|_| format!("{host} isn't a name TLS can check a certificate for"))?;
             let attempt = async {
-                let stream = connect_tcp(Some(host), *port).await?;
+                let stream = connect_tcp(Some(host), *port, own).await?;
                 tokio_rustls::TlsConnector::from(tls)
                     .connect(name, stream)
                     .await
@@ -140,13 +179,14 @@ pub(crate) async fn make_with(
             Ok(Box::new(stream))
         }
         Reach::ThisComputer(port) => {
-            let stream = tokio::time::timeout(CONNECT_TIMEOUT, connect_tcp(None, *port))
+            let stream = tokio::time::timeout(CONNECT_TIMEOUT, connect_tcp(None, *port, true))
                 .await
                 .unwrap_or_else(|_| Err(no_answer()))?;
             Ok(Box::new(stream))
         }
         Reach::Host(host, port) => {
-            let stream = tokio::time::timeout(CONNECT_TIMEOUT, connect_tcp(Some(host), *port))
+            let connecting = connect_tcp(Some(host), *port, own);
+            let stream = tokio::time::timeout(CONNECT_TIMEOUT, connecting)
                 .await
                 .unwrap_or_else(|_| Err(no_answer()))?;
             Ok(Box::new(stream))
@@ -201,8 +241,10 @@ fn no_answer() -> String {
     format!("no answer within {} seconds", CONNECT_TIMEOUT.as_secs())
 }
 
-/// A TCP connection to `port` of `host`, or of this computer, trying each address in turn.
-async fn connect_tcp(host: Option<&str>, port: u16) -> Result<TcpStream, String> {
+/// A TCP connection to `port` of `host`, or of this computer, trying each address in turn. A
+/// named computer one of whose addresses is this computer's own isn't connected to at all,
+/// unless `own`.
+async fn connect_tcp(host: Option<&str>, port: u16, own: bool) -> Result<TcpStream, String> {
     let addresses: Vec<std::net::SocketAddr> = match host {
         None => vec![
             (std::net::Ipv4Addr::LOCALHOST, port).into(),
@@ -213,6 +255,17 @@ async fn connect_tcp(host: Option<&str>, port: u16) -> Result<TcpStream, String>
             .map_err(|error| format!("{host} isn't a computer lengua can find: {error}"))?
             .collect(),
     };
+    if let (Some(host), false) = (host, own)
+        && let Some(here) = addresses
+            .iter()
+            .find(|address| this_computer(address.ip()))
+    {
+        return Err(format!(
+            "{host} is this computer ({}), which a connection to a named computer never goes \
+             to: an idea reaches this computer by a port alone",
+            here.ip()
+        ));
+    }
     let mut last = String::from("it has no address");
     for address in addresses {
         match TcpStream::connect(address).await {
@@ -359,10 +412,11 @@ mod tls {
 
     #[tokio::test]
     async fn a_certificate_lengua_cant_check_is_a_connection_it_couldnt_make() {
-        // Mozilla's roots don't vouch for a certificate of the test's own.
+        // Mozilla's roots don't vouch for a certificate of the test's own. The test's server is
+        // on this computer, which only a test's connection reaches by a name.
         let (acceptor, trust) = server_and_trust();
         let port = tls_server(acceptor.clone(), |_| async {}).await;
-        let refused = make(&Reach::Tls("localhost".into(), port)).await;
+        let refused = make_with(&Reach::Tls("localhost".into(), port), tls_config()).await;
         let Err(problem) = refused else {
             panic!("an untrusted certificate was accepted");
         };

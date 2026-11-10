@@ -366,8 +366,9 @@ are given. 16 answer `NOSYS`: `fd_advise`, `fd_allocate`, `fd_datasync`, `fd_fds
 and `proc_raise`. Every error is one of a closed set of 21 of WASI's numbers, and an error outside
 a function's own list becomes `IO`.
 
-Each call checks the memory, then the idea, then does its work. The idea's lines decide what is
-allowed (`src/wasm/host/policy.rs`):
+Each call checks the idea first: one the idea doesn't allow answers before any of its buffers is
+looked at. An allowed call checks every buffer it borrows against the program's memory, then does
+its work. The idea's lines decide what is allowed (`src/wasm/host/policy.rs`):
 - every program: its arguments, `fd_write`, `fd_fdstat_get`, `proc_exit` and `sched_yield`;
 - `standard input` or `the terminal`: reading standard input, and `poll_oneoff`;
 - `files`: the working folder and the files in it;
@@ -387,15 +388,34 @@ order. A program holds at most 4,352 descriptors.
 Files: every path goes through `cap-std`, which resolves it beneath the working folder. A path that
 climbs out of it, or starts with `/`, gives `NOTCAPABLE`; a link on the way gives `ACCES`. Names
 are held to what every system takes (`src/names.rs`): 255 bytes a name and 1,023 a path, UTF-8 of
-characters Unicode 9.0 assigned, none of the characters, device names and short-name shapes
+characters Unicode 9.0 assigned, none of the characters, device names (`COM0`, `LPT0`, `CONIN$`
+and `CONOUT$` among them, and a device's name with spaces before its dot) and short-name shapes
 Windows refuses. Names are found byte for byte, and a new name that differs from one in its folder
-only in case or normalization gives `EXIST`. A folder lists sorted by name.
+only in case or normalization gives `EXIST`. A folder lists sorted by name. A symbolic link, and
+on Windows a junction, is a link; a hard link is a regular file to every system, and to lengua,
+so a working folder that holds a hard link to a file elsewhere gives the program that file.
+
+A folder's listing is lengua's memory, not the program's: it is read once, shared by every
+descriptor that lists the folder while it stays the same, and the listings a program's descriptors
+hold are held to 1,048,576 entries in all (`LISTED`, `src/wasm/host/files.rs`). The `fd_readdir`
+that would pass it answers `IO`, as does any call on a path in a folder with more entries.
+
+The working folder is never one of lengua's own. For a program that uses files, and for a
+`stdin_file`, `run` refuses a folder that is, holds or lies inside the data folder or the folder of
+compiled modules, the plugin's own (`PLUGIN_DATA`) too, and on Linux `/proc`, `/sys`, `/dev` and
+anything beneath them, with links followed before paths are compared (`own_folder_problem`,
+`src/server.rs`). The program's own folder is a working folder like any other: what a program
+changes there only stops its next run.
 
 The network: a program never connects or binds by itself. Before it starts, lengua makes each
-connection its idea names, one after another in order, within 5 seconds each, and binds its
+connection its idea names, one after another in order, within 5 seconds each and 10 seconds in
+all, after which the rest are handed over ended, untried, and binds its
 listener, IPv4 only, on 127.0.0.1, or on every address when the idea serves any computer
 (`src/connect.rs`, `src/wasm/host/net.rs`). A connection lengua couldn't make is handed over
-already ended, and the run's report says why. Over TLS, lengua does the TLS in Rust (rustls 0.23
+already ended, and the run's report says why. A named computer, in the idea or in an argument, is
+another computer: a name whose last label is a number (`2130706433`, `127.1`, `0x7f.1`) is no name,
+and when any address a name resolves to is this computer's loopback or the unspecified address,
+written as IPv4 inside IPv6 too, the connection isn't made. Over TLS, lengua does the TLS in Rust (rustls 0.23
 with ring, Mozilla's roots from webpki-roots, the same on every system), and the program reads and
 writes plain bytes. A stream never waits in the system: lengua naps between looks, within the
 run's deadline, since a socket's own timeout on Windows can lose or repeat bytes.
@@ -408,11 +428,19 @@ clock and the random bytes may come from the test; otherwise random bytes come f
 | Kind of run | Time | Output | Files |
 |---|---|---|---|
 | A test | 2 s | 8 MiB a stream | 64 MiB a file, 256 MiB in all, a fresh working folder |
-| The `run` tool | 10 s by default, 1 to 40 | 8 MiB a stream | no limit, in an empty temporary folder or the user's `folder` |
-| A background server | 600 s, or until `run` with `stop`, or the session's end | 8 MiB a stream | no limit |
+| The `run` tool | 10 s by default, 1 to 40 | 8 MiB a stream | a test's limits in its own empty temporary folder; no limit in the user's `folder` |
+| A background server | 600 s, or until `run` with `stop`, or the session's end | 8 MiB a stream | as the `run` tool |
 | `lengua-mcp run` | none | none: the shell's own streams | no limit, in the current folder or `--in`'s |
 
-Memory is held to what the module declares: the dialect makes main.wat's minimum its maximum. A
+A host call ends at the run's deadline however much it was asked to do: `random_get` and a write
+to a file go a mebibyte at a time with a look at the deadline between, a read of a file looks
+before each buffer, and the end of a TLS connection waits two seconds at most and never past the
+deadline. What still outlasts a deadline, such as one slow write of a mebibyte, is ended by the
+pool, which kills a worker 20 seconds after its job's time.
+
+Memory is held to what the module declares: the dialect makes main.wat's minimum its maximum, of
+at most 16,384 pages, 1 GiB (the largest a shipped program declares is 1,538). A C, C++ or Rust
+toolchain's module, which the benchmark runs, is no main.wat and may declare up to 4 GiB. A
 module's one table holds at most 1,048,576 entries, whatever it declares or grows to.
 
 ### Workers
@@ -462,8 +490,10 @@ The code stamp is written when every test passes, before the proofs end, so `run
 32 random bytes in `key` in lengua's data folder, made on the first record (`src/lock.rs`,
 `src/data_dir.rs`). The data folder is `$XDG_DATA_HOME/lengua` or `~/.local/share/lengua` on
 Linux, `~/Library/Application Support/lengua` on macOS, `%LOCALAPPDATA%\lengua` on Windows, or
-`--data-dir`. On Unix the folder is made readable only by the user (0700) and so is the key's
-file; on Windows lengua sets no permissions of its own, so the key is as private as the user's
+`--data-dir`. On Unix the folder is made readable only by the user (0700) when the key is made or
+loaded for a record, also when it was there already with another mode, as when the engine's cache
+made it first, and the key's file is the user's alone (0600) from the start; on Windows lengua
+sets no permissions of its own, so the key is as private as the user's
 `%LOCALAPPDATA%`. One key serves every agent harness, so a lock recorded in one verifies in
 another. A lock signed on another computer doesn't verify here: the HMAC binds a lock to this
 user's key. It is a record, not a way to trust another computer's lock; `lengua-mcp check` is.
@@ -476,13 +506,25 @@ both files unchanged and no proof that found the build wrong, `check` writes its
 `verified`: `{ by: lengua/0.2.0, at, idea: sha256:…, code: sha256:… }`, last in the list, keeping
 everyone else's. It edits the frontmatter's lines and never writes its YAML again. Every `check`
 first removes lengua's entry once it no longer names the idea and main.wat as they are, and a
-proof that finds main.wat wrong removes it at once.
+proof that finds main.wat wrong removes it at once. What the hash leaves out, lengua doesn't read:
+the frontmatter's YAML is parsed without the lines of those two keys, so a key whose value is an
+alias of an anchor inside them names nothing and the idea is refused.
+
+A program folder may come from anyone, so `check`, the attester and `run` read its files, and a
+bundle's index.md and log.md, only as regular files of at most 32 MiB (`read_file`,
+`src/state.rs`): a link isn't followed, a named pipe or a device isn't opened, and a larger file
+isn't read. lengua.lock is read the same way, within its own 64 KiB.
 
 ### What run checks
 
 `run`, from MCP or from a shell, runs main.wat only when (`src/server/wat.rs`):
 - the lock records idea.md and main.wat as they are, and the key and the lock are trusted;
-- no proof the lock records, and none the running job found, says this module is wrong;
+- no proof the lock records, none the running job found, and none lengua keeps in its data
+  folder says this module is wrong. Whenever `check` or `run` reads or writes a lock that records
+  a module as found wrong, lengua keeps that in `wrong/<idea's hash>-<module's hash>` of the data
+  folder, so an earlier lock of the user's own, put back in the folder, doesn't let that module
+  run for that idea;
+- the working folder, for a program that uses files, is none of lengua's own or the system's;
 - environment variables are given only to an idea that uses the environment;
 - what runs is the module `check` tested. The `run` tool builds main.wat again and compares the
   build's SHA-256 with the lock's. A shell's run takes the module `check` kept in the data folder
@@ -639,19 +681,34 @@ listed below.
 - **A program that reaches more than its idea grants.** The checker refuses an import from outside
   WASI preview 1, one lengua doesn't give, one the idea doesn't allow, or one with another type.
   The host checks every call against the idea's lines, and every buffer a call borrows against the
-  program's memory. Every path is resolved beneath the working folder by `cap-std`, and no link is
-  followed. A program can't connect or bind by itself: it gets the connections its idea names,
-  made by lengua before it starts, and its one listener. It gets environment variables only when
-  its idea uses the environment, and only those its test or the user's `run` names. WebAssembly
-  holds every access inside the program's own memory, the engine's stack limit holds its calls,
-  and the engine's epochs stop it at its deadline, where its kind of run has one.
+  program's memory. Every path is resolved beneath the working folder by `cap-std`, and no
+  symbolic link or junction is followed; a hard link is a regular file, so the working folder is
+  the user's to choose with that in mind. The working folder is never lengua's data folder, its
+  folder of compiled modules, or on Linux `/proc`, `/sys` or `/dev`, nor a folder that holds or
+  lies inside one of them. A program can't connect or bind by itself: it gets the connections its
+  idea names, made by lengua before it starts, and its one listener, and a named computer is
+  never this one, by its name or by the address its name resolves to. It gets environment
+  variables only when its idea uses the environment, and only those its test or the user's `run`
+  names. WebAssembly holds every access inside the program's own memory, of at most 1 GiB for
+  main.wat, the engine's stack limit holds its calls, the engine's epochs stop it at its
+  deadline, where its kind of run has one, and a host call looks at the deadline as it works.
+  What lengua holds for a program outside its memory, such as its folders' listings, has a
+  stated end.
+- **A folder that someone hands the user.** `check`, the attester and `run` read a program
+  folder's files only as regular files of a bounded size, follow no link there and open no pipe,
+  so a handed folder can't make lengua read another file of this computer, wait for ever, or
+  read without end. Its lengua.lock fails the HMAC. `check` writes lengua.lock and idea.md in the
+  folder, and index.md and log.md in the folder's bundle, each by renaming a new file over the
+  old, never through a link; the attester writes nothing there. A test's files are named inside
+  its fresh working folder, and a test's program reaches only the test's own servers.
 - **A lock that isn't lengua's.** A lock lengua didn't write, or one changed outside lengua, fails
   its HMAC with the user's key, and `run` refuses the folder. So does a lock of another layout, a
   format lengua doesn't read, or proofs about another module.
 - **A build that isn't what was checked.** `run` runs only the module whose SHA-256 the signed lock
   records: the `run` tool builds main.wat again and compares, and a shell's run compares the kept
   module's bytes. An idea or code changed since the record, a module a proof found wrong, and a
-  build that differs after lengua changed are refused.
+  build that differs after lengua changed are refused. A module found wrong stays refused when an
+  earlier lock, which the user's key signed too, is put back: the data folder keeps the verdict.
 - **A secret that reaches timing within main.wat.** For an idea with a `- Secret:` line, the secret
   rule refuses a branch, an address, a length, a loop's count, a division or a float operation
   that depends on a secret, in main.wat.
@@ -669,8 +726,10 @@ listed below.
   suite's tests.
 - **The operating system**: its process isolation, its file system under `cap-std`, its sockets,
   and its clock and random bytes.
-- **The user's own folders**: the data folder, which holds the key, the recorded ideas and the
-  modules `check` kept, and the cache of compiled modules. Whoever can read the key, or write the
+- **The user's own folders**: the data folder, which holds the key, the recorded ideas, the
+  modules `check` kept and what proofs found wrong, and the cache of compiled modules, which
+  `PLUGIN_DATA` may place elsewhere: whoever sets that variable names a folder lengua runs machine
+  code from. Whoever can read the key, or write the
   data folder, can sign locks lengua trusts: the lock's HMAC is a record of what this user's lengua
   checked, not a wall against the user's own account. Wasmtime 50.0.1 loads a cached module's
   machine code as it finds it, checking only that it suits this engine, so the cache folder is
@@ -705,8 +764,11 @@ own work to the microsecond.
 
 Three items here were stopped by Claude's safety filter (todo.md). The soundness review of the
 secret rule was done on 2026-11-10 (docs/reviews/secret-rule-2026-11-10.md): its five findings
-have tests and are closed. Two are still open: the tests that try to get past the sandbox on
-macOS and Windows, and W13, checking the engine's machine code for constant time. lengua isn't to be presented as covering
+have tests and are closed. The review of the host was done the same day
+(docs/reviews/host-2026-11-10.md): its eleven findings have tests (tests/host_hard.rs and unit
+tests) and are closed, and what it left open is in todo.md. Two are still open: the tests that
+try to get past the sandbox on macOS and Windows, of which that review's tests are a first part,
+and W13, checking the engine's machine code for constant time. lengua isn't to be presented as covering
 security because of its examples or its checksums: they show algorithms, not a product that
 resists an attacker.
 

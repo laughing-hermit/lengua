@@ -35,7 +35,7 @@ use crate::prove;
 use crate::runner::{self, End, Limits};
 use crate::state::{
     CODE_FILE, Files, IDEA_FILE, LEGACY_IDEA_FILE, LEGACY_TESTS_FILE, ProgramFolder, Snapshot,
-    State, stamped_copy, tested_module,
+    State, stamped_copy, tested_module, wrong_record,
 };
 use crate::testdiff;
 use crate::testfile::{self, TestSuite};
@@ -170,6 +170,8 @@ struct Serving {
     running: Box<crate::wasm::Running>,
     /// Its module, kept until it stops.
     program: Arc<crate::wasm::Program>,
+    /// Whether it listens on every address of this computer, not on the loopback alone.
+    anywhere: bool,
 }
 
 impl Serving {
@@ -180,7 +182,9 @@ impl Serving {
 
     /// Stops it, and says how it went.
     async fn stop(self) -> std::io::Result<runner::Run> {
-        let Self { running, program } = self;
+        let Self {
+            running, program, ..
+        } = self;
         let stopped = running.stop().await;
         drop(program);
         stopped
@@ -553,7 +557,17 @@ impl LenguaServer {
         connections: Vec<ConnectionReport>,
     ) -> RunReport {
         static STARTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let address = serving_address(server.port().unwrap_or(0), false);
+        let port = server.port().unwrap_or(0);
+        let address = serving_address(port, server.anywhere);
+        // A server other computers can reach is said to be one.
+        let place = if server.anywhere {
+            format!(
+                "port {port} of every address of this computer ({address}), so other computers \
+                 can reach it; from this computer it is at 127.0.0.1:{port}"
+            )
+        } else {
+            address.clone()
+        };
         let id = STARTS.fetch_add(1, Ordering::Relaxed);
         background.insert(
             folder.path().to_path_buf(),
@@ -579,7 +593,7 @@ impl LenguaServer {
             stderr: String::new(),
             exit_code: None,
             ended: format!(
-                "serving on {address}. Try it with your own tools, such as curl or nc, then call \
+                "serving on {place}. Try it with your own tools, such as curl or nc, then call \
                  run with stop: true to stop it and see what it printed. It stops by itself \
                  after ten minutes or when this session ends."
             ),
@@ -593,15 +607,20 @@ impl LenguaServer {
 /// The address a server `run` started takes connections on, as `run`'s reply says it: its port
 /// of the loopback, or of every address of this computer when `anywhere`, as the unspecified
 /// address, 0.0.0.0.
-fn serving_address(port: u16, _anywhere: bool) -> String {
-    format!("127.0.0.1:{port}")
+fn serving_address(port: u16, anywhere: bool) -> String {
+    if anywhere {
+        format!("0.0.0.0:{port}")
+    } else {
+        format!("127.0.0.1:{port}")
+    }
 }
 
-/// The limits of a server `run` leaves serving: ten minutes, and no file's size held.
-fn background_limits() -> Limits {
+/// The limits of a server `run` leaves serving: ten minutes, and a file held to `max_file_size`
+/// bytes, if there's a limit.
+fn background_limits(max_file_size: Option<u64>) -> Limits {
     Limits {
         timeout: BACKGROUND_LIMIT,
-        max_file_size: None,
+        max_file_size,
         ..Limits::default()
     }
 }
@@ -667,8 +686,10 @@ impl LenguaServer {
             10 seconds and \
             8 MiB of output, and lengua lets it use only what its idea names, reach only the \
             places it names, through connections lengua makes for it before it starts, and touch \
-            files only inside its working folder: \
-            an empty temporary folder, or `folder`. A server starts in the background on its \
+            files only inside its working folder: `folder`, where it may fill the user's disk, \
+            or else an empty temporary folder, where a file holds at most 64 MiB and its files \
+            256 MiB in all. lengua's own folders, and on Linux /proc, /sys and /dev, are no \
+            working folder. A server starts in the background on its \
             idea's port and run returns its address; call run with stop: true to stop it and get \
             what it printed (it also stops after ten minutes or when the session ends). path: \
             absolute path of the program folder; args: the program's arguments; stdin: text for \
@@ -677,7 +698,7 @@ impl LenguaServer {
             stdin_file: a file in folder to read as standard input instead of stdin, up to 16 \
             MiB; timeout_seconds: up to 40 (10 by default); env: environment variables, for an \
             idea that uses the environment; stop: true to stop the server run started.",
-        annotations(title = "Run program", read_only_hint = false, open_world_hint = false)
+        annotations(title = "Run program", read_only_hint = false, open_world_hint = true)
     )]
     async fn run(
         &self,
@@ -754,6 +775,13 @@ impl LenguaServer {
     ) -> Result<CheckReport, String> {
         let began = Instant::now();
         let machine = Machine::detect();
+        // What lengua.lock records a proof found wrong goes in the data folder too, where an
+        // earlier lock put back in the folder doesn't take it away.
+        if let Ok(Some(key)) = Key::load(&self.data_dir)
+            && let Ok(Some(lock)) = lock::read(folder.path(), Some(&key))
+        {
+            remember_wrong(&self.data_dir, &lock);
+        }
         // lengua's entry in idea.md's `verified` stays only while it names the idea and main.wat
         // as they are, whatever stage this check stops at.
         let idea_text = match read_optional(folder, IDEA_FILE)? {
@@ -1513,8 +1541,8 @@ impl LenguaServer {
                 .map(theirs)
         };
         let unseen = "the first version isn't on this machine to compare";
-        let idea = match std::fs::read_to_string(folder.file(IDEA_FILE)) {
-            Ok(now) if trust::idea_hash(now.as_bytes()) != lock.request.idea => {
+        let idea = match crate::state::read_text(&folder.file(IDEA_FILE)) {
+            Ok(Some(now)) if trust::idea_hash(now.as_bytes()) != lock.request.idea => {
                 let now = theirs(now);
                 Some(kept(&lock.request.idea).map_or_else(
                     || format!("{IDEA_FILE} changed; {unseen}"),
@@ -1524,11 +1552,11 @@ impl LenguaServer {
             _ => None,
         };
         // Tests that test less than the ones first recorded for the request.
-        let tests_less = match std::fs::read_to_string(folder.file(IDEA_FILE)) {
-            Ok(now) => kept(&lock.request.idea)
+        let tests_less = match crate::state::read_text(&folder.file(IDEA_FILE)) {
+            Ok(Some(now)) => kept(&lock.request.idea)
                 .map(|before| testdiff::tests_less(&before, &now))
                 .unwrap_or_default(),
-            Err(_) => Vec::new(),
+            _ => Vec::new(),
         };
         Changes {
             requests: lock.request.words.clone(),
@@ -1584,6 +1612,7 @@ impl LenguaServer {
         };
         lock::write(folder.path(), &lock, &key)
             .map_err(|error| format!("couldn't write {folder}/{}: {error}", lock::LOCK_FILE))?;
+        remember_wrong(&self.data_dir, &lock);
         if let Some(module) = replaced {
             let builder = crate::wasm::text::BUILDER;
             let _ = std::fs::remove_file(tested_module(self.data_dir.path(), builder, &module));
@@ -1621,7 +1650,11 @@ impl LenguaServer {
             proofs: Some(Box::new(proofs)),
             ..lock
         };
-        lock::write(folder.path(), &lock, &key).is_ok()
+        let written = lock::write(folder.path(), &lock, &key).is_ok();
+        if written {
+            remember_wrong(&self.data_dir, &lock);
+        }
+        written
     }
 }
 
@@ -2054,13 +2087,11 @@ fn folder_of(path: &str) -> Result<ProgramFolder, String> {
     }
 }
 
-/// A program file, or `None` when it doesn't exist yet.
+/// A program file, or `None` when it doesn't exist yet: read only as a regular file of a bounded
+/// size ([`crate::state::read_file`]), since a program folder may come from anyone.
 fn read_optional(folder: &ProgramFolder, name: &str) -> Result<Option<String>, String> {
-    match std::fs::read_to_string(folder.file(name)) {
-        Ok(text) => Ok(Some(text)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("couldn't read {folder}/{name}: {error}")),
-    }
+    crate::state::read_text(&folder.file(name))
+        .map_err(|error| format!("couldn't read {folder}/{name}: {error}"))
 }
 
 fn read_idea(folder: &ProgramFolder) -> Result<String, String> {
@@ -2076,15 +2107,15 @@ fn missing_parts(folder: &ProgramFolder, idea: &idea::Idea) -> Vec<String> {
         .iter()
         .filter_map(|part| {
             let path = folder.path().join(&part.idea);
-            match std::fs::read_to_string(&path) {
-                Err(_) => Some(format!(
+            match crate::state::read_text(&path) {
+                Err(_) | Ok(None) => Some(format!(
                     "`- Builds on:` links to [{}]({}), but {} isn't there: make that part first, \
                      a folder with its own idea.md and {CODE_FILE}, or fix the link",
                     part.name,
                     part.idea,
                     path.display()
                 )),
-                Ok(text) if idea::parse(&text).is_err() => Some(format!(
+                Ok(Some(text)) if idea::parse(&text).is_err() => Some(format!(
                     "the part [{}]({}) has idea problems of its own: call check with path {} \
                      first",
                     part.name,
@@ -2093,7 +2124,7 @@ fn missing_parts(folder: &ProgramFolder, idea: &idea::Idea) -> Vec<String> {
                         .map_or(path.clone(), Path::to_path_buf)
                         .display()
                 )),
-                Ok(_) => None,
+                Ok(Some(_)) => None,
             }
         })
         .collect()
@@ -2106,9 +2137,42 @@ fn state_of(data_dir: &DataDir, folder: &ProgramFolder) -> Result<State, String>
     Ok(State::of(&snapshot))
 }
 
+/// Keeps in the data folder what `lock` records a proof found wrong about the module it stamps,
+/// by the idea and the module ([`wrong_record`]): `run` refuses that module for that idea from
+/// then on, whatever lock the program's folder holds, so putting back an earlier lock, which
+/// this user's key signed too, doesn't let it run. A record that can't be written is left out:
+/// the lock still holds it.
+fn remember_wrong(data_dir: &DataDir, lock: &Lock) {
+    use std::io::Write as _;
+    let (Some(code), Some(proofs)) = (&lock.code, &lock.proofs) else {
+        return;
+    };
+    if proofs.module_sha256 != code.module_sha256 || proofs.wrong.is_empty() {
+        return;
+    }
+    let path = wrong_record(data_dir.path(), &lock.idea.sha256, &code.module_sha256);
+    if path.exists() {
+        return;
+    }
+    let found: Vec<String> = proofs
+        .wrong
+        .iter()
+        .map(|(id, found)| format!("generated {id}: {found}"))
+        .collect();
+    let text = found.join("\n");
+    if let Some(folder) = path.parent()
+        && std::fs::create_dir_all(folder).is_ok()
+        && let Ok(mut file) = tempfile::NamedTempFile::new_in(folder)
+        && file.write_all(text.as_bytes()).is_ok()
+    {
+        let _ = file.persist(&path);
+    }
+}
+
 /// [`state_of`] for a run: the folder's state, with the snapshot it comes from, whose lock is the
 /// one lengua's key verified, and the bytes of idea.md and main.wat that snapshot hashed, which
-/// the run takes in place of reading the lock or either file again.
+/// the run takes in place of reading the lock or either file again. What that lock records a proof
+/// found wrong is kept in the data folder too ([`remember_wrong`]).
 fn state_for_run(
     data_dir: &DataDir,
     folder: &ProgramFolder,
@@ -2116,6 +2180,9 @@ fn state_for_run(
     let key = Key::load(data_dir).map_err(|error| error.to_string())?;
     let (snapshot, files) = Snapshot::read_with_files(folder, key.as_ref())
         .map_err(|error| format!("can't read {folder}: {error}"))?;
+    if let Some(lock) = snapshot.valid_lock() {
+        remember_wrong(data_dir, lock);
+    }
     Ok((State::of(&snapshot), snapshot, files))
 }
 
@@ -2201,6 +2268,76 @@ fn working_folder(path: &str) -> Result<PathBuf, String> {
     Ok(folder)
 }
 
+/// `path` with its links followed as far as it exists, and the rest as written: what two paths
+/// are compared by when one of them may not be there yet.
+fn canonical(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = path;
+    loop {
+        if let Ok(found) = at.canonicalize() {
+            return rest
+                .iter()
+                .rev()
+                .fold(found, |path, name: &std::ffi::OsString| path.join(name));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_owned());
+                at = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
+/// Why `folder`, a working folder as [`working_folder`] gives it, can't be the folder of a run
+/// that reads or writes files there, when it can't. A program that uses files reaches everything
+/// beneath its working folder, so the folder is never one of lengua's own, a folder that holds
+/// one, or a folder inside one: the data folder, whose key signs every lock, and the folder of
+/// compiled modules, the data folder's or the one the agent's harness gives the plugin, whose
+/// machine code the engine runs as it finds it. On Linux it is never `/proc`, `/sys` or `/dev`
+/// or anything beneath them either, where the system shows its processes, their memory and its
+/// devices as files. Paths are compared with their links followed. The program's own folder is
+/// a working folder like any other: what a program changes there, its own idea.md, main.wat or
+/// lengua.lock, only stops its next run, since lengua.lock is signed with a key the program
+/// can't read, and what a proof found wrong is kept in the data folder.
+fn own_folder_problem(data_dir: &DataDir, folder: &Path) -> Option<String> {
+    let folder = canonical(folder);
+    let overlaps = |own: &Path| folder.starts_with(own) || own.starts_with(&folder);
+    let data = canonical(data_dir.path());
+    if overlaps(&data) {
+        return Some(format!(
+            "folder {} is, holds or lies inside lengua's data folder, {}, which keeps the key \
+             that signs lengua.lock, and a program reaches everything in its working folder: \
+             name a folder that holds only the files the program is for",
+            folder.display(),
+            data.display()
+        ));
+    }
+    let cache = canonical(&crate::wasm::engine::cache_folder(data_dir));
+    if overlaps(&cache) {
+        return Some(format!(
+            "folder {} is, holds or lies inside {}, where lengua keeps compiled modules, which \
+             the engine runs as it finds them, and a program reaches everything in its working \
+             folder: name a folder that holds only the files the program is for",
+            folder.display(),
+            cache.display()
+        ));
+    }
+    if cfg!(target_os = "linux")
+        && let Some(system) = ["/proc", "/sys", "/dev"]
+            .into_iter()
+            .find(|system| folder.starts_with(system))
+    {
+        return Some(format!(
+            "folder {} is inside {system}, the system's own: its files are this computer's \
+             processes, their memory and its devices, not the user's files",
+            folder.display()
+        ));
+    }
+    None
+}
+
 fn random_seed() -> Result<u64, String> {
     let mut bytes = [0_u8; 8];
     getrandom::fill(&mut bytes).map_err(|error| format!("couldn't draw a seed: {error}"))?;
@@ -2270,6 +2407,40 @@ mod tests {
     fn a_server_for_any_computer_is_said_to_serve_on_every_address() {
         assert_eq!(serving_address(8080, false), "127.0.0.1:8080");
         assert_eq!(serving_address(8080, true), "0.0.0.0:8080");
+    }
+
+    /// A working folder is none of lengua's own: not the data folder, not a folder inside it,
+    /// there yet or not, and not a folder that holds it, such as the user's home; a folder beside
+    /// it is one. (The folder of compiled modules is the data folder's `cache` here, unless the
+    /// harness that runs this test gives the plugin a folder of its own.)
+    #[test]
+    fn a_working_folder_is_none_of_lengua_s_own() {
+        let home = tempfile::tempdir().expect("a home");
+        let data = home.path().join("share").join("lengua");
+        std::fs::create_dir_all(data.join("cache")).expect("the data folder");
+        let notes = home.path().join("notes");
+        std::fs::create_dir_all(&notes).expect("a folder of the user's");
+        let data_dir = DataDir::new(data.clone());
+        for own in [
+            data.clone(),
+            data.join("cache"),
+            data.join("tested"),
+            home.path().join("share"),
+            home.path().to_path_buf(),
+        ] {
+            let problem = own_folder_problem(&data_dir, &own);
+            assert!(problem.is_some(), "{}", own.display());
+        }
+        assert_eq!(own_folder_problem(&data_dir, &notes), None);
+        if cfg!(target_os = "linux") {
+            for system in ["/proc", "/proc/1", "/sys/kernel", "/dev"] {
+                let problem = own_folder_problem(&data_dir, Path::new(system));
+                assert!(
+                    problem.is_some_and(|problem| problem.contains("the system's own")),
+                    "{system}"
+                );
+            }
+        }
     }
 
     #[test]

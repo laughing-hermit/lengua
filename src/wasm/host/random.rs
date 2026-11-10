@@ -47,18 +47,27 @@ impl Random {
     }
 }
 
-/// `random_get(buf, len)`.
+/// The most bytes `random_get` fills between two looks at the run's deadline and at lengua's
+/// stop: a program may ask for as many as its memory holds in one call.
+const CHUNK: usize = 1024 * 1024;
+
+/// `random_get(buf, len)`: filled a [`CHUNK`] at a time, so the call ends at the run's deadline
+/// however many bytes it was asked for.
 ///
 /// # Errors
 ///
-/// A buffer outside memory.
+/// A buffer outside memory, and a stop at the deadline.
 pub fn random_get(host: &mut Host, memory: &mut [u8], buf: u32, len: u32) -> Result<(), Fail> {
     let range = memory::range(memory, buf, len)?;
-    if !host.policy.random {
-        memory[range].fill(0);
-        return Ok(());
+    for chunk in memory[range].chunks_mut(CHUNK) {
+        host.limits.check()?;
+        if host.policy.random {
+            host.random.fill(chunk).map_err(Fail::Errno)?;
+        } else {
+            chunk.fill(0);
+        }
     }
-    host.random.fill(&mut memory[range]).map_err(Fail::Errno)
+    Ok(())
 }
 
 #[cfg(test)]

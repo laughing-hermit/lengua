@@ -99,6 +99,10 @@ pub fn declares_bundle(folder: &Path) -> bool {
 
 /// The start of the text file at `path`: enough for its frontmatter.
 pub(super) fn head(path: &Path) -> Option<String> {
+    // Only a regular file: a link isn't followed, and a pipe isn't opened.
+    if !std::fs::symlink_metadata(path).ok()?.file_type().is_file() {
+        return None;
+    }
     let file = std::fs::File::open(path).ok()?;
     let mut bytes = Vec::new();
     file.take(HEAD_BYTES).read_to_end(&mut bytes).ok()?;

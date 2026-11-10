@@ -878,6 +878,14 @@ impl fmt::Display for LockError {
 /// Fails when a lock exists but can't be trusted.
 pub fn read(folder: &Path, key: Option<&Key>) -> Result<Option<Lock>, LockError> {
     let path = folder.join(LOCK_FILE);
+    // Only a regular file is a lock: a link isn't followed, and a named pipe isn't opened, which
+    // would wait for ever. A program folder may come from anyone.
+    match std::fs::symlink_metadata(&path) {
+        Ok(named) if named.file_type().is_file() => {}
+        Ok(_) => return Err(LockError::Unreadable("it isn't a regular file".to_owned())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(LockError::Unreadable(error.to_string())),
+    }
     let file = match std::fs::File::open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -1000,6 +1008,9 @@ impl Key {
     /// Fails when the data folder can't be created or the key can't be read or written.
     pub fn load_or_create(data_dir: &DataDir) -> Result<Self, KeyError> {
         if let Some(key) = Self::load(data_dir)? {
+            // A folder that got another mode since, or that an earlier lengua left with one, is
+            // made the user's alone again; the key is there either way.
+            let _ = create_private_dir(data_dir.path());
             return Ok(key);
         }
         let folder = data_dir.path();
@@ -1065,14 +1076,20 @@ fn unhex(text: &str) -> Option<Vec<u8>> {
 }
 
 /// Makes the folder `path`, with its parents, readable only by this user where the system
-/// says who may read a folder.
+/// says who may read a folder; one that is there already with another mode, as when the engine's
+/// cache made it first, is given that mode.
 #[cfg(unix)]
 pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt as _;
+    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
-        .create(path)
+        .create(path)?;
+    let permissions = std::fs::metadata(path)?.permissions();
+    if permissions.mode() & 0o777 != 0o700 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 /// Makes the folder `path`, with its parents.

@@ -1047,7 +1047,7 @@ fn fd_close(host: &mut Host, fd: u32) -> Result<(), Fail> {
         return Err(Fail::Errno(errno::NOTCAPABLE));
     }
     if let Some(Descriptor::Socket(mut socket)) = host.fds.remove(fd) {
-        socket.close();
+        socket.close(&host.limits);
     }
     Ok(())
 }
@@ -1098,6 +1098,8 @@ fn fd_read(
                 return Err(Fail::Errno(errno::NOTCAPABLE));
             }
             for range in buffers {
+                // A look at the run's deadline before each buffer, which may be large.
+                host.limits.check()?;
                 let wanted = range.len();
                 let got = match files::read(open, &mut memory[range]) {
                     Ok(got) => got,

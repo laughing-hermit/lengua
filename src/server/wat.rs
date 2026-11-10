@@ -21,7 +21,7 @@ use super::{
     BlockProof, CheckParams, CheckReport, Checking, ConnectionReport, FURTHER, Found, IdeaStage,
     LenguaServer, Model, Passed, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun, Stage,
     VERIFIED_NOTE, Witness, already_serving, background_limits, check_wait, cost_line, counted,
-    ended_report, idea_problems, keep_tested, proof_time, proven_detail, random_seed, reaches,
+    ended_report, idea_problems, keep_tested, own_folder_problem, proof_time, proven_detail, random_seed, reaches,
     read_optional, settled, state_for_run, state_of, wait_for, working_folder,
 };
 use crate::checker::{self, wasm::Obligation};
@@ -35,7 +35,9 @@ use crate::lock::{self, CodeStamp, Key};
 use crate::platform::{Cache, CacheHolds, Machine};
 use crate::prove::{self, Verdict};
 use crate::runner::{End, Limits};
-use crate::state::{CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, ProgramFolder, State, tested_module};
+use crate::state::{
+    CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, ProgramFolder, State, tested_module, wrong_record,
+};
 use crate::testfile::{self, TestSuite};
 use crate::testrun;
 use crate::trust;
@@ -57,8 +59,15 @@ const MAX_STDIN_FILE: u64 = 16 * 1024 * 1024;
 /// by the `run` tool: a test's limits in the temporary folder lengua makes for the run and
 /// throws away after it, and none in a folder of the user's own (`own_folder`), whose files are
 /// the user's to fill.
-fn run_file_limits(_own_folder: bool) -> (Option<u64>, Option<u64>) {
-    (None, None)
+fn run_file_limits(own_folder: bool) -> (Option<u64>, Option<u64>) {
+    if own_folder {
+        (None, None)
+    } else {
+        (
+            Some(crate::runner::TEST_FILE_LIMIT),
+            Some(crate::wasm::host::limits::TEST_WRITTEN),
+        )
+    }
 }
 
 /// The most of what the rules leave to the proofs that main.wat's memory line names, each on its
@@ -514,7 +523,7 @@ fn parts_problems(
                 continue;
             }
         }
-        let Ok(theirs) = std::fs::read_to_string(part_folder.join(CODE_FILE)) else {
+        let Ok(Some(theirs)) = crate::state::read_text(&part_folder.join(CODE_FILE)) else {
             problems.push(format!(
                 "the part [{}]({}) has no {CODE_FILE}: {CODE_FILE} takes functions only \
                  from parts in WebAssembly; make the part an Attested Computation compiled to \
@@ -626,6 +635,18 @@ fn runnable(
         return Err(format!(
             "The proof found inputs where {CODE_FILE} is wrong, so it won't run: {}. Call \
              check with path {folder} to see them, then fix {CODE_FILE}.",
+            wrong.join("; ")
+        ));
+    }
+    // And an earlier lock put back in the folder: what a proof found wrong about this module
+    // of this idea is kept in the data folder too.
+    let kept = wrong_record(data_dir.path(), &lock.idea.sha256, &stamp.module_sha256);
+    if let Ok(found) = std::fs::read_to_string(&kept) {
+        let wrong: Vec<&str> = found.lines().collect();
+        return Err(format!(
+            "The proof found inputs where {CODE_FILE} is wrong, so it won't run: {}. \
+             lengua.lock doesn't record that, as when an earlier lock was put back, but lengua \
+             keeps it. Call check with path {folder}, then fix {CODE_FILE}.",
             wrong.join("; ")
         ));
     }
@@ -804,6 +825,13 @@ pub(super) fn run_from_shell(
     let ended = run_once_checked(Some(cache.as_path()), || {
         let (folder, workspace) = folders()?;
         let ready = runnable(data_dir, &folder, &request.env)?;
+        // The working folder of a program that uses files is never one of lengua's own or the
+        // system's: said before anything is built or compiled.
+        if ready.uses.contains(&Use::Files)
+            && let Some(problem) = own_folder_problem(data_dir, &workspace)
+        {
+            return Err(problem);
+        }
         let to_run = kept_or_built(data_dir, &folder, &ready)?;
         let connections = reaches(&ready.network)
             .iter()
@@ -1122,11 +1150,12 @@ impl LenguaServer {
             return false;
         }
         let path = folder.file(IDEA_FILE);
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(Some(text)) = crate::state::read_text(&path) else {
             return false;
         };
-        let current = std::fs::read(folder.file(CODE_FILE))
+        let current = crate::state::read_file(&folder.file(CODE_FILE))
             .ok()
+            .flatten()
             .map(|bytes| Sha256Hex::of(&bytes));
         if trust::idea_hash(text.as_bytes()) != *idea || current.as_ref() != Some(code) {
             return false;
@@ -1167,8 +1196,9 @@ impl LenguaServer {
             return text;
         }
         let idea = trust::idea_hash(text.as_bytes());
-        let code = std::fs::read(folder.file(CODE_FILE))
+        let code = crate::state::read_file(&folder.file(CODE_FILE))
             .ok()
+            .flatten()
             .map(|bytes| Sha256Hex::of(&bytes));
         let current =
             |entry: &trust::Verified| entry.idea == idea && Some(&entry.code) == code.as_ref();
@@ -1181,7 +1211,7 @@ impl LenguaServer {
         let _writing = self.lock_writes.lock().await;
         let path = folder.file(IDEA_FILE);
         // An idea edited since this check read it is the next check's.
-        if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+        if crate::state::read_text(&path).ok().flatten().as_deref() != Some(text.as_str()) {
             return text;
         }
         match replace(&path, &without) {
@@ -1203,7 +1233,7 @@ impl LenguaServer {
         let [idea, code] = &checking.files;
         let _writing = self.lock_writes.lock().await;
         let path = folder.file(IDEA_FILE);
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(Some(text)) = crate::state::read_text(&path) else {
             return;
         };
         let names_them = trust::lengua_entries(&text)
@@ -1245,6 +1275,14 @@ impl LenguaServer {
         let built = built_as_tested(folder, &ready)?;
         let (uses, network) = (ready.uses, ready.network);
         let workspace = params.folder.as_deref().map(working_folder).transpose()?;
+        // A folder the run reads or writes in, for a program that uses files or for its standard
+        // input, is never one of lengua's own or the system's.
+        if let Some(given) = &workspace
+            && (uses.contains(&Use::Files) || params.stdin_file.is_some())
+            && let Some(problem) = own_folder_problem(&self.data_dir, given)
+        {
+            return Err(problem);
+        }
         let seconds = params.timeout_seconds.unwrap_or(10);
         if !(1..=RUN_SECONDS).contains(&seconds) {
             return Err(format!("timeout_seconds goes from 1 to {RUN_SECONDS}"));
@@ -1302,7 +1340,9 @@ impl LenguaServer {
     ) -> Result<RunReport, String> {
         let mut background = self.background.lock().await;
         already_serving(&background, folder)?;
-        let limits = background_limits();
+        let anywhere = spec.listen.is_some_and(|(_, anywhere)| anywhere);
+        let (max_file_size, _) = run_file_limits(spec.folder.is_some());
+        let limits = background_limits(max_file_size);
         let running = self
             .pool()
             .start(program, spec, limits)
@@ -1324,6 +1364,7 @@ impl LenguaServer {
         let server = Serving {
             running: Box::new(running),
             program: Arc::clone(program),
+            anywhere,
         };
         Ok(self.keep_serving(&mut background, folder, server, assertions, connections))
     }

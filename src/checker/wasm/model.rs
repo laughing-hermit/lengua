@@ -26,6 +26,12 @@ pub const FIRST_ADDRESS: u64 = 1024;
 /// A WebAssembly page, in bytes.
 pub const PAGE: u64 = 65_536;
 
+/// The most pages main.wat's memory may have: 1 GiB. A program's memory is the worker's own, and
+/// every test of a program runs in a worker, several at once, so its size has a stated end. The
+/// largest memory of a program lengua ships has 1,538 pages; a C, C++ or Rust toolchain's module
+/// that the benchmark runs is no main.wat, and isn't held to this.
+pub const MAX_PAGES: u64 = 16_384;
+
 /// The most locals the checker reads of a function: the validator's own limit.
 const MAX_LOCALS: usize = 50_000;
 
