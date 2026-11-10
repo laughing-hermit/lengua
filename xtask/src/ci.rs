@@ -206,20 +206,31 @@ mod tests {
         assert_eq!(shown(&command), "cargo test --release");
     }
 
-    /// A program's stream goes whole into its log, and its own exit code is kept.
+    /// A program's stream goes whole into its log, its errors with its output, and its own exit
+    /// code is kept, the one it ends with when run alone: cargo asked of a manifest that isn't
+    /// there says so on its errors alone, and fails (with 101, where an end with no code gives 1).
     #[test]
     fn a_logged_program_keeps_its_stream_and_its_code() {
         let folder = tempfile::tempdir().expect("a folder");
         let log = folder.path().join("run.log");
-        let mut command = cargo();
-        command.arg("--version");
-        let status = Logged::start(command, &log)
+        let failing = || {
+            let mut command = cargo();
+            command.args(["metadata", "--manifest-path"]);
+            command.arg(folder.path().join("Cargo.toml"));
+            command
+        };
+        let status = Logged::start(failing(), &log)
             .expect("cargo starts")
             .wait()
             .expect("cargo ends");
-        assert!(status.success());
-        assert_eq!(code(status), 0);
+        let alone = failing()
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("cargo runs");
+        assert!(!status.success(), "{status}");
+        assert_eq!(code(status), code(alone));
         let kept = std::fs::read_to_string(&log).expect("the log");
-        assert!(kept.starts_with("cargo "), "{kept}");
+        assert!(kept.contains("error"), "{kept}");
     }
 }

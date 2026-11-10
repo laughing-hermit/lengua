@@ -413,6 +413,12 @@ mod tests {
             parse_args(words(&["install", "--check"])),
             Ok(Command::Install(None, options)) if options.check
         ));
+        let folder = if cfg!(windows) { "C:\\data" } else { "/data" };
+        assert!(matches!(
+            parse_args(words(&["--data-dir", folder, "install", "--check"])),
+            Ok(Command::Install(Some(data_dir), options))
+                if options.check && data_dir.path() == std::path::Path::new(folder)
+        ));
         assert!(parse_args(words(&["install", "--now"])).is_err());
     }
 }

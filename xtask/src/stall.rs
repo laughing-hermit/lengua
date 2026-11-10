@@ -199,15 +199,23 @@ mod tests {
         assert_eq!(squeezed("one"), "one");
     }
 
-    /// A program that ends before its time is waited for, with its own exit code.
+    /// A program that ends before its time is waited for, with its own exit code: cargo's, asked
+    /// of a manifest that isn't there, which it fails with.
     #[test]
     fn a_program_that_ends_in_time_keeps_its_code() {
-        let mut child = ci::cargo()
-            .arg("--version")
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("cargo starts");
+        let folder = tempfile::tempdir().expect("a folder");
+        let failing = || {
+            let mut command = ci::cargo();
+            command.args(["metadata", "--manifest-path"]);
+            command.arg(folder.path().join("Cargo.toml"));
+            command.stdout(Stdio::null());
+            command.stderr(Stdio::null());
+            command
+        };
+        let mut child = failing().spawn().expect("cargo starts");
         let status = watch(&mut child, Duration::from_secs(600), "600").expect("cargo ends");
-        assert!(status.success());
+        let alone = failing().status().expect("cargo runs");
+        assert!(!status.success(), "{status}");
+        assert_eq!(ci::code(status), ci::code(alone));
     }
 }
