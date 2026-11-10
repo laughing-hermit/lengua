@@ -531,13 +531,13 @@ fn every_run_and_proof_is_as_recorded() {
 
 /// The programs whose proofs the test below holds to a small budget, by folder: the two whose
 /// main.wat sorts records in place, where the recording once never ended.
-const HELD_TO_TIME: [&str; 2] = ["sort-large", "tally"];
+const HELD_TO_TIME: [&str; 3] = ["sha256", "sort-large", "tally"];
 
 /// The time each proof of [`HELD_TO_TIME`] gets in the test below, in seconds.
 const SHORT_SECONDS: u64 = 5;
 
-/// The longest a program of [`HELD_TO_TIME`] may take in the test below, in seconds: GitHub's
-/// runners took 40 for the two (run 42846675507).
+/// The longest a program of [`HELD_TO_TIME`] may take in the test below, in seconds: GitHub's Linux
+/// runner on x86-64 took 40 for the two (run 42846675507).
 const LONGEST_SECONDS: u64 = 300;
 
 /// A proof ends with its budget: every block of the programs in [`HELD_TO_TIME`], its samples
