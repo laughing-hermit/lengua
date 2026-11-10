@@ -127,8 +127,8 @@ is a problem, with a rewrite built from its own values.
 
 A generated test's rows draw from generators: `int`, `decimal`, `choice` and `string`. A `runs`
 column gives 1 to 1000 runs, 100 when empty. Boundary values run first on every check, and the
-other inputs are drawn fresh from a seed each check draws. A row with at most 5,000 combinations
-runs every one instead, while the whole suite stays within 20,000 runs. Expected results come from
+other inputs are drawn fresh from a seed each check draws. A block with no `choice` and at most
+5,000 combinations runs every one instead, while the whole suite stays within 20,000 runs. Expected results come from
 formulas: checked 128-bit whole numbers, exact decimals, doubles and singles, and text, with 31
 functions, from `len` to `tally`, `sha256`, `aes128`, `crc32` and `fma` among them.
 
