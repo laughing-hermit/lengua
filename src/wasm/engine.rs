@@ -2,11 +2,14 @@
 //! WebAssembly features [`FEATURES`] names, so that a module the validator takes is a module the
 //! engine runs, and floats' NaNs canonical, so a program computes the same bits on every CPU.
 //!
-//! Three configurations ([`Setup`]): a test's counts every operation it executes as Wasmtime's
-//! fuel, which is deterministic, and stops at a deadline through the engine's epochs; a run's
-//! stops at its deadline the same way and counts nothing; a run from a shell, or a benchmark's,
-//! does neither, so it pays for nothing it doesn't use. Compiled modules are kept in Wasmtime's
-//! own cache, in the `cache` folder of lengua's data folder.
+//! Three configurations run programs ([`Setup`]): a test's counts every operation it executes as
+//! Wasmtime's fuel, which is deterministic, and stops at a deadline through the engine's epochs; a
+//! run's stops at its deadline the same way and counts nothing; a run from a shell, or a
+//! benchmark's, does neither, so it pays for nothing it doesn't use. A fourth runs a WebAssembly
+//! solver for the prover ([`crate::wasm::solver`]): [`SOLVER_FEATURES`], the programs' features
+//! and exceptions, which a C++ solver throws and catches; neither a count nor a deadline, since
+//! the prover stops a solver by ending its process; and the stack a native solver has. Compiled
+//! modules are kept in Wasmtime's own cache, in the `cache` folder of lengua's data folder.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -14,7 +17,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use wasmparser::WasmFeatures;
-use wasmtime::{Cache, CacheConfig, Config, Engine, Strategy};
+use wasmtime::{Cache, CacheConfig, Collector, Config, Engine, Strategy};
 
 /// The WebAssembly features lengua's programs may use, the engine's and the validator's alike:
 /// floats, mutable globals, saturating float-to-int conversions, sign extension, reference types
@@ -30,6 +33,16 @@ pub const FEATURES: WasmFeatures = WasmFeatures::FLOATS
     .union(WasmFeatures::MULTI_VALUE)
     .union(WasmFeatures::BULK_MEMORY)
     .union(WasmFeatures::SIMD);
+
+/// The WebAssembly features a solver's module may use, which the solver's engine alone turns on:
+/// [`FEATURES`]; exceptions in their standard form (`try_table`, `throw` and `throw_ref`, which a
+/// C++ toolchain's `throw` and `catch` compile to, and the `exnref` they pass); and GC's types,
+/// without which Wasmtime has no collector's heap to keep a thrown exception in (its
+/// `gc_support`). Not GC's own instructions (no `struct`, `array` or `i31`), typed function
+/// references, or the legacy form of exceptions, which Wasmtime doesn't run.
+pub const SOLVER_FEATURES: WasmFeatures = FEATURES
+    .union(WasmFeatures::EXCEPTIONS)
+    .union(WasmFeatures::GC_TYPES);
 
 /// The engine's version, as Cargo.toml pins it.
 pub const ENGINE_VERSION: &str = "50.0.1";
@@ -90,6 +103,17 @@ pub const TICK: Duration = Duration::from_millis(10);
 /// becomes, as the prover's model holds a program's deepest calls to it.
 pub const MAX_WASM_STACK: usize = 512 * 1024;
 
+/// The most of its thread's stack a solver's WebAssembly calls may take, in bytes: the 8 MiB a
+/// native solver has on each of the five systems, where Linux and macOS give a program's first
+/// thread 8 MiB and z3's build gives its Windows program as much (`/STACK:8388608`, in its
+/// cmake/msvc_legacy_quirks.cmake). Past it, a call traps.
+pub const MAX_SOLVER_WASM_STACK: usize = 8 * 1024 * 1024;
+
+/// The stack of the thread a solver runs on: [`MAX_SOLVER_WASM_STACK`] for its WebAssembly calls,
+/// and beside it the room a program's thread keeps for the engine and the host
+/// ([`crate::wasm::runner::STACK`]).
+pub const SOLVER_STACK: usize = MAX_SOLVER_WASM_STACK + crate::wasm::runner::STACK;
+
 /// What a configuration of the engine is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Setup {
@@ -99,11 +123,18 @@ pub enum Setup {
     Run,
     /// A run from a shell, or a benchmark: neither.
     Shell,
+    /// A WebAssembly solver's, which the prover starts in a process of its own
+    /// ([`crate::wasm::solver`]): exceptions on, and neither a count nor a deadline, since the
+    /// prover stops a solver by ending its process.
+    Solver,
 }
 
 impl Setup {
     /// Every configuration.
-    pub const ALL: [Self; 3] = [Self::Test, Self::Run, Self::Shell];
+    pub const ALL: [Self; 4] = [Self::Test, Self::Run, Self::Shell, Self::Solver];
+
+    /// The configurations that run lengua's programs, each with exactly [`FEATURES`].
+    pub const PROGRAMS: [Self; 3] = [Self::Test, Self::Run, Self::Shell];
 
     /// Whether it counts the operations a program executes.
     #[must_use]
@@ -116,6 +147,26 @@ impl Setup {
     pub const fn interrupts(self) -> bool {
         matches!(self, Self::Test | Self::Run)
     }
+
+    /// The WebAssembly features it turns on: [`FEATURES`] for a program's, [`SOLVER_FEATURES`]
+    /// for a solver's.
+    #[must_use]
+    pub const fn features(self) -> WasmFeatures {
+        match self {
+            Self::Test | Self::Run | Self::Shell => FEATURES,
+            Self::Solver => SOLVER_FEATURES,
+        }
+    }
+
+    /// The most of its thread's stack WebAssembly calls may take: [`MAX_WASM_STACK`] for a
+    /// program's, [`MAX_SOLVER_WASM_STACK`] for a solver's.
+    #[must_use]
+    pub const fn max_wasm_stack(self) -> usize {
+        match self {
+            Self::Test | Self::Run | Self::Shell => MAX_WASM_STACK,
+            Self::Solver => MAX_SOLVER_WASM_STACK,
+        }
+    }
 }
 
 /// The engine's configuration for `setup`, keeping compiled modules in `cache` when given.
@@ -126,14 +177,23 @@ impl Setup {
 pub fn config(setup: Setup, cache: Option<&Path>) -> Result<Config, String> {
     let mut config = Config::new();
     config.strategy(Strategy::Cranelift);
-    // Every feature off, then lengua's on: whatever Wasmtime's defaults are, its set is this one.
+    // Every feature off, then the setup's on: whatever Wasmtime's defaults are, its set is this
+    // one.
     config.wasm_features(WasmFeatures::all(), false);
-    config.wasm_features(FEATURES, true);
+    config.wasm_features(setup.features(), true);
     config.cranelift_nan_canonicalization(true);
     config.parallel_compilation(true);
     config.consume_fuel(setup.counts());
     config.epoch_interruption(setup.interrupts());
-    config.max_wasm_stack(MAX_WASM_STACK);
+    config.max_wasm_stack(setup.max_wasm_stack());
+    if setup == Setup::Solver {
+        // A thrown exception is kept in the heap of Wasmtime's collector: the one of deferred
+        // reference counting, the only one lengua builds in (Cargo.toml's `gc-drc`).
+        config.collector(Collector::DeferredReferenceCounting);
+        // Wasmtime takes no WebAssembly stack larger than an async call's, though lengua makes
+        // no async call: one would have the solver's whole thread.
+        config.async_stack_size(SOLVER_STACK);
+    }
     if let Some(folder) = cache {
         let mut settings = CacheConfig::new();
         settings.with_directory(folder);
@@ -165,10 +225,12 @@ pub fn engine(setup: Setup, cache: Option<&Path>) -> Result<Engine, String> {
     static TEST: OnceLock<Result<Engine, String>> = OnceLock::new();
     static RUN: OnceLock<Result<Engine, String>> = OnceLock::new();
     static SHELL: OnceLock<Result<Engine, String>> = OnceLock::new();
+    static SOLVER: OnceLock<Result<Engine, String>> = OnceLock::new();
     let slot = match setup {
         Setup::Test => &TEST,
         Setup::Run => &RUN,
         Setup::Shell => &SHELL,
+        Setup::Solver => &SOLVER,
     };
     slot.get_or_init(|| -> Result<Engine, String> {
         let engine = Engine::new(&config(setup, cache)?)
@@ -221,6 +283,17 @@ pub fn cache_folder(data_dir: &crate::data_dir::DataDir) -> PathBuf {
 /// What's wrong, and where in the module.
 pub fn validate(wasm: &[u8]) -> Result<(), wasmparser::BinaryReaderError> {
     wasmparser::Validator::new_with_features(FEATURES)
+        .validate_all(wasm)
+        .map(|_| ())
+}
+
+/// Validates `wasm` as the solver's engine would take it: with exactly [`SOLVER_FEATURES`].
+///
+/// # Errors
+///
+/// What's wrong, and where in the module.
+pub fn validate_solver(wasm: &[u8]) -> Result<(), wasmparser::BinaryReaderError> {
+    wasmparser::Validator::new_with_features(SOLVER_FEATURES)
         .validate_all(wasm)
         .map(|_| ())
 }
@@ -349,6 +422,103 @@ mod tests {
         assert!(Setup::Test.counts() && Setup::Test.interrupts());
         assert!(!Setup::Run.counts() && Setup::Run.interrupts());
         assert!(!Setup::Shell.counts() && !Setup::Shell.interrupts());
+    }
+
+    /// A solver's setup counts nothing and stops nothing: the prover ends its process.
+    #[test]
+    fn a_solver_s_setup_neither_counts_nor_stops() {
+        assert!(!Setup::Solver.counts() && !Setup::Solver.interrupts());
+        assert!(!Setup::PROGRAMS.contains(&Setup::Solver));
+        assert!(Setup::ALL.contains(&Setup::Solver));
+    }
+
+    /// WebAssembly text as wast encodes it, with none of lengua's own checks.
+    fn encoded(text: &str) -> Vec<u8> {
+        let buffer = wast::parser::ParseBuffer::new(text).expect("WebAssembly text");
+        let wast::Wat::Module(mut module) =
+            wast::parser::parse::<wast::Wat>(&buffer).expect("a module")
+        else {
+            panic!("the text isn't a module");
+        };
+        module.encode().expect("the module's bytes")
+    }
+
+    /// A main.wat that throws: exceptions are a solver's alone. lengua's build of main.wat, which
+    /// every check of a program runs, refuses it, as each of the three engines that run programs
+    /// does, and the solver's engine compiles it.
+    #[test]
+    fn exceptions_are_a_solver_s_alone() {
+        let text = "(module (memory (export \"memory\") 1) (tag $boom (param i32)) (func (export \
+                    \"_start\") (throw $boom (i32.const 1))))";
+        let refused = crate::wasm::text::build(text)
+            .map(|_| ())
+            .map_err(|problem| problem.to_string());
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|problem| problem.contains("exceptions")),
+            "{refused:?}"
+        );
+        let wasm = encoded(text);
+        assert!(validate(&wasm).is_err());
+        for setup in Setup::PROGRAMS {
+            let engine = engine(setup, None).expect("the engine");
+            let module = wasmtime::Module::from_binary(&engine, &wasm);
+            assert!(
+                module.is_err(),
+                "the {setup:?} engine compiled a module with exceptions"
+            );
+        }
+        let checked = validate_solver(&wasm);
+        assert!(checked.is_ok(), "{:?}", checked.err());
+        let engine = engine(Setup::Solver, None).expect("the solver's engine");
+        let module = wasmtime::Module::from_binary(&engine, &wasm);
+        assert!(module.is_ok(), "{:?}", module.err());
+    }
+
+    /// A function that calls itself as many times as its argument says, and gives that number.
+    const DEEP: &str = "(module (func $deep (export \"deep\") (param i32) (result i32) (if \
+                        (result i32) (local.get 0) (then (i32.add (call $deep (i32.sub \
+                        (local.get 0) (i32.const 1))) (i32.const 1))) (else (i32.const 0)))))";
+
+    /// What [`DEEP`] gives for `calls` in `setup`'s engine, on a thread of `stack` bytes: the
+    /// number, or the engine's trap.
+    fn deep(setup: Setup, stack: usize, calls: i32) -> Result<i32, String> {
+        let wasm = encoded(DEEP);
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn(move || {
+                let engine = engine(setup, None)?;
+                let module = wasmtime::Module::from_binary(&engine, &wasm)
+                    .map_err(|error| error.to_string())?;
+                let mut store = wasmtime::Store::new(&engine, ());
+                let instance = wasmtime::Instance::new(&mut store, &module, &[])
+                    .map_err(|error| error.to_string())?;
+                let function = instance
+                    .get_typed_func::<i32, i32>(&mut store, "deep")
+                    .map_err(|error| error.to_string())?;
+                function.call(&mut store, calls).map_err(|error| {
+                    error
+                        .downcast_ref::<wasmtime::Trap>()
+                        .map_or_else(|| error.to_string(), |trap| format!("{trap:?}"))
+                })
+            })
+            .expect("a thread")
+            .join()
+            .expect("the thread ends")
+    }
+
+    /// A solver's calls go as deep as a native solver's stack lets them, past where a program's
+    /// trap: 60,000 calls take more than 512 KiB of any CPU's stack, at 16 bytes a call or more,
+    /// and less than 8 MiB at under 139 bytes a call, which such a small function's frame is.
+    #[test]
+    fn a_solver_s_calls_go_deeper_than_a_program_s() {
+        let calls = 60_000;
+        assert_eq!(
+            deep(Setup::Shell, crate::wasm::runner::STACK, calls),
+            Err("StackOverflow".to_owned())
+        );
+        assert_eq!(deep(Setup::Solver, SOLVER_STACK, calls), Ok(calls));
     }
 
     #[test]

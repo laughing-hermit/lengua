@@ -54,9 +54,12 @@ toml = "1.1"
 unicode-normalization = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-# The WebAssembly engine, pinned: Cranelift, its own compiled-module cache, nothing else of its
-# defaults (no WASI of its own, no component model, no GC, no threads).
-wasmtime = { version = "=50.0.1", default-features = false, features = ["cranelift", "cache", "parallel-compilation", "runtime", "std"] }
+# The WebAssembly engine, pinned: Cranelift, its own compiled-module cache, and the collector a
+# WebAssembly solver's exceptions are kept by (`gc`, with its deferred reference counting,
+# `gc-drc`), which only the solver's engine turns on: programs' engines keep GC and exceptions off
+# (src/wasm/engine.rs). Nothing else of its defaults (no WASI of its own, no component model, no
+# threads).
+wasmtime = { version = "=50.0.1", default-features = false, features = ["cranelift", "cache", "parallel-compilation", "runtime", "std", "gc", "gc-drc"] }
 # The validator Wasmtime 50.0.1 itself uses (^0.261.0), so a module is checked as the engine reads it.
 wasmparser = { version = "=0.261.0", default-features = false, features = ["std", "validate", "features", "simd"] }
 # main.wat's text, with each instruction's place in it, and lengua's library merged in.

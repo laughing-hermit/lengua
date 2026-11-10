@@ -2,10 +2,13 @@
 //! checks and, under a line that found a problem, one sentence saying what to do, then the
 //! verdict. It looks at the server's version and own file; the engine, by compiling and running
 //! a module that uses the WebAssembly features lengua turns on; the CPU, as the `machine` line
-//! names it; z3 and cvc5, where the prover finds them ([`smt::find`]: the release archive's
-//! solvers folder beside the server first, then PATH), and their versions against the ones
-//! lengua pins; whether the data folder and `PLUGIN_DATA` can be written; and how fine the
-//! clocks are. `lengua-mcp doctor` exits 0 only when nothing is wrong.
+//! names it; z3 and cvc5, where the prover finds them ([`smt::find`]: a WebAssembly z3 first,
+//! then the release archive's solvers folder beside the server, then PATH), native or
+//! WebAssembly, and their versions against the ones lengua pins; whether the data folder and
+//! `PLUGIN_DATA` can be written; and how fine the clocks are. A WebAssembly solver it compiles for
+//! this computer first, once, into the cache its host reads ([`solver::compile`]), so that no
+//! proof waits for that; `lengua-mcp install` ends with doctor, so an install compiles it too.
+//! `lengua-mcp doctor` exits 0 only when nothing is wrong.
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -17,6 +20,7 @@ use crate::platform::Machine;
 use crate::prove::smt::{self, Found, Kind};
 use crate::wasm::engine::{self, Setup};
 use crate::wasm::host::clock::RESOLUTION;
+use crate::wasm::solver;
 
 /// doctor's verdict when nothing is wrong.
 pub const NOTHING_WRONG: &str = "nothing is wrong";
@@ -206,7 +210,9 @@ const MARKED: &str = "; if macOS refused to start it, as it does an unsigned pro
 #[cfg(not(target_os = "macos"))]
 const MARKED: &str = "";
 
-/// z3 or cvc5: where the prover finds it, and its version against the one lengua pins.
+/// z3 or cvc5: where the prover finds it, native or WebAssembly, and its version against the one
+/// lengua pins. A WebAssembly solver is compiled for this computer first ([`kept`]), and its
+/// version is read through its host, as the prover starts it.
 fn solver(kind: Kind) -> Finding {
     let (name, pinned) = (kind.name(), kind.pinned());
     let archive = format!(
@@ -229,8 +235,29 @@ fn solver(kind: Kind) -> Finding {
     let place = match &found {
         Found::Beside(path) => format!("beside the server, {}", path.display()),
         Found::OnPath(path) => format!("on PATH, {}", path.display()),
+        Found::ModuleBeside(path) => {
+            format!("WebAssembly beside the server, {}", path.display())
+        }
+        Found::ModuleNamed(path) => format!(
+            "WebAssembly that {} names, {}",
+            kind.module_variable().unwrap_or(smt::Z3_WASM),
+            path.display()
+        ),
     };
-    let printed = match version_printed(found.path()) {
+    let ready = if found.is_module() {
+        match kept(found.path()) {
+            Ok(ready) => ready,
+            Err((line, problem)) => {
+                return Finding::wrong(
+                    format!("{name}: {place}, {line}"),
+                    problem.unwrap_or_else(|| format!("Proofs need {name} to run: {archive}.")),
+                );
+            }
+        }
+    } else {
+        String::new()
+    };
+    let printed = match version_printed(found.program().command().arg("--version")) {
         Ok(printed) => printed,
         Err(error) => {
             return Finding::wrong(
@@ -241,7 +268,7 @@ fn solver(kind: Kind) -> Finding {
     };
     match smt::version_of(&printed) {
         Some(version) if version == pinned => Finding::fine(format!(
-            "{name}: {version}, the version lengua pins, {place}"
+            "{name}: {version}, the version lengua pins, {place}{ready}"
         )),
         Some(version) => Finding::wrong(
             format!("{name}: {version}, {place}, not the {pinned} lengua pins"),
@@ -260,10 +287,44 @@ fn solver(kind: Kind) -> Finding {
     }
 }
 
-/// What `program --version` prints, within [`VERSION_WAIT`].
-fn version_printed(program: &Path) -> Result<String, String> {
-    let mut child = Command::new(program)
-        .arg("--version")
+/// A WebAssembly solver's module at `module`, compiled for this computer and kept in the folder
+/// its host reads ([`solver::cache_folder`]), so that no proof waits for that: what doctor's line
+/// adds for it, where it is kept and how long doctor took to make it ready, a moment once it is
+/// kept. When it can't be, what the line says instead, and the problem's sentence when it isn't
+/// the solver's usual one.
+fn kept(module: &Path) -> Result<String, (String, Option<String>)> {
+    let Some(cache) = solver::cache_folder() else {
+        return Err((
+            "which lengua can't keep compiled here, as it finds no data folder".to_owned(),
+            Some(
+                "Each proof would compile it again: lengua keeps it compiled in its own data \
+                 folder, which HOME names on Linux and macOS (or XDG_DATA_HOME on Linux) and \
+                 LOCALAPPDATA on Windows."
+                    .to_owned(),
+            ),
+        ));
+    };
+    eprintln!(
+        "lengua-mcp: compiling {} for this computer, which can take a minute the first time",
+        module.display()
+    );
+    let started = Instant::now();
+    solver::compile(module, Some(&cache)).map_err(|problem| {
+        (
+            format!("which this computer's engine can't compile: {problem}"),
+            None,
+        )
+    })?;
+    Ok(format!(
+        ", compiled for this computer and kept in {} ({})",
+        cache.display(),
+        seconds(started.elapsed())
+    ))
+}
+
+/// What `command`, a solver's command with `--version`, prints, within [`VERSION_WAIT`].
+fn version_printed(command: &mut Command) -> Result<String, String> {
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -446,6 +507,11 @@ fn nanoseconds(ns: u128) -> String {
     } else {
         format!("{}.{} ms", ns / 1_000_000, ns % 1_000_000 / 100_000)
     }
+}
+
+/// `duration` in seconds, to a tenth: `31.2 s`.
+fn seconds(duration: Duration) -> String {
+    format!("{:.1} s", duration.as_secs_f64())
 }
 
 /// `count` of `thing`, as `1 core` or `4 cores`.
