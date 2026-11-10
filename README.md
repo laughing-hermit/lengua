@@ -116,14 +116,16 @@ marked: if you trust the archive, clear the mark first with `xattr -dr com.apple
 <folder>`. The install says how on macOS and on Windows, and clears nothing itself.
 
 To try the plugin without installing it, load the unpacked folder for one session:
-`claude --plugin-dir <folder>`. Other agent harnesses load it from its Agent Plugins manifests,
-`plugin.json` and `mcp.json`.
+`claude --plugin-dir <folder>`. Other agent harnesses are meant to load it from its Agent Plugins
+manifests, `plugin.json` and `mcp.json`, which `tests/manifests.rs` holds to the 1.1.0 schemas; no
+run has loaded it in one yet.
 
 From the source, `cargo xtask plugin` builds the server into `plugin/server/`, with the Rust that
 `rust-toolchain.toml` pins (1.99.1, which rustup installs); then `claude --plugin-dir
 /absolute/path/to/lengua/plugin`. The prover finds z3 and cvc5 in a `solvers/` folder beside the
-server's folder, else on `PATH`. Without them, programs are still checked and tested, but not
-proven.
+server's folder, else on `PATH`. Without them, programs are still checked and tested, and a proof
+finishes only where it needs no solver: where the tests tried every value, or the terms settle
+every step.
 
 ## Use
 
@@ -141,9 +143,9 @@ Describe a program to your agent: "Use lengua to write a program that ...". Then
    every test, what is proven, and any change made to the idea after your words.
 
 Run it with the `run` tool, which gives it 10 seconds by default (up to 40) and 8 MiB of each
-output stream, in a fresh folder or in one you name. A server keeps serving in the background until `run` stops
-it, ten minutes pass, or the session ends. From your own shell, scripts and services, the `done`
-reply gives the command:
+output stream, in a fresh folder or in one you name. A server keeps serving in the background
+until `run` stops it, ten minutes pass, or the session ends. From your own shell, scripts and
+services, the `done` reply gives the command:
 
 ```sh
 lengua-mcp run <program folder> -- <arguments>
@@ -189,7 +191,8 @@ Within lengua, for a program at `done`:
 What it doesn't promise:
 
 - **Nothing outside lengua.** `lengua-mcp wasm` writes the module out, a standard WASI preview 1
-  module that another runtime can run, with none of these checks behind it.
+  module, which another runtime can run when the program reaches only standard streams and
+  files, with none of these checks behind it.
 - **Not every proof finishes.** Some tests stay "tested, not proven": sorts and word tallies over
   8 bytes, SHA-256 and AES-128 (the proof doesn't model them), a server that waits on its
   connections with `poll_oneoff`, and whatever runs out of time.
@@ -215,8 +218,9 @@ lengua's program runs through `lengua-mcp run`, with every check it makes. It ru
 C++ and Rust compiled to WebAssembly (wasi-sdk 34, rustc 1.99.1) and run in the same engine and
 host, and against their native builds, made on the runner. The runs alternate, and a one-sided
 Mann-Whitney U test decides CPU and wall time at p < 0.01; memory and size are compared as
-measured. [KNOWN_BEHIND](KNOWN_BEHIND) names every row where lengua isn't ahead yet, and may only
-shrink.
+measured. [KNOWN_BEHIND](KNOWN_BEHIND) must name every row where lengua isn't ahead, and may only
+shrink: a row where lengua is behind or undecided that the list doesn't name, or one it names
+where lengua is ahead, fails the gate.
 
 The latest run is 42756074550, at commit 076bcc1, on all five runners. Its reports, as the bench
 wrote them from the run's results:
@@ -240,14 +244,17 @@ workloads against three languages):
 | Windows on x86-64 | 21 | 37 | 2 | 40 |
 | Windows on ARM64 | 21 | 35 | 2 | 40 |
 
-- **Size:** lengua's module is smaller on every row but one workload, capitals from standard
-  input, against C and C++.
+- **Size:** lengua's module is smaller on every row but one workload's, the 64 MiB stream of
+  capitals (upcase-stdin), against C and C++.
 - **Time:** where lengua was behind, it was on programs that mostly start up or run briefly (the
-  empty program, the hypotenuse, the 1 MiB capitals and shout), by 10% or less where the report
-  gives a ratio; and on macOS on ARM64 on the word count, which took 1.14 to 1.21 times the C and
-  Rust modules' time. Windows counts a process's CPU time in 15.6 ms ticks, so on both Windows
-  runners the short workloads read the same for every version, and their CPU rows stay
-  undecided.
+  empty program, the hypotenuse, and the 1 MiB capitals from a file and from standard input), by
+  10% or less where the report gives a ratio; and on macOS on ARM64 on the word count, which took
+  1.14 to 1.21 times the C and Rust modules' time. Windows counts a process's CPU time in 15.6 ms
+  ticks, so on both Windows runners a short workload's median is a whole number of ticks, most
+  often the same one for every module, and most of those CPU rows stay undecided. Three came out
+  behind: shout against C's module on Windows on x86-64 and upcase against C's module on Windows
+  on ARM64, both at 1.00×, and shout against Rust's module on Windows on x86-64, whose median was
+  no ticks to lengua's one.
 - **Memory:** lengua's median peak was 0.90 to 1.14 times the other module's. On Linux on x86-64,
   lengua's run adds 620 KiB to 1.02 MiB to its own module's peak (the report's last section).
 
@@ -323,15 +330,15 @@ against native C++ are undecided.
 
 ## Status and what's next
 
-lengua 0.2.0 is a work in progress. The WebAssembly lengua's milestones W0 to W12c and W14 are
-on main; W13 was stopped by the safety filter, and is the owner's. On main, the suite passes
-natively on all five runners (run 42760180544); among its tests, every program of `examples/`
-and `tests/fixtures` goes from its request to done. W17a, lengua's tooling in Rust, passed the
-suite on all five runners (run 42753840475), and built each runner's archive, then installed and
-checked it on a clean runner of its own system and CPU (run 42753851417). In an interactive
-Claude Code session, the agent followed the Linux on x86-64 archive's two skills and drove its
-`lengua-mcp` as the MCP client, from a request to done; loading the plugin into Claude Code
-itself is left for the owner ([todo.md](todo.md), W14's test).
+lengua 0.2.0 is a work in progress. The WebAssembly lengua's milestones W0 to W12c, W14 and
+W17a, lengua's tooling in Rust, are on main; W13 was stopped by the safety filter, and is the
+owner's. At bce6cd5, which merged W17a with W12c, the suite passes natively on all five runners
+(run 42765232534); among its tests, every program of `examples/` and `tests/fixtures` goes from
+its request to done. There, each runner's archive was built, then installed and checked on a
+clean runner of its own system and CPU (run 42765242004). In an interactive Claude Code session,
+the agent followed the Linux on x86-64 archive's two skills and drove its `lengua-mcp` as the MCP
+client, from a request to done; loading the plugin into Claude Code itself is left for the owner
+([todo.md](todo.md), W14's test).
 
 The finish line, seven points in [todo.md](todo.md), isn't reached. The gate doesn't pass yet on
 any runner; `check` doesn't yet compile each module ahead of time for the machine's CPU; and this
