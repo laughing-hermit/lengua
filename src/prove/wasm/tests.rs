@@ -1863,12 +1863,12 @@ const COUNT_AT_64: [(&str, &str); 3] = [
 ];
 
 /// count, whose words in a buffer-full depend on whether the one before ended inside a word,
-/// carries that from one buffer-full to the next as a flag, which its `$count_piece` asserts is 0
-/// or 1. The induction's step makes the flag any value at the read loop's head, and from there
-/// the assertion fails, so the step doesn't hold and `wc -lw` in SIMD128 is proven by length, as
-/// far as a proof's time goes: here every text of up to a buffer-full and a byte, the flag
-/// carried from the first piece to the second. The native count keeps its flag in a register it
-/// never asserts.
+/// carries the last byte of one buffer-full to the next, which its `$count_piece` asserts is a
+/// byte. The induction's step makes it any value at the read loop's head, and from there the
+/// assertion fails, so the step doesn't hold and `wc -lw` in SIMD128 is proven by length, as far
+/// as a proof's time goes: here every text of up to a buffer-full and a byte, the byte carried
+/// from the first piece to the second. The native count keeps a flag in a register it never
+/// asserts.
 #[test]
 fn proves_a_vector_word_count_by_length_as_its_flag_is_asserted() {
     if !solvers_installed() {
