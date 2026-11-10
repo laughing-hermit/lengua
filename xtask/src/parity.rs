@@ -21,7 +21,9 @@
 //!   from a cache the task makes first, which it times as the module's one-time compile. The
 //!   folder gets replay.tsv (each session's questions, differences and two times), parity.tsv
 //!   (the totals) and parity.md (the report, also in the job's summary), and in kept/ a few of the
-//!   sessions whose answers differ or whose WebAssembly replay didn't end as native z3's did.
+//!   sessions whose answers differ and a few of those whose replay didn't end by itself with 0,
+//!   each with what the two z3s printed for it and what they said on their errors, so that a
+//!   difference can be read block by block.
 //!   `PARITY_SECONDS`, when it gives a number, stops starting sessions after that long, so that
 //!   the job's time is never passed; the report then says how many were replayed.
 //! - `cargo xtask solver-report <folder>`: every runner's two legs, downloaded into `<folder>`,
@@ -95,7 +97,8 @@ const PARITY: &str = "parity.md";
 /// The report on every runner, in the report's folder.
 const BAR_REPORT: &str = "solver-bar.md";
 
-/// The most sessions the replay keeps for whoever looks into a difference.
+/// The most sessions the replay keeps for whoever looks into a difference, and as many again of
+/// those whose replay didn't end by itself with 0.
 const KEPT: usize = 5;
 
 /// The most lines of a replay's error output the report quotes.
@@ -701,9 +704,13 @@ pub fn differences(native: &str, wasm: &str) -> Differences {
             continue;
         }
         let kind = match (was, is) {
-            (Some(was), Some(is)) => match kind_of(was) {
-                Said::Nothing => kind_of(is),
-                kind => kind,
+            // An error where native z3 printed something else is an error, whatever it stands
+            // in for: values that only differ are two models of the same answer, which this isn't.
+            (Some(was), Some(is)) => match (kind_of(was), kind_of(is)) {
+                (Said::Nothing, kind) | (kind, Said::Nothing) => kind,
+                (Said::Answer, _) => Said::Answer,
+                (_, Said::Error) => Said::Error,
+                (kind, _) => kind,
             },
             _ => Said::Missing,
         };
@@ -962,7 +969,7 @@ pub fn parity(arguments: &[String]) -> Result<u8, String> {
     }
     let arguments = Z3_ARGUMENTS.join(" ");
     let kept = folder.join("kept");
-    let mut keeping = 0;
+    let (mut keeping, mut failing) = (0_usize, 0_usize);
     let began = Instant::now();
     let mut rows = Vec::new();
     for (at, path) in listed.iter().enumerate() {
@@ -1018,12 +1025,29 @@ pub fn parity(arguments: &[String]) -> Result<u8, String> {
                 format!(", WebAssembly z3 {}", row.wasm.ending())
             }
         );
-        let notable =
-            row.differences.count() > 0 || !row.wasm.ended_well() || !row.native.ended_well();
-        if notable && keeping < KEPT {
+        let failed = !row.wasm.ended_well() || !row.native.ended_well();
+        let keep = if failed {
+            failing += 1;
+            failing <= KEPT
+        } else if row.differences.count() > 0 {
+            keeping += 1;
+            keeping <= KEPT
+        } else {
+            false
+        };
+        if keep {
             files::folder(&kept)?;
             files::copy(path, &kept.join(&row.name))?;
-            keeping += 1;
+            for (who, replay) in [("native", &row.native), ("wasm", &row.wasm)] {
+                write(
+                    &kept.join(format!("{}.{who}.printed.txt", row.name)),
+                    &replay.printed,
+                )?;
+                write(
+                    &kept.join(format!("{}.{who}.errors.txt", row.name)),
+                    &replay.errors,
+                )?;
+            }
         }
         rows.push(row);
     }
@@ -1303,6 +1327,11 @@ mod tests {
             found.examples.get(&Said::Values),
             Some(&(2, "((t0 #x07))".to_owned(), "((t0 #x08))".to_owned()))
         );
+        // An error in place of values is an error, not other values.
+        let refused = PRINTED.replace("((t0 #x07))", "(error \"model is not available\")");
+        let found = differences(PRINTED, &refused);
+        assert_eq!(found.by_kind.get(&Said::Error), Some(&1));
+        assert_eq!(found.by_kind.get(&Said::Values), None);
         let ended = differences(PRINTED, "@@lengua@@\nsat\n");
         assert_eq!(ended.by_kind.get(&Said::Missing), Some(&3));
         assert_eq!(kind_of(&["(:reason-unknown \"timeout\")"]), Said::Reason);
