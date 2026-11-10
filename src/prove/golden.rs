@@ -13,9 +13,7 @@
 //! the blocks in [`NARROW`]), so that every combination is proven. Each proof has a model of its
 //! own, so that the functions one proof's runs reached say nothing of another's. The samples keep
 //! the idea's ranges, edges included, but for texts longer than [`SAMPLE_TEXT`]. A proof that
-//! still runs out of time is marked `~`, since how far it gets depends on the machine. Where
-//! lengua reads no free memory yet, each proof's terms are held to a proof worker's share
-//! ([`super::watch::WorkerShareForTest`]), as free memory holds them on Linux.
+//! still runs out of time is marked `~`, since how far it gets depends on the machine.
 //!
 //! `LENGUA_GOLDEN=write cargo test --release --lib prove::golden -- --ignored` records them under
 //! `target/golden/`, in prover-wasm.txt; without the variable the test compares. The recording
@@ -524,16 +522,10 @@ fn record_program(program: &Program, seconds: u64, recording: &mut String) {
 }
 
 /// The guard: every program's samples run and its blocks are proven as recorded (or recorded,
-/// where there is nothing to compare with: see [`compare_or_record`]). Where lengua reads no free
-/// memory yet (Windows and macOS), a proof whose terms would fill the computer's memory would end
-/// the test's process when an allocation failed, as run 42793458469 saw on Windows: there each
-/// proof's terms are held to a proof worker's share instead ([`super::watch::WorkerShareForTest`]),
-/// and a proof that passes it is recorded as one whose terms grew too large for the memory, as a
-/// proof that runs low on free memory is recorded on Linux.
+/// where there is nothing to compare with: see [`compare_or_record`]).
 #[test]
 #[ignore = "the prover's golden: run with --ignored around a change to the prover"]
 fn every_run_and_proof_is_as_recorded() {
-    let _share = super::watch::WorkerShareForTest::hold();
     compare_or_record(RECORDING, &record());
 }
 
