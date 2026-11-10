@@ -7,6 +7,10 @@ license = "Apache-2.0"
 description = "lengua's tooling, run as `cargo xtask <task>`: each step of CI's workflow, the release archive, the goldens' comparison and the bench's WebAssembly builds."
 publish = false
 
+# The tests' folders, with the tempfile the workspace already has.
+[dev-dependencies]
+tempfile = "3"
+
 # The workspace's lints: no unsafe code, every item documented, no unwrap (CI's clippy denies
 # every warning).
 [lints.rust]

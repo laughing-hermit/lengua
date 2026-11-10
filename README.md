@@ -125,11 +125,12 @@ which is Debian 13; `debian:12`, `ubuntu:22.04` and Alpine are too old). In any 
 ## Build
 
 ```sh
-scripts/build-plugin.sh
+cargo xtask plugin
 ```
 
 This builds the server and installs it at `plugin/server/lengua-mcp`, where both plugin manifests
-expect it. Run it again after every change to the Rust code.
+expect it. Run it again after every change to the Rust code. `cargo xtask` runs lengua's tooling,
+the task crate in `xtask/`, with the Rust that `rust-toolchain.toml` pins (rustup installs it).
 
 `scripts/release.sh` builds the release archive of the computer it runs on, one of the five lengua
 is built for: `dist/lengua-<version>-<target>.tar.gz` for `linux-x86_64`, `linux-aarch64` and

@@ -291,18 +291,34 @@ jobs:
           ref: ${{ matrix.ref }}
           fetch-depth: ${{ matrix.depth }}
 
-      # The base predates some of the scripts the steps below run (a base leg needs the full
-      # history, which brings the dispatched commit with it), so the leg runs the base's code with
-      # the dispatched ref's scripts.
-      - name: The dispatched ref's scripts
+      # The base predates some of the scripts and of the task crate the steps below run (a base
+      # leg needs the full history, which brings the dispatched commit with it), so the leg runs
+      # the base's code with the dispatched ref's scripts, Rust and task crate: the crate checked
+      # out beside the base, where `cargo xtask` builds and runs it on the base's folder.
+      - name: The dispatched ref's scripts and task crate
         if: ${{ matrix.ref != '' }}
-        run: git checkout ${{ github.sha }} -- scripts
-
-      - name: The machine
-        run: bash scripts/ci/machine.sh ${{ matrix.target }}
+        run: git checkout ${{ github.sha }} -- scripts rust-toolchain.toml && git worktree add "$RUNNER_TEMP/tooling" ${{ github.sha }} && echo "CARGO_ALIAS_XTASK=run --locked --manifest-path $RUNNER_TEMP/tooling/Cargo.toml --package xtask --" >> "$GITHUB_ENV"
 
       - name: Rust
         run: bash scripts/ci/setup.sh ${{ matrix.target }} rust
+
+      # The tests read the CPU's counters, which Linux lets a user read with this.
+      - name: The CPU's counters
+        if: ${{ runner.os == 'Linux' }}
+        run: sudo sysctl kernel.perf_event_paranoid=1 > /dev/null || true
+
+      # target/ holds the task crate's build too, which the machine's step makes first.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ci-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'scripts/ci/setup.sh') }}
+          restore-keys: ci-${{ matrix.target }}-
+
+      - name: The machine
+        run: cargo xtask machine ${{ matrix.target }}
 
       # The solvers are kept between runs. A release doesn't need them: the archive brings its own,
       # which scripts/release.sh fetches as tools.tsv pins them.
@@ -315,15 +331,6 @@ jobs:
       - name: z3 and cvc5, pinned by checksum
         if: ${{ matrix.mode != 'compile' && matrix.mode != 'release' }}
         run: bash scripts/ci/setup.sh ${{ matrix.target }} solvers
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ci-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'scripts/ci/setup.sh') }}
-          restore-keys: ci-${{ matrix.target }}-
 
       # --keep-going: every target's errors in one run, not the first target's alone. A release
       # is built from a commit whose suite already ran.
@@ -347,15 +354,7 @@ jobs:
           LENGUA_RANDOM_SEED: ${{ inputs.seed }}
           STALL_SECONDS: ${{ inputs.stall_seconds }}
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
-        run: |
-          selection=$(bash scripts/ci/test-selection.sh $TEST_FILES)
-          tests='set -o pipefail; cargo test --release --locked --workspace --no-fail-fast '"$selection"' -- $FILTER 2>&1 | tee test.log'
-          if [ -n "$STALL_SECONDS" ]; then
-            bash scripts/stall-report.sh "$STALL_SECONDS" bash -c "$tests"
-          else
-            bash -c "$tests"
-          fi
-          bash scripts/ci/ran-some-tests.sh test.log "$FILTER$TEST_FILES"
+        run: cargo xtask test
 
       - name: The slow ignored tests
         if: ${{ matrix.mode == 'ignored' }}
@@ -369,15 +368,7 @@ jobs:
           LENGUA_MUTATE_ONLY: ${{ inputs.mutate_only }}
           STALL_SECONDS: ${{ inputs.stall_seconds }}
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
-        run: |
-          selection=$(bash scripts/ci/test-selection.sh $TEST_FILES)
-          tests='set -o pipefail; cargo test --release --locked --workspace --no-fail-fast '"$selection"' -- --ignored --nocapture $FILTER 2>&1 | tee ignored.log'
-          if [ -n "$STALL_SECONDS" ]; then
-            bash scripts/stall-report.sh "$STALL_SECONDS" bash -c "$tests"
-          else
-            bash -c "$tests"
-          fi
-          bash scripts/ci/ran-some-tests.sh ignored.log "$FILTER$TEST_FILES"
+        run: cargo xtask test --ignored
 
       # The checker's and the prover's reports on every program, recorded. target/ is cached
       # whole, the recordings included, so they go first: a restored old recording would be
@@ -389,13 +380,7 @@ jobs:
         env:
           RUST_TEST_THREADS: "1"
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
-        run: |
-          rm -rf target/golden
-          set -o pipefail
-          LENGUA_GOLDEN=write cargo test --release --locked --lib -- --ignored \
-            every_report_is_as_recorded every_run_and_proof_is_as_recorded 2>&1 | tee golden.log
-          bash scripts/ci/ran-some-tests.sh golden.log goldens
-          ls -l target/golden
+        run: cargo xtask golden
 
       - name: The recordings, kept
         if: ${{ matrix.mode == 'golden' }}
@@ -487,7 +472,7 @@ jobs:
       # test that skips itself notes why (lengua::skiplog) and the notes are counted here.
       - name: What the tests skipped
         if: always()
-        run: bash scripts/skip-summary.sh skips.log | tee -a "$GITHUB_STEP_SUMMARY"
+        run: cargo xtask skips skips.log
 
       - name: Keep the logs and the server
         if: always()
