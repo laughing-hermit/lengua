@@ -1,12 +1,12 @@
 # lengua in real sessions
 
 The product as people use it: each request typed into a real interactive Claude Code session with
-lengua's plugin from this repository, in a new folder, by `scripts/session-suite.py`, which
-answers as a person who wants the program would (yes to each permission prompt, the first choice
-of each question, and "Yes, go ahead." when asked in words) and stops when the program's lock says
-`check` passed it. "Proven" lists the behaviors proven for every input in range; the rest are
-tested, with each proof line saying why. Turns counts the requests typed, the first included;
-minutes are the session's, the agent's work and lengua's checks together.
+lengua's plugin from this repository, in a new folder, by a driver (the tag `native-final` keeps
+it) that answers as a person who wants the program would (yes to each permission prompt, the first
+choice of each question, and "Yes, go ahead." when asked in words) and stops when the program's
+lock says `check` passed it. "Proven" lists the behaviors proven for every input in range; the
+rest are tested, with each proof line saying why. Turns counts the requests typed, the first
+included; minutes are the session's, the agent's work and lengua's checks together.
 
 ## x86-64 Linux (2026-11-02)
 

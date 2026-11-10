@@ -48,9 +48,8 @@ open standards, so it works in Claude Code, Codex, Cursor and other agent harnes
 > bundle is, and `check` holds each program to its parts' current code. In real Claude Code
 > sessions, twelve requests on each Linux target from an add to an HTTPS fetch, every program came
 > from one request ([SESSIONS.md](SESSIONS.md)). Linux on ARM64 is the same product, every example
-> with its AArch64 twin; [WHITEPAPER.md](WHITEPAPER.md) says what lengua is, and `site/` is a local
-> site for sharing specs. What's left for people, and the work the safety filter stopped or that
-> was skipped, is in [todo.md](todo.md).
+> with its AArch64 twin; [WHITEPAPER.md](WHITEPAPER.md) says what lengua is. What's left for
+> people, and the work the safety filter stopped or that was skipped, is in [todo.md](todo.md).
 
 ## Requirements
 
@@ -241,10 +240,11 @@ Complete programs, each with its spec, tests included, and its assembly:
   SSE2, so it runs on every x86-64 computer. Claude Code wrote it through lengua from one plain
   request in an interactive session; that version took 128 bytes a step with AVX-512 and, on a
   4 GiB file, ran at 15.8 GB/s, ahead of hand-written AVX-512 C, 12 times faster than plain C and
-  25 times faster than GNU `wc` (it is kept as
-  [a benchmark program](benches/programs/count/avx512.s)). The SSE2 counting is proven right,
-  with no solver question, for every input up to 3,190 bytes in four minutes of a GitHub runner,
-  and further each time a `check` asks to prove on; one pipe write holds 4096.
+  25 times faster than GNU `wc` (the tag `native-final` keeps it as
+  [a benchmark program](https://github.com/laughing-hermit/lengua/blob/native-final/benches/programs/count/avx512.s)).
+  The SSE2 counting is proven right, with no solver question, for every input up to 3,190 bytes in
+  four minutes of a GitHub runner, and further each time a `check` asks to prove on; one pipe write
+  holds 4096.
 
 Their `lengua.lock` files aren't committed, because a lock is signed with each machine's own key.
 Ask the agent to check one with lengua: one `check` records the spec, checks its tests and the
@@ -328,5 +328,4 @@ LGPL is one of three licenses it offers, the others MIT and Apache-2.0). The too
 separate programs, also permissive: LLVM's assembler and linker (Apache-2.0 with the LLVM
 exception), z3 (MIT) and cvc5 (BSD-3-Clause; its `-gpl` builds aren't used). Only tests here use
 QEMU (GPL-2.0), as a separate program, and GCC builds only the benchmark's C and C++. The programs
-lengua builds use no library at all. The site's Next.js brings an optional image library, sharp,
-whose libvips is LGPL-3.0, which the site doesn't use.
+lengua builds use no library at all.

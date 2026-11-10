@@ -37,7 +37,6 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".cargo/**"
-      - "scripts/**"
       - ".github/**"
   schedule:
     - cron: "17 5 * * 1"
