@@ -10,6 +10,15 @@
 //! (`--solver-wasm`, [`crate::wasm::solver`]) with z3's usual arguments, so that the pipes, the
 //! questions, the logs and the watchdog are the same for either. `lengua-mcp doctor` says where
 //! it found each, with the same function.
+//!
+//! `LENGUA_SMT_LOG=<folder>` keeps what each solver is sent, as it is sent, in a file of its own
+//! in that folder: `<process>-<session>-<solver>.smt2`, for this process's id, the number of the
+//! session the solver serves (one [`Solver`], its two solvers and their resets) and the solver's
+//! name. The file starts with a comment that names the command the solver was started with, and
+//! after each question a comment gives the answer and how long it took. Given to the same
+//! solver as its input, the file asks it the same questions in the same order, with the same
+//! options and time limits: `cargo xtask solver-parity` replays z3's sessions so, through native
+//! z3 and through the WebAssembly one.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -335,12 +344,50 @@ const CONFIRM_FACTOR: u64 = 4;
 /// The most earlier results of one float operation a new one is tied to, for each.
 const MAX_CONGRUENT: usize = 64;
 
+/// The environment variable that names the folder where each solver's session is kept, as the
+/// module's documentation says.
+pub const SMT_LOG: &str = "LENGUA_SMT_LOG";
+
+/// Where a session's solvers keep what they are sent: the folder [`SMT_LOG`] names, and the
+/// session's number in this process.
+#[derive(Debug, Clone)]
+struct SessionLog {
+    folder: PathBuf,
+    session: usize,
+}
+
+impl SessionLog {
+    /// The file of `kind`'s solver in this session, made anew, which starts by naming `command`,
+    /// what started it; none when the folder can't take it, as a log is no reason for a proof to
+    /// fail.
+    fn open(&self, kind: Kind, command: &Command) -> Option<std::fs::File> {
+        let process = std::process::id();
+        let name = format!("{process}-{}-{}.smt2", self.session, kind.name());
+        let mut file = std::fs::File::create(self.folder.join(name)).ok()?;
+        let words: Vec<String> = std::iter::once(command.get_program())
+            .chain(command.get_args())
+            .map(|word| word.to_string_lossy().into_owned())
+            .collect();
+        let header = format!(
+            "; {} for session {} of process {process}: {}\n",
+            kind.name(),
+            self.session,
+            words.join(" ")
+        );
+        file.write_all(header.as_bytes()).ok()?;
+        Some(file)
+    }
+}
+
 /// One running solver.
 struct Process {
     kind: Kind,
     child: Child,
     input: ChildStdin,
     output: BufReader<ChildStdout>,
+    /// What it is sent, as it is sent, and its answers as comments, when [`SMT_LOG`] names a
+    /// folder to keep them in.
+    log: Option<std::fs::File>,
     /// The time limit the solver was last given, in milliseconds.
     limit_ms: u64,
     /// The time limit it started with, which a reset returns to.
@@ -379,8 +426,15 @@ fn command(kind: Kind, program: &Program, timeout_ms: u64, floats: bool) -> Comm
 
 impl Process {
     /// Starts `program`, which speaks like `kind`, giving each question at most `timeout_ms`, for
-    /// questions that may hold floats when `floats` says so.
-    fn start(kind: Kind, program: &Program, timeout_ms: u64, floats: bool) -> io::Result<Self> {
+    /// questions that may hold floats when `floats` says so; with `log`, what it is sent is kept
+    /// in its session's file.
+    fn start(
+        kind: Kind,
+        program: &Program,
+        timeout_ms: u64,
+        floats: bool,
+        log: Option<&SessionLog>,
+    ) -> io::Result<Self> {
         if let Program::Wasm { module, .. } = program
             && !module.is_file()
         {
@@ -389,12 +443,14 @@ impl Process {
                 module.display()
             )));
         }
-        let mut child = command(kind, program, timeout_ms, floats)
+        let mut command = command(kind, program, timeout_ms, floats);
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()?;
         super::watch::started(child.id());
+        let log = log.and_then(|log| log.open(kind, &command));
         let input = child
             .stdin
             .take()
@@ -410,6 +466,7 @@ impl Process {
             child,
             input,
             output,
+            log,
             limit_ms: timeout_ms,
             start_ms: timeout_ms,
             ran_out: false,
@@ -442,10 +499,18 @@ impl Process {
     }
 
     fn send(&mut self, text: &str) -> io::Result<()> {
+        self.note(text);
         self.input
             .write_all(text.as_bytes())
             .and_then(|()| self.input.flush())
             .map_err(|error| self.failed(error))
+    }
+
+    /// Writes `text` to the solver's log, when it has one.
+    fn note(&mut self, text: &str) {
+        if let Some(log) = &mut self.log {
+            let _ = log.write_all(text.as_bytes());
+        }
     }
 
     /// Why the solver failed: the watchdog's reason when it stopped the solver.
@@ -516,9 +581,11 @@ impl Process {
             Some("unsat") => Answer::Unsat,
             _ => Answer::Unknown,
         };
+        let elapsed = asked.elapsed();
         self.ran_out = answer == Answer::Unknown
-            && asked.elapsed()
-                >= std::time::Duration::from_millis(limit_ms.saturating_sub(limit_ms / 20));
+            && elapsed >= std::time::Duration::from_millis(limit_ms.saturating_sub(limit_ms / 20));
+        let name = self.kind.name();
+        self.note(&format!("; {name}: {answer:?} in {elapsed:?}\n"));
         Ok(answer)
     }
 
@@ -601,8 +668,9 @@ pub struct Solver {
     second: Option<Process>,
     /// Why no second solver checks the first, when none does.
     pub alone: Option<String>,
-    /// Everything sent, when `LENGUA_SMT_LOG` names a folder to keep it in.
-    log: Option<std::fs::File>,
+    /// The folder each solver keeps what it is sent in, when [`SMT_LOG`] names one: the float
+    /// session's solver keeps its own there too.
+    log: Option<PathBuf>,
     defined: Vec<bool>,
     /// The questions asked so far, for the trace.
     pub questions: usize,
@@ -696,7 +764,8 @@ impl Solver {
 
     /// Starts the first of `solvers` that runs, to answer, and the next one that runs, to check
     /// it, giving each question at most `timeout_ms`, for questions that may hold floats when
-    /// `floats` says so. Each is a kind of solver and what to start for it.
+    /// `floats` says so. Each is a kind of solver and what to start for it. Each keeps what it is
+    /// sent in the folder [`SMT_LOG`] names, when it names one.
     ///
     /// # Errors
     ///
@@ -706,7 +775,25 @@ impl Solver {
         timeout_ms: u64,
         floats: bool,
     ) -> io::Result<Self> {
-        let mut running = Vec::new();
+        let log = std::env::var_os(SMT_LOG)
+            .filter(|folder| !folder.is_empty())
+            .map(PathBuf::from);
+        Self::started(solvers, timeout_ms, floats, log)
+    }
+
+    /// [`Self::with_programs`], each solver keeping what it is sent in the folder `log` when
+    /// given: a session's files, numbered in this process.
+    fn started(
+        solvers: &[(Kind, Program)],
+        timeout_ms: u64,
+        floats: bool,
+        log: Option<PathBuf>,
+    ) -> io::Result<Self> {
+        let session = log.clone().map(|folder| SessionLog {
+            folder,
+            session: SESSIONS.fetch_add(1, Ordering::Relaxed),
+        });
+        let mut running: Vec<Process> = Vec::new();
         let mut missing = Vec::new();
         for (kind, program) in solvers {
             let kind = *kind;
@@ -719,7 +806,7 @@ impl Solver {
             } else {
                 timeout_ms * CONFIRM_FACTOR
             };
-            match Process::start(kind, program, limit, floats) {
+            match Process::start(kind, program, limit, floats, session.as_ref()) {
                 Ok(process) => running.push(process),
                 Err(error)
                     if error.kind() == io::ErrorKind::NotFound
@@ -731,9 +818,13 @@ impl Solver {
             }
         }
         let mut running = running.into_iter();
-        let first = running
+        let mut first = running
             .next()
             .ok_or_else(|| io::Error::other(missing.join("; ")))?;
+        // A solver that couldn't start is named in the log of the one that answers instead.
+        for why in &missing {
+            first.note(&format!("; {why}\n"));
+        }
         let second = running.next();
         let alone = second.is_none().then(|| {
             if missing.is_empty() {
@@ -741,14 +832,6 @@ impl Solver {
             } else {
                 missing.join("; ")
             }
-        });
-        let log = std::env::var_os("LENGUA_SMT_LOG").and_then(|folder| {
-            let session = SESSIONS.fetch_add(1, Ordering::Relaxed);
-            let name = format!("{}-{session}.smt2", std::process::id());
-            let mut file = std::fs::File::create(std::path::Path::new(&folder).join(name)).ok()?;
-            file.write_all(format!("(set-logic {})\n", logic(floats)).as_bytes())
-                .ok()?;
-            Some(file)
         });
         Ok(Self {
             first,
@@ -783,8 +866,6 @@ impl Solver {
     ///
     /// Fails when a solver stops responding.
     pub fn reset(&mut self) -> io::Result<()> {
-        let logic = logic(self.first.floats);
-        self.note(&format!("(reset)\n(set-logic {logic})\n"));
         self.first.reset()?;
         if let Some(second) = &mut self.second {
             second.reset()?;
@@ -818,9 +899,6 @@ impl Solver {
 
     /// Sends `text` to every solver.
     fn send(&mut self, text: &str) -> io::Result<()> {
-        if let Some(log) = &mut self.log {
-            let _ = log.write_all(text.as_bytes());
-        }
         self.first.send(text)?;
         if let Some(second) = &mut self.second {
             second.send(text)?;
@@ -1144,13 +1222,6 @@ impl Solver {
         (quotient, remainder)
     }
 
-    /// Writes `text` to the log, when there is one.
-    fn note(&mut self, text: &str) {
-        if let Some(log) = &mut self.log {
-            let _ = log.write_all(text.as_bytes());
-        }
-    }
-
     /// Whether some input meets every condition in `conditions`. With `values`, also returns
     /// those terms' values for one such input, by term. The conditions are impossible only when
     /// every solver says so, and inputs a solver finds count only when they meet the conditions.
@@ -1228,7 +1299,7 @@ impl Solver {
             // answers them itself.
             if self.floats.is_none() {
                 let cvc5 = [(Kind::Cvc5, program(Kind::Cvc5))];
-                let mut floats = Self::with_programs(&cvc5, self.timeout_ms, true)?;
+                let mut floats = Self::started(&cvc5, self.timeout_ms, true, self.log.clone())?;
                 if let Some(deadline) = self.deadline {
                     floats.until(deadline);
                 }
@@ -1265,13 +1336,8 @@ impl Solver {
             text.push_str(&format!("(assert t{})\n", condition.index()));
         }
         self.send(&text)?;
-        let asked = std::time::Instant::now();
         let first = self.first.check_sat(self.limit(self.timeout_ms))?;
         let name = self.first.kind.name();
-        self.note(&format!(
-            "(check-sat)\n; {name}: {first:?} in {:?}\n",
-            asked.elapsed()
-        ));
         let mut model = HashMap::new();
         let answer = match first {
             Answer::Sat if values.is_empty() && !model_wanted => Answer::Sat,
@@ -1325,10 +1391,7 @@ impl Solver {
         if limit == 0 {
             return Ok(false);
         }
-        let name = second.kind.name();
-        let asked = std::time::Instant::now();
         let answer = second.check_sat(limit)?;
-        let elapsed = asked.elapsed();
         let possible = match answer {
             Answer::Sat if !wanted => true,
             Answer::Sat => match second.model(pool, conditions, values)? {
@@ -1340,7 +1403,6 @@ impl Solver {
             },
             _ => false,
         };
-        self.note(&format!("; {name}: {answer:?} in {elapsed:?}\n"));
         Ok(possible)
     }
 
@@ -1360,9 +1422,7 @@ impl Solver {
             return Ok(Answer::Unsat);
         };
         let name = second.kind.name();
-        let asked = std::time::Instant::now();
         let answer = second.check_sat(limit)?;
-        let elapsed = asked.elapsed();
         let (answer, why) = match answer {
             Answer::Unsat => (Answer::Unsat, String::new()),
             Answer::Sat => match second.model(pool, conditions, values)? {
@@ -1381,7 +1441,6 @@ impl Solver {
                 ),
             ),
         };
-        self.note(&format!("; {name}: {answer:?} in {elapsed:?}\n"));
         if answer == Answer::Unknown {
             self.why_unknown = why;
         }
@@ -1633,6 +1692,85 @@ mod tests {
             "{}",
             solver.why_unknown
         );
+    }
+
+    /// What z3 prints when `text` is its input: its answers.
+    fn answered(text: &str) -> String {
+        use std::io::Write as _;
+        let mut child = Command::new("z3")
+            .args(["-in", "-smt2", "-memory:4096"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("z3 starts");
+        let mut input = child.stdin.take().expect("its input");
+        input.write_all(text.as_bytes()).expect("z3 reads it");
+        drop(input);
+        let output = child.wait_with_output().expect("z3 ends");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// A session's log is what its solver was sent, as it was sent, after a comment that names
+    /// the command that started it, with each answer and its time as a comment: given to the
+    /// same solver as its input, it asks the same questions, with the same options and limits,
+    /// and gets the same answers and values.
+    #[test]
+    fn a_session_s_log_asks_its_solver_the_same_questions() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let z3 = [(Kind::Z3, Program::Native(OsString::from("z3")))];
+        let Ok(mut solver) = Solver::started(&z3, 5000, false, Some(folder.path().to_owned()))
+        else {
+            crate::skiplog::note("z3 isn't installed");
+            return;
+        };
+        let mut pool = Pool::default();
+        let (x, wraps) = wraps(&mut pool);
+        let (answer, model) = solver.witness(&pool, &[wraps]).expect("answers");
+        assert_eq!((answer, model.get(&x)), (Answer::Sat, Some(&255)));
+        let zero = pool.bv(8, 0);
+        let x_is_zero = pool.eq(x, zero);
+        let (answer, _) = solver
+            .check(&pool, &[wraps, x_is_zero], &[])
+            .expect("answers");
+        assert_eq!(answer, Answer::Unsat);
+        solver.reset().expect("resets");
+        drop(solver);
+        let logs: Vec<PathBuf> = std::fs::read_dir(folder.path())
+            .expect("the folder")
+            .map(|entry| entry.expect("an entry").path())
+            .collect();
+        let [log] = logs.as_slice() else {
+            panic!("one solver, one log: {logs:?}");
+        };
+        let name = log.file_name().expect("a name").to_string_lossy();
+        assert!(
+            name.starts_with(&format!("{}-", std::process::id())) && name.ends_with("-z3.smt2"),
+            "{name}"
+        );
+        let text = std::fs::read_to_string(log).expect("the log");
+        assert!(
+            text.starts_with("; z3 for session ") && text.contains(": z3 -in -smt2 -memory:4096\n"),
+            "{text}"
+        );
+        for sent in [
+            "(set-option :produce-models true)\n(set-logic QF_BV)\n",
+            "(check-sat-using (try-for (then bit-blast sat) 5000))\n",
+            "(get-value (",
+            "\n; z3: Sat in ",
+            "\n; z3: Unsat in ",
+            "(reset)\n",
+        ] {
+            assert!(text.contains(sent), "{sent:?} isn't in\n{text}");
+        }
+        // z3 asked again, from the log alone, answers as it did: sat with x at 255, then unsat.
+        let printed = answered(&text);
+        let answers: Vec<&str> = printed
+            .lines()
+            .filter(|line| matches!(*line, "sat" | "unsat" | "unknown"))
+            .collect();
+        assert_eq!(answers, ["sat", "unsat"], "{printed}");
+        assert_eq!(parse_values(&printed).values().copied().max(), Some(255));
     }
 
     #[test]
