@@ -2,7 +2,8 @@
 //! forbid unsafe code outright: any call that needs it is wrapped here in a safe function, with a
 //! test on the runner of the system it is for. On Linux, a program run in a process forked from
 //! this one, with what the system counted of its cost; on Windows, how the system describes the
-//! CPU's caches, and what a child process cost.
+//! CPU's caches, and what a child process cost; on Windows and macOS, the memory the computer has
+//! free and in all, and what a process holds of it.
 
 /// One of the CPU's caches, as Windows describes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,6 +338,218 @@ pub fn process_usage(child: &std::process::Child) -> Result<Usage, String> {
         kernel_ns: nanoseconds(kernel),
         peak_bytes: u64::try_from(counters.PeakWorkingSetSize).unwrap_or(u64::MAX),
     })
+}
+
+/// The computer's memory, as its system counts it.
+#[cfg(any(windows, target_os = "macos"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Memory {
+    /// What new work can still take, in bytes. On Windows, the physical memory free or the
+    /// room left under the commit limit, whichever is less: an allocation fails at either. On
+    /// macOS, the pages free and those inactive, which the system gives back when asked.
+    pub available: u64,
+    /// The physical memory the computer has, in bytes.
+    pub total: u64,
+}
+
+/// The computer's memory, free and in all, from `GlobalMemoryStatusEx`.
+///
+/// # Errors
+///
+/// The system's reason, when it won't say.
+#[cfg(windows)]
+pub fn memory() -> Result<Memory, String> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+    let size = u32::try_from(std::mem::size_of::<MEMORYSTATUSEX>()).unwrap_or(u32::MAX);
+    let mut status = MEMORYSTATUSEX {
+        dwLength: size,
+        ..MEMORYSTATUSEX::default()
+    };
+    // SAFETY: `status` is a MEMORYSTATUSEX of this frame, which outlives the call, and its
+    // `dwLength` says its size, as the call needs; the call fills it and nothing else.
+    let read = unsafe { GlobalMemoryStatusEx(&raw mut status) };
+    if read == 0 {
+        return Err(format!(
+            "GlobalMemoryStatusEx: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(Memory {
+        available: status.ullAvailPhys.min(status.ullAvailPageFile),
+        total: status.ullTotalPhys,
+    })
+}
+
+/// The memory the process with this number holds resident, its working set, in bytes, from
+/// `K32GetProcessMemoryInfo`.
+///
+/// # Errors
+///
+/// The system's reason, when it won't open the process or say: no process has the number, or it
+/// is another user's.
+#[cfg(windows)]
+pub fn resident_bytes(pid: u32) -> Result<u64, String> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::ProcessStatus::{
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+    };
+
+    // SAFETY: the call takes no pointer; it gives a new handle, or null.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid) };
+    if handle.is_null() {
+        return Err(format!("OpenProcess: {}", std::io::Error::last_os_error()));
+    }
+    let size = u32::try_from(std::mem::size_of::<PROCESS_MEMORY_COUNTERS>()).unwrap_or(u32::MAX);
+    let mut counters = PROCESS_MEMORY_COUNTERS {
+        cb: size,
+        ..PROCESS_MEMORY_COUNTERS::default()
+    };
+    // SAFETY: `handle` is the open handle above, with the access the call needs, and `counters`
+    // is a PROCESS_MEMORY_COUNTERS of this frame, `size` bytes, which the call fills.
+    let read = unsafe { K32GetProcessMemoryInfo(handle, &raw mut counters, size) };
+    let problem = std::io::Error::last_os_error();
+    // SAFETY: `handle` is the handle opened above, which nothing else holds, closed once.
+    unsafe {
+        CloseHandle(handle);
+    }
+    if read == 0 {
+        return Err(format!("K32GetProcessMemoryInfo: {problem}"));
+    }
+    Ok(u64::try_from(counters.WorkingSetSize).unwrap_or(u64::MAX))
+}
+
+/// macOS's own calls, which only this crate makes.
+#[cfg(target_os = "macos")]
+mod macos {
+    unsafe extern "C" {
+        /// `mach_host_self`: a port that names this computer to the kernel's counters.
+        pub(super) fn mach_host_self() -> u32;
+        /// `host_statistics64`: the counters of one flavor, written to `info` as 32-bit
+        /// integers, at most `count` of them; `count` becomes how many it wrote.
+        pub(super) fn host_statistics64(host: u32, flavor: i32, info: *mut u32, count: *mut u32)
+        -> i32;
+    }
+}
+
+/// The flavor of `host_statistics64` that counts the memory's pages (`HOST_VM_INFO64`).
+#[cfg(target_os = "macos")]
+const HOST_VM_INFO64: i32 = 4;
+
+/// How many 32-bit integers the page counts take (`vm_statistics64`, as macOS has written it
+/// since 10.9: `HOST_VM_INFO64_REV1_COUNT`). Its first is the pages free and its third the
+/// pages inactive.
+#[cfg(target_os = "macos")]
+const VM_INFO_INTEGERS: usize = 38;
+
+/// The computer's memory, free and in all: the kernel's page counts from `host_statistics64`,
+/// and the page's size and the count of physical pages from `sysconf`.
+///
+/// # Errors
+///
+/// When the system won't say.
+#[cfg(target_os = "macos")]
+pub fn memory() -> Result<Memory, String> {
+    use nix::libc;
+
+    /// The port that names this computer, asked for once: each ask takes a reference to it.
+    static HOST: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    let host = *HOST.get_or_init(|| {
+        // SAFETY: the call takes nothing and gives a port's name, a number.
+        unsafe { macos::mach_host_self() }
+    });
+    let mut counts = [0_u32; VM_INFO_INTEGERS];
+    let mut written = u32::try_from(VM_INFO_INTEGERS).unwrap_or(0);
+    // SAFETY: `counts` holds `written` 32-bit integers, and the kernel writes at most that many
+    // there, then how many it wrote to `written`; both are of this frame and outlive the call.
+    let status = unsafe {
+        macos::host_statistics64(host, HOST_VM_INFO64, counts.as_mut_ptr(), &raw mut written)
+    };
+    if status != 0 {
+        return Err(format!("host_statistics64: kern_return_t {status}"));
+    }
+    // SAFETY: `sysconf` takes a number and gives one; it reads no memory of ours.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    // SAFETY: as above.
+    let pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) };
+    let (Ok(page), Ok(pages)) = (u64::try_from(page), u64::try_from(pages)) else {
+        return Err(format!("sysconf: {}", std::io::Error::last_os_error()));
+    };
+    // The kernel counts pages in unsigned 32-bit integers.
+    let count = |at: usize| u64::from(counts[at]);
+    Ok(Memory {
+        available: count(0).saturating_add(count(2)).saturating_mul(page),
+        total: pages.saturating_mul(page),
+    })
+}
+
+/// The flavor of `proc_pid_rusage` that gives the first of its records (`RUSAGE_INFO_V0`).
+#[cfg(target_os = "macos")]
+const RUSAGE_INFO_V0: i32 = 0;
+
+/// The memory the process with this number holds resident, in bytes, from `proc_pid_rusage`.
+///
+/// # Errors
+///
+/// The system's reason, when it won't say: no process has the number, or it is another user's.
+#[cfg(target_os = "macos")]
+pub fn resident_bytes(pid: u32) -> Result<u64, String> {
+    use nix::libc;
+
+    let pid = i32::try_from(pid).map_err(|error| error.to_string())?;
+    // `rusage_info_v0` is 96 bytes: 16 of an identifier, then ten 64-bit counts, of which the
+    // seventh is the resident size.
+    let mut record = [0_u64; 12];
+    // SAFETY: `record` is 96 bytes aligned to 8, of this frame, which is what the first flavor
+    // writes; the call writes nothing else.
+    let status =
+        unsafe { libc::proc_pid_rusage(pid, RUSAGE_INFO_V0, record.as_mut_ptr().cast()) };
+    if status != 0 {
+        return Err(format!(
+            "proc_pid_rusage: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(record[8])
+}
+
+#[cfg(all(test, any(windows, target_os = "macos")))]
+mod memory_tests {
+    use super::{memory, resident_bytes};
+
+    /// The system says how much memory the computer has, and that some of it, not more than all,
+    /// is free for new work.
+    #[test]
+    fn the_computer_has_memory_and_some_of_it_free() {
+        let memory = memory().expect("this computer's memory");
+        eprintln!("{memory:?}");
+        assert!(memory.total >= 1 << 30, "{memory:?}");
+        assert!(memory.available > 0, "{memory:?}");
+        assert!(memory.available <= memory.total, "{memory:?}");
+    }
+
+    /// This process holds some memory, a child it started and still runs holds some too, and no
+    /// process has the largest number there is.
+    #[test]
+    fn a_running_process_holds_memory() {
+        let own = resident_bytes(std::process::id()).expect("this process's memory");
+        assert!(own > 0);
+        // A program that waits for input it never gets, so it runs until it is killed.
+        let waits = if cfg!(windows) { "cmd" } else { "cat" };
+        let mut child = std::process::Command::new(waits)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("it starts");
+        let held = resident_bytes(child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(held.expect("the child's memory") > 0);
+        assert!(resident_bytes(u32::MAX).is_err());
+    }
 }
 
 #[cfg(all(test, windows))]

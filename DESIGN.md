@@ -325,10 +325,12 @@ connections, so the server template's proofs stop there; clients at once; a bloc
 
 A build's proofs share 300 seconds, smallest block first, each with an equal share of what's left.
 A shape gets at most 256 paths, a question 20 seconds, and a shape once begun at least 20 seconds
-past its deadline. On Linux, proof workers are as many as free memory allows at 1 GiB each, run
-below the user's own work, and a watchdog stops the solver holding the most when free memory runs
-low; the proof then says the computer ran low on memory (`src/prove/watch.rs`). On macOS and
-Windows every core is a proof worker, and nothing watches the memory or lowers the priority.
+past its deadline. Proof workers are as many as free memory allows at 1 GiB each, and a watchdog
+stops the solver holding the most when free memory runs low; the proof then says the computer ran
+low on memory, as does a proof whose own terms outgrow what is free (`src/prove/watch.rs`). lengua
+reads the memory from `/proc` on Linux and from the system's own counters on macOS and Windows
+(`crates/lengua-os`). On Linux the workers also run below the user's own work; on macOS and Windows
+their priority isn't lowered.
 
 ## The runtime
 
