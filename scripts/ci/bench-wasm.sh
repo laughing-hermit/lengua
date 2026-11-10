@@ -4,7 +4,7 @@
 # runner's bench then runs these same modules in lengua's host, as it runs lengua's own
 # (LENGUA_BENCH_WASM names the folder). Usage: bash scripts/ci/bench-wasm.sh <output folder>
 #
-# It needs setup.sh's rust and wasi steps. The output folder gets <workload>/c.wasm, cpp.wasm and
+# It needs `cargo xtask fetch linux-x86_64 wasi`. The output folder gets <workload>/c.wasm, cpp.wasm and
 # rust.wasm, and toolchains.tsv: each version's compiler and flags, which the report gives.
 #
 # The flags are for speed, as a release build's: -O3 and link-time optimization, and every
@@ -18,7 +18,7 @@ set -euo pipefail
 
 out="${1:?usage: bench-wasm.sh <output folder>}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-sdk="${WASI_SDK:?WASI_SDK names wasi-sdk: run setup.sh with the wasi step first}"
+sdk="${WASI_SDK:?WASI_SDK names wasi-sdk: run cargo xtask fetch linux-x86_64 wasi first}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 

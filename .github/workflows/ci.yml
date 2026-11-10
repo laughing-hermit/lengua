@@ -3,8 +3,8 @@ name: ci
 # lengua built and tested natively on five runners, GitHub's free ones (the repository is public):
 # Linux on x86-64 and ARM64, macOS on ARM64 (Apple stopped making Intel Macs), and Windows on
 # x86-64 and ARM64, each running the same WebAssembly programs.
-# scripts/ci/targets.json names the five runners; scripts/ci/tools.tsv pins what they install;
-# scripts/ci/setup.sh installs it.
+# scripts/ci/targets.json names the five runners; xtask/tools.tsv pins what they install, which
+# `cargo xtask fetch` installs; rust-toolchain.toml pins Rust, which rustup installs.
 #
 # - A push to a branch runs the suite on all five (a branch named wip/... gets no push run: its
 #   author dispatches the run it wants, so work in progress doesn't cost a long suite per push).
@@ -191,8 +191,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Rust as rust-toolchain.toml pins it, which rustup installs when it first runs here; rustup
+      # itself where an image lacks it.
       - name: Rust
-        run: bash scripts/ci/setup.sh linux-x86_64 rust
+        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
 
       - name: Format
         run: |
@@ -232,9 +234,9 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # A bench's C, C++ and Rust compiled to WebAssembly once, with wasi-sdk (pinned in tools.tsv)
-  # and Rust's wasm32-wasip1 target, and kept for every runner's bench, which measures the same
-  # modules (scripts/ci/bench-wasm.sh). It runs only when a bench does.
+  # A bench's C, C++ and Rust compiled to WebAssembly once, with wasi-sdk (pinned in
+  # xtask/tools.tsv) and Rust's wasm32-wasip1 target, and kept for every runner's bench, which
+  # measures the same modules (scripts/ci/bench-wasm.sh). It runs only when a bench does.
   bench-wasm:
     name: bench-wasm
     needs: plan
@@ -250,10 +252,13 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/wasi-sdk
-          key: wasi-sdk-${{ hashFiles('scripts/ci/tools.tsv') }}
+          key: wasi-sdk-${{ hashFiles('xtask/tools.tsv') }}
 
-      - name: Rust, wasi-sdk and Rust's wasm32-wasip1 target
-        run: bash scripts/ci/setup.sh linux-x86_64 rust wasi
+      - name: Rust
+        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
+
+      - name: wasi-sdk and Rust's wasm32-wasip1 target
+        run: cargo xtask fetch linux-x86_64 wasi
 
       - name: The modules
         run: bash scripts/ci/bench-wasm.sh target/bench-wasm
@@ -291,16 +296,23 @@ jobs:
           ref: ${{ matrix.ref }}
           fetch-depth: ${{ matrix.depth }}
 
-      # The base predates some of the scripts and of the task crate the steps below run (a base
-      # leg needs the full history, which brings the dispatched commit with it), so the leg runs
-      # the base's code with the dispatched ref's scripts, Rust and task crate: the crate checked
-      # out beside the base, where `cargo xtask` builds and runs it on the base's folder.
-      - name: The dispatched ref's scripts and task crate
+      # The base predates some of the task crate the steps below run (a base leg needs the full
+      # history, which brings the dispatched commit with it), so the leg runs the base's code with
+      # the dispatched ref's Rust and task crate: the crate checked out beside the base, where
+      # `cargo xtask` builds and runs it on the base's folder.
+      - name: The dispatched ref's task crate
         if: ${{ matrix.ref != '' }}
-        run: git checkout ${{ github.sha }} -- scripts rust-toolchain.toml && git worktree add "$RUNNER_TEMP/tooling" ${{ github.sha }} && echo "CARGO_ALIAS_XTASK=run --locked --manifest-path $RUNNER_TEMP/tooling/Cargo.toml --package xtask --" >> "$GITHUB_ENV"
+        run: git checkout ${{ github.sha }} -- rust-toolchain.toml && git worktree add "$RUNNER_TEMP/tooling" ${{ github.sha }} && echo "CARGO_ALIAS_XTASK=run --locked --manifest-path $RUNNER_TEMP/tooling/Cargo.toml --package xtask --" >> "$GITHUB_ENV"
 
+      # Rust as rust-toolchain.toml pins it, which rustup installs when it first runs here; rustup
+      # itself where an image lacks it.
       - name: Rust
-        run: bash scripts/ci/setup.sh ${{ matrix.target }} rust
+        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
+
+      # The ring crate builds its assembly with clang on Windows ARM64: the image's LLVM has it.
+      - name: Clang for ring
+        if: ${{ matrix.target == 'windows-aarch64' }}
+        run: echo "C:\Program Files\LLVM\bin" >> "$GITHUB_PATH"
 
       # The tests read the CPU's counters, which Linux lets a user read with this.
       - name: The CPU's counters
@@ -314,7 +326,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ci-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'scripts/ci/setup.sh') }}
+          key: ci-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: ci-${{ matrix.target }}-
 
       - name: The machine
@@ -326,11 +338,11 @@ jobs:
         if: ${{ matrix.mode != 'compile' && matrix.mode != 'release' }}
         with:
           path: ~/solvers
-          key: tools-${{ matrix.target }}-${{ hashFiles('scripts/ci/tools.tsv', 'scripts/ci/setup.sh') }}
+          key: tools-${{ matrix.target }}-${{ hashFiles('xtask/tools.tsv', 'xtask/src/fetch.rs') }}
 
       - name: z3 and cvc5, pinned by checksum
         if: ${{ matrix.mode != 'compile' && matrix.mode != 'release' }}
-        run: bash scripts/ci/setup.sh ${{ matrix.target }} solvers
+        run: cargo xtask fetch ${{ matrix.target }} solvers
 
       # --keep-going: every target's errors in one run, not the first target's alone. A release
       # is built from a commit whose suite already ran.

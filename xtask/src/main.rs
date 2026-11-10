@@ -6,6 +6,9 @@
 
 mod ci;
 mod clock;
+mod fetch;
+mod files;
+mod http;
 mod machine;
 mod plugin;
 mod skips;
@@ -18,6 +21,8 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: cargo xtask <task> [<argument>...]
 
 Tasks:
+  fetch <target> solvers|wasi...
+                      z3 and cvc5, or wasi-sdk, as xtask/tools.tsv pins them
   machine <target>    the runner's facts, in the job's summary
   test [--ignored]    the suite, or the slow ignored tests, as FILTER, TEST_FILES and
                       STALL_SECONDS say
@@ -35,6 +40,7 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
     let done = match task.as_str() {
+        "fetch" => fetch::task(rest),
         "machine" => machine::task(rest),
         "test" => test::task(rest),
         "golden" => test::golden(rest),

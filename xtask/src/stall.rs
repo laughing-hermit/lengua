@@ -26,10 +26,13 @@ const BACKTRACE: &str = "thread apply all bt 30";
 /// The lines of gdb's own that the report leaves out.
 const GDB_NOISE: [&str; 3] = ["[New LWP", "warning:", "[Thread debugging"];
 
+/// How the stall task is called.
+const USAGE: &str = "usage: cargo xtask stall <seconds> <program> [<argument>...]";
+
 /// `cargo xtask stall <seconds> <program> [<argument>...]`: runs the program, watched.
 pub fn task(arguments: &[String]) -> Result<u8, String> {
     let [seconds, program, rest @ ..] = arguments else {
-        return Err("usage: cargo xtask stall <seconds> <program> [<argument>...]".to_owned());
+        return Err(USAGE.to_owned());
     };
     let after = limit(seconds)?;
     let mut child = Command::new(program)

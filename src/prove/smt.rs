@@ -52,7 +52,7 @@ impl Kind {
         }
     }
 
-    /// The version lengua is tested with: the one scripts/ci/tools.tsv pins for every runner,
+    /// The version lengua is tested with: the one xtask/tools.tsv pins for every runner,
     /// and a release archive ships.
     #[must_use]
     pub const fn pinned(self) -> &'static str {
@@ -1683,10 +1683,10 @@ mod tests {
     }
 
     /// The versions lengua pins are the ones every runner installs and a release archive ships,
-    /// as scripts/ci/tools.tsv names them for each of the five targets.
+    /// as xtask/tools.tsv names them for each of the five targets.
     #[test]
     fn the_pinned_solvers_are_the_ones_ci_installs() {
-        let tools = include_str!("../../scripts/ci/tools.tsv");
+        let tools = include_str!("../../xtask/tools.tsv");
         for kind in Kind::ALL {
             let rows: Vec<&str> = tools
                 .lines()

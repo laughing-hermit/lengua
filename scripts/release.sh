@@ -6,7 +6,7 @@
 #
 # The archive is the plugin, ready to load: the skills and the manifests, server/lengua-mcp
 # (.exe on Windows, which the manifests then start), solvers/ with the z3 and cvc5 that
-# scripts/ci/tools.tsv pins for the target, LICENSE and licenses/ (the licences of everything
+# xtask/tools.tsv pins for the target, LICENSE and licenses/ (the licences of everything
 # it ships: lengua's, the solvers' with those of the parts cvc5 links in, and those of the Rust
 # crates in lengua-mcp, which licenses/README.md lists), TARGET (the
 # system and CPU it is for), INSTALL.md, and install.sh (install.ps1 on Windows), which checks
@@ -21,7 +21,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n 1)"
-tools="$root/scripts/ci/tools.tsv"
+tools="$root/xtask/tools.tsv"
 
 # The target is the one Rust builds for here.
 host="$(rustc -vV | sed -n 's/^host: //p')"
