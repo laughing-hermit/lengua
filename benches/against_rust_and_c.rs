@@ -272,11 +272,13 @@ fn workload(name: &str) -> Option<Workload> {
             ..Workload::new(
                 "tally",
                 "Counts each different word of 64 MiB of standard input, 4,096 different words \
-                 from common to rare, and prints them from the most frequent. lengua's program, \
-                 C and C++ count in a table of FNV-1a with linear probing, Rust in its HashMap \
-                 with FNV-1a; lengua's passes over whitespace and words 16 bytes at a time with \
-                 SIMD128, written by hand, and matches a word 16 bytes at a time, where the \
-                 others take a byte at a time.",
+                 from common to rare, and prints them from the most frequent. C and C++ count in \
+                 a table of FNV-1a with linear probing and Rust in its HashMap with FNV-1a, each \
+                 passing over the bytes and hashing them a byte at a time. lengua's program finds \
+                 where each word starts and ends 64 bytes a step from SIMD128's bitmasks, written \
+                 by hand, and counts in a table with linear probing whose entries hold a word's \
+                 first 8 bytes as its key: a word of up to 8 bytes is hashed with one \
+                 multiplication and matched as one number.",
             )
         },
         "server" => Workload {
