@@ -84,12 +84,12 @@ async fn checked_template(session: &Session) -> Program {
     program
 }
 
-/// A program folder holding the fixture `name`'s idea.md and main.wat, from tests/fixtures, its
-/// idea recorded.
-async fn shipped(session: &Session, name: &str) -> Program {
+/// A program folder holding the idea.md and main.wat of `folder`, a program folder of the
+/// repository (examples/ or tests/fixtures/), its idea recorded.
+async fn shipped(session: &Session, folder: &str) -> Program {
     let program = Program::new();
     for file in ["idea.md", "main.wat"] {
-        program.write(file, &read(&format!("tests/fixtures/{name}/{file}")));
+        program.write(file, &read(&format!("{folder}/{file}")));
     }
     session.record(&program).await;
     program
@@ -323,10 +323,11 @@ async fn done_comes_once_the_tests_pass_while_the_proofs_go_on() {
     if !solvers_installed() {
         return;
     }
-    // add's proof of every pair of numbers takes minutes, so done comes first, with the proofs
-    // still running.
+    // sha256's proofs go through 64 rounds of mixing for each length of text, which takes
+    // minutes, so done comes first, with the proofs still running. (add's and the hypotenuse's
+    // are settled by the terms within the check, so they can't show this.)
     let session = Session::proving_with_grace(Protocol::Discover, 0).await;
-    let program = shipped(&session, "add").await;
+    let program = shipped(&session, "examples/sha256").await;
     let report = session.check(&program).await;
     assert_eq!(report["state"], "done", "{report}");
     assert!(any_line(&report["proofs"], ": proving"), "{report}");
@@ -335,10 +336,13 @@ async fn done_comes_once_the_tests_pass_while_the_proofs_go_on() {
         "{report}"
     );
     // The program runs while its proofs go on.
-    let run = session
-        .call_ok("run", with_args(&program, &["2", "3"]))
-        .await;
-    assert_eq!(run["stdout"], "5\n", "{run}");
+    let mut arguments = program.arguments();
+    arguments["stdin"] = json!("abc");
+    let run = session.call_ok("run", arguments).await;
+    assert_eq!(
+        run["stdout"], "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n",
+        "{run}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 
@@ -351,7 +355,7 @@ async fn the_proofs_are_in_the_lock_before_the_last_line_goes_final() {
         return;
     }
     let session = Session::proving_slow_to_record(Protocol::Discover, 50, 600).await;
-    let program = shipped(&session, "cat").await;
+    let program = shipped(&session, "tests/fixtures/cat").await;
     let started = std::time::Instant::now();
     loop {
         let report = session.check(&program).await;
@@ -388,7 +392,7 @@ async fn an_edit_mid_proof_starts_over_and_the_old_proof_never_lands() {
     // Each check waits 50 ms at most, so it sees the proof running: cat's, of every text its
     // idea allows, takes over a second even on an idle computer.
     let session = Session::proving_waiting(Protocol::Discover, 50).await;
-    let program = shipped(&session, "cat").await;
+    let program = shipped(&session, "tests/fixtures/cat").await;
     loop {
         let report = session.check(&program).await;
         match report["state"].as_str() {
@@ -427,7 +431,7 @@ async fn a_streaming_program_is_proven_for_every_length() {
         return;
     }
     let session = Session::proving_alone_for(Protocol::Discover, 1800).await;
-    let program = shipped(&session, "cat-stream").await;
+    let program = shipped(&session, "tests/fixtures/cat-stream").await;
     let report = done(&session, &program).await;
     let proof = text(&report["proofs"][0]);
     assert!(

@@ -266,9 +266,15 @@ fn a_broken_link_is_a_warning_and_blocks_nothing() {
         .collect();
     assert_eq!(broken.len(), 1, "{findings:#?}");
     assert_eq!(broken[0].severity, Severity::Warning);
+    // The link's line is where `linking` put it, in whatever add's idea looks like.
+    let line = text
+        .lines()
+        .position(|line| line.contains("../subtract/idea.md"))
+        .expect("the link is in the idea")
+        + 1;
     assert_eq!(
         broken[0].message,
-        "add/idea.md line 7 links to ../subtract/idea.md, which isn't there"
+        format!("add/idea.md line {line} links to ../subtract/idea.md, which isn't there")
     );
     assert!(
         findings

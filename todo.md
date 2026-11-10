@@ -96,6 +96,27 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 
 The owner was away while these were made (2026-11-06: "im not going to check up on you anymore").
 Each can be reversed.
+- **lengua is written in Rust and WebAssembly only** (the owner, 2026-11-09: "ok go with rust
+  and webassembly, proceed"):
+  - Rust is everything lengua is: the server, its tools and command line, and its tooling.
+    lengua's scripts become Rust (W17), and GitHub's workflow file stays only as glue.
+  - WebAssembly is everything lengua makes: main.wat, lengua's library, the templates and the
+    programs. They stay WebAssembly text, because the checker, the prover and the agent read
+    them line by line, so not 100% Rust.
+  - The benchmark's C and C++ programs stay, being the competitors point 4 measures, and so do
+    the manifests the Agent Plugins standard requires, data, and documents.
+  - Four choices made with it, after research (each with its sources in W17's brief):
+    - "Only" covers lengua's own code and tooling. Third-party programs and crates stay, pinned
+      and checked, and DESIGN names the C they carry: the solvers, ring for TLS, zstd, and a
+      file of Wasmtime's.
+    - z3 runs as WebAssembly if it costs fairly. That means the same verdicts on all five
+      runners at today's limits, with the replayed questions taking at most twice as long in
+      all. Another project already runs z3 under Wasmtime, with 413 of 414 answers the same
+      as native z3. If the bar isn't met, native z3 stays and the measurement is written here.
+    - cvc5 stays native, since no build that Wasmtime runs exists yet. After z3, one bounded try
+      to make one: at most five build runs.
+    - The site (`site/`) goes, and the tag keeps it. Static pages built by Rust can come back
+      when the owner wants to publish one.
 - **The code is WebAssembly text** (`main.wat`), written by the agent and validated by lengua.
 - **The interface is WASI preview 1**, which every WebAssembly runtime runs and Wasmtime keeps
   supporting. lengua implements the part its programs use, holding the semantics of today's 21
@@ -209,8 +230,17 @@ Each can be reversed.
   C++'s tally uses C's table; Rust writes large outputs straight to its descriptor, as C does.
   The gate's test corrects for continuity by half of U's step between runs of tied values.
 - **Secrets**: an idea line `- Secret:` names data that must not reach a branch, a `select`, an
-  address, a length, a loop's count, division or floating point (point 5), checked first in the
-  WebAssembly and then in the machine code the engine makes, with the native lengua's decoders.
+  address, a length, a loop's count, division or floating point (point 5), checked in the
+  WebAssembly. Checking the machine code the engine makes as well (W13) was stopped by the safety
+  filter and is the owner's, so that code is trusted for timing, as DESIGN says.
+- **A generated test may repeat fixed text** (W12, b878286): `` `\n` `4194304` times then
+  `{line}` `` is written out in its template, at most 8 MiB as an example's repeat is, and a
+  placeholder is never repeated. A limit no generator reaches, such as sort-large's 4194305
+  lines, gets its generated test, as the write-idea skill gives every limit a behavior.
+- **z3's library ships only where z3 loads it** (W14, 7835d9a): Linux's and macOS's z3 have it
+  built in, and z3's .NET binding is left out everywhere. The archives shrank by about a quarter
+  on Linux and macOS (Linux on x86-64: 53.7 MB to 39.2 MB), release and install green on all
+  five (42387777039).
 - **Five runners**, as above; macOS on x86-64 stays dropped (the design pass would have kept it;
   the owner's earlier word stands).
 
@@ -238,15 +268,33 @@ Each merges to main when green on the runners it names; [ROADMAP.md](ROADMAP.md)
 - **W10. Constant time and caches.**
 - **W11. The native product retired** (kept at the tag).
 - **W12. Performance and the gate.**
-- **W13. Constant time in the machine code.**
+- **W13. Constant time in the machine code.** Stopped by the safety filter on 2026-11-07, and the
+  owner's (below).
 - **W14. Package, `doctor` and release** on all five runners, and the agent's test in the
   interactive session.
 - **W15. The documents, the finish-line run, and the report.**
 - **W16. The repository tidied and presentable on GitHub** (the owner, 2026-11-07: "when
   finished with lengua please tidy up the repo and make it presentable please in github"): a
-  README that presents lengua, the top level pruned, the merged work branches deleted (never
-  `wip/routes-ci`, `wip/r2-8a-snap` or `wip/r2-base-check`, which are the owner's), and the
-  repository's description and topics on GitHub.
+  README that presents lengua, the top level pruned, and the repository's description and
+  topics on GitHub.
+  - **Only main remains** (the owner, 2026-11-09: "remember at the end only main branch shoudl
+    remain"). Every other branch goes, on GitHub and on the owner's computer, including
+    `wip/routes-ci`, `wip/r2-8a-snap` and `wip/r2-base-check`.
+  - First, a branch whose commits main doesn't hold keeps its tip as a tag `archive/<branch>`,
+    so nothing is lost. A tag isn't a branch, and the tag `native-final` stays as it is.
+- **W12b. lengua's run made lean.** The first gate run (42661776298, all five runners) found
+  lengua's program ahead on module size nearly everywhere, and on time where the work is large
+  (wc, files, readings, part of sort). It is behind on time and memory wherever starting dominates,
+  and on memory almost everywhere. That gap is `lengua-mcp run`'s own work around the program
+  (reading the whole idea, building main.wat again) and lengua's library merged in whole. W12b
+  cuts it and keeps every guarantee. KNOWN_BEHIND holds each runner's rows from that run, and
+  may only shrink.
+- **W17. lengua in Rust and WebAssembly only** (the owner, 2026-11-09):
+  - The shell, PowerShell, sed and Python scripts become Rust: `lengua-mcp install` for the
+    install scripts, and a Rust task crate for release, CI setup and the goldens.
+  - Each step of the workflow file calls into Rust.
+  - The site is rebuilt in Rust or left out.
+  - The solvers run as WebAssembly if the research shows they can at a fair cost.
 
 Runs, as they land:
 
@@ -261,7 +309,10 @@ Runs, as they land:
 | W5 | 42336485988 (the rules at 0534a06, on the seam: format, the suite on all five runners and the gate, green; the red team's refusals and the template passing every rule); its review's 23 findings fixed before it |
 | W6 | 42329274411 (the Attested Computation form alone, at 5791d73); 42345074041 (check and run for main.wat at 1c75e7d: format, the suite on all five runners and the gate, green, add from the request to done, run, `lengua-mcp run` and `lengua-mcp check`); the reviews' 15 and 17 findings fixed before them |
 | W7 | 42325471157 (the golden ledger, raw: the checker's and the prover's recordings identical, byte for byte); 42336209846 (the seam on main at d280fa1: format, the suite on all five runners and the gate, green) |
-| W8 | 42344545735 (the WebAssembly model and proofs, z3 and cvc5 on every runner, with add, echo and greet proven and planted bugs found); 42348682819 (stacked on W6 at dac4c7d: format, the suite on all five runners and the gate, green); the review's 11 findings fixed before them; 42362037786 (check proves main.wat, at c6508b4: format, the suite on all five runners and the gate, green; the golden ledger 42357663706 differs only in sha256's load-dependent x86-64 line, not proven either way). Every length (step 3) and SIMD and floats (step 4) are to come |
+| W8 | 42344545735 (the WebAssembly model and proofs, z3 and cvc5 on every runner, with add, echo and greet proven and planted bugs found); 42348682819 (stacked on W6 at dac4c7d: format, the suite on all five runners and the gate, green); the review's 11 findings fixed before them; 42362037786 (check proves main.wat, at c6508b4: format, the suite on all five runners and the gate, green; the golden ledger 42357663706 differs only in sha256's load-dependent x86-64 line, not proven either way); 42386526911 (every length by induction over a read loop, step 3, and SIMD128 and floats in the model, step 4, at 2b71184: format, the suite on all five runners and the gate, green, with every covered operator compared with the engine's bits); its review's 4 findings fixed before it (a read before the loop's head, a time round that changes the working folder, count's flag, the layout); 42388141609 (the golden ledger against W8's earlier base: no native verdict changed); on main with W10 at 2727216 (42391963513) |
+| W10 | 42386323947 (the secret rule over main.wat and the caches on every system, at df1e8ae: format, the suite on all five runners and the gate, green); on main, stacked with W8's steps 3 and 4, at 2727216 (42391963513: the suite on all five runners and the gate, green) |
+| W13 | Stopped by the safety filter, left for the owner (below) |
+| W14 | 42387284972 (the suite on all five runners and the gate at 83641b5); 42387777039 (release at 7835d9a: the five archives built, each installed on a clean runner of its system and CPU, doctor and the release check, green); main at 7835d9a. The agent's test in this session, 2026-11-07, with that Linux x86-64 archive: below |
 | W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
 
 ## Superseded by the pivot
@@ -354,3 +405,54 @@ routed around through other models or subagents.
   `wip/secret`) was stopped partway, when it had only read files. It confirmed no finding and
   showed nothing about the rule, so the rule hasn't passed a soundness review. Its content isn't
   produced again, and the owner decides how the review goes on.
+- **2026-11-07, W13.** A reply (Opus 5.5) was stopped while W13, checking the engine's machine
+  code for an idea's secrets, was being designed, before anything was written. It is the second
+  stop on that ground in a day, so W13 is left for the owner: not retried, reworded or passed to
+  another model. The secret rule over main.wat (W10) stands, and the engine's compiled code is
+  trusted for timing. W11 removes the native decoders W13 would have used; the tag
+  `native-final` keeps them.
+
+## The agent's test in this session (W14, 2026-11-07)
+
+The owner's rule is that an agent-level test runs only in the live interactive session. Claude
+Code can't load a plugin into a session already running (`claude --plugin-dir` starts a new one),
+so the session's agent was also the MCP client: it started the archive's own `lengua-mcp` over
+standard input and output, read the archive's two skills, and followed them as written. Loading
+the plugin in Claude Code is the one step left for the owner (`/plugin`, or `claude
+--plugin-dir`).
+- **The archive:** lengua 0.2.0 for Linux on x86-64, from release run 42383680141. Its SHA-256
+  matched its `.sha256`. `lengua-mcp doctor` said nothing is wrong.
+- **The program:** vowels, which counts the vowels in standard input of any length. The request
+  was the test's own words, since the owner asked for no such program.
+- **The idea:**
+  - The first `check` listed its three problems at once, each with the fix.
+  - Once they were fixed, the idea was recorded.
+- **The code:**
+  - The first main.wat, from the stream template, went to `done` on its first code check, after
+    one STE problem in the idea was fixed. It followed every rule and passed 172 test runs.
+  - One generated test was proven for every input in range. The others were proven up to 93 and
+    89 bytes and tested beyond, as that build's prover went one length at a time (W8's steps 3
+    and 4 came after it).
+- **Running it:**
+  - `run` printed 21 for a 66-byte text, and `tr` agrees.
+  - From a shell, `lengua-mcp run` counted 625,299 vowels in 4 MB in 35 ms, the same count as
+    `tr`. With its output closed, it exited with code 2.
+- **The attester:** `lengua-mcp check` said `attested` after five minutes and wrote nothing.
+- **The graph:** index.md and log.md are in the Open Knowledge Format's layouts.
+- **Speed:** the compile skill's speed pass rewrote main.wat to take 16 bytes a step with
+  SIMD128. It passed every rule and test on its first check. A 1 MiB input went from 1,729 µs to
+  197 µs (8.8 times faster), and its proofs were then "tested, not proven" at `I8x16Splat`, as
+  the skill says for that build.
+- **What it found:**
+  - The archive shipped 35 MB of z3 library that z3 doesn't load; fixed in 7835d9a.
+  - Several native words remain: plugin.json's description, the server's instructions, the
+    native fields of `run`'s reply, and the native examples in the test format's reference (W11).
+  - The first recording's reply both lists the program in index.md and calls it an orphan.
+
+## Where the work broke its own ground rules
+
+The rule is that this computer only edits, reads and runs git and gh. These broke it, each once,
+none changed a result, and each is recorded here for the owner:
+- W5's implementer ran `rustfmt` on files here.
+- W12's implementer, the session itself on W14's scripts/release.sh, and W11's part C each ran
+  `bash -n`, a shell's syntax check that runs nothing.
