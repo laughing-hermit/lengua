@@ -7,35 +7,62 @@ language model, that says whether a folder's computation is the one its idea san
 ## Check it
 
 ```sh
-lengua-mcp check <folder>
+lengua-mcp check <program folder>
 ```
 
-It reads the folder's `idea.md` and `main.wat`, then:
+It takes one program folder, its path absolute or from the current folder, and needs no data
+folder, no lock and no key, so anyone with the folder can check it on their own computer. It
+reads the folder's `idea.md` and `main.wat`, then, in order:
 
-1. compares the hashes in lengua's entry in the idea's `verified` list with the files: `idea`,
-   the idea's SHA-256 with its `verified` and `generated` keys left out, and `code`, the SHA-256
-   of `main.wat`;
-2. builds `main.wat` into its WebAssembly module, as [`run`](run.md) does;
-3. checks the module against every rule of lengua's WebAssembly dialect, and, for an idea with a
+1. compares lengua's last entry in the idea's `verified` list with the files: `idea`, lengua's
+   SHA-256 of `idea.md` with its `verified` and `generated` keys left out, and `code`, the
+   SHA-256 of `main.wat`;
+2. reads the idea as `check` does: it must parse, be an Attested Computation with no
+   `- Threads:` line, and hold tests that check;
+3. builds `main.wat` into its WebAssembly module, as [`run`](run.md) does;
+4. checks the module against every rule of lengua's WebAssembly dialect and, for an idea with a
    `- Secret:` line, the secret rule: no value computed from an input the line names decides a
-   branch, an address, a length, a loop's count, a division or a float operation of `main.wat`,
-   or reaches a host call but as the bytes it writes out (the rule checks the WebAssembly, and
-   trusts the engine's machine code to keep its timing);
-4. runs every test the idea holds, its examples and its generated tests, and compares each run's
-   receipt with what the idea says;
-5. proves each generated test, as lengua's `check` tool does, within five minutes for all of
-   them (`LENGUA_PROOF_SECONDS` sets another time): for every input, up to a length, or not, and
-   why. Inputs a proof finds where `main.wat` is wrong are run for real before it says so. The
-   memory line says what the rules settle for every input and what the proofs settle of the
-   rest.
+   branch, an `if`, a `br_if`, a `br_table` or a `select`, and so a loop's count; nor an address,
+   an index or a length of a load, a store, a copy or a fill; nor a division, a remainder or a
+   float operation; nor reaches a host call but as the bytes it writes out. The rule can't tell
+   inputs of one kind apart: one secret file makes every file the program reads secret, and so
+   does one variable for the environment and one argument for the arguments. It checks the
+   WebAssembly, and trusts the engine's machine code to keep its timing;
+5. runs every test the idea holds, its examples and its generated tests, in workers of its own,
+   the generated tests' inputs drawn from a fresh seed, and compares each run's standard output,
+   standard error, exit code and working folder with what the idea says;
+6. proves each generated test, as lengua's `check` tool does, but only when every step above
+   passed and lengua's entry names both files: the smallest first, each with its share of five
+   minutes for them all (`LENGUA_PROOF_SECONDS` sets another time). Before a proof, the model of
+   the module must agree with the real program on up to 24 of the test's own inputs, and inputs
+   a proof finds where `main.wat` is wrong are run for real before it says so. It doesn't prove
+   on from where a proof stopped: that is the `check` tool's, which keeps a lock.
 
-It writes nothing, and needs no lock file and no key, so anyone with the folder can check it on
-their own computer. It prints one line for each thing it finds, then `attested` or `not attested`,
-and exits 0 when the folder is attested and 1 when it isn't. A folder is attested when its idea
-and its `main.wat` pass every step, no proof finds inputs where `main.wat` is wrong, and lengua's
-entry names them both. A proof that doesn't finish, or that the prover can't make, leaves the
-folder attested and says "tested, not proven" with the reason. The proofs run only for a folder
-that passes every other step.
+It doesn't hold `main.wat` to the parts its idea's `- Builds on:` line names, as the `check` tool
+does.
+
+It prints one line for each thing it finds, then `attested` or `not attested`, and exits 0 when
+the folder is attested and 1 when it isn't:
+
+```text
+verified: lengua/0.2.0 checked this idea.md and this main.wat at …
+main.wat: builds into a module of … bytes, sha256:…
+main.wat: follows every rule of lengua's WebAssembly dialect
+tests: passed all … test runs, the generated ones drawn from seed …
+proofs: generated B1: …
+memory: the rules (M1 to M8) hold every address they can follow to its owner, …
+attested
+```
+
+A folder is attested when its idea and its `main.wat` pass every step, no proof finds inputs
+where `main.wat` is wrong, and lengua's entry names them both. A proof that doesn't finish, or
+that the prover can't make, leaves the folder attested, and its line says "tested, not proven"
+with the reason. The memory line says what the rules settle for every input, and what the
+proofs settle of the rest.
+
+It writes nothing in the folder or in lengua's data folder: no lock, no `index.md`, no `log.md`
+and no compiled modules. While it runs, it keeps the module and each test's working folder in
+temporary folders, which go when it ends.
 
 ## lengua's entry in `verified`
 
@@ -47,7 +74,13 @@ verified:
   - { by: lengua/0.2.0, at: 2026-11-06T23:00:00Z, idea: "sha256:…", code: "sha256:…" }
 ```
 
-It changes no other entry and no other line of the file. When the idea or `main.wat` changes, the
-next `check` removes the entry until the program is done again, and when one of its proofs, which
-can go on after done, finds inputs where `main.wat` is wrong, it removes the entry at once. So a
-consumer reads "machine-confirmed" (OKF §5.3) only for the files lengua checked.
+The entry goes last in the list. lengua's earlier entries go, and everyone else's stay. A
+`verified` written as a flow list is rewritten one entry a line, with its comments; a single
+mapping becomes the list's first entry; with no `verified` key, the key goes just before the
+frontmatter's closing `---`. Every line outside `verified` stays byte for byte, and lengua's
+hash of the idea leaves `verified` and `generated` out, so writing the entry changes no lock.
+
+When the idea or `main.wat` changes, the next `check` removes lengua's entry until the program
+is done again. When one of its proofs, which can go on after done, finds inputs where `main.wat`
+is wrong, lengua removes the entry at once. So a consumer reads "machine-confirmed" (OKF §5.3)
+only for the files lengua checked.
