@@ -58,9 +58,9 @@ programming language a person can review, and to review it. That keeps the middl
 reader who can't keep up.
 
 lengua is the other answer: keep the person's words as the source, let the agent write the
-code, and check that code so thoroughly that nobody has to read it. That's a new standard for
-programs written in natural language: a source format anyone can read, and checks anyone can
-run.
+code, and check that code with tests, rules and proofs, so nobody has to read it to trust what
+those checks cover. That gives programs written in natural language a source format anyone can
+read, and checks anyone can run.
 
 ## Why it isn't a programming language
 
@@ -96,14 +96,14 @@ agent.
 
 - **Every test, with fresh inputs on every check.** Each behavior's example is a test, and its
   generated tests draw their inputs from the table the idea gives: boundary values first, then
-  random ones from a seed drawn afresh on every check [3]. Where a row's ranges hold at most
-  5,000 combinations, every one runs, while the whole idea stays within 20,000 runs [18].
-  Expected results come from formulas in a small language with no loops, over whole numbers
-  checked at 128 bits, so an overflow is an error, not a wrong answer [19]. The formulas must
-  reproduce each behavior's example, and a dry run of every formula catches one that overflows,
-  divides by zero or prints the same thing for every input, before any code exists [20]. lengua
-  keeps a copy of every idea it records, so when an idea's tests change, the reply marks every
-  change that tests less [21].
+  random ones from a seed drawn afresh on every check [3]. Where a row has no `choice(…)` and its
+  ranges hold at most 5,000 combinations, every one runs, while the whole idea stays within
+  20,000 runs [18]. Expected results come from formulas in a small language with no loops, over
+  whole numbers checked at 128 bits, so an overflow is an error, not a wrong answer [19]. The
+  formulas must reproduce each behavior's example, and a dry run of every formula catches one
+  that overflows, divides by zero or prints the same thing for every input, before any code
+  exists [20]. lengua keeps a copy of every idea it records, so when an idea's tests change, the
+  reply marks every change that tests less [21].
 - **Its own rules.** NASA's "Power of 10" rules for safety-critical code, adapted to AI-written
   WebAssembly: simple control flow with no recursion, a fixed bound on every loop, resources
   fixed up front, functions of at most 180 operators, at least two assertions a function on
@@ -119,11 +119,12 @@ agent.
   symbolically, every path through it, and compares what it does with what the idea's formulas
   say, for every input in the idea's ranges [4]. Before a proof, the model must agree with the
   real program on samples of the test's own inputs, and inputs a proof finds are run for real
-  before lengua says the code is wrong [26]. Most steps settle from the terms themselves. Where
-  one needs a solver, the question goes to z3, and with both installed, its "no counterexample"
-  counts only when cvc5 gives it too; questions about floats that the bits don't settle go to
-  cvc5 alone, and the proof's line says so [27]. How far a proof reaches depends on the code's
-  shape, not only on what it computes, and every proof line says exactly what it covers [28]:
+  before lengua says the code is wrong [26]. A step the terms or a known input settle needs no
+  solver. Where one needs a solver, the question goes to z3, and with both installed, its "no
+  counterexample" counts only when cvc5 gives it too; questions about floats that the bits don't
+  settle go to cvc5 alone, and the proof's line says so [27]. How far a proof reaches depends on
+  the code's shape, not only on what it computes, and every proof line says exactly what it
+  covers [28]:
   - The suite proves its greet and echo programs for every input, its add for numbers of up to
     three digits, the hypotenuse in doubles, and the behaviors of the compile skill's vector
     template [29].
@@ -132,10 +133,12 @@ agent.
   - A filter or a count that reads standard input a buffer-full at a time through lengua's
     `$fill` is proven for every length, by induction over its read loop, when it writes each
     buffer-full's bytes mapped one by one or keeps counts that add up [31]. The suite proves a
-    streaming copy and a line count in SIMD128 this way; the word count in SIMD128 is proven by
-    length only, since a flag it asserts is any value at the loop's head [32]. A program that
-    reads standard input only through `$fill` is proven however that input arrives, cut into any
-    pieces; a program on the network is proven for four ways its peer's bytes can arrive [33].
+    streaming copy and a line count in SIMD128 this way. The word count in SIMD128 carries the
+    last byte of one buffer-full to the next and asserts that it is a byte; at the loop's head
+    the induction's step lets it be any value, so the step fails, and the count is proven by
+    length only [32]. A program that reads standard input only through `$fill` is proven however
+    that input arrives, cut into any pieces; a program on the network is proven for four ways its
+    peer's bytes can arrive [33].
   - Sorting and word tallies are proven for texts of up to 8 bytes and tested beyond; SHA-256
     and AES-128 aren't modelled; and a server that waits on its connections with `poll_oneoff`
     isn't followed yet. Those stay "tested, not proven", and their lines say so [34].
@@ -171,19 +174,20 @@ where the suite takes every program of the repository from its request to done [
 semantics are small and exact, so a prover can model them: the model follows its integer and
 float operators, and SIMD128 but for float lanes' arithmetic, narrowing, widening, pairwise forms
 and lane loads, each held to the engine's own bits [45]. Its memory is the program's own by
-construction: an access outside it traps [46]. And it's a
-standard: the module lengua builds is a WASI preview 1 module, which another runtime can run
-[47].
+construction: an access outside it traps [46]. And it's a standard: the module lengua builds is a
+WASI preview 1 module, which another runtime can run when the program reaches only standard
+streams and files [47].
 
 It costs speed. lengua's program runs in an engine, with lengua's checks before every run [48].
 On the latest run of the gate, on each of the five runners, against C, C++ and Rust compiled to
 WebAssembly and run in the same engine, lengua's program was ahead on module size in 40 of 42
 rows, on wall time in 30 to 38, and on CPU time in 21 to 39; Windows counts CPU time in 15.6 ms
-ticks, which leaves its short rows undecided. Its peak memory was 0.90 to 1.14 times theirs, and
-behind on most rows [49]. Against the same languages' native builds, it was behind on most rows:
-its CPU time was 0.47 to 6.05 times the best native build's, below 1 only on the word tally
-[49]. Those gaps are published per runner, and the list of rows where lengua isn't ahead may only
-shrink [50]. W19 plans a lean runner and native builds of the proven `main.wat` [51].
+ticks, which leaves most of its short rows' CPU time undecided. Its peak memory was 0.90 to 1.14
+times theirs, and behind on most rows [49]. Against the same languages' native builds, it was
+behind on most rows: its CPU time was 0.47 to 6.05 times the best native build's, below 1 only on
+the word tally [49]. Those gaps are published per runner, and the list of rows where lengua isn't
+ahead may only shrink [50]. W19 plans a lean runner and native builds of the proven `main.wat`
+[51].
 
 ## Why the idea is the mother
 
@@ -265,13 +269,15 @@ program of the repository from its request to done there [44]. Each runner's rel
 built on that runner, then installed and checked on a clean runner of its own system and CPU,
 through a plain MCP client [59]. In an interactive Claude Code session, an agent followed an
 archive's two skills from a request to done, driving its server as the MCP client [60]. The
-finish line isn't reached: the gate against C, C++ and Rust doesn't pass on any runner yet [49],
-and moving the solvers into WebAssembly is next [61]. After that, four milestones aim at a
-replacement for C, C++ and Rust: reach, native speed, parallelism, and a library of proven parts
-[51].
+finish line isn't reached: the gate against C, C++ and Rust doesn't pass on any runner yet [49].
+Next is a try to run z3 as WebAssembly, kept only if it gives the same verdicts on all five
+runners with the replayed questions taking at most twice as long, then one bounded try for cvc5
+[61]. After that, four milestones aim at a replacement for C, C++ and Rust: reach, native speed,
+parallelism, and a library of proven parts [51].
 
-lengua is an Agent Plugin: two skills and one MCP server, using only open standards, so a
-harness that loads Agent Plugins can load it [6].
+lengua is an Agent Plugin: two skills and one MCP server, using only open standards, with its
+manifests held to the Agent Plugins 1.1.0 schemas [6]. No run has loaded it in a harness yet, and
+loading it in Claude Code is the owner's step [60].
 
 ## Sources
 
@@ -311,7 +317,8 @@ https://github.com/laughing-hermit/lengua.
     the tests that test less); `src/testdiff.rs`.
 16. [examples/add/idea.md](examples/add/idea.md).
 17. `Cargo.toml` (Wasmtime 50.0.1, with Cranelift, pinned); `src/wasm/engine.rs`.
-18. `src/testfile.rs` (`EVERY_VALUE_MAX`, 5,000, and `SUITE_RUNS_MAX`, 20,000).
+18. `src/testfile.rs` (`EVERY_VALUE_MAX`, 5,000, and `SUITE_RUNS_MAX`, 20,000; `mark_every_value`,
+    which leaves out a row with `choice(…)`).
 19. `src/expr.rs` (the formula language: checked 128-bit integers, exact decimals, doubles and
     singles, and functions, with no loops).
 20. `src/testfile.rs` (each behavior's formulas must reproduce its example; the dry run).
@@ -323,7 +330,9 @@ https://github.com/laughing-hermit/lengua.
 25. `src/checker/wasm/determinism.rs`.
 26. `src/server.rs` (the model held to the real program on up to 24 of a test's inputs before a
     proof); `src/server/wat.rs` (what a proof finds, run for real).
-27. `src/prove/smt.rs` (z3 first, and cvc5 to confirm; floats to cvc5 alone).
+27. `src/prove/smt.rs` (z3 first, and cvc5 to confirm; floats to cvc5 alone; a condition the terms
+    settle needs no solver); `src/prove/mod.rs` (inputs known to reach a branch, tried before a
+    solver).
 28. `src/server.rs` (each proof's line: proven for every input in range, or with text up to a
     length, or tested, not proven, with why).
 29. `src/prove/wasm/tests.rs`: `proves_greet_and_echo_and_add_to_three_digits`,
