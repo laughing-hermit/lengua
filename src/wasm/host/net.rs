@@ -638,7 +638,10 @@ mod tests {
             ended.write(b"x", &limits),
             Err(Fail::Errno(errno::PIPE))
         ));
-        assert!(matches!(ended.shutdown(9, &limits), Err(Fail::Errno(errno::INVAL))));
+        assert!(matches!(
+            ended.shutdown(9, &limits),
+            Err(Fail::Errno(errno::INVAL))
+        ));
     }
 
     /// A write over TLS that waits on its socket longer than a slice sends its bytes once: TLS

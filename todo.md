@@ -150,6 +150,63 @@ recorded and left.
 Earlier stops (2026-10-31 to 2026-11-04) left nothing open: their items were done with the
 owner's permission, or their topics left alone.
 
+### The review of the host (2026-11-10)
+
+The review is [docs/reviews/host-2026-11-10.md](docs/reviews/host-2026-11-10.md): whether a
+checked program, or a folder someone hands the user, can reach more than the idea grants. It
+found the host's core sound and eleven holes around it. Each got a test that failed first (run
+42904330205, on Linux on x86-64: all 19 new tests failed) and then its fix (42907709201: they
+pass). What each
+fix costs a user:
+1. **The working folder** of a program that uses files is never lengua's data folder, its folder
+   of compiled modules, a folder that holds one of them or lies inside one, nor, on Linux,
+   `/proc`, `/sys`, `/dev` or a folder beneath them. Cost: such a program no longer runs in the
+   home folder, which holds the data folder; the user names a folder beneath it. The program's
+   own folder stays allowed: what a program changes there only stops its next run.
+2. **Listings**: one per folder, shared, and 1,048,576 entries in all among a program's
+   descriptors. Cost: a folder with more entries can't be listed, or have a path in it opened
+   (`IO`).
+3. **A handed folder's files** are read only as regular files of at most 32 MiB. Cost: an
+   idea.md, main.wat, lengua.lock, index.md or log.md that is a symbolic link is refused.
+4. **A named computer is never this one.** Cost: a name the user's own computer resolves to its
+   loopback, as a line of the hosts file does, is refused; the idea says a port alone.
+5. **A module a proof found wrong** stays refused when an earlier lock is put back: the data
+   folder keeps the verdict by idea and module. Cost: none; a changed idea or main.wat has
+   another hash.
+6. **Host calls end at the deadline**, and a run's connections are made within 10 seconds in
+   all. Cost: of three places that don't answer, the third isn't tried.
+7. **The run tool's temporary folder** has a test's file limits (64 MiB a file, 256 MiB in all).
+   Cost: a run that writes more names a `folder`.
+8. **The frontmatter** is parsed without `verified` and `generated`. Cost: an anchor inside them
+   can't be used from another key.
+9. **The run tool** says `0.0.0.0:port` and "every address" for a server any computer may reach,
+   and its open-world hint is true. Cost: a harness may ask before `run`.
+10. **The data folder** is made 0700 when it was there with another mode. Cost: none.
+11. **main.wat's memory** has at most 16,384 pages, 1 GiB. Cost: a larger program reads its
+    input a part at a time.
+
+Still open from it, for the owner:
+- `check` doesn't read the data folder's record of a wrong module: with an earlier lock put back
+  it says done while `run` refuses. `run` is the wall; `check`'s words lag.
+- A hard link in a working folder to a file elsewhere is that file, on every system. Refusing
+  files with more than one link would cost users who keep hard-linked backups.
+- A link that another process plants in the working folder while a program runs is followed
+  beneath the folder (cap-std holds it there), since lengua's listings are kept until the
+  program itself changes something.
+- `stdin_file` is checked, then read by its path: another process can swap it in between.
+- `check` writes index.md and log.md in the parent of a handed folder, with titles from the
+  handed idea.
+- The tests of a handed folder may each take a worker with 1 GiB of memory; nothing bounds the
+  workers' memory in all.
+- A size cap on what `check` builds and proves in the server (a 32 MiB main.wat is still read
+  and built there), and the time the checker takes on it, have no test.
+- Not shown failing by themselves before their fixes, since an earlier line of the same test
+  failed first: the named pipes (main.wat and lengua.lock), `fd_write` past the deadline, the
+  `PLUGIN_DATA` folder, and the numeric spellings of the loopback. The TLS shutdown's wait and the
+  connections' total have no test: both need a place that doesn't answer.
+- Windows's junctions, and macOS's own name folding against APFS, still have no test of their
+  own.
+
 ### What the permission checks refused
 
 Claude Code's permission checks refused these actions. Each refusal was taken as given, with

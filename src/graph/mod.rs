@@ -185,7 +185,8 @@ impl Graph {
     fn listed_nodes(&self) -> BTreeSet<PathBuf> {
         let mut listed = BTreeSet::new();
         for index in &self.indexes {
-            let (Some(base), Ok(Some(text))) = (index.parent(), crate::state::read_text(index)) else {
+            let (Some(base), Ok(Some(text))) = (index.parent(), crate::state::read_text(index))
+            else {
                 continue;
             };
             listed.extend(

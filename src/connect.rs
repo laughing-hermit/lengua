@@ -256,9 +256,7 @@ async fn connect_tcp(host: Option<&str>, port: u16, own: bool) -> Result<TcpStre
             .collect(),
     };
     if let (Some(host), false) = (host, own)
-        && let Some(here) = addresses
-            .iter()
-            .find(|address| this_computer(address.ip()))
+        && let Some(here) = addresses.iter().find(|address| this_computer(address.ip()))
     {
         return Err(format!(
             "{host} is this computer ({}), which a connection to a named computer never goes \

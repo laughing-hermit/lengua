@@ -3762,7 +3762,13 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         ] {
             assert_eq!(host_kind(nothing), HostKind::NotAName, "{nothing}");
         }
-        for other in ["192.0.2.7", "::ffff:192.0.2.7", "example.com", "a1.example", "0x.org"] {
+        for other in [
+            "192.0.2.7",
+            "::ffff:192.0.2.7",
+            "example.com",
+            "a1.example",
+            "0x.org",
+        ] {
             assert_eq!(host_kind(other), HostKind::Other, "{other}");
         }
     }

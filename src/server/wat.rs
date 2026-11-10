@@ -21,8 +21,9 @@ use super::{
     BlockProof, CheckParams, CheckReport, Checking, ConnectionReport, FURTHER, Found, IdeaStage,
     LenguaServer, Model, Passed, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun, Stage,
     VERIFIED_NOTE, Witness, already_serving, background_limits, check_wait, cost_line, counted,
-    ended_report, idea_problems, keep_tested, own_folder_problem, proof_time, proven_detail, random_seed, reaches,
-    read_optional, settled, state_for_run, state_of, wait_for, working_folder,
+    ended_report, idea_problems, keep_tested, own_folder_problem, proof_time, proven_detail,
+    random_seed, reaches, read_optional, settled, state_for_run, state_of, wait_for,
+    working_folder,
 };
 use crate::checker::{self, wasm::Obligation};
 use crate::connect::Reach;

@@ -605,7 +605,10 @@ mod tests {
         let at = |name: &str| folder.path().join(name);
         assert_eq!(read_file(&at("none")).expect("no file"), None);
         std::fs::write(at("notes.md"), "hello").expect("a file");
-        assert_eq!(read_text(&at("notes.md")).expect("a file"), Some("hello".to_owned()));
+        assert_eq!(
+            read_text(&at("notes.md")).expect("a file"),
+            Some("hello".to_owned())
+        );
         std::fs::create_dir(at("sub")).expect("a folder");
         let refused = |name: &str| {
             read_file(&at(name))
@@ -623,7 +626,12 @@ mod tests {
         assert!(not_text.to_string().contains("isn't UTF-8 text"));
         let most = usize::try_from(MAX_FILE_BYTES).expect("a size");
         std::fs::write(at("most.md"), vec![b' '; most]).expect("a file");
-        assert_eq!(read_file(&at("most.md")).expect("it").map(|bytes| bytes.len()), Some(most));
+        assert_eq!(
+            read_file(&at("most.md"))
+                .expect("it")
+                .map(|bytes| bytes.len()),
+            Some(most)
+        );
         std::fs::write(at("large.md"), vec![b' '; most + 1]).expect("a file");
         assert!(refused("large.md").contains("holds more than 32 MiB"));
     }

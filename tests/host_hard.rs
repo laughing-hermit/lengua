@@ -385,7 +385,10 @@ async fn the_server_reads_a_handed_folder_s_files_the_same_way() {
     std::os::unix::fs::symlink(&elsewhere, linked.file("idea.md")).expect("a link");
     for tool in ["check", "run"] {
         let refused = session.call_error(tool, linked.arguments()).await;
-        assert!(refused.contains("isn't a regular file"), "{tool}: {refused}");
+        assert!(
+            refused.contains("isn't a regular file"),
+            "{tool}: {refused}"
+        );
     }
     let piped = Folder::with_add_idea();
     let made = Command::new("mkfifo")
@@ -462,8 +465,7 @@ fn refused_as_wrong(session: &Session, program: &Folder) -> Result<(), String> {
         ],
         None,
     );
-    if ran.status.code() == Some(125) && ran.stdout.is_empty() && said(&ran).contains(WRONG_BUILD)
-    {
+    if ran.status.code() == Some(125) && ran.stdout.is_empty() && said(&ran).contains(WRONG_BUILD) {
         Ok(())
     } else {
         Err(format!("{ran:?}"))
