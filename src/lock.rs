@@ -882,7 +882,13 @@ pub fn read(folder: &Path, key: Option<&Key>) -> Result<Option<Lock>, LockError>
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(LockError::Unreadable(error.to_string())),
     };
-    let mut bytes = Vec::new();
+    // The file's size, as the open file gives it, makes room for it at once: one read takes it
+    // all, where a read with no room doubles its buffer, and reads again, from 32 bytes up.
+    let size = file
+        .metadata()
+        .map_or(0, |metadata| metadata.len())
+        .min(MAX_LOCK_BYTES + 1);
+    let mut bytes = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
     file.take(MAX_LOCK_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| LockError::Unreadable(error.to_string()))?;
