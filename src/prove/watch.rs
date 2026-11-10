@@ -85,13 +85,63 @@ pub const BYTES_PER_TERM: u64 = 256;
 /// already. A pool's tables double when they fill, which takes about their size again for a
 /// moment, and the proof's other workers grow theirs the same way at the same time: pools that
 /// waited for the floor itself took a runner from 4.8 GB free to 0.2 GB between two samples ten
-/// seconds apart, probably in such doublings.
+/// seconds apart, probably in such doublings. Where this system's free memory isn't read yet, no
+/// pool is short, but in a test that holds pools to a worker's share (`WorkerShareForTest`).
 #[must_use]
 pub fn is_short_for(bytes: u64) -> bool {
     pretending()
-        || memory().is_some_and(|(available, total)| {
-            available < floor(total).saturating_add(bytes.saturating_mul(2))
-        })
+        || memory().map_or_else(
+            || past_a_worker_s_share(bytes),
+            |(available, total)| available < floor(total).saturating_add(bytes.saturating_mul(2)),
+        )
+}
+
+/// What a pool may hold in a test that asks for it ([`WorkerShareForTest`]), where this system's
+/// free memory isn't read yet: a proof worker's share of the memory, [`PER_WORKER`]; 0 for no
+/// such limit.
+#[cfg(test)]
+static SHARE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Whether a pool of `bytes` has no room to double within the share a test holds pools to, where
+/// this system's free memory isn't read yet.
+#[cfg(test)]
+fn past_a_worker_s_share(bytes: u64) -> bool {
+    let share = SHARE.load(std::sync::atomic::Ordering::Relaxed);
+    share > 0 && bytes.saturating_mul(2) > share
+}
+
+/// Only a test holds pools to a share: elsewhere, a system whose free memory isn't read sets a
+/// pool no limit.
+#[cfg(not(test))]
+const fn past_a_worker_s_share(_bytes: u64) -> bool {
+    false
+}
+
+/// A test's limit on every pool, where this system's free memory isn't read yet (Windows and
+/// macOS so far): a pool may grow while it has room to double within a proof worker's share
+/// ([`PER_WORKER`]), and past that finds the memory short, as a pool finds it on Linux when free
+/// memory runs low, so that a proof whose terms would fill the computer's memory stops as it
+/// does there rather than end the test's process when an allocation fails. The prover's golden
+/// runs under it on every runner. It holds for every thread as long as the value lasts; where
+/// free memory is read, it changes nothing.
+#[cfg(test)]
+pub struct WorkerShareForTest;
+
+#[cfg(test)]
+impl WorkerShareForTest {
+    /// Starts the limit; it lasts as long as the value returned.
+    #[must_use]
+    pub fn hold() -> Self {
+        SHARE.store(PER_WORKER, std::sync::atomic::Ordering::Relaxed);
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for WorkerShareForTest {
+    fn drop(&mut self) {
+        SHARE.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]
@@ -288,6 +338,24 @@ mod tests {
         assert_eq!(floor(32 << 30), 2 << 30);
         assert!(workers(16) >= 1);
         assert_eq!(workers(1), 1);
+    }
+
+    /// Where this system's free memory isn't read, a test that holds pools to a worker's share
+    /// finds a pool that couldn't double within it short, and one that could not; without the
+    /// limit, no pool is short there. (Where free memory is read, the free memory decides, as
+    /// the next test shows.)
+    #[test]
+    fn a_test_holds_pools_to_a_worker_s_share_where_memory_is_unread() {
+        if memory().is_some() {
+            return;
+        }
+        let (small, large) = (PER_WORKER / 4, PER_WORKER);
+        assert!(!is_short_for(large));
+        let share = WorkerShareForTest::hold();
+        assert!(is_short_for(large) && !is_short_for(small));
+        assert!(!is_low());
+        drop(share);
+        assert!(!is_short_for(large));
     }
 
     /// A pool needs the floor and room to double twice over: none has room for a pool the size of
