@@ -290,14 +290,15 @@ against native C++ are undecided.
   with Claude Code's mirrors of both.
 - **[Agent Skills](https://agentskills.io):** `write-idea` and `compile`, each a `SKILL.md`
   with only the standard's fields.
-- **The [Model Context Protocol](https://modelcontextprotocol.io)**, through the Rust SDK, rmcp
-  3.8.0: two tools, `check` and `run`, with no resources and no prompts, tested in the
+- **The [Model Context Protocol](https://modelcontextprotocol.io)**, through the
+  [Rust SDK](https://github.com/modelcontextprotocol/rust-sdk), rmcp 3.8.0: two tools, `check` and `run`, with no resources and no prompts, tested in the
   2025-11-25 handshake and the 2026-07-28 `server/discover`.
 - **The [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
   v0.2:** `idea.md` is an `Attested Computation`, and a folder of programs is a bundle whose
   `index.md` and `log.md` `check` keeps.
-- **Andrej Karpathy's LLM Wiki:** `idea.md` is an idea file, the source each person's agent
-  builds out, and `index.md` and `log.md` are the wiki's index and log.
+- **Andrej Karpathy's [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f):**
+  `idea.md` is an idea file, the source each person's agent builds out, and `index.md` and
+  `log.md` are the wiki's index and log.
 - **ASD-STE100 Simplified Technical English** for an idea's prose: `check` holds it to 25 words
   a sentence, six sentences a paragraph, no -ing forms but technical names, and the step
   vocabulary's phrasings. The rest of STE is the `write-idea` skill's to teach.
@@ -341,8 +342,10 @@ client, from a request to done; loading the plugin into Claude Code itself is le
 ([todo.md](todo.md), W14's test).
 
 The finish line, seven points in [todo.md](todo.md), isn't reached. The gate doesn't pass yet on
-any runner; `check` doesn't yet compile each module ahead of time for the machine's CPU; and this
-pass over the documents is W15's, before the finish-line run and the report. Next:
+any runner. Some proofs stay "tested, not proven". No run yet compares the proofs' verdicts across
+the five runners. And lengua keeps one set of WebAssembly features on every machine, so that every
+machine computes the same bits, where point 3 asks for each machine's fastest: that choice is the
+owner's. This pass over the documents is W15's, before the finish-line run and the report. Next:
 
 - **W17b:** the solvers as WebAssembly. z3 moves into Wasmtime only if it gives the same verdicts
   on all five runners at today's limits, with the replayed questions taking at most twice as

@@ -84,13 +84,13 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 
 | Point | Now | Left |
 |---|---|---|
-| 1. AI language, Agent Plugin | The WebAssembly plugin: `write-idea`, `compile`, `check`, `run`; `idea.md` an Attested Computation in STE with its tests inside, and `main.wat`; the graph's `index.md` and `log.md`, and `verified` written at `done` (W1, W3, W3b, W6, W9). The native product is retired, kept at the tag (W11, 42713054140). The suite on all five runners at f4cf505 (42760180544) and with W17a at d0e9ea6 (42753840475) | W1 (idea files), W3 (the graph), W6 (Attested Computation), W9 (the skills) |
-| 2. One product everywhere | The one suite passes natively on all five runners (42760180544; 42753840475). The goldens hold the WebAssembly checker's and prover's recordings to a baseline, on Linux on x86-64 (42716553289) | W2, then W4 to W9 on all five runners |
-| 3. Tailored | Cranelift compiles each module for the machine's own CPU when a worker first runs it, kept in Wasmtime's cache, with one feature set everywhere; the `machine` line tells the agent the CPU's vectors and caches (W4, W10, 42386323947) | W4 (the engine), W10 (caches), W12 |
-| 4. Competitive | The gate has run on all five runners three times and passed on none: 42661776298 (W12, at 9a549b3), 42728160641 (W12b, at d6496e3) and 42756074550 (W12c, at 076bcc1), whose reports are in [docs/benchmarks](docs/benchmarks/README.md). KNOWN_BEHIND fell from 1,359 rows to 1,057 (94 off after W12b, 208 after W12c). Of them, against C, C++ and Rust compiled to WebAssembly: 48 on Linux on x86-64, 33 on Linux on ARM64, 58 on macOS on ARM64, 68 on Windows on x86-64 and 69 on Windows on ARM64, peak memory the most common measure among them | The gate's first run on each runner, KNOWN_BEHIND from it, and the speed work it shows |
-| 5. Safe and proven | The dialect's rules and memory rules over main.wat (W5), proofs on z3 and cvc5 by length and by induction (W8), the secret rule over main.wat (W10), and lengua's host holding a program to what its idea grants, with no OS sandbox around it (W4): the suite on all five runners (42760180544; 42753840475). The secret rule's soundness review and W13 were stopped by the safety filter | W5, W8, W10, W13 |
-| 6. Truthful documents | W15 under way: README, DESIGN, the white paper, ROADMAP, the plugin's README, docs/run.md and docs/check.md describe the WebAssembly lengua; the native lengua's ledger, sessions and benchmarks are in [docs/history](docs/history); the latest bench run's reports in [docs/benchmarks](docs/benchmarks/README.md) (42756074550) | W15 |
-| 7. Shippable | One archive per runner, built by `cargo xtask release`, installed by its own `lengua-mcp install` on a clean runner of each of the five, doctor and the release check green (W17a at d0e9ea6, 42753851417). The agent's test in the interactive session ran once, with W14's Linux x86-64 archive (2026-11-07). The archives are unsigned | W14 |
+| 1. AI language, Agent Plugin | The WebAssembly plugin: `write-idea`, `compile`, `check`, `run`; `idea.md` an Attested Computation in STE with its tests inside, and `main.wat`; the graph's `index.md` and `log.md`, and `verified` written at `done` (W1, W3, W3b, W6, W9). The native product is retired, kept at the tag (W11, 42713054140). The suite on all five runners at bce6cd5 (42765232534), and main's push run there (42770579377) | Loading the plugin into Claude Code itself, the owner's step; the agent's test once more with the final archive (W15) |
+| 2. One product everywhere | The one suite passes natively on all five runners (42765232534). The goldens hold the WebAssembly checker's and prover's recordings to a baseline, on Linux on x86-64 (42716553289) | No run yet compares the proof lines' verdicts across the five runners, as the goldens record on Linux on x86-64 alone; W17b's measurement records them on all five |
+| 3. Tailored | Cranelift compiles each module for the machine's own CPU when a worker first runs it, during `check`'s tests, and Wasmtime's cache keeps it; one feature set everywhere; the `machine` line tells the agent the CPU's vectors and caches (W4, W10, 42386323947) | The point asks for the fastest WebAssembly features the engine supports on each machine. lengua keeps one set on every machine, so that every machine computes the same bits (point 2). The faster sets the engine has, relaxed SIMD and wide arithmetic, aren't finished standards, and relaxed SIMD gives different results on different CPUs. The owner decides between the two points |
+| 4. Competitive | The gate has run on all five runners three times and passed on none: 42661776298 (W12, at 9a549b3), 42728160641 (W12b, at d6496e3) and 42756074550 (W12c, at 076bcc1), whose reports are in [docs/benchmarks](docs/benchmarks/README.md). KNOWN_BEHIND fell from 1,359 rows to 1,057 (94 off after W12b, 208 after W12c). Of them, against C, C++ and Rust compiled to WebAssembly: 48 on Linux on x86-64, 33 on Linux on ARM64, 58 on macOS on ARM64, 68 on Windows on x86-64 and 69 on Windows on ARM64, peak memory the most common measure among them | The gate passes on no runner yet. Against the WebAssembly builds, KNOWN_BEHIND names 276 rows (peak memory the most common measure among them), which point 4 needs gone, and five rows came out behind or undecided that it doesn't name, the owner's ("A row the gate can't decide"). Against the native builds, the gaps are published, as the point asks |
+| 5. Safe and proven | The dialect's rules and memory rules over main.wat (W5), proofs on z3 and cvc5 by length and by induction (W8), the secret rule over main.wat (W10), and lengua's host holding a program to what its idea grants, with no OS sandbox around it (W4): the suite on all five runners (42765232534). The secret rule's soundness review and W13 were stopped by the safety filter | W13 and the secret rule's soundness review, the owner's. Some proofs stay "tested, not proven", so those programs aren't proven or bounded to a length: sorts and tallies over 8 bytes, SHA-256, AES-128, and servers that wait with `poll_oneoff` |
+| 6. Truthful documents | W15 under way: README, DESIGN, the white paper, ROADMAP, the plugin's README, docs/run.md and docs/check.md describe the WebAssembly lengua; the native lengua's ledger, sessions and benchmarks are in [docs/history](docs/history); the latest bench run's reports in [docs/benchmarks](docs/benchmarks/README.md) (42756074550) | The finish-line run's reports and run ids, and the report to the owner (W15) |
+| 7. Shippable | One archive per runner, built by `cargo xtask release` and installed by its own `lengua-mcp install` on a clean runner of each of the five, with doctor and the release check green (at bce6cd5, 42765242004). The agent's test in the interactive session ran once, with W14's Linux x86-64 archive (2026-11-07). The archives are unsigned | The agent's test once more with the final archive (W15); publishing the archives, which is the owner's |
 
 ## Still open (2026-11-09)
 
@@ -209,9 +209,12 @@ Each can be reversed.
   listener, 5 on the connections lengua made. Files live in the working folder, as before.
 - **The clock is rounded to a microsecond**, after OpenAI's 2026 report of agents signalling to
   each other through the CPU cache's timing.
-- **No threads** until WebAssembly's threads are standard, and no fused multiply-add (core
-  WebAssembly has none): an idea with `- Threads:` or `fma` is refused. The parallel template, and
-  the tiers that need CPU instructions (AES, SHA, CRC, AVX-512, SVE), are retired.
+- **No threads** until WebAssembly's threads are standard: an idea with `- Threads:` is refused.
+  Core WebAssembly has no fused multiply-add either. The test format keeps `fma(a, b, c)`, which
+  check accepts and the prover follows, and the write-idea skill tells the agent not to use it,
+  as a program would have to compute it in software (2026-11-10: this line said `fma` is refused,
+  which the code never did). The parallel template, and the tiers that need CPU instructions (AES,
+  SHA, CRC, AVX-512, SVE), are retired.
 - **`idea.md` is an Open Knowledge Format `Attested Computation`**: `runtime: webassembly`,
   `computation: main.wat`, `parameters` with a lengua key `from` (an argument, standard input, an
   environment variable or a file), `run` its executor and `check` its attester. OKF §6.2 makes
@@ -584,5 +587,6 @@ none changed a result, and each is recorded here for the owner:
 - W5's implementer ran `rustfmt` on files here.
 - W12's implementer, the session itself on W14's scripts/release.sh, and W11's part C each ran
   `bash -n`, a shell's syntax check that runs nothing.
-- W12c's fixer ran `awk` twice to count line lengths. awk is a text tool like the grep and sed
-  the rule allows, not a build or a run of code. It is listed because the fixer reported it.
+- W12c's fixer ran `awk` twice to count line lengths, and W15's fixer once as a filter over the
+  bench reports, whose output it didn't use. awk is a text tool like the grep and sed the rule
+  allows, not a build or a run of code. Both are listed because the fixers reported them.
