@@ -395,10 +395,12 @@ fn build(module: &Path) -> Result<(), String> {
         .args(["--", "-k", "0"]);
     logged(make, &work.join("build.log"))?;
 
-    let made = built.join(MODULE);
-    if !made.is_file() {
-        return Err(format!("z3's build made no {}", made.display()));
-    }
+    // CMake names the executable z3, without the .wasm wasi-sdk's toolchain file asks for.
+    let made = [MODULE, "z3"]
+        .iter()
+        .map(|file| built.join(file))
+        .find(|file| file.is_file())
+        .ok_or_else(|| format!("z3's build made no z3 or z3.wasm in {}", built.display()))?;
     files::copy(&made, module)?;
     let seconds = started.elapsed().as_secs();
     println!(
