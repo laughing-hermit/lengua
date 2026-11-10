@@ -324,12 +324,12 @@ against native C++ are undecided.
 ## Status and what's next
 
 lengua 0.2.0 is a work in progress. The WebAssembly lengua's milestones W0 to W12c and W14 are
-on main; W13 was stopped by the safety filter, and is the owner's. [ROADMAP.md](ROADMAP.md)
-gives the runs that verify each. On main, the suite passes natively on all five runners (run
-42760180544); among its tests, every program of `examples/` and `tests/fixtures` goes from its
-request to done. W17a, lengua's tooling in Rust, passed the suite on all five runners (run
-42753840475), and built each runner's archive, then installed and checked it on a clean runner
-of its own system and CPU (run 42753851417). In an interactive Claude Code session, the agent
+on main; W13 was stopped by the safety filter, and is the owner's. On main, the suite passes
+natively on all five runners (run 42760180544); among its tests, every program of `examples/`
+and `tests/fixtures` goes from its request to done. W17a, lengua's tooling in Rust, passed the
+suite on all five runners (run 42753840475), and built each runner's archive, then installed and
+checked it on a clean runner of its own system and CPU (run 42753851417). In an interactive
+Claude Code session, the agent
 followed the Linux on x86-64 archive's two skills and drove its `lengua-mcp` as the MCP client,
 from a request to done; loading the plugin into Claude Code itself is left for the owner
 ([todo.md](todo.md), W14's test).
