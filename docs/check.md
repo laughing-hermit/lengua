@@ -26,8 +26,10 @@ reads the folder's `idea.md` and `main.wat`, then, in order:
    an index or a length of a load, a store, a copy or a fill; nor a division, a remainder or a
    float operation; nor reaches a host call but as the bytes it writes out. The rule can't tell
    inputs of one kind apart: one secret file makes every file the program reads secret, and so
-   does one variable for the environment and one argument for the arguments. It checks the
-   WebAssembly, and trusts the engine's machine code to keep its timing;
+   does one variable for the environment and one argument for the arguments. A secret the
+   program writes to a file or sends to a peer makes what it reads from every file and
+   connection secret, since the secret may come back. It checks the WebAssembly, and trusts the
+   engine's machine code to keep its timing;
 5. runs every test the idea holds, its examples and its generated tests, in workers of its own,
    the generated tests' inputs drawn from a fresh seed, and compares each run's standard output,
    standard error, exit code and working folder with what the idea says;
