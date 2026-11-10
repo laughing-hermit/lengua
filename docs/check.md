@@ -28,8 +28,13 @@ reads the folder's `idea.md` and `main.wat`, then, in order:
    inputs of one kind apart: one secret file makes every file the program reads secret, and so
    does one variable for the environment and one argument for the arguments. A secret the
    program writes to a file or sends to a peer makes what it reads from every file and
-   connection secret, since the secret may come back. It checks the WebAssembly, and trusts the
-   engine's machine code to keep its timing;
+   connection secret, since the secret may come back. Then it compiles the module for this
+   computer's CPU, x86-64 or ARM64, and reads the machine code the engine made for each operator
+   that takes a secret: a conditional branch, a jump or a call through a register, a call of one
+   of the engine's functions, a division, the address of a table in the code, or bytes it can't
+   read is refused on the operator's line of `main.wat`, and a line of the output says which
+   CPU's code was read. It trusts the CPU's own timing of the instructions left, the code the
+   engine's address map gives no operator, and the engine's and the host's own functions;
 5. runs every test the idea holds, its examples and its generated tests, in workers of its own,
    the generated tests' inputs drawn from a fresh seed, and compares each run's standard output,
    standard error, exit code and working folder with what the idea says;

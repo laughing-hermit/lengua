@@ -1063,6 +1063,30 @@ fn walk<'t>(lines: &[&'t str], end: usize, mut met: impl FnMut(Met<'t>)) -> Opti
 /// Any problem of the frontmatter's end, of a code block that is never closed, or of a line of
 /// `# Constraints`, as [`parse`] reports it.
 pub fn grants(text: &str) -> Result<(Vec<Use>, Network), Vec<Problem>> {
+    let mut parser = constraints_read(text)?;
+    let uses = parser.uses.take().unwrap_or_default();
+    Ok((uses, parser.network))
+}
+
+/// The inputs an idea's `- Secret:` line names, read as [`grants`] reads its lines, by the same
+/// code; none for an idea without the line. A run takes them from the idea whose hash its lock
+/// records, to check the machine code it is about to run.
+///
+/// # Errors
+///
+/// As [`grants`].
+pub fn secrets(text: &str) -> Result<Vec<Source>, Vec<Problem>> {
+    let mut parser = constraints_read(text)?;
+    Ok(parser
+        .secrets
+        .take()
+        .map(|(_, secrets)| secrets)
+        .unwrap_or_default())
+}
+
+/// The lines of `# Constraints` of an idea's `text`, read as [`parse`] reads them, and nothing
+/// else of the idea; or the problems [`grants`] reports.
+fn constraints_read(text: &str) -> Result<Parser, Vec<Problem>> {
     let lines: Vec<&str> = text.lines().collect();
     let mut parser = Parser::default();
     let Some(end) = frontmatter_end(&lines) else {
@@ -1077,9 +1101,8 @@ pub fn grants(text: &str) -> Result<(Vec<Use>, Network), Vec<Problem>> {
     if let Some(line) = unclosed {
         parser.problem(Some(line), UNCLOSED);
     }
-    let uses = parser.uses.take().unwrap_or_default();
     if parser.problems.is_empty() {
-        Ok((uses, parser.network))
+        Ok(parser)
     } else {
         Err(parser.into_problems())
     }
@@ -4927,18 +4950,23 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
     }
 
     /// A run's grants are what check's parse finds: for every idea the repository ships that
-    /// parses, grants gives exactly its uses and its network.
+    /// parses, grants gives exactly its uses and its network, and secrets gives its secrets,
+    /// which one of them, secret-equal, has.
     #[test]
     fn grants_are_the_uses_and_the_network_parse_finds() {
         let mut compared = 0;
+        let mut secret = 0;
         for (name, text) in shipped_ideas() {
             let Ok(idea) = parse(&text) else {
                 continue;
             };
             assert_eq!(grants(&text), Ok((idea.uses, idea.network)), "{name}");
+            secret += usize::from(!idea.secrets.is_empty());
+            assert_eq!(secrets(&text), Ok(idea.secrets), "{name}");
             compared += 1;
         }
         assert!(compared >= 43, "only {compared} ideas parsed");
+        assert!(secret >= 1, "no shipped idea names a secret");
     }
 
     /// grants takes a `- Uses:` line only where parse does, in `# Constraints` outside code

@@ -221,6 +221,9 @@ struct Checking {
     further: bool,
     /// What main.wat's rules leave to its proofs, which its memory line names.
     obligations: Vec<Obligation>,
+    /// For an idea with a `- Secret:` line, what the check of the engine's machine code read on
+    /// this CPU, in one line.
+    machine_code: Option<String>,
 }
 
 impl std::fmt::Debug for Checking {
@@ -1408,6 +1411,7 @@ impl LenguaServer {
             "{code} follows every rule and passed all {} test runs",
             passed.runs
         )];
+        tests.extend(checking.machine_code.clone());
         tests.extend(passed.every_value.iter().cloned());
         if found.wrong {
             return CheckReport {
@@ -2738,6 +2742,7 @@ mod tests {
             green_told: AtomicBool::new(false),
             further: false,
             obligations: Vec::new(),
+            machine_code: None,
         });
         server
             .checks

@@ -157,9 +157,10 @@ agent.
   wraps the engine, and that second wall is deferred [39].
 - **Secrets.** An idea's `- Secret:` line names inputs whose values must not steer the code: the
   rule refuses a branch, an address, a length, a loop's count, a division or a float operation
-  of `main.wat` that depends on them [40]. It checks the WebAssembly. The machine code Wasmtime
-  makes from it is trusted to keep its timing; checking that code was stopped by the safety
-  filter, and so was a review of the rule's soundness, and both are left to the owner [41].
+  of `main.wat` that depends on them [40]. It checks the WebAssembly, and then, on the CPU that
+  runs the program, the machine code Wasmtime made for each operator that takes a secret, where
+  it refuses a branch, a table, a call or a division. The CPU's own timing of the instructions
+  left, and the code the engine's address map gives no operator, are trusted [41].
 
 The checks are fast enough to sit inside the agent's loop: every call of `check` replies within
 about 40 seconds, and the proofs that need longer go on in the background, for up to five
@@ -356,8 +357,8 @@ https://github.com/laughing-hermit/lengua.
 39. [todo.md](todo.md), the decisions ("An OS sandbox as a second wall is deferred") and
     "Deferred, and why"; `src/wasm/pool.rs` (workers are child processes of `lengua-mcp`).
 40. `src/checker/wasm/secret.rs`.
-41. `src/checker/wasm/secret.rs` (the machine code trusted for timing); [todo.md](todo.md), "What
-    the safety filter stopped".
+41. `src/checker/wasm/machine.rs` (what it reads of the machine code, and what it trusts);
+    [DESIGN.md](DESIGN.md), "Secrets".
 42. `src/server.rs` (`CHECK_WAIT`, 40 seconds; `PROOF_TIME`, 300 seconds).
 43. [todo.md](todo.md), "Where lengua stands" and "Superseded by the pivot"; the tag
     `native-final`.

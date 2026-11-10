@@ -199,9 +199,13 @@ What it doesn't promise:
   8 bytes, SHA-256 and AES-128 (the proof doesn't model them), a server that waits on its
   connections with `poll_oneoff`, and whatever runs out of time.
 - **The engine is trusted.** Isolation rests on Wasmtime, lengua's host and `cap-std`, with no
-  operating system sandbox around them. The secret rule checks the WebAssembly; the machine code
-  Wasmtime compiles from it is trusted to keep its timing. Checking that code (W13) was stopped by
-  the safety filter ([todo.md](todo.md)).
+  operating system sandbox around them.
+- **A secret's timing is checked in part.** The secret rule checks the WebAssembly. Then, on this
+  computer's CPU, x86-64 or ARM64, `check` and every run read the machine code Wasmtime made for
+  each operator that takes a secret, and refuse a branch, a table, a call or a division there
+  (W13). The rest is trusted: the CPU's own timing of the instructions left, the code the
+  engine's address map gives no operator, and the engine's and the host's own functions
+  ([DESIGN.md](DESIGN.md), Secrets).
 - **No security product.** The examples show algorithms, such as AES-128 and SHA-256. They
   aren't built to resist an attacker, and lengua isn't presented as covering security because
   of them.
@@ -333,8 +337,8 @@ against native C++ are undecided.
 ## Status and what's next
 
 lengua 0.2.0 is a work in progress. The WebAssembly lengua's milestones W0 to W12c, W14 and
-W17a, lengua's tooling in Rust, are on main; W13 was stopped by the safety filter, and is the
-owner's. At bce6cd5, which merged W17a with W12c, the suite passes natively on all five runners
+W17a, lengua's tooling in Rust, are on main; W13, the check of the engine's machine code for an
+idea's secrets, is on the branch `wip/machine-time`. At bce6cd5, which merged W17a with W12c, the suite passes natively on all five runners
 (run 42765232534); among its tests, every program of `examples/` and `tests/fixtures` goes from
 its request to done. There, each runner's archive was built, then installed and checked on a
 clean runner of its own system and CPU (run 42765242004). In an interactive Claude Code session,

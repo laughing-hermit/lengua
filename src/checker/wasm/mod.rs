@@ -7,12 +7,14 @@
 //! ([`flow`]); every value that becomes an address, every access and every buffer a call borrows
 //! ([`memory`]); the Power of 10's other rules ([`rules`]); that every computer computes the
 //! same bits ([`determinism`]); and, for an idea with a `- Secret:` line, that no secret decides
-//! how the program runs ([`secret`]). Violations are [`Rule`]s and [`Violation`]s, reported
+//! how the program runs ([`secret`]), which [`machine`] then holds the machine code to that the
+//! engine compiles main.wat to on this CPU. Violations are [`Rule`]s and [`Violation`]s, reported
 //! against main.wat's lines: `rule 4 (small functions) main.wat:12: …`.
 //! What the rules can't settle is left to the proof, as an [`Obligation`].
 
 pub mod determinism;
 pub mod flow;
+pub mod machine;
 pub mod memory;
 pub mod model;
 pub mod rules;
@@ -92,6 +94,9 @@ pub struct Report {
     pub facts: Facts,
     /// The `;; unsafe:` blocks, all of which are reported.
     pub unsafe_blocks: Vec<UnsafeBlock>,
+    /// The operators that take a secret operand, for an idea with a `- Secret:` line: what the
+    /// check of the machine code holds the engine's code to ([`machine`]).
+    pub secret_operators: Vec<secret::Taken>,
 }
 
 impl Report {
@@ -112,6 +117,7 @@ impl Report {
             hidden,
             facts,
             unsafe_blocks,
+            secret_operators: Vec::new(),
         }
     }
 
@@ -176,6 +182,10 @@ pub fn check(text: &str, built: &Built, context: &Context<'_>) -> Report {
     memory::check(&module, &flows, &analysis, &mut violations, &mut facts);
     rules::check(&module, &flows, &analysis, &mut violations, &mut facts);
     determinism::check(&module, &analysis, &mut violations, &mut facts);
-    secret::check(&module, &flows, &analysis, context.secrets, &mut violations);
-    Report::new(violations, facts, module.unsafe_blocks.clone())
+    let secret_operators =
+        secret::check(&module, &flows, &analysis, context.secrets, &mut violations);
+    Report {
+        secret_operators,
+        ..Report::new(violations, facts, module.unsafe_blocks.clone())
+    }
 }

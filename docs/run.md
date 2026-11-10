@@ -25,7 +25,10 @@ Given such a folder, it:
    `check` kept in lengua's data folder, and runs it only when its SHA-256 is the one
    `lengua.lock` records. Where that module is missing or another, it builds `main.wat`, and
    runs the build only when it is that same module: after lengua itself changed, a build that
-   differs doesn't run until `check` tests it;
+   differs doesn't run until `check` tests it. For an idea with a `- Secret:` line, it builds
+   `main.wat` every time, finds the operators that take a secret as `check` does, compiles the
+   module, and reads the machine code the engine made for them on this computer's CPU
+   ([check.md](check.md), step 4): code that doesn't keep the secret rule isn't run;
 2. runs it on Wasmtime, in lengua's own WASI host, in this process, with this shell's standard
    input, output and error. The working folder is the current one, or the existing folder `--in`
    names, from the current folder when it isn't absolute, never `/`. For a program whose idea uses

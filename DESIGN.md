@@ -230,10 +230,61 @@ each on its line with what to write instead:
 Masks made with arithmetic pass, as the compile skill's constant-time.md shows. What it can't tell
 apart it takes as secret: every argument's text when one argument is secret, every variable's
 when one variable is, every file the program reads when one file is. What it can't follow it
-refuses: past 4,000,000 followed operators, or blocks and calls 256 deep. The rule is over main.wat
-only. The machine code the engine compiles main.wat to is trusted to keep its timing, since
-checking it (W13) was stopped by the safety filter, and the rule itself hasn't passed a soundness
-review, which was stopped too (todo.md).
+refuses: past 4,000,000 followed operators, or blocks and calls 256 deep. The rule's soundness
+review is docs/reviews/secret-rule-2026-11-10.md.
+
+The rule is over main.wat, and WebAssembly with no branch on a secret can still become machine
+code with one, since the engine chooses the CPU's instructions. So for a module the rule passes,
+`check` also reads the machine code (W13, `src/checker/wasm/machine.rs`). The secret rule gives
+every operator that takes a secret operand, by its offset in the module. `check` compiles the
+module with the engine as `run` and a run from a shell configure it, with the compiled modules'
+cache they use, and takes the code, each function's place in it, and Wasmtime's address map, which
+says for each stretch of code the offset of the operator it was made for. Those offsets are the
+checker's own: Cranelift's translator names each operator by where its reader stands in the module
+before it reads the operator, which is the offset `wasmparser` gives the checker for the same
+bytes, and the module the engine compiles is the module the checker read, without its names, which
+come after the code. Each stretch made for an operator that takes a secret is read, x86-64 with
+`iced-x86` and ARM64 by the architecture's encoding index, which sorts each 32-bit word by a few
+fixed bits. On the operator's line of main.wat, `check` refuses:
+- a conditional branch (x86-64 `jcc`, `jrcxz`, `loop`; ARM64 `b.cond`, `cbz`, `cbnz`, `tbz`,
+  `tbnz`);
+- a jump or a call through a register, and a call of any function, which is one of the engine's;
+- a division or a square root;
+- the address of data in the code taken into a register (x86-64 `lea` of an address counted from
+  the instruction; ARM64 `adr`, `adrp`): how the engine starts a lookup in a table, or a jump
+  through one. A constant loaded from the code with no index isn't refused;
+- bytes it can't read as an instruction.
+
+What the secret rule already holds of an operator, its code may do: a `select`'s may branch on its
+condition, which isn't secret, as the engine's code for a `select` between vectors does on both
+CPUs; a load's, a store's, a `global.set`'s and a bulk memory operator's may check addresses and
+lengths and call the engine's copy or fill; the code of a call of one of main.wat's functions
+calls it. ARM64's code holds constants inside itself, as a load of the bytes after the next word
+and a jump over them; those bytes aren't read as instructions.
+
+Reading Cranelift 0.137.1's lowering for every place it emits a branch, a table or a call found
+one operator the secret rule passes whose code isn't straight: on x86-64, `i8x16.shl` and
+`i8x16.shr_u` by an amount that isn't a constant read a mask from a table at an index made from
+the amount (`ishl_i8x16_mask_table`, `ushr_i8x16_mask_table`). `check` refuses it there, and when
+only the vector is secret too, since it can't tell which operand the index came from. On ARM64
+none was found: its branches are those of `select` between vectors, of traps for divisions and
+float conversions, which the secret rule refuses before, and of atomics, which lengua has off. The
+tests pin the refusal on x86-64 and the pass on ARM64 with one module, and pin both CPUs' readers
+with code written as bytes.
+
+`check`'s `tests` say which CPU's code was read. `run`, a run from a shell and the attester read
+the code again before they run it, each for its own configuration, so the code that runs was read
+on the computer that runs it, whichever computer wrote lengua.lock; the lock records no CPU. An
+idea with no `- Secret:` line compiles nothing for this, in `check` or in a run.
+
+What the check of the machine code trusts, on both CPUs: the time the CPU takes for the
+instructions it leaves, such as a multiplication, a shift or a vector instruction; code the
+address map gives no operator, which is a function's entry and exit, values moved between
+registers and the stack, and what the engine's optimizer made anew from several operators, whose
+new instructions carry no offset; the code of operators that take no secret, of lengua's library
+and of the engine's own functions and the host's; that the engine compiles a module to the same
+code each time on one computer; and, on ARM64, that a word is the instruction its group's bits
+say, since nothing else of a word is decoded.
 
 ## The tests
 
@@ -711,13 +762,16 @@ listed below.
   earlier lock, which the user's key signed too, is put back: the data folder keeps the verdict.
 - **A secret that reaches timing within main.wat.** For an idea with a `- Secret:` line, the secret
   rule refuses a branch, an address, a length, a loop's count, a division or a float operation
-  that depends on a secret, in main.wat.
+  that depends on a secret, in main.wat; and in the machine code the engine made on this CPU for
+  each operator that takes a secret, a branch, a table, a call or a division.
 
 ### What lengua trusts
 
 - **The engine and its compiled code**: Wasmtime 50.0.1 and Cranelift for every bound, the stack,
   fuel and epochs; `wasmparser` 0.261.0 and `wast` 261.0.0 to read main.wat as the engine does;
-  and the machine code Cranelift makes, for timing as well, since checking it (W13) was stopped. No
+  and the machine code Cranelift makes. For timing, the code made for operators that take a
+  secret is read (Secrets, above), and the rest is trusted: the CPU's own timing of the
+  instructions left, code the address map gives no operator, and the engine's own functions. No
   OS sandbox wraps a worker: a worker is a plain child process, and a second wall (seccomp and
   Landlock on Linux, each other system's own) is deferred.
 - **The solvers**: z3 4.16.0 and cvc5 1.3.4, an "impossible" counting only when both say it, but
@@ -751,7 +805,8 @@ Programs that need these can't be written in lengua yet, and the host has no way
 
 The proofs and the rules have their own limits, said above: what the model refuses is tested, not
 proven; an access the rules leave is proven only inside the program's memory; the secret rule
-covers main.wat only.
+covers main.wat, and of the machine code only what the engine made for operators that take a
+secret.
 
 ### Covert channels it narrows
 
@@ -766,9 +821,10 @@ Three items here were stopped by Claude's safety filter (todo.md). The soundness
 secret rule was done on 2026-11-10 (docs/reviews/secret-rule-2026-11-10.md): its five findings
 have tests and are closed. The review of the host was done the same day
 (docs/reviews/host-2026-11-10.md): its eleven findings have tests (tests/host_hard.rs and unit
-tests) and are closed, and what it left open is in todo.md. Two are still open: the tests that
-try to get past the sandbox on macOS and Windows, of which that review's tests are a first part,
-and W13, checking the engine's machine code for constant time. lengua isn't to be presented as covering
+tests) and are closed, and what it left open is in todo.md. W13, the check of the engine's
+machine code for an idea's secrets, was built on 2026-11-10 (Secrets, above). One is still open:
+the tests that try to get past the sandbox on macOS and Windows, of which the host review's tests
+are a first part. lengua isn't to be presented as covering
 security because of its examples or its checksums: they show algorithms, not a product that
 resists an attacker.
 

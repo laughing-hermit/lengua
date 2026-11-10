@@ -88,7 +88,7 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 | 2. One product everywhere | The one suite passes natively on all five runners (42765232534). The goldens hold the WebAssembly checker's and prover's recordings to a baseline, on Linux on x86-64 (42716553289) | No run yet compares the proof lines' verdicts across the five runners, as the goldens record on Linux on x86-64 alone; W17b's measurement records them on all five |
 | 3. Tailored | Cranelift compiles each module for the machine's own CPU when a worker first runs it, during `check`'s tests, and Wasmtime's cache keeps it; one feature set everywhere; the `machine` line tells the agent the CPU's vectors and caches (W4, W10, 42386323947) | The point asks for the fastest WebAssembly features the engine supports on each machine. lengua keeps one set on every machine, so that every machine computes the same bits (point 2). The faster sets the engine has, relaxed SIMD and wide arithmetic, aren't finished standards, and relaxed SIMD gives different results on different CPUs. The owner decides between the two points |
 | 4. Competitive | The gate has run on all five runners three times and passed on none: 42661776298 (W12, at 9a549b3), 42728160641 (W12b, at d6496e3) and 42756074550 (W12c, at 076bcc1), whose reports are in [docs/benchmarks](docs/benchmarks/README.md). KNOWN_BEHIND fell from 1,359 rows to 1,057 (94 off after W12b, 208 after W12c). Of them, against C, C++ and Rust compiled to WebAssembly: 48 on Linux on x86-64, 33 on Linux on ARM64, 58 on macOS on ARM64, 68 on Windows on x86-64 and 69 on Windows on ARM64, peak memory the most common measure among them | The gate passes on no runner yet. Against the WebAssembly builds, KNOWN_BEHIND names 276 rows (peak memory the most common measure among them), which point 4 needs gone, and five rows came out behind or undecided that it doesn't name, the owner's ("A row the gate can't decide"). Against the native builds, the gaps are published, as the point asks |
-| 5. Safe and proven | The dialect's rules and memory rules over main.wat (W5), proofs on z3 and cvc5 by length and by induction (W8), the secret rule over main.wat (W10), and lengua's host holding a program to what its idea grants, with no OS sandbox around it (W4): the suite on all five runners (42765232534). The secret rule's soundness review and W13 were stopped by the safety filter | W13 and the secret rule's soundness review, the owner's. Some proofs stay "tested, not proven", so those programs aren't proven or bounded to a length: sorts and tallies over 8 bytes, SHA-256, AES-128, and servers that wait with `poll_oneoff` |
+| 5. Safe and proven | The dialect's rules and memory rules over main.wat (W5), proofs on z3 and cvc5 by length and by induction (W8), the secret rule over main.wat (W10), and lengua's host holding a program to what its idea grants, with no OS sandbox around it (W4): the suite on all five runners (42765232534). The secret rule's soundness review was done on 2026-11-10, and so was W13, the check of the engine's machine code for an idea's secrets, on `wip/machine-time` (RUNS-W13) | W13's merge to main. Some proofs stay "tested, not proven", so those programs aren't proven or bounded to a length: sorts and tallies over 8 bytes, SHA-256, AES-128, and servers that wait with `poll_oneoff` |
 | 6. Truthful documents | W15 under way: README, DESIGN, the white paper, ROADMAP, the plugin's README, docs/run.md and docs/check.md describe the WebAssembly lengua; the native lengua's ledger, sessions and benchmarks are in [docs/history](docs/history); the latest bench run's reports in [docs/benchmarks](docs/benchmarks/README.md) (42756074550) | The finish-line run's reports and run ids, and the report to the owner (W15) |
 | 7. Shippable | One archive per runner, built by `cargo xtask release` and installed by its own `lengua-mcp install` on a clean runner of each of the five, with doctor and the release check green (at bce6cd5, 42765242004). The agent's test in the interactive session ran once, with W14's Linux x86-64 archive (2026-11-07). The archives are unsigned | The agent's test once more with the final archive (W15); publishing the archives, which is the owner's |
 
@@ -143,9 +143,31 @@ recorded and left.
     don't follow can overwrite another region. The secret rule is sound against it now; whether
     the prover refuses it wasn't examined.
   - The rule's limits on depth and on operators followed have no test.
-- **Constant time in the engine's machine code** (W13, stopped 2026-11-07). The secret rule
-  holds main.wat; the machine code Wasmtime compiles from it is trusted for timing. The tag
-  `native-final` keeps the decoders such a check would use. Not tried again yet.
+- **Constant time in the engine's machine code** (W13, stopped 2026-11-07). **Done on
+  2026-11-10**, on `wip/machine-time` (RUNS-W13). For an idea with a `- Secret:` line, `check`,
+  `run`, a run from a shell and the attester compile the module for this computer and read the
+  machine code the engine made for each operator the secret rule found to take a secret
+  (`src/checker/wasm/machine.rs`): a conditional branch, a jump or a call through a register, a
+  call of the engine's functions, a division, the address of a table in the code, or bytes it
+  can't read is refused on the operator's line of main.wat. x86-64 is read with `iced-x86`
+  1.21.0, which comes back as a dependency; ARM64 by the architecture's encoding index, in about
+  a hundred lines, since the decoder at `native-final` reads only the native dialect's subset
+  and refuses the rest of what Cranelift emits.
+  - What it found: on x86-64, `i8x16.shl` and `i8x16.shr_u` by an amount that isn't a constant
+    read a mask from a table at an index made from the amount. The secret rule passes it, and
+    the check refuses it on x86-64; on ARM64 the same module passes, and no such operator was
+    found there.
+  - What it trusts, on both CPUs: the CPU's own timing of the instructions left; code the
+    address map gives no operator, which includes what the engine's optimizer made anew from
+    several operators; the code of operators that take no secret, of lengua's library, and of
+    the engine's and the host's own functions; and on ARM64, that a word is the instruction its
+    group's bits say.
+  - Still open from it, for the owner: lengua.lock records no CPU, since every run reads its own
+    code again and so needs none; a lane shift of a secret vector by an amount that varies and
+    isn't secret is refused on x86-64 too, since the check can't tell which operand a table's
+    index came from; a function of more than about 32 KiB of ARM64 code may hold the engine's
+    constants between its instructions, which the check would refuse as bytes it can't read; and
+    a CPU without SSSE3 gets a call for some vector operators, which the check would refuse.
 
 Earlier stops (2026-10-31 to 2026-11-04) left nothing open: their items were done with the
 owner's permission, or their topics left alone.
@@ -364,8 +386,9 @@ Each can be reversed.
   The gate's test corrects for continuity by half of U's step between runs of tied values.
 - **Secrets**: an idea line `- Secret:` names data that must not reach a branch, a `select`, an
   address, a length, a loop's count, division or floating point (point 5), checked in the
-  WebAssembly. Checking the machine code the engine makes as well (W13) was stopped by the safety
-  filter and is the owner's, so that code is trusted for timing, as DESIGN says.
+  WebAssembly, and then in the machine code the engine makes on the CPU that runs the program,
+  for each operator that takes a secret (W13): what that check reads and what it trusts is in
+  DESIGN, under Secrets.
 - **A generated test may repeat fixed text** (W12, b878286): `` `\n` `4194304` times then
   `{line}` `` is written out in its template, at most 8 MiB as an example's repeat is, and a
   placeholder is never repeated. A limit no generator reaches, such as sort-large's 4194305
@@ -417,8 +440,8 @@ Each merges to main when green on the runners it names; [ROADMAP.md](ROADMAP.md)
 - **W10. Constant time and caches.**
 - **W11. The native product retired** (kept at the tag).
 - **W12. Performance and the gate.**
-- **W13. Constant time in the machine code.** Stopped by the safety filter on 2026-11-07, and the
-  owner's (below).
+- **W13. Constant time in the machine code.** Stopped by the safety filter on 2026-11-07; built on
+  2026-11-10 with the owner's word, on `wip/machine-time` (above).
 - **W14. Package, `doctor` and release** on all five runners, and the agent's test in the
   interactive session.
 - **W15. The documents, the finish-line run, and the report.**
@@ -499,7 +522,7 @@ Runs, as they land:
 | W12 | 42393960971 (the benchmark, its workloads and the gate, at 9a549b3: the suite on all five runners and the gate, green); 42661776298 (the first gate run on all five runners: each runner's KNOWN_BEHIND, from its own KNOWN_BEHIND-<runner>.txt, at 2bad55a); on main with W11 |
 | W12b | 42728146781 (lengua's run made lean, at d6496e3: the suite on all five runners and the gate, green); 42728160641 (its bench on all five runners at d6496e3: on Linux on x86-64 a run's own cost fell from about 0.75 ms of CPU time and 5 MiB to 0.15 to 0.32 ms and 0.7 to 1.0 MiB; 94 rows newly ahead, taken out of KNOWN_BEHIND at 59f76f9); main at eff6b98, whose push suite 42732412732 is green |
 | W12c | 42756064246 (the programs made faster, at 076bcc1: the suite on all five runners, green, with the format job's layout applied at f4cf505, which 42759059023 compiles clean); 42756074550 (its bench on all five runners at 076bcc1: on Linux on x86-64, lengua's CPU time is 0.36 of the fastest WebAssembly build of C, C++ or Rust on tally, 0.61 on sort, 0.79 on histogram and crc32c, 0.90 on wc and files, and 1.10 on empty, as the report rounds them; 208 rows newly ahead on the five runners, taken out of KNOWN_BEHIND at 5714b42); its review's 5 findings fixed before them; main at f4cf505, whose push suite 42760180544 is green |
-| W13 | Stopped by the safety filter, left for the owner (below) |
+| W13 | RUNS-W13-ROW |
 | W14 | 42387284972 (the suite on all five runners and the gate at 83641b5); 42387777039 (release at 7835d9a: the five archives built, each installed on a clean runner of its system and CPU, doctor and the release check, green); main at 7835d9a. The agent's test in this session, 2026-11-07, with that Linux x86-64 archive: below |
 | W17a | 42753840475 (lengua's tooling in Rust, at d0e9ea6: the suite on all five runners and the gate, green); 42753851417 (release at d0e9ea6: the five archives built by `cargo xtask release`, each installed by `lengua-mcp install` on a clean runner of its system and CPU, doctor and the release check, green); 42753863525 (the goldens recorded by `cargo xtask golden` and compared by `cargo xtask golden-diff`: the raw view differs only in four proof lines that ran out of time, which the runner's load decides); 42753874793 (the bench through `cargo xtask bench-wasm` and `bench-report` on Linux on x86-64, to its report); with W12c merged, at bce6cd5: 42765232534 (the suite on all five runners and the gate, green) and 42765242004 (release on all five, each archive installed on a clean runner, green); main at bce6cd5 |
 | W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](docs/history/PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
@@ -580,8 +603,9 @@ this file at the tag `native-final`.
 - **Native kernels**: assembly a WebAssembly program calls for its busiest loops, for speed. Only
   if each is proven for every input and runs inside an OS sandbox, since it runs outside
   WebAssembly's.
-- **Checking the engine's machine code for constant time**, with the native lengua's x86-64 and
-  ARM64 decoders, so the timing guarantee doesn't rest on the engine's compiler.
+- **A check of all the engine's machine code for constant time.** W13 reads the code made for
+  each operator that takes a secret. It follows no secret through the CPU's registers, so the
+  code the address map gives no operator, and the engine's own functions, stay trusted.
 - **Proofs past the finish line.** Research: sorting at every length, word tallies past a few
   bytes, byte loops at 64 KiB, and long chains of mixing rounds.
 - **A pointer read from memory.** The memory rules can't follow it to an owner, so a program that
@@ -616,7 +640,8 @@ routed around through other models or subagents.
   stop on that ground in a day, so W13 is left for the owner: not retried, reworded or passed to
   another model. The secret rule over main.wat (W10) stands, and the engine's compiled code is
   trusted for timing. W11 removes the native decoders W13 would have used; the tag
-  `native-final` keeps them.
+  `native-final` keeps them. On 2026-11-10 the owner changed the model to Fable 5.2 and said to
+  try it: W13 was built that day, with no stop (above).
 
 ## The agent's test in this session (W14, 2026-11-07)
 

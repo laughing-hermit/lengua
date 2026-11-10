@@ -14,9 +14,9 @@ value computed from a secret input, and refuses `main.wat` where one decides wha
 next. Each refusal is on its line, `secrets main.wat:LINE: …`, with what to write instead.
 
 What the rule covers, and what it doesn't:
-- It checks `main.wat`, the WebAssembly. The machine code the engine compiles it to is trusted to
-  keep the WebAssembly's timing: secrets are followed in the WebAssembly's instructions, not in
-  the CPU's, until lengua checks the CPU's too (its roadmap's W13).
+- It checks `main.wat`, the WebAssembly, and then the machine code the engine compiles it to on
+  this computer's CPU, x86-64 or ARM64: the code made for each operator that takes a secret
+  ([The machine code](#the-machine-code) says what it reads there, and what it still trusts).
 - It says what `main.wat` doesn't do with a secret. It isn't a claim that a program resists an
   attacker, and don't present it to the user as one.
 
@@ -85,10 +85,66 @@ What passes: arithmetic, `and`, `or`, `xor`, shifts and rotations by any amount,
 result is a value (`i32.eq`, `i32.lt_u`, `i32.eqz`), multiplication, the integer SIMD128
 operators, `v128.bitselect`, loads and stores at public addresses, and the data `fd_write`,
 `sock_send` and `$write_all` write out, secret or not (a secret written to a file or sent to a peer
-makes what the program reads from files and connections secret, as above).
+makes what the program reads from files and connections secret, as above). One of these the
+machine code's check refuses on x86-64, a shift of 8-bit lanes by an amount that varies
+([The machine code](#the-machine-code)).
 
 What the rule can't follow it refuses: a call that leads back to its caller, and blocks and calls
 nested more than 256 deep.
+
+## The machine code
+
+WebAssembly with no branch on a secret can still become machine code with one: the engine chooses
+the CPU's instructions. So once `main.wat` passes the rule, `check` compiles its module as `run`
+and a run from a shell will, and reads the code the engine made for each operator that takes a
+secret operand. The engine's address map says which operator each stretch of code was made for.
+`check` says which CPU's code it read, and `run` reads the code again before each run, so the code
+that runs is always code that was read on the computer that runs it.
+
+For code made for an operator that takes a secret, `check` refuses, on the operator's line of
+`main.wat`:
+
+| The code has | On x86-64 | On ARM64 |
+|---|---|---|
+| a conditional branch | `jcc`, `jrcxz`, `loop` | `b.cond`, `cbz`, `cbnz`, `tbz`, `tbnz` |
+| a jump or a call through a register, or a call of one of the engine's functions | `jmp` and `call` through a register or memory, `call` | `br`, `blr`, `bl` |
+| a division or a square root | `div`, `idiv`, `divss` and its kin, `sqrtss` and its kin | `udiv`, `sdiv`, `fdiv`, `fsqrt` |
+| the address of a table in the code, which the code then reads at an index | `lea` of an address counted from the instruction | `adr`, `adrp` |
+| bytes that are no instruction `check` reads | any | any |
+
+What the secret rule already holds, the code may do: the code of a `select` may branch on its
+condition, which isn't secret; the code of a load, a store, a `global.set`, a `memory.copy` or a
+`memory.fill` may check its addresses and lengths, which aren't secret, and call the engine's copy
+or fill; the code of a call of one of `main.wat`'s functions calls it.
+
+One operator of those the secret rule passes is refused this way today, and on x86-64 only:
+`i8x16.shl` and `i8x16.shr_u` by an amount that isn't a constant. x86-64 has no shift of 8-bit
+lanes, so the engine shifts 16-bit lanes and clears the bits that crossed lanes with a mask, which
+it reads from a table at an index made from the amount. `check` can't tell which operand the index
+came from, so it refuses the shift whenever any operand is secret and the amount varies. ARM64's
+code for the same shift is straight, and passes. Write a shift that passes on both:
+
+```wat
+    ;; By a constant: the engine loads one mask, with no index.
+    (i8x16.shl (local.get $bytes) (i32.const 3))
+    ;; By an amount from 0 to 7 that varies: shift 16-bit lanes, then clear in each byte the
+    ;; bits that came from the byte below it, with a mask made from the amount by arithmetic.
+    (v128.and
+      (i16x8.shl (local.get $bytes) (local.get $amount))
+      (i8x16.splat (i32.shl (global.get $ALL_ONES) (local.get $amount))))
+```
+
+What this check still trusts, on both CPUs:
+
+- the CPU's own timing of the instructions it leaves: a multiplication, a shift, a vector
+  instruction;
+- code the address map gives no operator: a function's entry and exit, values moved between
+  registers and the stack, and what the engine's optimizer made anew from several operators;
+- the code of operators that take no secret, of lengua's library (`$fill`, `$write_all`), and of
+  the engine's own functions and the host's, which `memory.copy`, `memory.fill` and every host
+  call run;
+- on ARM64, that each word is the instruction its group's bits say: `check` reads the bits that
+  name a branch, a call, a division or an address, and decodes nothing else of a word.
 
 ## Masks
 

@@ -244,12 +244,30 @@ on ARM64 and on both Windows runners.
 
 ## W13. Constant time in the machine code
 
-For an idea with `- Secret:`, `check` was to compile the module for this machine, decode the
-engine's code, map each instruction to its WebAssembly offset, and refuse a conditional branch,
-an indirect jump, a division or an address derived from a secret. It was to be verified by the
-tests on all five runners, covering x86-64 and ARM64 machine code. It was stopped by the safety
-filter on 2026-11-07, while it was being designed, and left for the owner (todo.md): the engine's
-compiled code is trusted for timing.
+For an idea with `- Secret:`, `check` compiles the module for this machine as `run` and a run
+from a shell will, and reads the engine's code for each operator the secret rule found to take a
+secret, by the engine's address map: x86-64 with `iced-x86`, ARM64 by the architecture's encoding
+index (`src/checker/wasm/machine.rs`). On the operator's line of main.wat it refuses a conditional
+branch, a jump or a call through a register, a call of the engine's functions, a division, the
+address of a table in the code, and bytes it can't read. `run`, a run from a shell and the
+attester read the code again before they run it, so each run's code was read on its own computer.
+An idea with no secret compiles nothing for it. It was stopped by the safety filter on 2026-11-07
+while it was being designed, and built on 2026-11-10 on `wip/machine-time`.
+
+What it found: on x86-64, Cranelift's code for `i8x16.shl` and `i8x16.shr_u` by an amount that
+isn't a constant reads a mask from a table at an index made from the amount, which the secret rule
+over main.wat can't see. `check` refuses it there. On ARM64 the same module passes, and no
+operator the secret rule passes was found whose ARM64 code branches or reads a table.
+
+What it trusts: the CPU's own timing of the instructions it leaves; the code the address map gives
+no operator (a function's entry and exit, moves, and what the engine's optimizer made anew); the
+code of operators that take no secret, of lengua's library, and of the engine's and the host's own
+functions; and, on ARM64, that a word is the instruction its group's bits say.
+
+*Verified by:* the tests on all five runners, each of its own CPU's code: secret-equal passes;
+one module with a lane shift by a secret amount is refused on its line on x86-64 and passes on
+ARM64; the engine's own branch is refused only when its operator is named as taking a secret; and
+both readers are pinned on every runner with code written as bytes (todo.md has the runs).
 
 ## W14. Package, `doctor`, release, and the agent's test
 

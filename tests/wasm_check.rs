@@ -1259,3 +1259,102 @@ async fn secret_equal_goes_from_its_request_to_done_and_a_branch_on_a_secret_is_
     assert!(any_line(&report["problems"], "with a mask"), "{report}");
     session.service.cancel().await.expect("close the session");
 }
+
+/// Where secret-equal has written its answer's newline: the shift below goes after it.
+const ANSWERED: &str = "          (i32.store8 offset=4 (global.get $out) (global.get $NEWLINE))\n";
+
+/// The answer written, then the first 16 bytes of the input shifted as 8-bit lanes, by one bit
+/// or by none as the answer's mask says: an amount made from a secret. The secret rule passes
+/// it, since nothing in it branches on a secret or makes an address from one.
+const SHIFTED: &str = "          (i32.store8 offset=4 (global.get $out) (global.get $NEWLINE))\n          \
+                       (v128.store (global.get $text)\n            (i8x16.shl (v128.load \
+                       (global.get $text))\n              (i32.and (local.get $mask) (global.get \
+                       $ODD))))\n";
+
+/// The name `check` gives the CPU this test runs on.
+fn cpu() -> &'static str {
+    if cfg!(target_arch = "x86_64") {
+        "x86-64"
+    } else {
+        "ARM64"
+    }
+}
+
+/// secret-equal's idea names standard input as secret, so `check` also reads the machine code
+/// the engine compiles its main.wat to on this computer, and says which CPU's it read; `run`,
+/// a run from a shell and the attester check that code again before they run it. With a shift
+/// of 8-bit lanes by an amount made from the secret, which the secret rule passes, x86-64's
+/// code looks a mask up in a table at an index made from the amount, and `check` refuses
+/// main.wat on the shift's line with what to write instead; ARM64's code is straight, and the
+/// same main.wat goes to done there.
+#[tokio::test]
+async fn the_machine_code_of_a_secret_idea_is_checked_on_this_cpu() {
+    let session = Session::start(Protocol::Discover).await;
+    let program = Program::new();
+    program.write("idea.md", SECRET_IDEA);
+    let report = session
+        .call_ok(
+            "check",
+            program.request("Make me a program that says whether two secret lines are the same"),
+        )
+        .await;
+    assert_eq!(report["state"], "write_code", "{report}");
+    program.write("main.wat", SECRET_CODE);
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let kept = format!(
+        "the {} code the engine compiles main.wat to on this computer keeps the secret rule",
+        cpu()
+    );
+    assert!(any_line(&done["tests"], &kept), "{done}");
+    // `run` checks the code it is about to run, and runs it.
+    let mut arguments = program.arguments();
+    arguments["stdin"] = json!("aba\naba\n");
+    let ran = session.call_ok("run", arguments).await;
+    assert_eq!(ran["stdout"], "same\n", "{ran}");
+    // So does a run from a shell, here with no input, which the program answers with its usage.
+    let usage = run_from_shell(&session, program.path(), &[]);
+    assert_eq!(
+        usage.stderr, b"usage: two lines of the same length\n",
+        "{usage:?}"
+    );
+    assert_eq!(usage.status.code(), Some(1), "{usage:?}");
+    // And the attester, which says what it read.
+    let (code, said) = attest(program.path());
+    assert_eq!(code, Some(0), "{said}");
+    assert!(said.contains(&format!("main.wat: {kept}")), "{said}");
+
+    let shifted = changed(SECRET_CODE, ANSWERED, SHIFTED);
+    program.write("main.wat", &shifted);
+    let report = session.settle(&program).await;
+    if cfg!(target_arch = "x86_64") {
+        assert_eq!(report["state"], "code_problems", "{report}");
+        let line = line_of(&shifted, "(i8x16.shl");
+        assert!(
+            any_line(
+                &report["problems"],
+                &format!(
+                    "secrets main.wat:{line}: on x86-64, the engine compiles this `i8x16.shl`, \
+                     which takes a secret, to code with the address of a table in the code"
+                )
+            ),
+            "{report}"
+        );
+        assert!(
+            any_line(
+                &report["problems"],
+                "Fix: shift by an amount that isn't secret"
+            ),
+            "{report}"
+        );
+        // The attester refuses it the same way, and a run of the folder is refused: its code
+        // no longer is what lengua.lock names.
+        let (code, said) = attest(program.path());
+        assert_ne!(code, Some(0), "{said}");
+        assert!(said.contains("on x86-64, the engine compiles this `i8x16.shl`"), "{said}");
+    } else {
+        assert_eq!(report["state"], "done", "{report}");
+        assert!(any_line(&report["tests"], &kept), "{report}");
+    }
+    session.service.cancel().await.expect("close the session");
+}

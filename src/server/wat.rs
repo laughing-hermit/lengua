@@ -25,7 +25,10 @@ use super::{
     random_seed, reaches, read_optional, settled, state_for_run, state_of, wait_for,
     working_folder,
 };
-use crate::checker::{self, wasm::Obligation};
+use crate::checker::{
+    self,
+    wasm::{Obligation, machine},
+};
 use crate::connect::Reach;
 use crate::data_dir::DataDir;
 use crate::expr;
@@ -472,6 +475,9 @@ pub(super) struct WasmCode {
     unsafe_blocks: usize,
     /// What the rules leave to the proofs.
     obligations: Vec<Obligation>,
+    /// For an idea with a `- Secret:` line, what the check of the engine's machine code read on
+    /// this CPU, in one line.
+    machine_code: Option<String>,
 }
 
 /// What keeps main.wat from building on its idea's parts: a part that isn't checked on this
@@ -590,8 +596,54 @@ struct Runnable {
     uses: Vec<Use>,
     /// What it may do on the network, from its `- Network:` line.
     network: idea::Network,
+    /// The inputs its `- Secret:` line names: for an idea that names any, the machine code of
+    /// the module is checked on this computer before it runs ([`keeps_secrets`]).
+    secrets: Vec<idea::Source>,
     /// The SHA-256 of the module check tested.
     module: Sha256Hex,
+}
+
+/// For a program whose idea names secrets, checks the machine code the engine compiles `built`
+/// to on this computer in `setup`, the configuration about to run it, as `check` does: the rules
+/// find the operators that take a secret, and the code made for each keeps the secret rule
+/// ([`machine`]). So the code of every run is checked on the CPU that runs it, whichever
+/// computer checked the folder. A program whose idea names no secret is checked for nothing,
+/// and nothing is compiled for it here.
+fn keeps_secrets(
+    data_dir: &DataDir,
+    folder: &ProgramFolder,
+    ready: &Runnable,
+    built: &Built,
+    setup: Setup,
+) -> Result<(), String> {
+    if ready.secrets.is_empty() {
+        return Ok(());
+    }
+    let context = checker::wasm::Context {
+        uses: &ready.uses,
+        network: &ready.network,
+        secrets: &ready.secrets,
+    };
+    let report = checker::wasm::check(&ready.code, built, &context);
+    let refused = if report.passed() {
+        let cache = engine::cache_folder(data_dir);
+        match machine::check(
+            &built.wasm,
+            &report.secret_operators,
+            &[setup],
+            Some(cache.as_path()),
+        ) {
+            Ok(_) => return Ok(()),
+            Err(refused) => refused.iter().map(ToString::to_string).collect(),
+        }
+    } else {
+        report.lines()
+    };
+    Err(format!(
+        "{IDEA_FILE} names a secret, and {CODE_FILE} doesn't keep it on this computer, so it \
+         won't run: {}. Call check with path {folder}, then fix {CODE_FILE}.",
+        refused.join("; ")
+    ))
 }
 
 /// Checks that `folder` holds main.wat lengua may run, as `run` does from MCP and from a shell:
@@ -659,6 +711,8 @@ fn runnable(
     })?;
     let (uses, network) =
         idea::grants(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
+    let secrets =
+        idea::secrets(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
     if !env.is_empty() && !uses.contains(&Use::Environment) {
         return Err(format!(
             "{IDEA_FILE} doesn't use the environment, so the program gets no environment \
@@ -669,6 +723,7 @@ fn runnable(
         code,
         uses,
         network,
+        secrets,
         module: stamp.module_sha256.clone(),
     })
 }
@@ -811,8 +866,9 @@ impl Order for Checked<'_> {
 /// `folders` gives, then the module check tested, kept or built ([`kept_or_built`]), in this
 /// process, attached to the shell's standard input, output and error, with no time limit. The
 /// engine starts on the program's thread while the checks run on this one, and compiles nothing
-/// until they pass ([`run_once_checked`]). Gives the program's exit code, or [`TRAPPED`] when it
-/// trapped, which it says on standard error.
+/// until they pass ([`run_once_checked`]), but for an idea that names a secret, whose checks
+/// compile the module to read its machine code ([`keeps_secrets`]). Gives the program's exit
+/// code, or [`TRAPPED`] when it trapped, which it says on standard error.
 ///
 /// # Errors
 ///
@@ -834,6 +890,19 @@ pub(super) fn run_from_shell(
             return Err(problem);
         }
         let to_run = kept_or_built(data_dir, &folder, &ready)?;
+        // An idea that names a secret: the code this computer runs is checked first, from
+        // main.wat built again when the module is the one check kept.
+        if !ready.secrets.is_empty() {
+            match &to_run {
+                ToRun::Built(built) => {
+                    keeps_secrets(data_dir, &folder, &ready, built, Setup::Shell)?;
+                }
+                ToRun::Kept(_) => {
+                    let built = built_as_tested(&folder, &ready)?;
+                    keeps_secrets(data_dir, &folder, &ready, &built, Setup::Shell)?;
+                }
+            }
+        }
         let connections = reaches(&ready.network)
             .iter()
             .map(|reach| made(reach, &request.args))
@@ -953,6 +1022,22 @@ impl LenguaServer {
         if !report.passed() {
             return Err(report.lines());
         }
+        // An idea with a `- Secret:` line: the code the engine compiles the module to on this
+        // CPU, as `run` and a run from a shell compile it, keeps the secret rule too. An idea
+        // with none compiles nothing here.
+        let machine_code = if idea.secrets.is_empty() {
+            None
+        } else {
+            let cache = engine::cache_folder(&self.data_dir);
+            let passed = machine::check(
+                &built.wasm,
+                &report.secret_operators,
+                &[Setup::Run, Setup::Shell],
+                Some(cache.as_path()),
+            )
+            .map_err(|refused| refused.iter().map(ToString::to_string).collect::<Vec<_>>())?;
+            Some(passed.line())
+        };
         let features = engine::features_used(&built.wasm);
         let module = Sha256Hex::of(&built.wasm);
         let program = Program::new(built)
@@ -966,6 +1051,7 @@ impl LenguaServer {
             max_stack_bytes: report.facts.max_stack_bytes,
             unsafe_blocks: report.unsafe_blocks.len(),
             obligations: report.facts.obligations.clone(),
+            machine_code,
         })
     }
 
@@ -1001,6 +1087,7 @@ impl LenguaServer {
             green_told: AtomicBool::new(false),
             further,
             obligations: code.obligations.clone(),
+            machine_code: code.machine_code.clone(),
         });
         if let Some(old) = self
             .checks
@@ -1274,6 +1361,8 @@ impl LenguaServer {
         // The tool's reply and its worker need the build's assertions and lines: it builds
         // main.wat, held to the module check tested.
         let built = built_as_tested(folder, &ready)?;
+        // An idea that names a secret: the code this computer runs is checked first.
+        keeps_secrets(&self.data_dir, folder, &ready, &built, Setup::Run)?;
         let (uses, network) = (ready.uses, ready.network);
         let workspace = params.folder.as_deref().map(working_folder).transpose()?;
         // A folder the run reads or writes in, for a program that uses files or for its standard
@@ -1495,6 +1584,18 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     lines.push(format!(
         "{CODE_FILE}: follows every rule of lengua's WebAssembly dialect"
     ));
+    // An idea that names a secret: the code the engine compiles the module to on this computer
+    // keeps the secret rule too, compiled here with nothing kept.
+    if !idea.secrets.is_empty() {
+        let setups = [Setup::Run, Setup::Shell];
+        match machine::check(&built.wasm, &report.secret_operators, &setups, None) {
+            Ok(passed) => lines.push(format!("{CODE_FILE}: {}", passed.line())),
+            Err(refused) => {
+                lines.extend(refused.iter().map(ToString::to_string));
+                return false;
+            }
+        }
+    }
     let launcher = match std::env::current_exe() {
         Ok(launcher) => launcher,
         Err(error) => {

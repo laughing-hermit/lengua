@@ -134,6 +134,10 @@ pub fn config(setup: Setup, cache: Option<&Path>) -> Result<Config, String> {
     config.consume_fuel(setup.counts());
     config.epoch_interruption(setup.interrupts());
     config.max_wasm_stack(MAX_WASM_STACK);
+    // The map from the engine's code to the module's operators, which the check of a secret
+    // idea's machine code reads: Wasmtime's own default, set here so that it holds whatever the
+    // default becomes.
+    config.generate_address_map(true);
     if let Some(folder) = cache {
         let mut settings = CacheConfig::new();
         settings.with_directory(folder);

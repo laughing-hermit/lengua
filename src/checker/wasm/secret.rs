@@ -55,9 +55,9 @@
 //! operators as it follows them. A loop that hasn't settled in 32 rounds has all it may write
 //! taken as secret: the locals it writes, every byte of memory and every global that changes.
 //!
-//! It is a rule over main.wat, like a type. The machine code the engine compiles main.wat to is
-//! trusted to keep its time as the WebAssembly does, until lengua checks that code as well
-//! (ROADMAP.md, W13).
+//! It is a rule over main.wat, like a type. For a module it passes, it also gives every operator
+//! that takes a secret operand ([`Taken`]), by its offset in the module, so that the machine
+//! code the engine compiles each one to on this CPU is checked as well ([`super::machine`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -449,6 +449,54 @@ impl Leak {
     }
 }
 
+/// What the secret rule already holds of an operator that takes a secret, and so what the
+/// machine code the engine makes for it may do besides compute ([`super::machine`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Takes {
+    /// It computes with the secret: its code may not branch, look a value up or call.
+    Plain,
+    /// A `select`: the rule holds its condition as not secret, so its code may branch on it, as
+    /// the engine's code for a `select` between vectors does.
+    Choice,
+    /// A load, a store, a `global.set`, or a `memory.copy`, `memory.fill` or `memory.init`: the
+    /// rule holds its addresses and lengths as not secret, so its code may check them against
+    /// the memory's size, and may call the engine's own copy or fill.
+    Memory,
+    /// A call of one of main.wat's functions with a secret argument: its code calls that
+    /// function.
+    Call,
+}
+
+impl Takes {
+    /// What the rule holds of `operator`.
+    fn of(operator: &Operator<'_>) -> Self {
+        match operator {
+            Operator::Select | Operator::TypedSelect { .. } => Self::Choice,
+            Operator::Call { .. } => Self::Call,
+            Operator::GlobalSet { .. }
+            | Operator::MemoryCopy { .. }
+            | Operator::MemoryFill { .. }
+            | Operator::MemoryInit { .. } => Self::Memory,
+            other if memory::memory_op(other).is_some() => Self::Memory,
+            _ => Self::Plain,
+        }
+    }
+}
+
+/// An operator of main.wat that takes a secret operand on some path the secret rule follows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Taken {
+    /// Its offset in the module, which is where the engine's address map says its machine code
+    /// came from.
+    pub offset: u64,
+    /// Its line of main.wat.
+    pub line: Option<usize>,
+    /// Its name as main.wat writes it, such as `i32.xor`.
+    pub name: String,
+    /// What the rule holds of it.
+    pub takes: Takes,
+}
+
 /// Follows main.wat from `_start`, with the idea's secrets.
 struct Follower<'m, 'a> {
     /// The module.
@@ -472,6 +520,8 @@ struct Follower<'m, 'a> {
     sent: bool,
     /// What it refuses: each line, problem and fix, once.
     found: BTreeSet<(Option<usize>, String, String)>,
+    /// The operators that take a secret operand on some path it follows, by offset.
+    taken: BTreeMap<u64, Taken>,
 }
 
 impl Follower<'_, '_> {
@@ -806,6 +856,7 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
         };
         let (params, results) = self.module().block_arity(ty);
         if state.reachable && self.pop() {
+            self.took(at);
             self.report(at, Leak::Branch("if"));
         }
         if !self.enter() {
@@ -940,6 +991,23 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
         self.follower.report(line, &leak);
     }
 
+    /// Keeps the operator at `at` as one that takes a secret operand.
+    fn took(&mut self, at: usize) {
+        let function = self.function;
+        let Some(op) = function.body.get(at) else {
+            return;
+        };
+        self.follower
+            .taken
+            .entry(op.offset)
+            .or_insert_with(|| Taken {
+                offset: op.offset,
+                line: op.line,
+                name: written_name(&op.operator),
+                takes: Takes::of(&op.operator),
+            });
+    }
+
     /// Takes the top value off the stack: whether it may be secret.
     fn pop(&mut self) -> bool {
         self.stack.pop().unwrap_or(false)
@@ -1045,6 +1113,7 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
             }
             Operator::BrIf { relative_depth } => {
                 if self.pop() {
+                    self.took(at);
                     let leak = self.branch_leak("br_if", &[*relative_depth]);
                     self.report(at, leak);
                 }
@@ -1054,6 +1123,7 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
                 let mut depths: Vec<u32> = targets.targets().flatten().collect();
                 depths.push(targets.default());
                 if self.pop() {
+                    self.took(at);
                     let leak = self.branch_leak("br_table", &depths);
                     self.report(at, leak);
                 }
@@ -1077,6 +1147,9 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
                 let first = self.pop();
                 if condition {
                     self.report(at, Leak::Select);
+                }
+                if first || second || condition {
+                    self.took(at);
                 }
                 self.push(first || second || condition);
             }
@@ -1107,6 +1180,7 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
             }
             Operator::GlobalSet { global_index } => {
                 if self.pop() {
+                    self.took(at);
                     state.globals.insert(*global_index);
                 } else {
                     state.globals.remove(global_index);
@@ -1130,6 +1204,9 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
         state: &mut State,
     ) {
         let operands = self.pop_n(takes);
+        if operands.contains(&true) {
+            self.took(at);
+        }
         let address = operands.first().copied().unwrap_or(false);
         if address {
             self.report(at, Leak::Address(name));
@@ -1153,6 +1230,9 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
     /// Follows the `memory.copy` at `at`: its destination holds what its source held.
     fn copy(&mut self, at: usize, state: &mut State) {
         let operands = self.pop_n(3);
+        if operands.contains(&true) {
+            self.took(at);
+        }
         if operands[0] || operands[1] {
             self.report(at, Leak::Address("memory.copy"));
         }
@@ -1171,6 +1251,9 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
     /// at `at`: its destination holds its value.
     fn fill(&mut self, at: usize, name: &'static str, state: &mut State) {
         let operands = self.pop_n(3);
+        if operands.contains(&true) {
+            self.took(at);
+        }
         // `memory.init` takes an offset into its segment where `memory.fill` takes the value.
         if operands[0] || (operands[1] && name == "memory.init") {
             self.report(at, Leak::Address(name));
@@ -1190,6 +1273,9 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
         let (takes, gives) = self.module().arity(&[], operator);
         let operands = self.pop_n(takes);
         let secret = operands.contains(&true);
+        if secret {
+            self.took(at);
+        }
         if secret && divides(operator) {
             self.report(at, Leak::Division(wat_name(operator)));
         } else if secret && floats(operator) {
@@ -1205,6 +1291,9 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
             return;
         };
         let secret = self.pop_n(callee.params.len());
+        if secret.contains(&true) {
+            self.took(at);
+        }
         match callee.kind {
             Kind::Own => self.own(at, callee, secret, state),
             Kind::Library => self.library(at, callee, &secret, state),
@@ -1650,29 +1739,50 @@ fn wat_name(operator: &Operator<'_>) -> String {
     name
 }
 
+/// The name main.wat writes `operator` with, for the operators that take a secret: [`wat_name`]
+/// for those named by a type, and the names of the others.
+fn written_name(operator: &Operator<'_>) -> String {
+    let name = match operator {
+        Operator::If { .. } => "if",
+        Operator::BrIf { .. } => "br_if",
+        Operator::BrTable { .. } => "br_table",
+        Operator::Call { .. } => "call",
+        Operator::Select | Operator::TypedSelect { .. } => "select",
+        Operator::GlobalSet { .. } => "global.set",
+        Operator::MemoryCopy { .. } => "memory.copy",
+        Operator::MemoryFill { .. } => "memory.fill",
+        Operator::MemoryInit { .. } => "memory.init",
+        other => return wat_name(other),
+    };
+    name.to_owned()
+}
+
 /// Checks that nothing `secrets` names, the inputs of the idea's `- Secret:` line, decides how
 /// main.wat runs, following it from `_start`; nothing to check when the line names nothing.
+/// Gives every operator that takes a secret operand on a path it follows, in the module's order:
+/// what the check of the machine code holds the engine's code to ([`super::machine`]).
 pub fn check(
     module: &Module<'_>,
     flows: &Flows,
     analysis: &Analysis,
     secrets: &[Source],
     violations: &mut Vec<Violation>,
-) {
+) -> Vec<Taken> {
     if secrets.is_empty() {
-        return;
+        return Vec::new();
     }
     let Some(entry) = module.entry() else {
-        return;
+        return Vec::new();
     };
     let Some(start) = module
         .function(entry)
         .filter(|function| function.kind == Kind::Own)
     else {
-        return;
+        return Vec::new();
     };
     let mut sources = Sources::of(secrets);
     let mut found = BTreeSet::new();
+    let mut taken = BTreeMap::new();
     // Followed once; and once more when it may write a secret to a file or send one to a peer,
     // with what every file and connection gives secret, wherever in the program it reads them.
     loop {
@@ -1687,6 +1797,7 @@ pub fn check(
             steps: 0,
             sent: false,
             found: BTreeSet::new(),
+            taken: BTreeMap::new(),
         };
         let call = Call {
             secret: Vec::new(),
@@ -1696,6 +1807,7 @@ pub fn check(
         };
         follower.follow(entry, call, start.line, start.results.len());
         found.append(&mut follower.found);
+        taken.append(&mut follower.taken);
         if sources.returned || !follower.sent {
             break;
         }
@@ -1707,4 +1819,5 @@ pub fn check(
         problem,
         fix,
     }));
+    taken.into_values().collect()
 }
