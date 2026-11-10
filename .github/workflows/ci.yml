@@ -3,8 +3,9 @@ name: ci
 # lengua built and tested natively on five runners, GitHub's free ones (the repository is public):
 # Linux on x86-64 and ARM64, macOS on ARM64 (Apple stopped making Intel Macs), and Windows on
 # x86-64 and ARM64, each running the same WebAssembly programs.
-# scripts/ci/targets.json names the five runners; xtask/tools.tsv pins what they install, which
-# `cargo xtask fetch` installs; rust-toolchain.toml pins Rust, which rustup installs.
+# xtask/targets.json names the five runners; xtask/tools.tsv pins what they install, which
+# `cargo xtask fetch` installs; rust-toolchain.toml pins Rust, which rustup installs. Each step
+# that does more than one thing is a task of the task crate, xtask/ (`cargo xtask <task>`).
 #
 # - A push to a branch runs the suite on all five (a branch named wip/... gets no push run: its
 #   author dispatches the run it wants, so work in progress doesn't cost a long suite per push).
@@ -43,7 +44,7 @@ on:
   workflow_dispatch:
     inputs:
       targets:
-        description: "Which targets: all, or a comma-separated list from scripts/ci/targets.json"
+        description: "Which targets: all, or a comma-separated list from xtask/targets.json"
         type: string
         default: "all"
       mode:
@@ -112,16 +113,22 @@ env:
   CARGO_TERM_COLOR: never
 
 jobs:
-  # The jobs to run, as a matrix, from the one list of runners: each target in each mode.
+  # The jobs to run, as a matrix, from the one list of runners: each target in each mode
+  # (`cargo xtask plan`, which says how a push, the weekly run and a dispatch choose them).
   plan:
     name: plan
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       bench: ${{ steps.matrix.outputs.bench }}
     steps:
       - uses: actions/checkout@v4
+
+      # Rust as rust-toolchain.toml pins it, which rustup installs when it first runs here; rustup
+      # itself where an image lacks it.
+      - name: Rust
+        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
 
       - id: matrix
         env:
@@ -131,52 +138,7 @@ jobs:
           GOLDEN_BASE: ${{ inputs.golden_base }}
           GOLDEN_BASE_RUN: ${{ inputs.golden_base_run }}
           GH_TOKEN: ${{ github.token }}
-        run: |
-          # A push runs the suite, the weekly run the suite, the ignored tests and the bench, a
-          # dispatch what it asks.
-          case "$EVENT" in
-            push) modes='["test"]'; TARGETS=all; MODE=test ;;
-            schedule) modes='["test","ignored","bench"]'; TARGETS=all; MODE=test ;;
-            *) modes="[\"$MODE\"]" ;;
-          esac
-          TARGETS="${TARGETS// /}"
-          listed=$(jq -c '.' scripts/ci/targets.json)
-          if [ -z "$TARGETS" ] || [ "$TARGETS" = all ]; then
-            include="$listed"
-          else
-            include=$(jq -c --arg t ",$TARGETS," \
-              '[.[] | . as $e | select($t | contains("," + $e.target + ","))]' <<< "$listed")
-          fi
-          # The bench and the release archive run on all five; the goldens' legs are made below.
-          # A job's checkout is shallow unless it must read other commits: a bench holds each change
-          # to KNOWN_BEHIND in the history to the list before it (the list may only shrink), and
-          # reads any commit it is measured against. The weekly run's bench leg too.
-          matrix=$(jq -c --argjson modes "$modes" \
-            '[.[] as $t | $modes[] as $m | $t + {mode: $m, ref: "", label: "", depth: (if $m == "bench" then 0 else 1 end)}]' <<< "$include")
-          if [ "$MODE" = golden ]; then
-            # The goldens: the dispatched ref and, unless an earlier run's are reused, the base,
-            # each recorded on its own runner so that the two legs run at once. The recordings are
-            # the checker's and the prover's, which one x86-64 host makes.
-            if [ -z "$GOLDEN_BASE" ] && [ -z "$GOLDEN_BASE_RUN" ]; then
-              echo "golden needs golden_base (a commit) or golden_base_run (an earlier golden run)" >&2
-              exit 1
-            fi
-            legs='[{"label":"head","ref":""}]'
-            if [ -z "$GOLDEN_BASE_RUN" ]; then
-              # actions/checkout takes a branch, a tag or a full commit hash, never a short one.
-              full=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GOLDEN_BASE" --jq .sha)
-              legs=$(jq -c --arg r "$full" '. + [{label: "base", ref: $r}]' <<< "$legs")
-            fi
-            matrix=$(jq -c --argjson legs "$legs" \
-              '[.[] | select(.target == "linux-x86_64") as $t | $legs[] | $t + . + {mode: "golden", depth: 0}]' <<< "$listed")
-          fi
-          if [ "$matrix" = "[]" ]; then
-            echo "Nothing to run for: $TARGETS in $MODE" >&2
-            exit 1
-          fi
-          echo "matrix={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
-          # Whether a bench runs, which needs the WebAssembly builds of C, C++ and Rust.
-          echo "bench=$(jq -r 'any(.[]; .mode == "bench")' <<< "$matrix")" >> "$GITHUB_OUTPUT"
+        run: cargo xtask plan
 
   # Formatting is the same on every target, so it is checked once, beside the tests rather than in
   # front of them: a difference never hides a test result. When there is one, the patch that
@@ -197,12 +159,7 @@ jobs:
         run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
 
       - name: Format
-        run: |
-          if ! cargo fmt --check; then
-            cargo fmt
-            git diff > fmt.patch
-            exit 1
-          fi
+        run: cargo run --package xtask -- format
 
       - name: Keep the patch
         if: failure()
@@ -215,15 +172,11 @@ jobs:
 
       # Nothing builds on the owner's computer, so a new dependency's lock entries are made here:
       # when Cargo.lock is behind Cargo.toml, the resolved Cargo.lock is kept (cargo-lock), to copy
-      # into the repository, and the job fails.
+      # into the repository, and the job fails. Both steps run the task crate without the alias's
+      # --locked, so that they run while the lock is behind.
       - name: Lock file
         if: ${{ !cancelled() }}
-        run: |
-          if ! cargo metadata --locked --format-version 1 > /dev/null; then
-            cargo metadata --format-version 1 > /dev/null
-            mkdir -p lock && cp Cargo.lock lock/Cargo.lock
-            exit 1
-          fi
+        run: cargo run --package xtask -- lock
 
       - name: Keep the lock file
         if: failure()
@@ -417,18 +370,11 @@ jobs:
         env:
           LENGUA_BENCH_AGAINST: ${{ inputs.bench_against }}
           LENGUA_BENCH_WASM: ${{ runner.temp }}/bench-wasm
-        run: |
-          if [ -d "/c/Program Files/LLVM/bin" ]; then
-            export PATH="$PATH:/c/Program Files/LLVM/bin"
-          fi
-          cargo bench --locked --bench against_rust_and_c 2>&1 | tee bench.log
+        run: cargo xtask bench
 
       - name: The report, in the summary
         if: ${{ always() && matrix.mode == 'bench' }}
-        env:
-          REPORT: BENCHMARKS-${{ matrix.target }}.md
-        run: |
-          if [ -f "$REPORT" ]; then cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"; fi
+        run: cargo xtask bench-report BENCHMARKS-${{ matrix.target }}.md
 
       # This runner's archive (cargo xtask release, which also gives its version), and the release
       # check built beside it, to run where the archive is installed, on a runner that builds
@@ -505,15 +451,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Rust as rust-toolchain.toml pins it, which rustup installs when it first runs here; rustup
+      # itself where an image lacks it.
+      - name: Rust
+        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
+
+      # The base's: from this run, or from an earlier one whose recordings are reused.
       - name: The recordings of both commits
         env:
           GH_TOKEN: ${{ github.token }}
           RUN: ${{ github.run_id }}
           BASE_RUN: ${{ inputs.golden_base_run }}
-        run: |
-          gh run download "$RUN" --pattern 'golden-head-*' --dir golden/head
-          # The base's: from this run, or from an earlier one whose recordings are reused.
-          gh run download "${BASE_RUN:-$RUN}" --pattern 'golden-base-*' --dir golden/base
+        run: cargo xtask golden-download
 
       # `shell: bash` runs with pipefail, so that the script's exit decides the job and not tee's.
       - name: Compare
@@ -569,27 +518,27 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # One check that says whether the whole run passed.
+  # One check that says whether the whole run passed: plan, format and test must succeed;
+  # golden-diff runs in the golden mode only, bench-wasm when a bench runs, and install in the
+  # release mode only, so each may be skipped (`cargo xtask gate`).
   gate:
     name: gate
     needs: [plan, format, bench-wasm, test, golden-diff, install]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
+
+      # Rust as rust-toolchain.toml pins it, which rustup installs when it first runs here; rustup
+      # itself where an image lacks it.
+      - name: Rust
+        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
+
       - name: Every job passed
         env:
           RESULTS: ${{ needs.plan.result }} ${{ needs.format.result }} ${{ needs.test.result }}
           GOLDEN_DIFF: ${{ needs.golden-diff.result }}
           BENCH_WASM: ${{ needs.bench-wasm.result }}
           INSTALL: ${{ needs.install.result }}
-        run: |
-          echo "plan, format, test: $RESULTS; golden diff: $GOLDEN_DIFF; bench-wasm: $BENCH_WASM; install: $INSTALL"
-          for result in $RESULTS; do
-            [ "$result" = success ] || exit 1
-          done
-          # It runs in the golden mode only, and bench-wasm when a bench runs.
-          [ "$GOLDEN_DIFF" = success ] || [ "$GOLDEN_DIFF" = skipped ] || exit 1
-          [ "$BENCH_WASM" = success ] || [ "$BENCH_WASM" = skipped ] || exit 1
-          # It runs in the release mode only.
-          [ "$INSTALL" = success ] || [ "$INSTALL" = skipped ] || exit 1
+        run: cargo xtask gate

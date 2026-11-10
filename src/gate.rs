@@ -36,7 +36,7 @@ pub const LOOK_ALPHA: f64 = ALPHA / LOOKS.len() as f64;
 /// The longest a workload's rows run.
 pub const MAX_ROW: Duration = Duration::from_secs(600);
 
-/// The runners the gate runs on, by the names scripts/ci/targets.json gives them.
+/// The runners the gate runs on, by the names xtask/targets.json gives them.
 pub const TARGETS: [&str; 5] = [
     "linux-x86_64",
     "linux-aarch64",

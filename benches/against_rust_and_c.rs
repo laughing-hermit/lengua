@@ -1172,7 +1172,7 @@ struct Against {
 /// report is written from it alone.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Results {
-    /// The runner, as scripts/ci/targets.json names it.
+    /// The runner, as xtask/targets.json names it.
     target: String,
     /// The commit measured.
     commit: String,

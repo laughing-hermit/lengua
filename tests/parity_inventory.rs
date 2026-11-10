@@ -9,10 +9,10 @@
 //!   (`#![cfg(target_arch = ...)]`) or that names a target in its own name fails. A case that only
 //!   some systems can take, such as one that starts `sh`, is a test of its own gated where it
 //!   stands, in a file every runner runs.
-//! - A test runner for every target: `scripts/ci/targets.json` lists the GitHub runner of each of
-//!   the five targets, and `ci.yml`'s one test job runs `cargo test` on every runner the list
-//!   names. A target without a runner in the list fails, and so does a second workflow that runs
-//!   the suite.
+//! - A test runner for every target: `xtask/targets.json` lists the GitHub runner of each of the
+//!   five targets, `ci.yml`'s plan job makes its matrix from the list (`cargo xtask plan`), and
+//!   its one test job runs `cargo test` on every runner the matrix names. A target without a
+//!   runner in the list fails, and so does a second workflow that runs the suite.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -150,10 +150,10 @@ fn the_ratchet_sees_a_file_for_one_target() {
     assert!(why_for_one_target("parity_inventory.rs", "").is_none());
 }
 
-/// The runners `scripts/ci/targets.json` lists: the label of the GitHub runner of each target,
-/// by the target's name.
+/// The runners `xtask/targets.json` lists: the label of the GitHub runner of each target, by the
+/// target's name.
 fn hosts() -> BTreeMap<String, String> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/ci/targets.json");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("xtask/targets.json");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let list: Value = serde_json::from_str(&text).expect("targets.json is JSON");
@@ -209,21 +209,28 @@ fn every_target_has_a_test_runner() {
     let hosts = hosts();
     for target in lengua::gate::TARGETS {
         let label = hosts.get(target).unwrap_or_else(|| {
-            panic!("{target} has no runner in scripts/ci/targets.json: add its GitHub runner")
+            panic!("{target} has no runner in xtask/targets.json: add its GitHub runner")
         });
         assert!(!label.is_empty(), "{target}: an empty runner");
     }
     let listed: Vec<&str> = hosts.keys().map(String::as_str).collect();
     let mut targets = lengua::gate::TARGETS.to_vec();
     targets.sort_unstable();
-    assert_eq!(listed, targets, "the targets scripts/ci/targets.json lists");
+    assert_eq!(listed, targets, "the targets xtask/targets.json lists");
     let workflows = workflows();
     let ci: Value = serde_saphyr::from_str(workflows.get("ci.yml").expect("ci.yml"))
         .unwrap_or_else(|error| panic!("ci.yml: not YAML: {error}"));
-    // The plan reads the list, and the test job runs on what the plan made of it.
+    // The plan job runs the task crate's plan, which reads the list, and the test job runs on
+    // what the plan made of it.
     assert!(
-        runs(&ci["jobs"]["plan"], "scripts/ci/targets.json"),
-        "ci.yml's plan job doesn't read scripts/ci/targets.json"
+        runs(&ci["jobs"]["plan"], "cargo xtask plan"),
+        "ci.yml's plan job doesn't run cargo xtask plan"
+    );
+    let plan = Path::new(env!("CARGO_MANIFEST_DIR")).join("xtask/src/plan.rs");
+    let plan = std::fs::read_to_string(&plan).expect("xtask's plan");
+    assert!(
+        plan.contains("include_str!(\"../targets.json\")"),
+        "xtask's plan doesn't read xtask/targets.json"
     );
     let test = &ci["jobs"]["test"];
     assert_eq!(test["runs-on"], "${{ matrix.runner }}");
