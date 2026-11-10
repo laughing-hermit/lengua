@@ -1,3 +1,5 @@
+> This file describes the native lengua's time. The tag `native-final` keeps that lengua. The WebAssembly lengua's reports, one for each runner, are in [docs/benchmarks](../benchmarks/README.md).
+
 # lengua against C, C++ and Rust
 
 Measured by `cargo bench --bench against_rust_and_c`, which writes this file. Every version of a program gets the same arguments, input and files and must give the same output. Instructions and cycles are user-space counts from the CPU's counters, starting at the program's own exec, so a dynamically linked program's loader counts; CPU time includes the kernel's work for it. Each figure is the median of 41 runs after 3 to warm up; peak memory is the median of 5 runs of GNU time. "Best other ÷ best lengua" is how many times more the best C, C++ or Rust version takes than the best lengua version.

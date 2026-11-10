@@ -1,3 +1,6 @@
 # Line endings: LF on every OS, so a Windows checkout reads the same bytes as Linux's. (An idea's hash
 # normalizes CRLF, but the programs' text, the goldens and the scripts must not change with the OS.)
 * text=auto eol=lf
+# The bench's reports are kept as the bench wrote them, byte for byte: a Windows runner's report
+# quotes its compilers' messages with their CRLF line endings.
+docs/benchmarks/BENCHMARKS-*.md -text
