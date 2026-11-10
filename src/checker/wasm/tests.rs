@@ -1809,3 +1809,25 @@ fn the_secret_rules_reports_name_it() {
     assert_eq!(Rule::Secrets.label(), "secrets");
     assert_eq!(Rule::Dialect.label(), "dialect");
 }
+
+/// A program's memory holds at most 16,384 pages, 1 GiB: one page more is refused on its line,
+/// and the most is taken.
+#[test]
+fn a_memory_past_the_most_pages_is_refused() {
+    let most = with(
+        "(memory (export \"memory\") 1 1)",
+        "(memory (export \"memory\") 16384 16384)",
+    );
+    assert_no(&check_text(&most), Rule::Resources);
+    let past = with(
+        "(memory (export \"memory\") 1 1)",
+        "(memory (export \"memory\") 16385 16385)",
+    );
+    let report = check_text(&past);
+    assert_violation(
+        &report,
+        Rule::Resources,
+        line_of(&past, "(memory (export"),
+        "at most 16384 pages",
+    );
+}

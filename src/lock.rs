@@ -1749,6 +1749,26 @@ mod tests {
         }
     }
 
+    /// A data folder that something else made first, with another mode, as the engine's cache
+    /// makes it before the first record, is made the user's alone when the key goes in.
+    #[cfg(unix)]
+    #[test]
+    fn a_data_folder_made_with_another_mode_is_made_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().expect("temporary folder");
+        let data_dir = DataDir::new(home.path().join("lengua"));
+        std::fs::create_dir_all(data_dir.path().join("cache")).expect("the cache's folder");
+        std::fs::set_permissions(data_dir.path(), std::fs::Permissions::from_mode(0o755))
+            .expect("another mode");
+        Key::load_or_create(&data_dir).expect("create the key");
+        let mode = std::fs::metadata(data_dir.path())
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
+    }
+
     #[test]
     fn reports_a_damaged_key() {
         let home = tempfile::tempdir().expect("temporary folder");

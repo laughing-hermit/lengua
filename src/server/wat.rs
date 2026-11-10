@@ -53,6 +53,14 @@ const TRAPPED: i32 = 134;
 /// whole, with the job.
 const MAX_STDIN_FILE: u64 = 16 * 1024 * 1024;
 
+/// The most bytes a file may hold, and the most a program may write to files in all, in a run
+/// by the `run` tool: a test's limits in the temporary folder lengua makes for the run and
+/// throws away after it, and none in a folder of the user's own (`own_folder`), whose files are
+/// the user's to fill.
+fn run_file_limits(_own_folder: bool) -> (Option<u64>, Option<u64>) {
+    (None, None)
+}
+
 /// The most of what the rules leave to the proofs that main.wat's memory line names, each on its
 /// line of main.wat; it counts the rest.
 const SHOWN_OBLIGATIONS: usize = 4;
@@ -1254,13 +1262,14 @@ impl LenguaServer {
                 .map_err(|error| format!("lengua couldn't keep the module: {error}"))?,
         );
         let connections = reaches(&network);
+        let (max_file_size, max_written) = run_file_limits(workspace.is_some());
         let spec = Spec {
             folder: workspace.as_deref(),
             env: &params.env,
             connections: &connections,
             listen: network.listens.map(|port| (port, network.serves_anywhere)),
             setup: Setup::Run,
-            max_written: None,
+            max_written,
             alone: true,
             ..Spec::new(&params.args, &stdin, Policy::of(&uses, &network))
         };
@@ -1271,7 +1280,7 @@ impl LenguaServer {
         }
         let limits = Limits {
             timeout: Duration::from_secs(seconds),
-            max_file_size: None,
+            max_file_size,
             ..Limits::default()
         };
         let run = self
@@ -1652,6 +1661,18 @@ mod tests {
 
     /// The add idea as an Attested Computation.
     const IDEA: &str = include_str!("../../tests/fixtures/add/idea.md");
+
+    /// A run in lengua's own temporary folder is held to a test's file limits; one in a folder
+    /// of the user's is held to none.
+    #[test]
+    fn a_run_s_throw_away_folder_has_a_test_s_file_limits() {
+        let limits = (
+            Some(crate::runner::TEST_FILE_LIMIT),
+            Some(crate::wasm::host::limits::TEST_WRITTEN),
+        );
+        assert_eq!(run_file_limits(false), limits);
+        assert_eq!(run_file_limits(true), (None, None));
+    }
 
     /// The add idea as an idea of the native lengua's type, whose line 2 says the type.
     fn native_idea() -> String {

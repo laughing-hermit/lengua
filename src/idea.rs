@@ -3718,6 +3718,41 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         assert_eq!(folder_of_link("../numbers/main.wat"), "../numbers");
     }
 
+    /// This computer is known by its address however the address is spelled: the loopback and
+    /// the unspecified address written as IPv4 inside IPv6 are this computer's, and a spelling
+    /// only a system's older parsing reads as an address (one number, fewer than four parts, hex
+    /// or octal) is no computer's name, since such a system reads `2130706433` as 127.0.0.1.
+    #[test]
+    fn this_computer_is_known_by_its_address_not_its_spelling() {
+        for this in ["::ffff:127.0.0.1", "::ffff:127.9.9.9", "::ffff:0.0.0.0"] {
+            assert_eq!(host_kind(this), HostKind::ThisComputer, "{this}");
+        }
+        for nothing in [
+            "2130706433",
+            "127.1",
+            "0x7f.1",
+            "0177.0.0.1",
+            "0x7f000001",
+            "example.0x10",
+            "10.1.",
+        ] {
+            assert_eq!(host_kind(nothing), HostKind::NotAName, "{nothing}");
+        }
+        for other in ["192.0.2.7", "::ffff:192.0.2.7", "example.com", "a1.example", "0x.org"] {
+            assert_eq!(host_kind(other), HostKind::Other, "{other}");
+        }
+    }
+
+    /// The frontmatter's `verified` and `generated` are left out of the idea's hash, so nothing
+    /// lengua reads may come from them: a key whose value is an alias of an anchor there is
+    /// refused, since its value could change with the hash staying as it is.
+    #[test]
+    fn nothing_read_from_the_frontmatter_comes_from_what_the_hash_leaves_out() {
+        let aliased = ADD.replace("title: add\n", "verified: &name add\ntitle: *name\n");
+        assert_ne!(aliased, ADD);
+        assert_problem(&aliased, "the frontmatter isn't valid YAML");
+    }
+
     #[test]
     fn network_lines_name_the_ports() {
         let client = ADD.replace(

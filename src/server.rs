@@ -553,7 +553,7 @@ impl LenguaServer {
         connections: Vec<ConnectionReport>,
     ) -> RunReport {
         static STARTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let address = format!("127.0.0.1:{}", server.port().unwrap_or(0));
+        let address = serving_address(server.port().unwrap_or(0), false);
         let id = STARTS.fetch_add(1, Ordering::Relaxed);
         background.insert(
             folder.path().to_path_buf(),
@@ -588,6 +588,13 @@ impl LenguaServer {
             connections,
         }
     }
+}
+
+/// The address a server `run` started takes connections on, as `run`'s reply says it: its port
+/// of the loopback, or of every address of this computer when `anywhere`, as the unspecified
+/// address, 0.0.0.0.
+fn serving_address(port: u16, _anywhere: bool) -> String {
+    format!("127.0.0.1:{port}")
 }
 
 /// The limits of a server `run` leaves serving: ten minutes, and no file's size held.
@@ -2256,6 +2263,14 @@ fn idea_problems(folder: &ProgramFolder, problems: &[idea::Problem]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server that every address may reach is said to serve on every address, not on the
+    /// loopback alone.
+    #[test]
+    fn a_server_for_any_computer_is_said_to_serve_on_every_address() {
+        assert_eq!(serving_address(8080, false), "127.0.0.1:8080");
+        assert_eq!(serving_address(8080, true), "0.0.0.0:8080");
+    }
 
     #[test]
     fn instructions_fit_in_512_characters() {

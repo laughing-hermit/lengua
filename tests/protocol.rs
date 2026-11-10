@@ -63,3 +63,21 @@ async fn a_new_folder_shows_the_machine_and_the_first_step() {
         session.service.cancel().await.expect("close the session");
     }
 }
+
+/// `run` reaches past this computer for a program whose idea names other computers or serves any
+/// computer, so its open-world hint says so; `check` runs a program only against the test's own
+/// servers, on the loopback.
+#[tokio::test]
+async fn run_says_it_reaches_the_open_world_and_check_does_not() {
+    let session = Session::start(Protocol::Discover).await;
+    let tools = session.service.list_all_tools().await.expect("list tools");
+    for (name, open) in [("run", true), ("check", false)] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .expect("the tool");
+        let hints = tool.annotations.as_ref().expect("annotations");
+        assert_eq!(hints.open_world_hint, Some(open), "{name}");
+    }
+    session.service.cancel().await.expect("close the session");
+}

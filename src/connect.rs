@@ -273,6 +273,40 @@ mod tests {
             );
         }
     }
+
+    /// An argument that names this computer by another spelling of its address, or by a number
+    /// only a system's older parsing reads as an address, is a connection lengua can't make.
+    #[test]
+    fn an_argument_never_names_this_computer_by_another_spelling() {
+        let typed = Reach::Argument {
+            index: 1,
+            port: 6379,
+            tls: false,
+        };
+        for given in ["::ffff:127.0.0.1", "2130706433", "127.1", "0x7f.1"] {
+            let refused = resolved(&typed, &[given.to_owned()]);
+            assert!(refused.is_err(), "{given}: {refused:?}");
+        }
+    }
+
+    /// A named computer whose address turns out to be this computer's loopback is a connection
+    /// lengua couldn't make, whatever the name: the address a name resolves to is looked at, not
+    /// only how the name is spelled. Something listens there, so only the refusal keeps the
+    /// connection from being made.
+    #[tokio::test]
+    async fn a_named_computer_that_resolves_to_this_one_is_not_reached() {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("a free port");
+        let port = listener.local_addr().expect("its address").port();
+        for name in ["::ffff:127.0.0.1", "127.0.0.1"] {
+            let made = make(&Reach::Host(name.to_owned(), port)).await;
+            let Err(problem) = made else {
+                panic!("{name}: a connection to this computer's loopback was made");
+            };
+            assert!(problem.contains("this computer"), "{name}: {problem}");
+        }
+    }
 }
 
 #[cfg(all(test, unix))]

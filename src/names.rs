@@ -293,6 +293,25 @@ mod tests {
         }
     }
 
+    /// The devices Microsoft's list has beside the classic ones, `COM0` and `LPT0`, the
+    /// console's two, and a device's name with spaces before its dot, which Windows's older
+    /// parsing takes as the device: all refused, on every system.
+    #[test]
+    fn windows_s_other_devices_are_refused_too() {
+        for path in [
+            "COM0",
+            "lpt0.txt",
+            "CONIN$",
+            "conout$",
+            "CONIN$.txt",
+            "aux .txt",
+            "NUL  .log",
+            "folder/con .x",
+        ] {
+            assert_eq!(errno(path), Some(EINVAL), "{path}");
+        }
+    }
+
     #[test]
     fn windows_short_names_are_refused_everywhere() {
         for path in [
