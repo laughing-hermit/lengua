@@ -1454,12 +1454,7 @@ fn a_secret_a_loop_moves_for_more_rounds_than_the_rule_follows_is_still_secret()
         .collect();
     let moves: String = (1..LOCALS)
         .rev()
-        .map(|local| {
-            format!(
-                "      (local.set $l{local} (local.get $l{}))\n",
-                local - 1
-            )
-        })
+        .map(|local| format!("      (local.set $l{local} (local.get $l{}))\n", local - 1))
         .collect();
     let last = format!("(if (local.get $l{}) (then (nop)))", LOCALS - 1);
     let text = format!(
@@ -1484,12 +1479,7 @@ fn a_secret_a_loop_moves_for_more_rounds_than_the_rule_follows_is_still_secret()
     unreachable))
 "#
     );
-    let report = check_secret(
-        &text,
-        &["standard input"],
-        "",
-        &[Source::StandardInput],
-    );
+    let report = check_secret(&text, &["standard input"], "", &[Source::StandardInput]);
     assert_violation(
         &report,
         Rule::Secrets,
@@ -1603,7 +1593,12 @@ fn a_secret_written_to_a_file_or_sent_to_a_peer_is_secret_when_it_comes_back() {
         line_of(ROUND_TRIP, branch),
         "the condition of this `if`",
     );
-    let report = check_secret(ECHO, &["standard input"], "listens on TCP port 8080", &secret);
+    let report = check_secret(
+        ECHO,
+        &["standard input"],
+        "listens on TCP port 8080",
+        &secret,
+    );
     assert_violation(
         &report,
         Rule::Secrets,
@@ -1620,8 +1615,17 @@ fn a_secret_written_to_a_file_or_sent_to_a_peer_is_secret_when_it_comes_back() {
     // And with no secret sent, what the peer sends isn't.
     let sent = "(i32.store (global.get $iovec) (global.get $key))";
     assert!(ECHO.contains(sent));
-    let unsent = ECHO.replacen(sent, "(i32.store (global.get $iovec) (global.get $back))", 1);
-    let report = check_secret(&unsent, &["standard input"], "listens on TCP port 8080", &secret);
+    let unsent = ECHO.replacen(
+        sent,
+        "(i32.store (global.get $iovec) (global.get $back))",
+        1,
+    );
+    let report = check_secret(
+        &unsent,
+        &["standard input"],
+        "listens on TCP port 8080",
+        &secret,
+    );
     assert_no(&report, Rule::Secrets);
 }
 
@@ -1663,7 +1667,10 @@ fn the_count_of_one_read_of_a_secret_standard_input_is_secret() {
     );
     assert_eq!(
         secret_lines(&report),
-        [line_of(COUNT_READ, "(if (i32.load offset=8 (global.get $iovec))")],
+        [line_of(
+            COUNT_READ,
+            "(if (i32.load offset=8 (global.get $iovec))"
+        )],
         "{:#?}",
         report.lines()
     );
