@@ -233,14 +233,15 @@ fn resolved(path: &Path) -> PathBuf {
     }
 }
 
-/// Whether the unpacked archive `here` may be copied into the marketplace folder `market`, both
-/// as [`resolved`] gives them: not into a folder inside the archive, where the copy would copy
-/// itself again and again, and not in place of the folder it is copied from, as the install of
-/// an installed lengua's own lengua-mcp would be, which Windows won't let it remove as it runs.
-/// When not, says why, and what to do.
+/// Whether the unpacked archive `here` may be copied into the marketplace folder `market`,
+/// compared as [`resolved`] gives them: not into a folder inside the archive, where the copy would
+/// copy itself again and again, and not in place of the folder it is copied from, as the install
+/// of an installed lengua's own lengua-mcp would be, which Windows won't let it remove as it
+/// runs. When not, says why, and what to do.
 fn apart(here: &Path, market: &Path) -> Result<(), String> {
-    let staging = market.join("lengua.new");
-    if staging.starts_with(here) {
+    let (archive, folder) = (resolved(here), resolved(market));
+    let staging = folder.join("lengua.new");
+    if staging.starts_with(&archive) {
         return Err(format!(
             "{} is this archive's own folder or inside it, so the install would copy the archive \
              into itself: give --prefix a folder outside {}.",
@@ -248,7 +249,7 @@ fn apart(here: &Path, market: &Path) -> Result<(), String> {
             here.display()
         ));
     }
-    if here.starts_with(market.join("lengua")) || here.starts_with(&staging) {
+    if archive.starts_with(folder.join("lengua")) || archive.starts_with(&staging) {
         return Err(format!(
             "This lengua-mcp runs from {}, which the install would replace: run the install from \
              the unpacked archive, in a folder of its own.",
@@ -567,7 +568,7 @@ fn installed(options: &Options, data_dir: Option<&DataDir>) -> Result<u8, String
         Some(prefix) => absolute(prefix)?,
         None => own.ok_or(NOWHERE)?,
     };
-    apart(&resolved(&here), &resolved(&market))?;
+    apart(&here, &market)?;
     replaceable(&market)?;
     let dest = place(&here, &market, &version)?;
     quarantine_note(&dest);
@@ -725,22 +726,27 @@ mod tests {
         assert!(refused.contains("is another marketplace's"), "{refused}");
     }
 
-    /// The archive is copied into no folder of its own, there or not there yet, and not over the
-    /// folder it runs from, as an installed lengua's own install would copy it; a marketplace
-    /// folder beside the archive, or one that holds it, takes it.
+    /// The archive is copied into no folder of its own, there or not there yet or reached by a
+    /// link, and not over the folder it runs from, as an installed lengua's own install would
+    /// copy it; a marketplace folder beside the archive, or one that holds it, takes it.
     #[test]
     fn the_archive_is_copied_neither_into_itself_nor_over_itself() {
         let root = tempfile::tempdir().expect("a folder");
         let here = root.path().join("lengua-0.2.0-linux-x86_64");
         std::fs::create_dir_all(&here).expect("the archive's folder");
-        let here = resolved(&here);
         for market in [here.clone(), here.join("new").join("market")] {
-            let refused = apart(&here, &resolved(&market)).expect_err("inside the archive");
+            let refused = apart(&here, &market).expect_err("inside the archive");
             assert!(refused.contains("give --prefix a folder outside"), "{refused}");
         }
-        let market = resolved(&root.path().join("market"));
+        #[cfg(unix)]
+        {
+            let link = root.path().join("link");
+            std::os::unix::fs::symlink(&here, &link).expect("a link to the archive");
+            assert!(apart(&here, &link).is_err());
+        }
+        let market = root.path().join("market");
         assert!(apart(&here, &market).is_ok());
-        assert!(apart(&here, &resolved(root.path())).is_ok());
+        assert!(apart(&here, root.path()).is_ok());
         let installed = market.join("lengua");
         let refused = apart(&installed, &market).expect_err("an installed lengua's own");
         assert!(refused.contains("which the install would replace"), "{refused}");
