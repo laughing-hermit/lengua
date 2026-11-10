@@ -903,13 +903,14 @@ fn module_run(spec: &str) -> Result<i32, String> {
         let wasm = std::fs::read(&run.module)
             .map_err(|error| format!("can't read {}: {error}", run.module.display()))?;
         let words: Vec<&str> = run.uses.iter().map(String::as_str).collect();
-        let (uses, network) = crate::idea::constraints(&words, &run.network).map_err(|problems| {
-            problems
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("; ")
-        })?;
+        let (uses, network) =
+            crate::idea::constraints(&words, &run.network).map_err(|problems| {
+                problems
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })?;
         Ok(ModuleOrder {
             run: &run,
             wasm,
