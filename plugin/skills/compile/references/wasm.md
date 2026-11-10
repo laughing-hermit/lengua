@@ -366,8 +366,8 @@ A split with no branch on a record, the records sorted as numbers:
   may still take. The largest of a split's three goes on first, so the stack holds about
   2 log2(n) parts at most. The part the same as the pivot gets the keys of its next 4 bytes and
   is sorted on, unless its key held its lines' end. A part split about 2 log2(n) times below or
-  above a pivot, which only an input made against the pivots' choice brings, is sorted by a heap
-  sort, as introsort does, so no input takes n squared steps.
+  above a pivot, as an input made against the pivots' choice makes one and random input almost
+  never does, is sorted by a heap sort, as introsort does, so no input takes n squared steps.
 
 ## The network
 
