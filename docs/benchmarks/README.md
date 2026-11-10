@@ -24,5 +24,5 @@ tally and readings on both Windows runners. Each report's section "Where the run
 disagree" and its workloads' sections say which rows these are.
 
 The finish-line run ([ROADMAP.md](../../ROADMAP.md), W15) replaces these five files with its own
-reports. The native
-lengua's numbers, from before the move to WebAssembly, are in [docs/history](../history/BENCHMARKS.md).
+reports. The native lengua's numbers, from before the move to WebAssembly, are in
+[docs/history](../history/BENCHMARKS.md).
