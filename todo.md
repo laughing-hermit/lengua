@@ -92,6 +92,49 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 | 6. Truthful documents | Describe the native lengua | W15 |
 | 7. Shippable | Native archives for two Linux targets | W14 |
 
+## Still open (2026-11-09)
+
+### Where C, C++ and Rust still win
+
+- Raw speed against native builds. lengua runs in WebAssembly, so a native C, C++ or Rust build
+  is 1.1 to 7 times faster. That gap is published, not hidden.
+- Programs lengua can't express yet: threads, GUIs, network connections a program opens on its
+  own, and UDP.
+- A few workloads: tally, sort and histogram, where lengua's own programs are slower; W12c is on
+  those now. lengua also uses about 1 MiB more memory per run, the last of run's own overhead.
+
+In short, lengua trades some raw speed for guarantees none of those languages make: the program
+is proven against a readable spec, holds only the permissions it declares, and can't corrupt
+memory.
+
+### What the safety filter stopped, still the owner's
+
+Each was stopped once or more, recorded below under "Stopped by the safety filter", and never
+retried, reworded or passed to another model:
+- **Tests that try to get past the sandbox on macOS and Windows** (stopped 2026-11-05, after
+  three stops near that ground). ROADMAP's bypass cells and the spikes' checks of what the sandbox
+  refuses are left for the owner or another engineer.
+- **A soundness review of the secret rule** (W10, stopped 2026-11-07). The rule over main.wat
+  stands and its tests pass, but no review has confirmed it can't be fooled.
+- **Constant time in the engine's machine code** (W13, stopped 2026-11-07). The secret rule
+  holds main.wat; the machine code Wasmtime compiles from it is trusted for timing. The tag
+  `native-final` keeps the decoders such a check would use.
+
+Earlier stops (2026-10-31 to 2026-11-04) left nothing open: their items were done with the
+owner's permission, or their topics left alone.
+
+### What the permission checks refused
+
+Claude Code's permission checks refused these actions. Each refusal was taken as given, with
+nothing to route around it:
+- **Force-pushing rebased branches** (2026-11-07), as a destructive git action. Rebased work went
+  up under new branch names, or main came in through merge commits. At the end, only main
+  remains (W16).
+- **`python3 --version`** in a command one of W12b's agents wrote (2026-11-09). It never ran:
+  this computer runs no interpreter.
+- **A broad delete with `rm -rf` on a glob** (2026-11-07). It wasn't needed: a fresh folder was
+  used instead.
+
 ## Decisions made during the pivot, for the owner to review
 
 The owner was away while these were made (2026-11-06: "im not going to check up on you anymore").
@@ -314,6 +357,41 @@ Each merges to main when green on the runners it names; [ROADMAP.md](ROADMAP.md)
   - The site is rebuilt in Rust or left out.
   - The solvers run as WebAssembly if the research shows they can at a fair cost.
 
+**After the finish line: a replacement for C, C++ and Rust** (the owner, 2026-11-09: "I agreee
+please add them"). lengua has to match C, C++ and Rust in reach and speed, and beat them in trust:
+a program proven against a readable spec, holding only the permissions it declares, with no
+memory corruption, and written by an AI. Today it wins on trust, competes on speed inside
+WebAssembly, and loses on reach and on native speed. These four come after W12c, W17, W15 and
+W16, in this order. Each lands on main the same way, and at their end, too, only main remains.
+- **W18. Reach: everything possible, nothing implicit.** Least privilege stays the default. An
+  idea may grant whatever a C, C++ or Rust program can do: each grant is declared under
+  `# Constraints`, checked by lengua, shown to the user before the program runs, enforced by the
+  host, and modelled by the prover.
+  - Files anywhere the user names: a folder or file an argument names, the home folder, or
+    read-only system files.
+  - The network chosen at run time: any computer on a declared port, over TLS, and also UDP and
+    DNS.
+  - Starting named programs (`- Runs: git`), with pipes.
+  - The terminal's two imports (keys as they're pressed, the window's size), so interactive
+    tools work.
+  - What it unlocks: shells, build tools, package managers, crawlers, proxies, and programs over
+    databases on any path.
+- **W19. Native speed: a lean runner and native builds.** Most of the gap to native builds is
+  start-up and the engine, not the program.
+  - A run-only binary: Wasmtime's runtime without its compiler loads the module `check` compiled
+    ahead of time, authenticated as it is today. Start-up goes from about 2.5 ms toward C's
+    0.4 ms, and memory from about 10 MiB toward a few.
+  - An optional native build of the proven main.wat, through wasm2c and clang, as Firefox
+    sandboxes C libraries at close to native speed. The proof still holds, since it covers
+    WebAssembly's semantics, and main.wat stays the one shared artifact.
+- **W20. Parallelism.** WebAssembly's threads (shared memory and atomics), as structured
+  fork-join alone. The rules show that a program has no data race, so its results stay the same
+  on every run, which free threads in C, C++ and Rust can't promise.
+- **W21. A library of proven parts.** A shared, proven standard set (sorting, hash tables, JSON,
+  HTTP, compression, dates) that programs build on with `- Builds on:`. The agent assembles
+  programs from verified pieces instead of writing everything new, which makes them faster to
+  build and to prove.
+
 Runs, as they land:
 
 | Milestone | Runs |
@@ -388,8 +466,10 @@ this file at the tag `native-final`.
   files, or answering questions over the graph, needs a design the owner hasn't asked for.
 - **Connections made on demand.** A program that opens a connection itself, as a proxy does,
   needs WASI's newer sockets (preview 2 or 3) and spec syntax. Today a program gets the
-  connections its idea names, made before it starts, and that carries over.
-- **Threads**, until WebAssembly's threads are standard and Wasmtime runs them.
+  connections its idea names, made before it starts, and that carries over. Planned as part of
+  W18.
+- **Threads**, until WebAssembly's threads are standard and Wasmtime runs them. Planned as W20,
+  as structured fork-join that the rules show free of data races.
 - **An OS sandbox around the engine** as a second wall: Linux's seccomp and Landlock from the
   native lengua, and each other system's own. It would bring back per-OS work.
 - **Native kernels**: assembly a WebAssembly program calls for its busiest loops, for speed. Only
@@ -402,7 +482,8 @@ this file at the tag `native-final`.
 - **A pointer read from memory.** The memory rules can't follow it to an owner, so a program that
   uses one is "tested, not proven" for memory.
 - **UDP, any URL, processes, GUIs, libraries for other languages to call:** outside the finish
-  line's scope; W15 has DESIGN say what would bring each in.
+  line's scope; W15 has DESIGN say what would bring each in. UDP, any URL and processes are
+  planned as part of W18; GUIs and libraries for other languages to call stay here.
 
 ## Stopped by the safety filter
 
