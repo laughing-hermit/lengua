@@ -178,9 +178,10 @@ Within lengua, for a program at `done`:
   is tested, not proven. The reply's memory line says which is which.
 - **The same bits on every computer.** NaNs are made canonical, there are no threads, and relaxed
   SIMD, whose results differ between computers, is off.
-- **Every proof says what it covers.** A solver's "no counterexample" counts only when z3 and
-  cvc5 both give it. Questions about floats that the bits don't settle go to cvc5 alone, and the
-  line says so. Inputs a proof finds are run for real before lengua says the code is wrong.
+- **Every proof says what it covers.** With both solvers installed, as the archive ships them, a
+  solver's "no counterexample" counts only when z3 and cvc5 both give it. Questions about floats
+  that the bits don't settle go to cvc5 alone, and the line says so. Inputs a proof finds are run
+  for real before lengua says the code is wrong.
 - **An idea's secrets don't steer its code.** For an idea with a `- Secret:` line, `main.wat` may
   not branch on, index with, divide by or loop over those inputs.
 - **The clock is rounded down to a microsecond**, so it can't carry finer timing.
