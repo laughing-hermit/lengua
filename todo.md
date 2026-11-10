@@ -32,7 +32,7 @@ so the WSL 2 and Lima routes are superseded (branch `wip/routes-ci`, left unmerg
 lengua is finished when all seven of these are true. Each is shown by green runs on GitHub's free
 runners, whose ids are written in the table below, and by nothing else. The runners are five:
 Linux on x86-64 (`ubuntu-24.04`), Linux on ARM64 (`ubuntu-24.04-arm`), Windows on x86-64
-(`windows-2025`), Windows on ARM64 (`windows-11-arm`) and macOS on ARM64 (`macos-15`). macOS on
+(`windows-2025`), Windows on ARM64 (`windows-11-arm`) and macOS on ARM64 (`macos-26`). macOS on
 x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 
 1. **An AI language, as an Agent Plugin and nothing else.**
@@ -96,8 +96,10 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 
 ### Where C, C++ and Rust still win
 
-- Raw speed against native builds. lengua runs in WebAssembly, so a native C, C++ or Rust build
-  is 1.1 to 7 times faster. That gap is published, not hidden.
+- Raw speed against native builds. lengua runs in WebAssembly, so in run 42756074550 it took
+  0.47 to 6.05 times the CPU time of the best native C, C++ or Rust build, and up to 16.31 times
+  its wall time on Linux on ARM64 and up to 4.11 times on the other four runners; it was faster
+  only on tally. That gap is published, not hidden ([docs/benchmarks](docs/benchmarks/README.md)).
 - Programs lengua can't express yet: threads, GUIs, network connections a program opens on its
   own, and UDP.
 - A few workloads: tally, sort and histogram, where lengua's own programs are slower; W12c is on
@@ -220,7 +222,8 @@ Each can be reversed.
   `verified: [{ by: lengua/<version>, at, idea: sha256:…, code: sha256:… }]` at `done` (a
   line-level edit, never re-serializing the YAML), removes its own entry when a changed idea is
   recorded, and keeps anyone else's. The lock's hash of the idea leaves out `verified` and
-  `generated`. The lock's format is 5 after the rename and 6 with the WebAssembly code stamp.
+  `generated`. The lock's format is 5 after the rename, 6 with the WebAssembly code stamp, and 7
+  since W11, which records main.wat alone; lengua reads 6 and 7.
 - **The skill `write-spec` is now `write-idea`.**
 - **Idea files are in ASD-STE100 Simplified Technical English** (the owner's words), in the
   style of behavior-driven development. `check` holds an idea's prose to what a computer can see
