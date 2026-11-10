@@ -259,12 +259,15 @@ fn workload(name: &str) -> Option<Workload> {
                 "sort",
                 "Sorts the lines of 64 MiB of standard input in byte order, as `LC_ALL=C sort` \
                  does. Each version sorts with its own language's sort: lengua's program finds \
-                 the lines 16 bytes a step from a bitmask of the newlines and orders their 4-byte \
-                 starts with a bottom-up merge sort that compares two lines 16 bytes at a time \
-                 with SIMD128, written by hand, and prints them through a 1 MiB buffer; \
-                 C sorts with its C library's qsort (wasi-libc's in WebAssembly), C++ with \
+                 the lines 16 bytes a step from a bitmask of the newlines, gives each a record of \
+                 8 bytes, its start below 4 bytes of the line as a key that compares as one \
+                 number, and orders the records in place with a multikey quicksort without \
+                 recursion, whose two splits around a median of three keys take no branch on a \
+                 record, and whose lines that are the same as the pivot go on with their next 4 \
+                 bytes; it prints the lines 16 bytes a step with SIMD128, written by hand. C \
+                 sorts with its C library's qsort (wasi-libc's in WebAssembly), C++ with \
                  std::sort and Rust with sort_unstable, each comparing lines with its library's \
-                 memcmp or comparison of slices, and they print through a 64 KiB buffer.",
+                 memcmp or comparison of slices. Every version prints through a 64 KiB buffer.",
             )
         },
         "tally" => Workload {
