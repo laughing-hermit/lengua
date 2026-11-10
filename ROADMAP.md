@@ -40,10 +40,10 @@ against 723879e showing no checker or prover verdict changed (42296519743).
 
 The two-target cut's changes to CI are reversed: five rows in the runners' list, z3 and cvc5
 pinned for each, and each system's setup. lengua builds and its tests pass natively on each
-runner; native programs ran on Linux only, and elsewhere their tests noted "native programs run on
-Linux only" and ended. *Verified by:* the suite natively on all five runners at f762aa2
-(42304371890); macOS's one failure there, a proof's time test that a fast machine finished early,
-is fixed at e9f4700.
+runner; native programs ran only on Linux on x86-64 and Linux on ARM64, and on the other three
+runners their tests said so and ended. *Verified by:* the suite natively on all five runners at
+f762aa2 (42304371890); macOS's one failure there, a proof's time test that a fast machine finished
+early, is fixed at e9f4700.
 
 ## W3. The knowledge graph
 
@@ -151,11 +151,10 @@ verdict that changed from the native lengua, with its reason
 ([docs/history/PARITY.md](docs/history/PARITY.md)). The server template waits with `poll_oneoff`,
 which the model doesn't follow yet, so its proofs stop there. A program that reads keys from the
 terminal has no template: it waits for the host to give the terminal's raw mode and window size,
-which W18 plans. *Verified by:* every program's rules
-and tests on all five runners, each run with format, the suite and the gate green: the
-WebAssembly templates, wasm.md and write-idea's Attested Computation at 50a546f (42356699038); all
-29 programs in WebAssembly from the request to done at b761dd3 (42367496557); the compile skill
-for main.wat, the parity ledger and 0.2.0 (42373720077).
+which W18 plans. *Verified by:* every program's rules and tests on all five runners, each run with
+format, the suite and the gate green: the WebAssembly templates, wasm.md and write-idea's Attested
+Computation at 50a546f (42356699038); all 29 programs in WebAssembly from the request to done at
+b761dd3 (42367496557); the compile skill for main.wat, the parity ledger and 0.2.0 (42373720077).
 
 ## W10. Constant time and caches
 
@@ -238,17 +237,18 @@ layout fixed at f4cf505); the gate run on all five runners at 076bcc1 (427560745
 came out ahead on 208 rows KNOWN_BEHIND named, which left the list in 5714b42, and whose reports
 are in [docs/benchmarks](docs/benchmarks/README.md); main at f4cf505, whose push run, format, the
 suite on all five runners and the gate, is green (42760180544). In 42756074550 the gate passed on
-no runner: besides those 208 rows, its problems were five rows the gate can't decide, which are
-the owner's (todo.md), and native C++ builds that failed on macOS and Windows.
+no runner: besides those 208 rows, its problems were five rows the list doesn't name, which came
+out behind or undecided and are the owner's (todo.md), and native C++ builds that failed on macOS
+on ARM64 and on both Windows runners.
 
 ## W13. Constant time in the machine code
 
-For an idea with `- Secret:`, `check` compiles the module for this machine, decodes the engine's
-code, maps each instruction to its WebAssembly offset, and refuses a conditional branch, an
-indirect jump, a division or an address derived from a secret. *Verified by:* the tests on all
-five runners, which covers x86-64 and ARM64 machine code. Stopped by the safety filter on
-2026-11-07, while it was being designed, and left for the owner (todo.md): the engine's compiled
-code is trusted for timing.
+For an idea with `- Secret:`, `check` was to compile the module for this machine, decode the
+engine's code, map each instruction to its WebAssembly offset, and refuse a conditional branch,
+an indirect jump, a division or an address derived from a secret. It was to be verified by the
+tests on all five runners, covering x86-64 and ARM64 machine code. It was stopped by the safety
+filter on 2026-11-07, while it was being designed, and left for the owner (todo.md): the engine's
+compiled code is trusted for timing.
 
 ## W14. Package, `doctor`, release, and the agent's test
 
@@ -293,14 +293,15 @@ crate `xtask/` (`cargo xtask`, with Rust 1.99.1 pinned in `rust-toolchain.toml`)
 archive, fetching the pinned tools, CI's job matrix and steps, the goldens' comparison and the
 bench's WebAssembly builds; and `lengua-mcp install` in place of the install scripts. The workflow
 file is glue: each step is one command, most of them `cargo xtask` calls. The site, the native
-assembly left in the bench's folder and
-`scripts/` go; the tag keeps the site. *Verified by:* at d0e9ea6, format, the suite on all five
-runners and the gate, green (42753840475); release and install on all five runners, each archive
-built by `cargo xtask release` and installed on a clean runner, green (42753851417); the golden
-diff against its base, differing in four proof lines only, each one the base ran out of time on
-and the head proved (42753863525); the bench through the task crate on Linux on x86-64, which
-measured every workload and wrote its report (42753874793), its gate's four problems rows of
-upcase and files. Merged with main's W12c at bce6cd5.
+assembly left in the bench's folder and `scripts/` go; the tag keeps the site. *Verified by:* at
+d0e9ea6, format, the suite on all five runners and the gate, green (42753840475); release and
+install on all five runners, each archive built by `cargo xtask release` and installed on a clean
+runner, green (42753851417); the golden diff against its base, differing in four proof lines only,
+each one the base ran out of time on and the head proved (42753863525); the bench through the
+task crate on Linux on x86-64, which measured every workload and wrote its report (42753874793),
+its gate's four problems, rows of upcase and files. Merged with main's W12c at bce6cd5: the suite
+on all five runners and the gate, green (42765232534), and release and install on all five, green
+(42765242004); main at bce6cd5.
 
 **W17b, the solvers as WebAssembly.** z3 runs as WebAssembly if it costs fairly: the same verdicts
 on all five runners at today's limits, with the replayed questions taking at most twice as long in
