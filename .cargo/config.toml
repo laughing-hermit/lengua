@@ -1,0 +1,6 @@
+# `cargo xtask <task>`: lengua's tooling, the task crate in xtask/ (what CI's workflow runs, the
+# release archive, the goldens' comparison and the bench's WebAssembly builds). It runs with
+# --locked, as CI's builds do, so a Cargo.lock behind Cargo.toml stops it there: CI's format job,
+# which runs the crate without the alias, makes the lock again.
+[alias]
+xtask = "run --locked --package xtask --"

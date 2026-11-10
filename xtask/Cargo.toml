@@ -1,0 +1,17 @@
+[package]
+name = "xtask"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.97"
+license = "Apache-2.0"
+description = "lengua's tooling, run as `cargo xtask <task>`: each step of CI's workflow, the release archive, the goldens' comparison and the bench's WebAssembly builds."
+publish = false
+
+# The workspace's lints: no unsafe code, every item documented, no unwrap (CI's clippy denies
+# every warning).
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "warn"

@@ -2,14 +2,15 @@
 name = "lengua-mcp"
 version = "0.2.0"
 edition = "2024"
-# Wasmtime 50's own floor (crates.io, 2026-10-29); CI's Rust, in scripts/ci/setup.sh, is above it.
+# Wasmtime 50's own floor (crates.io, 2026-10-29); the Rust rust-toolchain.toml pins is above it.
 rust-version = "1.97"
 license = "Apache-2.0"
 description = "MCP server for lengua: idea-driven programming in checked WebAssembly"
 publish = false
 
+# lengua-os holds the calls that need unsafe code; xtask is lengua's tooling (`cargo xtask`).
 [workspace]
-members = ["crates/lengua-os"]
+members = ["crates/lengua-os", "xtask"]
 
 [lib]
 name = "lengua"
