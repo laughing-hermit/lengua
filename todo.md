@@ -456,7 +456,21 @@ this file at the tag `native-final`.
   an open, the clock. Where one of those dominates a row, lengua's lead is only its own few
   instructions, and the row may stay undecided or tied after every fix. W12 names those rows, with
   the runs. For each, the owner then picks: keep the finish line open, or accept that row as a
-  stated exception. Until they pick, it stays open.
+  stated exception. Until they pick, it stays open. The rows so far:
+  - **CPU time on Windows, for a short run.** Windows counts a process's CPU time in 15.6 ms
+    ticks, so every version of a short workload reads 15.6 ms. Its CPU rows can't be decided on
+    Windows on x86-64 or on ARM64, whatever the programs do. KNOWN_BEHIND keeps them. Example:
+    shout against Rust, on Windows on ARM64, was ahead in run 42728160641 and undecided in run
+    42756074550.
+  - **The server's CPU time on Linux on x86-64**, against C, C++ and Rust compiled to
+    WebAssembly. The 64 clients' wall time decides the workload, and its CPU totals are about
+    equal. It was ahead in run 42728160641 and undecided in run 42756074550, so the ratchet keeps
+    it off the list.
+  - **wc's peak memory on Linux on x86-64, against C++ compiled to WebAssembly.** The run adds
+    about 0.7 MiB, which is about the gap. It was ahead in run 42728160641 and behind in run
+    42756074550.
+
+  Until the owner picks, a bench run fails on these rows wherever they don't come out ahead.
 - **The decisions above**, each the owner's to keep or reverse.
 
 ## Deferred, and why
