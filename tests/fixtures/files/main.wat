@@ -1,14 +1,18 @@
 ;; files: reads every file in the working folder and prints how many files there are and how many
 ;; bytes they hold. In the WebAssembly dialect 1 (references/power-of-10-webassembly.md): lengua's
-;; library gives $fill and $write_all. It lists the working folder a batch of entries at a time
-;; with fd_readdir, each batch from the cookie of the last whole entry before it, as sweep does;
-;; it opens each file with path_open, reads it to its end a 64 KiB buffer-full at a time with
-;; $fill, and closes it. Folders are neither counted nor read.
+;; library gives $write_all. It lists the working folder a batch of entries at a time with
+;; fd_readdir, each batch from the cookie of the last whole entry before it, as sweep does; it
+;; opens each file with path_open, reads it to its end a 64 KiB buffer-full at a time with
+;; fd_read, and closes it. A read of a file gives every byte it asks for up to the file's end
+;; (references/host.md), so a read that gives less than a buffer-full is the file's last, and a
+;; file shorter than the buffer takes one read where $fill would take a second to find its end.
+;; Folders are neither counted nor read.
 (module
   (import "wasi_snapshot_preview1" "fd_readdir"
     (func $fd_readdir (param i32 i32 i32 i64 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_open"
     (func $path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "fd_close" (func $fd_close (param i32) (result i32)))
   (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
   ;; Three pages: lengua's first 1024 bytes, then the regions below, which end at 132480.
@@ -30,8 +34,8 @@
   (global $NO_FLAGS i32 (i32.const 0))
   (global $NO_RIGHTS i64 (i64.const 0))
   (global $READ_RIGHTS i64 (i64.const 2))
-  ;; The stop byte that has $fill read until the buffer is full or the input ends.
-  (global $READ_TO_END i32 (i32.const -1))
+  ;; The buffers a read of a file fills: one, the whole of the buffer for a file's content.
+  (global $ONE_BUFFER i32 (i32.const 1))
   ;; The buffer-fulls a file takes at most: 2147483647 of 64 KiB, 128 TiB.
   (global $MAX_PIECES i32 (i32.const 2147483647))
   ;; A folder's entries, as fd_readdir writes them: each a dirent of 24 bytes, the next entry's
@@ -57,7 +61,8 @@
   (global $ZERO i32 (i32.const 48))
 
   ;; Regions (rule 3, M1), from 1024 up: what the host writes, the line it prints, a file's name,
-  ;; a batch of entries and a buffer-full of a file.
+  ;; the iovec of a file's reads and the count they give, a batch of entries and a buffer-full of
+  ;; a file.
   ;; How many bytes of entries fd_readdir wrote.
   (global $listed i32 (i32.const 1024))
   (global $listed.size i32 (i32.const 4))
@@ -73,6 +78,11 @@
   ;; A file's name, copied from its entry to a start of its own.
   (global $name i32 (i32.const 1104))
   (global $name.size i32 (i32.const 256))
+  ;; The iovec of a read of a file, the content's address and size, and the count fd_read writes.
+  (global $iovec i32 (i32.const 1360))
+  (global $iovec.size i32 (i32.const 8))
+  (global $nread i32 (i32.const 1368))
+  (global $nread.size i32 (i32.const 4))
   ;; One batch of the folder's entries.
   (global $entries i32 (i32.const 1408))  ;; shared: count_folder lists into it; the others read it
   (global $entries.size i32 (i32.const 65536))
@@ -251,8 +261,10 @@
     (local.get $size))
 
   ;; Reads the file open as $fd to its end, a buffer-full at a time, and gives how many bytes it
-  ;; read, or UNREADABLE when a read fails.
+  ;; read, or UNREADABLE when a read fails. Each read asks for the whole buffer, as what the one
+  ;; before gave isn't kept.
   (func $read_all (param $fd i32) (result i64)
+    (local $err i32)
     (local $got i32)
     (local $total i64)
     (local $result i64)
@@ -264,14 +276,18 @@
       (block $done
         (local.set $left (global.get $MAX_PIECES))
         (loop $piece  ;; bound: 2147483647
-          (local.set $got
-            (call $fill (local.get $fd) (global.get $content) (global.get $content.size)
-              (global.get $READ_TO_END)))
-          (br_if $failed (i32.lt_s (local.get $got) (i32.const 0)))
+          (i32.store (global.get $iovec) (global.get $content))
+          (i32.store offset=4 (global.get $iovec) (global.get $content.size))
+          (local.set $err
+            (call $fd_read (local.get $fd) (global.get $iovec) (global.get $ONE_BUFFER)
+              (global.get $nread)))
+          (br_if $failed (local.get $err))
+          (local.set $got (i32.load (global.get $nread)))
           (if (i32.gt_u (local.get $got) (global.get $content.size))
             (then (call $assert_fail (i32.const 13)) unreachable))
           (local.set $total (i64.add (local.get $total) (i64.extend_i32_u (local.get $got))))
-          ;; A buffer-full that isn't full is the file's last.
+          ;; A read of a file gives every byte it asks for up to the file's end: one that doesn't
+          ;; fill the buffer has reached it.
           (br_if $done (i32.lt_u (local.get $got) (global.get $content.size)))
           (local.set $left (i32.sub (local.get $left) (i32.const 1)))
           (br_if $piece (local.get $left)))
