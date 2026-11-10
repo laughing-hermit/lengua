@@ -2150,23 +2150,26 @@ pub struct ShellRun {
 /// the shell's own standard input, output and error and no time limit, main.wat's module in this
 /// process. Returns the program's exit code, or 134 when it trapped, which it says on standard
 /// error. It is a plain function, and needs no async runtime: nothing on its way waits on one,
-/// and the connections lengua makes for a program have a runtime of their own.
+/// and the connections lengua makes for a program have a runtime of their own. The engine starts
+/// while the checks run, from the folders on, and compiles nothing until they pass.
 ///
 /// # Errors
 ///
 /// Fails, saying why, when lengua won't run the program or can't start it.
 pub fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i32, String> {
-    let here = std::env::current_dir()
-        .map_err(|error| format!("can't read the current folder: {error}"))?;
-    let absolute = |path: &str| here.join(path).to_string_lossy().into_owned();
-    let folder = ProgramFolder::new(&absolute(&request.path))?;
-    let workspace = working_folder(
-        &request
-            .folder
-            .as_deref()
-            .map_or_else(|| here.to_string_lossy().into_owned(), absolute),
-    )?;
-    wat::run_from_shell(data_dir, &folder, request, &workspace)
+    wat::run_from_shell(data_dir, request, || {
+        let here = std::env::current_dir()
+            .map_err(|error| format!("can't read the current folder: {error}"))?;
+        let absolute = |path: &str| here.join(path).to_string_lossy().into_owned();
+        let folder = ProgramFolder::new(&absolute(&request.path))?;
+        let workspace = working_folder(
+            &request
+                .folder
+                .as_deref()
+                .map_or_else(|| here.to_string_lossy().into_owned(), absolute),
+        )?;
+        Ok((folder, workspace))
+    })
 }
 
 /// The folder a `run` happens in: an existing absolute folder other than `/`, where confining

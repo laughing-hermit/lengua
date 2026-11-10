@@ -4,8 +4,9 @@
 dialect](power-of-10-webassembly.md) and runs through [lengua's host](host.md). Those two pages
 are the rules and the calls; this page is how to write a program that meets them on the first
 check, from the module's layout to vectors, with the idioms the templates use. Every snippet here
-is from a template in `assets/`, each a complete program that passes every rule and every test
-of its idea.
+is from a complete program that passes every rule and every test of its idea: a template in
+`assets/`, or, in the section on speed, lengua's own word tally and sort, which go past the
+templates' plain forms.
 
 ## The templates
 
@@ -15,7 +16,7 @@ of its idea.
 | `stream-template.wat` | `stream-template-wat-idea.md` | Standard input of any length, a 64 KiB buffer-full at a time, in constant memory |
 | `vector-template.wat` | `vector-template-wat-idea.md` | A line read up to its newline, found and changed 16 bytes at a time, with a scalar tail |
 | `server-template.wat` | `server-template-wat-idea.md` | A server for several clients at once: `poll_oneoff`, `sock_accept`, `sock_recv`, `sock_send` |
-| `tally-template.wat` | `tally-template-wat-idea.md` | A hash table, a merge sort and buffered output, in regions of several megabytes |
+| `tally-template.wat` | `tally-template-wat-idea.md` | A hash table, a merge sort and buffered output, in regions of several megabytes, in their plain form: the section on speed makes them fast |
 
 Start from the template closest to the idea, and keep its shape. Two kinds of program have no
 template: one that reads keys from the terminal waits for lengua's host to give the terminal's
@@ -97,6 +98,13 @@ follows it for the next line.
   first newline in what came, as `$find_newline` does: a newline may come before the last byte.
 - **Any length**: `stop` is -1 and `room` a whole buffer, 64 KiB. A count below the buffer's size
   is the input's last piece; a loop of buffer-fulls keeps only what crosses from one to the next.
+- **A file**: on a local disk, a read of a regular file gives every byte it asks for up to the
+  file's end ([the host](host.md)), so `fd_read` into the whole buffer, its iovec written just
+  before the call, needs no second read to find the end: a count below the buffer's size is the
+  file's last. `$fill` reads a file the same way, with one more read that gives 0 at the end,
+  which costs a call for each file where a program reads many small ones. On a network or FUSE
+  mount a read may give fewer bytes before the end, so a program that must be right there too
+  reads through `$fill`.
 
 ## Writing with `$write_all`
 
@@ -220,6 +228,16 @@ callee's parameters, and the bounds checks above, are the usual ones. `$assert_f
   `i8x16.sub`, `i8x16.add` or `v128.xor` applies it; `v128.bitselect` picks between two vectors.
 - **Find a byte** with `i8x16.eq` against a splat of it, `i8x16.bitmask` (a bit for each lane),
   and `i32.ctz` of a mask that isn't 0: the first match's place in the vector.
+- **Count matches** in the lanes, not through a bitmask, which ARM64 has no one instruction
+  for: a compare's all ones moved down by 7 (`i8x16.shr_u`) is 1 where it holds, which
+  `i8x16.add` adds to a counter of a byte in each lane. Before 255 steps, widen the bytes in
+  pairs into lanes of 16 bits, `i16x8.shl` then `i16x8.shr_u` by 8 for the first of each pair and
+  `i16x8.shr_u` by 8 for the second, and the same at 16 bits into lanes of 32 bits at the end,
+  then add the lanes with `i32x4.extract_lane`. Shifts keep each count a sum of the compares'
+  conditions, which the proofs follow; `extadd_pairwise` does the same in one instruction, but
+  the proofs don't follow it yet.
+- **The byte before each lane** is `i8x16.shuffle` of the step before's vector and this one's,
+  lanes 15 to 30: the last lane of the one before, then this one's first fifteen.
 - **Bound every vector access** to the region's size less 16, so a 16-byte access never crosses
   the end; round a region up to whole vectors where a loop reads them all, as `$line`'s 80 bytes
   hold `READ_MAX`, 65.
@@ -229,6 +247,127 @@ callee's parameters, and the bounds checks above, are the usual ones. `$assert_f
 - **Only the deterministic instructions**: no relaxed SIMD, which gives different bits on
   different computers. Integer lanes compute the same everywhere; float lanes do too, as the
   engine makes every NaN the same.
+
+## Speed: word edges, keys and sorts as numbers
+
+The templates keep their plain form: correct first, as step 4 of the skill says. lengua's own
+word tally and sort go further, in the ways below, each in the dialect.
+
+Where words start and end, 64 bytes a step. Four vectors' whitespace compares each give a
+bitmask, put in place in one `i64` (here the second, from bit 16):
+
+```wat
+    (local.set $chunk (v128.load offset=16 (i32.add (global.get $buffer) (local.get $at))))
+    (local.set $found
+      (i64.or (local.get $found)
+        (i64.shl
+          (i64.extend_i32_u
+            (i8x16.bitmask
+              (v128.or (i8x16.eq (local.get $chunk) (local.get $space))
+                (i8x16.le_u (i8x16.sub (local.get $chunk) (local.get $tab))
+                  (local.get $tab_to_cr)))))
+          (global.get $SECOND_LANES))))
+```
+
+Then the bits that differ from the bit before are the edges, each written to a list:
+
+```wat
+        ;; A bit for each lane whose kind differs from the lane's before it, the last lane of the
+        ;; block before for the first.
+        (local.set $changes
+          (i64.xor (local.get $spaces)
+            (i64.or (i64.shl (local.get $spaces) (i64.const 1)) (local.get $before))))
+        (local.set $before (i64.shr_u (local.get $spaces) (global.get $LAST_LANE)))
+        ;; Each edge's place, from the lowest bit: the lowest, done, comes off.
+        (block $noted
+          (local.set $bits (global.get $BLOCK))
+          (loop $edge  ;; bound: 64
+            (br_if $noted (i64.eqz (local.get $changes)))
+            …
+            (i32.store
+              (i32.add (global.get $edges) (i32.shl (local.get $count) (global.get $INDEX_SHIFT)))
+              (i32.add (local.get $at) (i32.wrap_i64 (i64.ctz (local.get $changes)))))
+            (local.set $count (i32.add (local.get $count) (i32.const 1)))
+            (local.set $changes
+              (i64.and (local.get $changes) (i64.sub (local.get $changes) (i64.const 1))))
+            (local.set $bits (i32.sub (local.get $bits) (i32.const 1)))
+            (br_if $edge (local.get $bits))))
+```
+
+- **The lanes past the input's end** are set as whitespace before the edges are taken,
+  `ALL_BITS << rest` where `rest` bytes are left, so a word that runs to the end ends there.
+- **`before` is the last lane of the step before**, the byte before the input counting as
+  whitespace, so a step's first lane is compared like the others.
+- **The edges alternate**, a word's start then its end, so a second loop takes them two at a
+  time and counts each word with no search of its own.
+
+A word of up to 8 bytes as one number, its slot from one multiplication:
+
+```wat
+            ;; The word's bytes, those past its end cleared: its key.
+            (local.set $key
+              (i64.and (i64.load (i32.add (global.get $buffer) (local.get $start)))
+                (i64.shr_u (global.get $ALL_BITS)
+                  (i64.extend_i32_u
+                    (i32.shl (i32.sub (global.get $KEY_BYTES) (local.get $length))
+                      (global.get $BYTE_SHIFT))))))
+            (local.set $slot
+              (i32.wrap_i64
+                (i64.shr_u (i64.mul (local.get $key) (global.get $GOLDEN))
+                  (global.get $HASH_SHIFT))))
+            …
+            (local.set $tally (i64.load (local.get $entry)))
+            (br_if $long_way (i64.ne (i64.load offset=8 (local.get $entry)) (local.get $key)))
+            (br_if $long_way
+              (i32.ne (i32.and (i32.wrap_i64 (local.get $tally)) (global.get $LENGTH_MASK))
+                (local.get $length)))
+            (i64.store (local.get $entry) (i64.add (local.get $tally) (global.get $ONE_MORE)))
+```
+
+- **The key is the bytes**: one `i64.load` from the word's start, the bytes past its end cleared
+  by `ALL_BITS >> ((8 - length) << 3)`. The buffer keeps 8 bytes of room past any word's start,
+  so the load never leaves it.
+- **One multiplication hashes it**: the slot is the top bits of the key times
+  `0x9e3779b97f4a7c15`, the constant `$GOLDEN` written as a signed number, shifted down by 64
+  less the slots' bits.
+- **One entry, two compares**: the entry keeps the key, and the length in its count's low byte,
+  so one `i64.ne` and one `i32.ne` decide, and one add counts the word. A longer word, a slot
+  another word holds and a new word take the long way: a probe, with the bytes past the key
+  compared from where the entry's word is kept.
+
+A split with no branch on a record, the records sorted as numbers:
+
+```wat
+        (local.set $record
+          (i64.load
+            (i32.add (global.get $records) (i32.shl (local.get $i) (global.get $RECORD_SHIFT)))))
+        (i64.store
+          (i32.add (global.get $records) (i32.shl (local.get $i) (global.get $RECORD_SHIFT)))
+          (i64.load
+            (i32.add (global.get $records)
+              (i32.shl (local.get $front) (global.get $RECORD_SHIFT)))))
+        (i64.store
+          (i32.add (global.get $records) (i32.shl (local.get $front) (global.get $RECORD_SHIFT)))
+          (local.get $record))
+        (local.set $front
+          (i32.add (local.get $front) (i64.lt_u (local.get $record) (local.get $bound))))
+```
+
+- **A record is its key above its place**: each line's `i64` holds its start in the low bits
+  and above them 4 of its bytes from a depth, the first the highest (an `i8x16.shuffle` turns a
+  loaded word round), the bytes from its newline on cleared, and how many of the 4 are the
+  line's. One `i64.lt_u` orders two lines that are the same before that depth.
+- **Swap, then count**: each record swaps with the first place not yet known to be below the
+  bound, and the compare's 0 or 1 moves that place on, so no branch waits on the data. A pass
+  with the pivot's key and one with that key plus one split a part three ways: below the pivot,
+  the same as it, and above it.
+- **A multikey quicksort with no recursion**: the parts still to sort are on a stack in a
+  region, each its first and last record, the depth its lines are the same to and the splits it
+  may still take. The largest of a split's three goes on first, so the stack holds about
+  2 log2(n) parts at most. The part the same as the pivot gets the keys of its next 4 bytes and
+  is sorted on, unless its key held its lines' end. A part split about 2 log2(n) times below or
+  above a pivot, as an input made against the pivots' choice makes one and random input almost
+  never does, is sorted by a heap sort, as introsort does, so no input takes n squared steps.
 
 ## The network
 

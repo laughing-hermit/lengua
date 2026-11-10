@@ -31,6 +31,13 @@ lengua makes what the idea names before the program starts, so a program reaches
 Files are names inside the working folder; a name that would leave it, with `..` or from `/`,
 gives `NOTCAPABLE`, and a link, which no name may lead through, gives `ACCES`.
 
+lengua's host passes each read of a file to the system once. On a local disk, a regular file's
+read gives every byte it asks for, up to the file's end, as the proofs take it: a read that
+gives fewer bytes than it asked for has reached the end, so a file shorter than a buffer takes
+one `fd_read`. On a network or FUSE mount a read may give fewer before the end: a program that
+must be right there reads until a read gives 0, as `$fill` does. Standard input and a connection
+give what has arrived, which may be less before their end: read them through `$fill`.
+
 ## What a call borrows
 
 A call reads or writes only the memory its arguments name, and every byte of it must lie inside

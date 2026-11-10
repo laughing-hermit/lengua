@@ -10,7 +10,7 @@
 //! type, is told where the native lengua went.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -41,7 +41,7 @@ use crate::testrun;
 use crate::trust;
 use crate::wasm::engine::{self, Setup};
 use crate::wasm::job::{Connection, Made};
-use crate::wasm::runner::{Here, Source, run_here};
+use crate::wasm::runner::{Here, Order, Source, run_once_checked};
 use crate::wasm::text::{self, Built};
 use crate::wasm::{Policy, Pool, Program, Spec, parts};
 
@@ -734,49 +734,82 @@ fn made(reach: &Reach, args: &[String]) -> Made {
     Made { place, connection }
 }
 
-/// `lengua-mcp run` for main.wat: `run`'s checks, then the module check tested, kept or built
-/// ([`kept_or_built`]), in this process, attached to the shell's standard input, output and
-/// error, with no time limit, in `workspace`. Gives the program's exit code, or [`TRAPPED`] when
-/// it trapped, which it says on standard error.
+/// What a run from a shell runs once its checks pass: the module check tested, kept or built,
+/// and what the program is given, all from the bytes the checks read.
+struct Checked<'r> {
+    /// The run, as the shell asked for it.
+    request: &'r ShellRun,
+    /// The folder it runs in.
+    workspace: PathBuf,
+    /// main.wat, what its idea grants, and the module check tested, by its hash.
+    ready: Runnable,
+    /// The module that runs.
+    to_run: ToRun,
+    /// The connections lengua makes for it, in order.
+    connections: Vec<Made>,
+}
+
+impl Order for Checked<'_> {
+    fn wasm(&self) -> &[u8] {
+        match &self.to_run {
+            ToRun::Kept(wasm) => wasm.as_slice(),
+            ToRun::Built(built) => built.wasm.as_slice(),
+        }
+    }
+
+    fn here(&self) -> Here<'_> {
+        let network = &self.ready.network;
+        Here {
+            args: &self.request.args,
+            env: &self.request.env,
+            folder: &self.workspace,
+            policy: Policy::of(&self.ready.uses, network),
+            listen: network.listens.map(|port| (port, network.serves_anywhere)),
+            connections: &self.connections,
+            source: match &self.to_run {
+                ToRun::Kept(_) => Source::Text {
+                    text: &self.ready.code,
+                    module: &self.ready.module,
+                },
+                ToRun::Built(built) => Source::Built(built),
+            },
+        }
+    }
+}
+
+/// `lengua-mcp run` for main.wat: `run`'s checks, in the program folder and the working folder
+/// `folders` gives, then the module check tested, kept or built ([`kept_or_built`]), in this
+/// process, attached to the shell's standard input, output and error, with no time limit. The
+/// engine starts on the program's thread while the checks run on this one, and compiles nothing
+/// until they pass ([`run_once_checked`]). Gives the program's exit code, or [`TRAPPED`] when it
+/// trapped, which it says on standard error.
 ///
 /// # Errors
 ///
 /// Why lengua won't run it, or can't.
 pub(super) fn run_from_shell(
     data_dir: &DataDir,
-    folder: &ProgramFolder,
     request: &ShellRun,
-    workspace: &Path,
+    folders: impl FnOnce() -> Result<(ProgramFolder, PathBuf), String>,
 ) -> Result<i32, String> {
-    let ready = runnable(data_dir, folder, &request.env)?;
-    let to_run = kept_or_built(data_dir, folder, &ready)?;
-    let (wasm, source) = match &to_run {
-        ToRun::Kept(wasm) => (
-            wasm.as_slice(),
-            Source::Text {
-                text: &ready.code,
-                module: &ready.module,
-            },
-        ),
-        ToRun::Built(built) => (built.wasm.as_slice(), Source::Built(built)),
-    };
-    let network = &ready.network;
-    let connections: Vec<Made> = reaches(network)
-        .iter()
-        .map(|reach| made(reach, &request.args))
-        .collect();
     let cache = engine::cache_folder(data_dir);
-    let here = Here {
-        args: &request.args,
-        env: &request.env,
-        folder: workspace,
-        policy: Policy::of(&ready.uses, network),
-        listen: network.listens.map(|port| (port, network.serves_anywhere)),
-        connections: &connections,
-        cache: Some(cache.as_path()),
-        source,
-    };
-    match run_here(wasm, &here).map_err(|error| format!("couldn't run the program: {error}"))? {
+    let ended = run_once_checked(Some(cache.as_path()), || {
+        let (folder, workspace) = folders()?;
+        let ready = runnable(data_dir, &folder, &request.env)?;
+        let to_run = kept_or_built(data_dir, &folder, &ready)?;
+        let connections = reaches(&ready.network)
+            .iter()
+            .map(|reach| made(reach, &request.args))
+            .collect();
+        Ok(Checked {
+            request,
+            workspace,
+            ready,
+            to_run,
+            connections,
+        })
+    })?;
+    match ended.map_err(|error| format!("couldn't run the program: {error}"))? {
         End::Exited(code) => Ok(code),
         trapped @ End::Trapped(..) => {
             eprintln!(

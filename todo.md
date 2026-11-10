@@ -248,7 +248,9 @@ Each can be reversed.
   it, or main.wat built again where none is kept); C, C++ and Rust's modules in
   lengua's host through `lengua-mcp measure`, with the same engine and the same cache of compiled
   modules, the policy from the words of lengua's program's idea, and memory that may grow to
-  4 GiB, as lengua's host holds a module to the maximum it declares. The native builds use each
+  4 GiB, as lengua's host holds a module to the maximum it declares. On both paths the engine
+  starts on the program's thread while the caller reads what runs, lengua's checks or a module's
+  file and words, and compiles nothing before they end (W12c). The native builds use each
   system's own compilers: GCC on Linux, Apple's clang on macOS, LLVM's clang on Windows, rustc
   everywhere, each for this CPU with link-time optimization, falling back to a CPU flag every
   runner of its kind has where the compiler doesn't take `native`.
@@ -286,6 +288,22 @@ Each can be reversed.
   five (42387777039).
 - **Five runners**, as above; macOS on x86-64 stays dropped (the design pass would have kept it;
   the owner's earlier word stands).
+- **The lock is read with no TOML where it is exactly as lengua writes it** (W12c, ca4905a). A
+  run's lock goes through `as_written`, which reads the lines `Lock::body_in` writes, and only a
+  body it doesn't take goes to TOML, which still reads format 6 and says what is wrong with a
+  lock lengua can't take. This reverses W12b's choice to keep one parser for the lock, which G2
+  rests on (its brief's "Left out"). G2 still holds: the HMAC over the body is verified first,
+  as before, and `as_written` takes a body only when `body_in` writes it back byte for byte and
+  TOML's checks of its content hold (one to six request words, proofs only of the code's
+  module), so both readers give the same lock from the same text. The fuzzer's mutations seldom
+  keep a body as lengua writes it, so a seeded test reads 2,000 random locks both ways.
+- **files reads each file with its own `fd_read`** (W12c, 0da6aec), on a local disk's promise of
+  every byte up to the end, which host.md now says. So its reads no longer go through `$fill`:
+  where the golden ledger records a proof of files' B1 or B3, its `cut` turns from true to false
+  and its paths may change. That says nothing of a program with no standard input or network,
+  whose reply never named it. No proof by induction is lost: those tests give files on disk and
+  no standard input, and the induction over a read loop takes only standard input as one text,
+  so it never took them (src/prove/induction.rs, `streamed`).
 
 ## Roadmap: the pivot's milestones (2026-11-06)
 
@@ -438,7 +456,21 @@ this file at the tag `native-final`.
   an open, the clock. Where one of those dominates a row, lengua's lead is only its own few
   instructions, and the row may stay undecided or tied after every fix. W12 names those rows, with
   the runs. For each, the owner then picks: keep the finish line open, or accept that row as a
-  stated exception. Until they pick, it stays open.
+  stated exception. Until they pick, it stays open. The rows so far:
+  - **CPU time on Windows, for a short run.** Windows counts a process's CPU time in 15.6 ms
+    ticks, so every version of a short workload reads 15.6 ms. Its CPU rows can't be decided on
+    Windows on x86-64 or on ARM64, whatever the programs do. KNOWN_BEHIND keeps them. Example:
+    shout against Rust, on Windows on ARM64, was ahead in run 42728160641 and undecided in run
+    42756074550.
+  - **The server's CPU time on Linux on x86-64**, against C, C++ and Rust compiled to
+    WebAssembly. The 64 clients' wall time decides the workload, and its CPU totals are about
+    equal. It was ahead in run 42728160641 and undecided in run 42756074550, so the ratchet keeps
+    it off the list.
+  - **wc's peak memory on Linux on x86-64, against C++ compiled to WebAssembly.** The run adds
+    about 0.7 MiB, which is about the gap. It was ahead in run 42728160641 and behind in run
+    42756074550.
+
+  Until the owner picks, a bench run fails on these rows wherever they don't come out ahead.
 - **The decisions above**, each the owner's to keep or reverse.
 
 ## Deferred, and why

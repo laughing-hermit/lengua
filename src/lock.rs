@@ -425,7 +425,21 @@ impl CodeTable {
     }
 }
 
+/// The lock whose body, its signature verified, is `body`. A body exactly as this lengua writes
+/// it, as every lock a run reads is, is read line by line with no TOML ([`as_written`]); any other
+/// text, a lock of format 6 among them, is read as TOML ([`parse_toml`]), which says what is
+/// wrong with one lengua can't take. Either way the lock is the one TOML reads.
 pub(crate) fn parse_body(body: &str) -> Result<Lock, LockError> {
+    if let Some(lock) = as_written(body) {
+        return Ok(lock);
+    }
+    parse_toml(body)
+}
+
+/// [`parse_body`] by TOML: a body of either format this lengua reads, checked for its version,
+/// its fields, its dialect, its hashes and fingerprint, and its layout, which must be the one
+/// [`Lock::body_in`] writes.
+pub(crate) fn parse_toml(body: &str) -> Result<Lock, LockError> {
     let malformed = |detail: &str| LockError::Malformed(detail.to_owned());
     // The body's TOML is parsed once: its version is read from the table, which then gives the
     // whole, so an unsupported version is said before any field lengua doesn't write.
@@ -543,6 +557,247 @@ pub(crate) fn parse_body(body: &str) -> Result<Lock, LockError> {
     Ok(lock)
 }
 
+/// The lock whose body in format [`VERSION`] is exactly `body`, read with no TOML: `None` for any
+/// other text. It reads the lines [`Lock::body_in`] writes, in their order, and takes the lock
+/// only when `body_in` writes `body` back byte for byte and the checks [`parse_toml`] makes of a
+/// lock's content hold: one to [`MAX_REQUESTS`] request words, and proofs only about the module
+/// the code's stamp names. So the lines it passes over (the dialect, the fingerprint and the
+/// target, which the version and the hashes decide), every string's escapes and every number's
+/// digits are lengua's own, and its numbers are within TOML's integers, an `i64`'s. A lock it
+/// takes is the very lock [`parse_toml`] takes from the same text, since `body_in` writes TOML
+/// that reads back as the lock it was written from.
+pub(crate) fn as_written(body: &str) -> Option<Lock> {
+    let mut text = Written(body);
+    text.eat(HEADER)?;
+    text.eat("version = ")?;
+    if text.number::<u32>()? != VERSION {
+        return None;
+    }
+    text.eat("\n")?;
+    // The dialect, which the version decides.
+    text.line()?;
+    // The fingerprint, which the hashes decide, once code is stamped.
+    if text.0.starts_with("fingerprint = ") {
+        text.line()?;
+    }
+    text.eat("\n[request]\nwords = ")?;
+    let words = text.list(Written::string)?;
+    text.eat("\nidea = ")?;
+    let first = text.sha256()?;
+    text.eat("\n\n[idea]\nsha256 = ")?;
+    let idea = text.sha256()?;
+    text.eat("\n")?;
+    let code = if text.eat("\n[code]\nsha256 = ").is_some() {
+        let sha256 = text.sha256()?;
+        text.eat("\nmodule_sha256 = ")?;
+        let module_sha256 = text.sha256()?;
+        text.eat("\nengine = ")?;
+        let engine = text.string()?;
+        text.eat("\nmax_stack_bytes = ")?;
+        let max_stack_bytes = text.number()?;
+        text.eat("\nunsafe_blocks = ")?;
+        let unsafe_blocks = text.number()?;
+        text.eat("\n")?;
+        // The target, one module for every computer.
+        text.line()?;
+        text.eat("features = ")?;
+        let features = text.list(Written::string)?;
+        text.eat("\n")?;
+        Some(CodeStamp {
+            sha256,
+            module_sha256,
+            engine,
+            max_stack_bytes,
+            unsafe_blocks,
+            features,
+        })
+    } else {
+        None
+    };
+    let proofs = if text.eat("\n[proofs]\nmodule_sha256 = ").is_some() {
+        let module_sha256 = text.sha256()?;
+        text.eat("\nproven = ")?;
+        let proven = text.list(Written::string)?;
+        text.eat("\n")?;
+        let bounded = if text.eat("bounded = ").is_some() {
+            let bounded = text.list(Written::bounded)?;
+            text.eat("\n")?;
+            bounded
+        } else {
+            Vec::new()
+        };
+        text.eat("solvers = ")?;
+        let solvers = text.string()?;
+        text.eat("\n")?;
+        let wrong = text.pairs("wrong", "found")?;
+        let unproven = text.pairs("unproven", "why")?;
+        Some(Box::new(ProofStamp {
+            module_sha256,
+            proven,
+            bounded,
+            solvers,
+            wrong,
+            unproven,
+        }))
+    } else {
+        None
+    };
+    if !text.0.is_empty() {
+        return None;
+    }
+    let requested = (1..=MAX_REQUESTS).contains(&words.len());
+    let about_the_stamp = match (&code, &proofs) {
+        (_, None) => true,
+        (Some(code), Some(proofs)) => code.module_sha256 == proofs.module_sha256,
+        (None, Some(_)) => false,
+    };
+    let lock = Lock {
+        request: RequestStamp { words, idea: first },
+        idea: IdeaStamp { sha256: idea },
+        code,
+        proofs,
+    };
+    (requested && about_the_stamp && lock.body_in(VERSION) == body).then_some(lock)
+}
+
+/// What is left to read of a lock's body, read as [`Lock::body_in`] writes it ([`as_written`]).
+/// Each reader takes what it reads from the front and gives `None` when the text there isn't
+/// that; then nothing is taken, or what is left is never read again.
+struct Written<'b>(&'b str);
+
+impl Written<'_> {
+    /// Takes `literal`, when what is left starts with it.
+    fn eat(&mut self, literal: &str) -> Option<()> {
+        self.0 = self.0.strip_prefix(literal)?;
+        Some(())
+    }
+
+    /// Takes the rest of a line, its newline too.
+    fn line(&mut self) -> Option<()> {
+        let (_, rest) = self.0.split_once('\n')?;
+        self.0 = rest;
+        Some(())
+    }
+
+    /// A TOML basic string, on one line, with the escapes [`toml_string`] writes: `\"`, `\\`,
+    /// `\n`, `\t`, `\r` and `\u` with four hex digits. Whether they are written as `toml_string`
+    /// writes them, [`as_written`]'s comparison says.
+    fn string(&mut self) -> Option<String> {
+        let mut rest = self.0.strip_prefix('"')?;
+        let mut text = String::new();
+        loop {
+            let mut chars = rest.chars();
+            match chars.next()? {
+                '"' => {
+                    self.0 = chars.as_str();
+                    return Some(text);
+                }
+                '\\' => match chars.next()? {
+                    '"' => text.push('"'),
+                    '\\' => text.push('\\'),
+                    'n' => text.push('\n'),
+                    't' => text.push('\t'),
+                    'r' => text.push('\r'),
+                    'u' => {
+                        let after = chars.as_str();
+                        let code = u32::from_str_radix(after.get(..4)?, 16).ok()?;
+                        text.push(char::from_u32(code)?);
+                        chars = after.get(4..)?.chars();
+                    }
+                    _ => return None,
+                },
+                '\n' => return None,
+                other => text.push(other),
+            }
+            rest = chars.as_str();
+        }
+    }
+
+    /// A SHA-256, as a string of its 64 lowercase hex digits.
+    fn sha256(&mut self) -> Option<Sha256Hex> {
+        let (digits, rest) = self.0.strip_prefix('"')?.split_once('"')?;
+        self.0 = rest;
+        Sha256Hex::parse(digits)
+    }
+
+    /// A whole number in decimal digits, within TOML's integers, an `i64`'s, and within `T`.
+    fn number<T: TryFrom<i64>>(&mut self) -> Option<T> {
+        let end = self
+            .0
+            .bytes()
+            .position(|byte| !byte.is_ascii_digit())
+            .unwrap_or(self.0.len());
+        let (digits, rest) = self.0.split_at_checked(end)?;
+        self.0 = rest;
+        T::try_from(digits.parse::<i64>().ok()?).ok()
+    }
+
+    /// `true` or `false`.
+    fn boolean(&mut self) -> Option<bool> {
+        if self.eat("true").is_some() {
+            Some(true)
+        } else {
+            self.eat("false").map(|()| false)
+        }
+    }
+
+    /// A list on one line, `[]` or `[a, b]`, of what `item` reads.
+    fn list<T>(&mut self, mut item: impl FnMut(&mut Self) -> Option<T>) -> Option<Vec<T>> {
+        self.eat("[")?;
+        let mut items = Vec::new();
+        if self.eat("]").is_some() {
+            return Some(items);
+        }
+        loop {
+            items.push(item(self)?);
+            if self.eat("]").is_some() {
+                return Some(items);
+            }
+            self.eat(", ")?;
+        }
+    }
+
+    /// One of `[proofs]`'s `bounded` tables: `{ id = "B1", bytes = 4096, of = 5000, more = true }`.
+    fn bounded(&mut self) -> Option<Bounded> {
+        self.eat("{ id = ")?;
+        let id = self.string()?;
+        self.eat(", bytes = ")?;
+        let bytes = self.number()?;
+        self.eat(", of = ")?;
+        let of = self.number()?;
+        self.eat(", more = ")?;
+        let more = self.boolean()?;
+        self.eat(" }")?;
+        Some(Bounded {
+            id,
+            bytes,
+            of,
+            more,
+        })
+    }
+
+    /// `[proofs]`'s list `key` of tables of an id and its `field`, such as `wrong = [{ id = "B2",
+    /// found = "…" }]`, on a line of its own: none when that line isn't there.
+    fn pairs(&mut self, key: &str, field: &str) -> Option<Vec<(String, String)>> {
+        if self.eat(key).is_none() {
+            return Some(Vec::new());
+        }
+        self.eat(" = ")?;
+        let pairs = self.list(|text| {
+            text.eat("{ id = ")?;
+            let id = text.string()?;
+            text.eat(", ")?;
+            text.eat(field)?;
+            text.eat(" = ")?;
+            let value = text.string()?;
+            text.eat(" }")?;
+            Some((id, value))
+        })?;
+        self.eat("\n")?;
+        Some(pairs)
+    }
+}
+
 /// A TOML basic string.
 fn toml_string(text: &str) -> String {
     let mut quoted = String::with_capacity(text.len() + 2);
@@ -628,7 +883,13 @@ pub fn read(folder: &Path, key: Option<&Key>) -> Result<Option<Lock>, LockError>
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(LockError::Unreadable(error.to_string())),
     };
-    let mut bytes = Vec::new();
+    // The file's size, as the open file gives it, makes room for it at once: one read takes it
+    // all, where a read with no room doubles its buffer, and reads again, from 32 bytes up.
+    let size = file
+        .metadata()
+        .map_or(0, |metadata| metadata.len())
+        .min(MAX_LOCK_BYTES + 1);
+    let mut bytes = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
     file.take(MAX_LOCK_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| LockError::Unreadable(error.to_string()))?;
@@ -822,6 +1083,9 @@ pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use rand::rngs::ChaCha8Rng;
+    use rand::{RngExt, SeedableRng};
+
     use super::*;
 
     fn key(byte: u8) -> Key {
@@ -1212,6 +1476,226 @@ mod tests {
                 ),
                 "accepted:\n{body}"
             );
+        }
+    }
+
+    /// A lock exactly as lengua writes it reads with no TOML, as the very lock TOML reads from the
+    /// same text: with no code, with code, with proofs of every kind, with words of every escape
+    /// and of any character, and with numbers as large as TOML's integers. Any other text is
+    /// TOML's to read or to refuse: another layout, digits lengua doesn't write, a number past
+    /// TOML's integers, another dialect, an escape lengua doesn't write, a lock of format 6, and a
+    /// body with a byte more or less.
+    #[test]
+    fn a_lock_as_lengua_writes_it_reads_without_toml() {
+        let mut proven = Lock {
+            proofs: Some(proofs()),
+            ..full_lock()
+        };
+        if let Some(stamp) = &mut proven.proofs {
+            stamp.bounded = vec![
+                Bounded {
+                    id: "B3".into(),
+                    bytes: 4096,
+                    of: 5000,
+                    more: true,
+                },
+                Bounded {
+                    id: "B4".into(),
+                    bytes: 0,
+                    of: 0,
+                    more: false,
+                },
+            ];
+            stamp.wrong = vec![(
+                "B2".into(),
+                "with n = 1234567: it printed \"-1234566\"".into(),
+            )];
+            stamp.unproven = vec![
+                ("B5".into(), "the proof ran out of time".into()),
+                ("B6".into(), String::new()),
+            ];
+        }
+        let mut odd = full_lock();
+        odd.request.words = vec![
+            "tab\t, quote \", backslash \\, newline\n, return\r".into(),
+            "\u{0}\u{1f}\u{7f}\u{80}\u{9f} é \u{1f600} \\u0041 \\\" [] , { }".into(),
+            String::new(),
+        ];
+        let mut largest = full_lock();
+        if let Some(code) = &mut largest.code {
+            code.max_stack_bytes = u64::try_from(i64::MAX).expect("an i64's largest is a u64");
+            code.unsafe_blocks = u32::MAX;
+            code.features = Vec::new();
+        }
+        let locks = [
+            Lock::requested(Sha256Hex::of(b"idea"), "an adder".into()),
+            full_lock(),
+            Lock {
+                proofs: Some(proofs()),
+                ..full_lock()
+            },
+            proven,
+            odd,
+            largest,
+        ];
+        for lock in locks {
+            let body = lock.body();
+            assert_eq!(as_written(&body).as_ref(), Some(&lock), "{body}");
+            assert_eq!(parse_toml(&body).as_ref(), Ok(&lock), "{body}");
+            assert_eq!(parse_body(&body).as_ref(), Ok(&lock), "{body}");
+        }
+        let body = full_lock().body();
+        let past = body.replace(
+            "max_stack_bytes = 1184",
+            "max_stack_bytes = 9223372036854775808",
+        );
+        let others = [
+            body.replace("\n\n[idea]", "\n\n\n[idea]"),
+            body.replace("max_stack_bytes = 1184", "max_stack_bytes = 01184"),
+            body.replace("max_stack_bytes = 1184", "max_stack_bytes = +1184"),
+            past.clone(),
+            body.replace("\"webassembly 1\"", "\"webassembly 2\""),
+            body.replace("\"bulk-memory\"", "\"bulk\\u002Dmemory\""),
+            full_lock().body_in(6),
+            format!("{body}\n"),
+            body[..body.len() - 1].to_owned(),
+        ];
+        for other in others {
+            assert_eq!(as_written(&other), None, "{other}");
+        }
+        assert!(matches!(parse_body(&past), Err(LockError::Malformed(_))));
+    }
+
+    /// Text of up to 12 characters, none a tenth of the time, each of a kind toml_string treats
+    /// its own way: ASCII it writes as it is, the five it escapes by name, the C0 controls, DEL
+    /// and the C1 controls it writes as `\u` escapes, the rest of Latin-1, the rest of the Basic
+    /// Multilingual Plane, the planes above it, and pieces of a lock's own layout.
+    fn random_text(rng: &mut ChaCha8Rng) -> String {
+        const ESCAPED: [char; 5] = ['"', '\\', '\n', '\t', '\r'];
+        const PIECES: [&str; 8] = [
+            "\", \"",
+            "]",
+            " }",
+            "\\u0041",
+            "[proofs]\nproven = []\n",
+            " = ",
+            "# ",
+            "\"\"\"",
+        ];
+        let mut text = String::new();
+        if rng.random_range(0..10) == 0 {
+            return text;
+        }
+        for _ in 0..rng.random_range(1..=12) {
+            let character = match rng.random_range(0..9) {
+                0 => rng.random_range(' '..='~'),
+                1 => ESCAPED[rng.random_range(0..ESCAPED.len())],
+                2 => rng.random_range('\u{0}'..='\u{1f}'),
+                3 => '\u{7f}',
+                4 => rng.random_range('\u{80}'..='\u{9f}'),
+                5 => rng.random_range('\u{a0}'..='\u{ff}'),
+                6 => rng.random_range('\u{100}'..='\u{ffff}'),
+                7 => rng.random_range('\u{10000}'..='\u{10ffff}'),
+                _ => {
+                    text.push_str(PIECES[rng.random_range(0..PIECES.len())]);
+                    continue;
+                }
+            };
+            text.push(character);
+        }
+        text
+    }
+
+    /// Up to `most` texts of [`random_text`]'s.
+    fn random_texts(rng: &mut ChaCha8Rng, most: usize) -> Vec<String> {
+        (0..rng.random_range(0..=most))
+            .map(|_| random_text(rng))
+            .collect()
+    }
+
+    /// The SHA-256 of 8 random bytes.
+    fn random_hash(rng: &mut ChaCha8Rng) -> Sha256Hex {
+        Sha256Hex::of(&rng.random::<u64>().to_le_bytes())
+    }
+
+    /// A whole number from 0 to TOML's largest integer, an `i64`'s, its two ends and small
+    /// numbers often.
+    fn random_number(rng: &mut ChaCha8Rng) -> u64 {
+        let most = u64::try_from(i64::MAX).expect("an i64's largest is a u64");
+        match rng.random_range(0..4) {
+            0 => 0,
+            1 => most,
+            2 => rng.random_range(0..10_000),
+            _ => rng.random_range(0..=most),
+        }
+    }
+
+    /// A lock lengua may write, made at random: one to [`MAX_REQUESTS`] request words, code or
+    /// none, and proofs of the code's module or none, each text one of [`random_text`]'s.
+    fn random_lock(rng: &mut ChaCha8Rng) -> Lock {
+        let words = (0..rng.random_range(1..=MAX_REQUESTS))
+            .map(|_| random_text(rng))
+            .collect();
+        let code = rng.random_bool(0.75).then(|| CodeStamp {
+            sha256: random_hash(rng),
+            module_sha256: random_hash(rng),
+            engine: random_text(rng),
+            max_stack_bytes: random_number(rng),
+            unsafe_blocks: match rng.random_range(0..3) {
+                0 => 0,
+                1 => u32::MAX,
+                _ => rng.random(),
+            },
+            features: random_texts(rng, 4),
+        });
+        let proofs = match &code {
+            Some(code) if rng.random_bool(0.75) => Some(Box::new(ProofStamp {
+                module_sha256: code.module_sha256.clone(),
+                proven: random_texts(rng, 3),
+                bounded: (0..rng.random_range(0..=3))
+                    .map(|_| Bounded {
+                        id: random_text(rng),
+                        bytes: usize::try_from(random_number(rng)).unwrap_or(usize::MAX),
+                        of: usize::try_from(random_number(rng)).unwrap_or(usize::MAX),
+                        more: rng.random_bool(0.5),
+                    })
+                    .collect(),
+                solvers: random_text(rng),
+                wrong: (0..rng.random_range(0..=3))
+                    .map(|_| (random_text(rng), random_text(rng)))
+                    .collect(),
+                unproven: (0..rng.random_range(0..=3))
+                    .map(|_| (random_text(rng), random_text(rng)))
+                    .collect(),
+            })),
+            _ => None,
+        };
+        Lock {
+            request: RequestStamp {
+                words,
+                idea: random_hash(rng),
+            },
+            idea: IdeaStamp {
+                sha256: random_hash(rng),
+            },
+            code,
+            proofs,
+        }
+    }
+
+    /// Locks made at random, 2,000 of them, read with no TOML as the very locks TOML reads from
+    /// the same text: words, engines, features, ids, solvers and reasons of every kind of
+    /// character toml_string treats its own way, the C0 and C1 controls among them, and empty
+    /// ones; numbers from 0 to TOML's largest. Each is a body exactly as lengua writes it, which
+    /// the fuzzer's mutations seldom keep, so its check that the two readers agree seldom fires.
+    #[test]
+    fn random_locks_read_without_toml_as_toml_reads_them() {
+        let mut rng = ChaCha8Rng::seed_from_u64(0x6c6f_636b);
+        for _ in 0..2000 {
+            let lock = random_lock(&mut rng);
+            let body = lock.body();
+            assert_eq!(as_written(&body).as_ref(), Some(&lock), "{body}");
+            assert_eq!(parse_toml(&body).as_ref(), Ok(&lock), "{body}");
         }
     }
 
