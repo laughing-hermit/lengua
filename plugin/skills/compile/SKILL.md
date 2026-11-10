@@ -167,9 +167,11 @@ alone, by the steps below: `check` refuses any other code file and says what to 
      byte, and widen them before 255 steps, as [writing main.wat](references/wasm.md) shows: no
      bitmask, which ARM64 has no one instruction for.
    - **Large pieces:** read through `$fill` into a 64 KiB buffer, and write large pieces with
-     `$write_all`, never a line or a byte per call: each host call costs. A read of a file gives
-     everything up to its end, so a file shorter than the buffer is one `fd_read`, where `$fill`
-     takes a second read to find the end.
+     `$write_all`, never a line or a byte per call: each host call costs. On a local disk a read
+     of a file gives everything up to its end, so a file shorter than the buffer is one
+     `fd_read`, where `$fill` takes a second read to find the end. On a network or FUSE mount a
+     read may give less, so a program that must be right there reads through `$fill`, as
+     [the host](references/host.md) says.
    - **Lookups by byte:** take each byte with `i32.load8_u` at its offset from one address,
      rather than shifting and masking a word, and lend a table's region to the function whose
      loop uses it, as an address in a parameter, so the address stays in a register.

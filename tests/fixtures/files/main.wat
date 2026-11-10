@@ -3,10 +3,11 @@
 ;; library gives $write_all. It lists the working folder a batch of entries at a time with
 ;; fd_readdir, each batch from the cookie of the last whole entry before it, as sweep does; it
 ;; opens each file with path_open, reads it to its end a 64 KiB buffer-full at a time with
-;; fd_read, and closes it. A read of a file gives every byte it asks for up to the file's end
-;; (references/host.md), so a read that gives less than a buffer-full is the file's last, and a
-;; file shorter than the buffer takes one read where $fill would take a second to find its end.
-;; Folders are neither counted nor read.
+;; fd_read, and closes it. On a local disk, where the benchmark's folders are, a read of a file
+;; gives every byte it asks for up to the file's end (references/host.md), so a read that gives
+;; less than a buffer-full is the file's last, and a file shorter than the buffer takes one read
+;; where $fill would take a second to find its end; on a network or FUSE mount a read may give
+;; less, and the program would count fewer bytes. Folders are neither counted nor read.
 (module
   (import "wasi_snapshot_preview1" "fd_readdir"
     (func $fd_readdir (param i32 i32 i32 i64 i32) (result i32)))
@@ -286,8 +287,8 @@
           (if (i32.gt_u (local.get $got) (global.get $content.size))
             (then (call $assert_fail (i32.const 13)) unreachable))
           (local.set $total (i64.add (local.get $total) (i64.extend_i32_u (local.get $got))))
-          ;; A read of a file gives every byte it asks for up to the file's end: one that doesn't
-          ;; fill the buffer has reached it.
+          ;; On a local disk a read of a file gives every byte it asks for up to the file's end:
+          ;; one that doesn't fill the buffer has reached it.
           (br_if $done (i32.lt_u (local.get $got) (global.get $content.size)))
           (local.set $left (i32.sub (local.get $left) (i32.const 1)))
           (br_if $piece (local.get $left)))

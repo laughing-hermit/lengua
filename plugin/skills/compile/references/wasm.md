@@ -97,11 +97,13 @@ follows it for the next line.
   first newline in what came, as `$find_newline` does: a newline may come before the last byte.
 - **Any length**: `stop` is -1 and `room` a whole buffer, 64 KiB. A count below the buffer's size
   is the input's last piece; a loop of buffer-fulls keeps only what crosses from one to the next.
-- **A file**: a read of a file gives every byte it asks for up to the file's end
-  ([the host](host.md)), so `fd_read` into the whole buffer, its iovec written just before the
-  call, needs no second read to find the end: a count below the buffer's size is the file's
-  last. `$fill` reads a file the same way, with one more read that gives 0 at the end, which
-  costs a call for each file where a program reads many small ones.
+- **A file**: on a local disk, a read of a regular file gives every byte it asks for up to the
+  file's end ([the host](host.md)), so `fd_read` into the whole buffer, its iovec written just
+  before the call, needs no second read to find the end: a count below the buffer's size is the
+  file's last. `$fill` reads a file the same way, with one more read that gives 0 at the end,
+  which costs a call for each file where a program reads many small ones. On a network or FUSE
+  mount a read may give fewer bytes before the end, so a program that must be right there too
+  reads through `$fill`.
 
 ## Writing with `$write_all`
 
