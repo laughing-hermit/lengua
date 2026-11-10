@@ -494,7 +494,10 @@ pub fn checked(name: &str, wasm: &[u8]) -> Result<String, String> {
             wrong.join(", ")
         ));
     }
-    for (export, kind) in [("_start", ExternalKind::Func), ("memory", ExternalKind::Memory)] {
+    for (export, kind) in [
+        ("_start", ExternalKind::Func),
+        ("memory", ExternalKind::Memory),
+    ] {
         let exported = contents
             .exports
             .iter()
@@ -603,9 +606,10 @@ pub fn check(arguments: &[String]) -> Result<u8, String> {
         return Err(USAGE.to_owned());
     };
     let wasm = std::fs::read(module).map_err(|error| format!("{module}: {error}"))?;
-    let name = Path::new(module)
-        .file_name()
-        .map_or_else(|| module.clone(), |name| name.to_string_lossy().into_owned());
+    let name = Path::new(module).file_name().map_or_else(
+        || module.clone(),
+        |name| name.to_string_lossy().into_owned(),
+    );
     ci::print_and_summarize(&checked(&name, &wasm)?)?;
     Ok(0)
 }
@@ -698,7 +702,9 @@ mod tests {
     fn the_solver_features_are_the_programs_and_exceptions() {
         let named = FEATURE_NAMES
             .iter()
-            .fold(WasmFeatures::empty(), |all, (_, feature)| all.union(*feature));
+            .fold(WasmFeatures::empty(), |all, (_, feature)| {
+                all.union(*feature)
+            });
         assert_eq!(named, SOLVER_FEATURES);
         let engine = include_str!("../../src/wasm/engine.rs");
         let start = engine

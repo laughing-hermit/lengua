@@ -28,7 +28,10 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
         "plan, format, test: {results}; golden diff: {golden}; bench-wasm: {bench}; \
          solver-wasm: {solver}; install: {install}"
     );
-    Ok(u8::from(!passed(&results, &[&golden, &bench, &solver, &install])))
+    Ok(u8::from(!passed(
+        &results,
+        &[&golden, &bench, &solver, &install],
+    )))
 }
 
 #[cfg(test)]
