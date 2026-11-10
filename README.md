@@ -140,8 +140,8 @@ Describe a program to your agent: "Use lengua to write a program that ...". Then
 3. At `done`, the agent tells you where the program is, what its idea promises, that it passed
    every test, what is proven, and any change made to the idea after your words.
 
-Run it with the `run` tool, which gives it 10 seconds by default (up to 40) and 8 MiB of output,
-in a fresh folder or in one you name. A server keeps serving in the background until `run` stops
+Run it with the `run` tool, which gives it 10 seconds by default (up to 40) and 8 MiB of each
+output stream, in a fresh folder or in one you name. A server keeps serving in the background until `run` stops
 it, ten minutes pass, or the session ends. From your own shell, scripts and services, the `done`
 reply gives the command:
 
