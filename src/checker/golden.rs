@@ -21,7 +21,7 @@
 //! The recordings aren't committed. A baseline is made on GitHub's runners: a `golden` dispatch
 //! of ci.yml with `golden_base` at the commit W11 lands on (or a later one) records this golden
 //! and the prover's ([`crate::prove`]'s golden) at that commit and at the dispatched ref, each on
-//! a runner of its own, and scripts/ci/golden-diff.sh compares them, byte for byte or as the
+//! a runner of its own, and `cargo xtask golden-diff` compares them, byte for byte or as the
 //! proofs' verdicts alone.
 
 use std::collections::{BTreeMap, BTreeSet};

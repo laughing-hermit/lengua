@@ -43,10 +43,13 @@ Tasks:
   plugin              the server built into plugin/server/
   release [<target>]  this computer's release archive, in dist/
   release-check       the release check, built into dist/check/
+  bench-wasm <folder> the bench's C, C++ and Rust compiled to WebAssembly (WASI_SDK)
   bench               the gate against C, C++ and Rust (LENGUA_BENCH_*)
   bench-report <report>
                       the bench's report, in the job's summary
   golden-download     both commits' recordings (RUN, BASE_RUN)
+  golden-diff raw|ledger <base dir> <head dir>
+                      the two commits' recordings compared, in the job's summary
   gate                whether the run passed (RESULTS, GOLDEN_DIFF, BENCH_WASM, INSTALL)
   help                this list";
 
@@ -69,9 +72,11 @@ fn main() -> ExitCode {
         "plugin" => plugin::task(rest),
         "release" => release::task(rest),
         "release-check" => release::check(rest),
+        "bench-wasm" => bench::wasm(rest),
         "bench" => bench::bench(rest),
         "bench-report" => bench::report(rest),
         "golden-download" => golden::download(rest),
+        "golden-diff" => golden::diff(rest),
         "gate" => gate::task(rest),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");

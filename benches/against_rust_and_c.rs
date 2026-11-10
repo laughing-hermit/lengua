@@ -3,7 +3,7 @@
 //!
 //! A workload has lengua's program, its folder in `PROGRAMS`, which the bench takes from its
 //! idea to done as an agent does, and six other versions from benches/programs/<workload>: C,
-//! C++ and Rust compiled to WebAssembly by scripts/ci/bench-wasm.sh (once, on linux-x86_64, for
+//! C++ and Rust compiled to WebAssembly by `cargo xtask bench-wasm` (once, on linux-x86_64, for
 //! every runner), and the same three built natively here with this system's own compilers. Every
 //! version gets the same arguments, input and files and must give the same output, which is
 //! checked before anything is measured. Each runs as people run it, in a process of its own,
@@ -1369,7 +1369,7 @@ fn native(
     })
 }
 
-/// The WebAssembly builds of workload `name`, from `folder`, as bench-wasm.sh made them.
+/// The WebAssembly builds of workload `name`, from `folder`, as `cargo xtask bench-wasm` made them.
 fn modules(folder: &Path, name: &str, toolchains: &BTreeMap<String, String>) -> Vec<Made> {
     let mut made = Vec::new();
     for (language, _) in LANGUAGES {
@@ -1383,7 +1383,7 @@ fn modules(folder: &Path, name: &str, toolchains: &BTreeMap<String, String>) -> 
             })
         } else {
             Err(format!(
-                "no module {}: scripts/ci/bench-wasm.sh builds it, in the folder that \
+                "no module {}: cargo xtask bench-wasm builds it, in the folder that \
                  LENGUA_BENCH_WASM names",
                 module.display()
             ))
@@ -1777,7 +1777,8 @@ fn cpu_model() -> String {
     setting("PROCESSOR_IDENTIFIER").unwrap_or_else(|| "a CPU the system doesn't name".to_owned())
 }
 
-/// The WebAssembly builds' compilers and flags, from bench-wasm.sh's toolchains.tsv in `folder`.
+/// The WebAssembly builds' compilers and flags, from toolchains.tsv in `folder` (which
+/// `cargo xtask bench-wasm` writes).
 fn wasm_toolchains(folder: &Path) -> BTreeMap<String, String> {
     let text = std::fs::read_to_string(folder.join("toolchains.tsv")).unwrap_or_default();
     let mut toolchains = BTreeMap::new();

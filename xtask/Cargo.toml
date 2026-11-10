@@ -13,6 +13,9 @@ publish = false
 [dependencies]
 # gzip, with its pure-Rust backend: wasi-sdk's tar.gz, and the release's.
 flate2 = "1.1"
+# The goldens' expected lines and their ledger, and the raw view's unified diff.
+regex = "1"
+similar = "3"
 # HTTPS for the downloads: rustls with ring, and Mozilla's roots, as lengua-mcp has them.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"

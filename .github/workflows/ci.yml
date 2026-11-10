@@ -189,7 +189,7 @@ jobs:
 
   # A bench's C, C++ and Rust compiled to WebAssembly once, with wasi-sdk (pinned in
   # xtask/tools.tsv) and Rust's wasm32-wasip1 target, and kept for every runner's bench, which
-  # measures the same modules (scripts/ci/bench-wasm.sh). It runs only when a bench does.
+  # measures the same modules (`cargo xtask bench-wasm`). It runs only when a bench does.
   bench-wasm:
     name: bench-wasm
     needs: plan
@@ -214,7 +214,7 @@ jobs:
         run: cargo xtask fetch linux-x86_64 wasi
 
       - name: The modules
-        run: bash scripts/ci/bench-wasm.sh target/bench-wasm
+        run: cargo xtask bench-wasm target/bench-wasm
 
       # A run's every attempt keeps one set, the last built.
       - name: Keep the modules
@@ -438,7 +438,7 @@ jobs:
           if-no-files-found: ignore
 
   # The goldens recorded at the dispatched ref and at the base, compared: byte for byte (raw) or
-  # as the proofs' verdicts alone (ledger); see scripts/ci/golden-diff.sh.
+  # as the proofs' verdicts alone (ledger); see `cargo xtask golden-diff` (xtask/src/golden.rs).
   golden-diff:
     name: golden diff
     needs: test
@@ -464,12 +464,11 @@ jobs:
           BASE_RUN: ${{ inputs.golden_base_run }}
         run: cargo xtask golden-download
 
-      # `shell: bash` runs with pipefail, so that the script's exit decides the job and not tee's.
+      # What it finds goes to the log and to the job's summary; its exit decides the job.
       - name: Compare
-        shell: bash
         env:
           VIEW: ${{ inputs.golden_view }}
-        run: bash scripts/ci/golden-diff.sh "$VIEW" golden/base golden/head | tee -a "$GITHUB_STEP_SUMMARY"
+        run: cargo xtask golden-diff "$VIEW" golden/base golden/head
 
   # Each runner's release archive installed on a clean runner of its own system and CPU, as a
   # user installs it: nothing of lengua's set up first (no checkout, no Rust, no solvers). The
