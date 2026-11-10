@@ -156,7 +156,7 @@ The review is [docs/reviews/host-2026-11-10.md](docs/reviews/host-2026-11-10.md)
 checked program, or a folder someone hands the user, can reach more than the idea grants. It
 found the host's core sound and eleven holes around it. Each got a test that failed first (run
 42904330205, on Linux on x86-64: all 19 new tests failed) and then its fix (42907709201: they
-pass). What each
+pass; the suite on Linux on x86-64, 42911144089, and on all five systems, 42914865765). What each
 fix costs a user:
 1. **The working folder** of a program that uses files is never lengua's data folder, its folder
    of compiled modules, a folder that holds one of them or lies inside one, nor, on Linux,
