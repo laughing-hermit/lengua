@@ -399,7 +399,8 @@ pub fn resident_bytes(pid: u32) -> Result<u64, String> {
     };
 
     // SAFETY: the call takes no pointer; it gives a new handle, or null.
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid) };
+    let handle =
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid) };
     if handle.is_null() {
         return Err(format!("OpenProcess: {}", std::io::Error::last_os_error()));
     }
@@ -430,8 +431,12 @@ mod macos {
         pub(super) fn mach_host_self() -> u32;
         /// `host_statistics64`: the counters of one flavor, written to `info` as 32-bit
         /// integers, at most `count` of them; `count` becomes how many it wrote.
-        pub(super) fn host_statistics64(host: u32, flavor: i32, info: *mut u32, count: *mut u32)
-        -> i32;
+        pub(super) fn host_statistics64(
+            host: u32,
+            flavor: i32,
+            info: *mut u32,
+            count: *mut u32,
+        ) -> i32;
     }
 }
 
@@ -505,8 +510,7 @@ pub fn resident_bytes(pid: u32) -> Result<u64, String> {
     let mut record = [0_u64; 12];
     // SAFETY: `record` is 96 bytes aligned to 8, of this frame, which is what the first flavor
     // writes; the call writes nothing else.
-    let status =
-        unsafe { libc::proc_pid_rusage(pid, RUSAGE_INFO_V0, record.as_mut_ptr().cast()) };
+    let status = unsafe { libc::proc_pid_rusage(pid, RUSAGE_INFO_V0, record.as_mut_ptr().cast()) };
     if status != 0 {
         return Err(format!(
             "proc_pid_rusage: {}",

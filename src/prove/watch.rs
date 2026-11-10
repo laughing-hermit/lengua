@@ -309,7 +309,10 @@ mod tests {
     #[test]
     fn reads_this_computers_memory() {
         let (available, total) = memory().expect("this computer's memory");
-        assert!(available > 0 && available <= total, "{available} of {total}");
+        assert!(
+            available > 0 && available <= total,
+            "{available} of {total}"
+        );
         assert_eq!(floor(8 << 30), 512 << 20);
         assert_eq!(floor(32 << 30), 2 << 30);
         assert!(workers(16) >= 1);
