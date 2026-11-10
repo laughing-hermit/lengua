@@ -7,9 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use wasmtime::{Engine, Linker, Module, Store, UpdateDeadline, WasmBacktrace};
@@ -519,8 +519,6 @@ pub struct Here<'a> {
     pub listen: Option<(u16, bool)>,
     /// The connections lengua makes for it, in order.
     pub connections: &'a [job::Made],
-    /// Where compiled modules are kept.
-    pub cache: Option<&'a Path>,
     /// What places a trap on its line of main.wat.
     pub source: Source<'a>,
 }
@@ -542,32 +540,136 @@ pub enum Source<'a> {
     },
 }
 
+/// What a run's checks hand the program's thread once they pass ([`run_once_checked`]): the
+/// module that runs and what it is given, which the thread reads through a shared reference.
+pub trait Order: Send + Sync {
+    /// The module's bytes.
+    fn wasm(&self) -> &[u8];
+
+    /// What the module is given.
+    fn here(&self) -> Here<'_>;
+}
+
+/// A module and what it is given, handed over as they are: [`run_here`]'s order, which no checks
+/// come before.
+struct Given<'a> {
+    /// The module's bytes.
+    wasm: &'a [u8],
+    /// What it is given.
+    here: Here<'a>,
+}
+
+impl Order for Given<'_> {
+    fn wasm(&self) -> &[u8] {
+        self.wasm
+    }
+
+    fn here(&self) -> Here<'_> {
+        self.here
+    }
+}
+
 /// Runs the module `wasm` here, attached to this process's own streams, as `lengua-mcp run` does
-/// from a shell, on a thread of its own: how it ended. Everything happens on that thread, outside
-/// any async runtime the caller is in, since the connections lengua makes to places have a
-/// runtime of their own.
+/// from a shell, on a thread of its own, with compiled modules kept in `cache`: how it ended. It
+/// is [`run_once_checked`] with nothing to check.
 ///
 /// # Errors
 ///
 /// When the module can't be compiled or given what it asks, or this process can't hold the files
 /// it may.
-pub fn run_here(wasm: &[u8], here: &Here<'_>) -> io::Result<End> {
-    make_room().map_err(io::Error::other)?;
-    let joined = std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .name("lengua program".to_owned())
-            .stack_size(STACK)
-            .spawn_scoped(scope, || run_on_this_thread(wasm, here))
-            .map(|running| running.join())
-    })?;
-    joined.map_err(|_| io::Error::other("the program's thread failed"))?
+pub fn run_here(wasm: &[u8], here: &Here<'_>, cache: Option<&Path>) -> io::Result<End> {
+    run_once_checked(cache, || Ok(Given { wasm, here: *here }))
+        .unwrap_or_else(|why| Err(io::Error::other(why)))
 }
 
-/// [`run_here`]'s work, on the program's own thread.
-fn run_on_this_thread(wasm: &[u8], here: &Here<'_>) -> io::Result<End> {
-    let engine = crate::wasm::engine::engine(Setup::Shell, here.cache).map_err(io::Error::other)?;
+/// Runs a module here as [`run_here`] does, once `checks`, on the caller's thread, give it: the
+/// program's thread starts first, and makes the engine, with compiled modules kept in `cache`,
+/// and its linker while the checks run, so the engine's start and the checks take their time
+/// side by side, on each path that runs a module this way. It compiles nothing until the checks
+/// pass: nothing is compiled, instantiated or run before then, a run they refuse ends the thread
+/// with nothing compiled, and making the engine reads nothing of the program's. Where `cache`
+/// names a folder that isn't there yet, the engine waits for the checks too, so a run they
+/// refuse makes no folder. Everything that runs the module happens on that thread, outside any
+/// async runtime the caller is in, since the connections lengua makes to places have a runtime
+/// of their own.
+///
+/// # Errors
+///
+/// The checks' refusal, as they say it. Inside, how the run went, or why it couldn't: the module
+/// can't be compiled or given what it asks, or this process can't hold the files it may.
+pub fn run_once_checked<O: Order>(
+    cache: Option<&Path>,
+    checks: impl FnOnce() -> Result<O, String>,
+) -> Result<io::Result<End>, String> {
+    let order: OnceLock<Option<O>> = OnceLock::new();
+    let (refused, ended) = std::thread::scope(|scope| {
+        let given = &order;
+        let program = std::thread::Builder::new()
+            .name("lengua program".to_owned())
+            .stack_size(STACK)
+            .spawn_scoped(scope, move || {
+                let early = cache.is_none_or(Path::is_dir).then(|| prepared(cache));
+                let checked = given.wait().as_ref()?;
+                let made = early.unwrap_or_else(|| prepared(cache));
+                Some(made.and_then(|(engine, linker)| {
+                    run_on_this_thread(&engine, &linker, checked.wasm(), &checked.here())
+                }))
+            });
+        // Whatever the checks come to, a panic too, the program's thread hears of it, so it
+        // never waits for ever.
+        let release = Release(given);
+        let refused = match checks() {
+            Ok(checked) => {
+                let _ = given.set(Some(checked));
+                None
+            }
+            Err(why) => Some(why),
+        };
+        drop(release);
+        let ended = program.and_then(|running| {
+            running
+                .join()
+                .map_err(|_| io::Error::other("the program's thread failed"))
+        });
+        (refused, ended)
+    });
+    match (refused, ended) {
+        (Some(why), _) => Err(why),
+        (None, Ok(Some(ended))) => Ok(ended),
+        (None, Ok(None)) => Ok(Err(io::Error::other("the program's thread failed"))),
+        (None, Err(error)) => Ok(Err(error)),
+    }
+}
+
+/// Gives a run's program thread no order when it is dropped, unless the checks gave it one: on
+/// a panic in the checks too, so the thread never waits for ever.
+struct Release<'a, O>(&'a OnceLock<Option<O>>);
+
+impl<O> Drop for Release<'_, O> {
+    fn drop(&mut self) {
+        let _ = self.0.set(None);
+    }
+}
+
+/// What the program's thread prepares before it compiles a module: room for the files a program
+/// may hold, the engine for a run from a shell, with compiled modules kept in `cache`, and its
+/// linker. None of it reads anything of the program's.
+fn prepared(cache: Option<&Path>) -> io::Result<(Engine, Linker<Host>)> {
+    make_room().map_err(io::Error::other)?;
+    let engine = crate::wasm::engine::engine(Setup::Shell, cache).map_err(io::Error::other)?;
     let linker = crate::wasm::host::linker(&engine).map_err(io::Error::other)?;
-    let module = Module::from_binary(&engine, wasm).map_err(io::Error::other)?;
+    Ok((engine, linker))
+}
+
+/// [`run_once_checked`]'s work, on the program's own thread, once the checks pass: `wasm` run
+/// with what `here` gives, in `engine`, through `linker`.
+fn run_on_this_thread(
+    engine: &Engine,
+    linker: &Linker<Host>,
+    wasm: &[u8],
+    here: &Here<'_>,
+) -> io::Result<End> {
+    let module = Module::from_binary(engine, wasm).map_err(io::Error::other)?;
     let mut connections = Vec::new();
     for made in here.connections {
         let (link, problem) = connect(&made.connection);
@@ -626,8 +728,8 @@ fn run_on_this_thread(wasm: &[u8], here: &Here<'_>) -> io::Result<End> {
         events: None,
     };
     let executed = execute(
-        &engine,
-        &linker,
+        engine,
+        linker,
         &module,
         Setup::Shell,
         Host::new(world),
@@ -684,17 +786,62 @@ mod tests {
                 policy: Policy::default(),
                 listen: None,
                 connections: &[],
-                cache: None,
                 source: Source::Text {
                     text: TRAPS,
                     module,
                 },
             };
-            run_here(&built.wasm, &here).expect("it runs")
+            run_here(&built.wasm, &here, None).expect("it runs")
         };
         let module = Sha256Hex::of(&built.wasm);
         assert_eq!(ended(&module), End::Trapped(Trap::Unreachable, Some(4)));
         let other = Sha256Hex::of(b"another module");
         assert_eq!(ended(&other), End::Trapped(Trap::Unreachable, None));
+    }
+
+    /// A main.wat whose `_start` exits with code 3.
+    const EXITS: &str = "(module\n  (import \"wasi_snapshot_preview1\" \"proc_exit\" (func $exit \
+                         (param i32)))\n  (memory (export \"memory\") 1)\n  (func (export \
+                         \"_start\")\n    (call $exit (i32.const 3))))\n";
+
+    /// A run whose checks pass runs what they give; one they refuse gives their refusal, runs
+    /// nothing, and makes no cache folder that wasn't there; and a panic in the checks comes back
+    /// as the caller's, its program's thread ended, not waiting for ever. (The engine for a run
+    /// from a shell is the process's, made at its first use, so the runs that pass keep no
+    /// cache, as every other test's do.)
+    #[test]
+    fn a_run_runs_only_once_its_checks_pass() {
+        let built = crate::wasm::text::build(EXITS).expect("it builds");
+        let folder = tempfile::tempdir().expect("a folder");
+        let args: Vec<String> = Vec::new();
+        let env: BTreeMap<String, String> = BTreeMap::new();
+        let here = Here {
+            args: &args,
+            env: &env,
+            folder: folder.path(),
+            policy: Policy::default(),
+            listen: None,
+            connections: &[],
+            source: Source::Built(&built),
+        };
+        let cache = folder.path().join("cache");
+        let refused = run_once_checked(Some(cache.as_path()), || {
+            Err::<Given<'_>, _>("lengua won't run it".to_owned())
+        });
+        assert_eq!(refused.err().as_deref(), Some("lengua won't run it"));
+        assert!(!cache.exists(), "a refused run made the cache's folder");
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_once_checked::<Given<'_>>(None, || panic!("the checks failed"))
+        }));
+        assert!(panicked.is_err(), "the checks' panic came back");
+        let ran = run_once_checked(None, || {
+            Ok(Given {
+                wasm: &built.wasm,
+                here,
+            })
+        });
+        assert!(matches!(ran, Ok(Ok(End::Exited(3)))), "{ran:?}");
+        let again = run_here(&built.wasm, &here, None);
+        assert!(matches!(again, Ok(End::Exited(3))), "{again:?}");
     }
 }

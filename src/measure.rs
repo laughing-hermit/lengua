@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 use crate::data_dir::DataDir;
 use crate::runner::{End, Limits};
 use crate::wasm::Policy;
-use crate::wasm::runner::{Here, Source, run_here};
+use crate::wasm::runner::{Here, Order, Source, run_once_checked};
 
 /// The hidden flag that starts this binary as the runner of one WebAssembly module, which
 /// `measure` gives the module's run after it, as JSON.
@@ -863,31 +863,62 @@ pub fn run_module(spec: &str) -> i32 {
     }
 }
 
-/// [`run_module`]'s work.
+/// A module of any toolchain, read, with what its words allow: what [`module_run`] hands its
+/// program's thread.
+struct ModuleOrder<'r> {
+    /// The run, as `measure` gave it.
+    run: &'r ModuleRun,
+    /// The module's bytes.
+    wasm: Vec<u8>,
+    /// What its `uses` and `network` words allow.
+    policy: Policy,
+    /// The port it serves on, if it serves, and whether every address may reach it.
+    listen: Option<(u16, bool)>,
+}
+
+impl Order for ModuleOrder<'_> {
+    fn wasm(&self) -> &[u8] {
+        &self.wasm
+    }
+
+    fn here(&self) -> Here<'_> {
+        Here {
+            args: &self.run.args,
+            env: &self.run.env,
+            folder: &self.run.folder,
+            policy: self.policy,
+            listen: self.listen,
+            connections: &[],
+            source: Source::Unknown,
+        }
+    }
+}
+
+/// [`run_module`]'s work: the engine starts while the module is read and its words turned into
+/// what it may reach, as it starts while `lengua-mcp run` checks a program.
 fn module_run(spec: &str) -> Result<i32, String> {
     let run: ModuleRun = serde_json::from_str(spec)
         .map_err(|error| format!("the module's run can't be read: {error}"))?;
-    let wasm = std::fs::read(&run.module)
-        .map_err(|error| format!("can't read {}: {error}", run.module.display()))?;
-    let words: Vec<&str> = run.uses.iter().map(String::as_str).collect();
-    let (uses, network) = crate::idea::constraints(&words, &run.network).map_err(|problems| {
-        problems
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ")
+    let ended = run_once_checked(run.cache.as_deref(), || {
+        let wasm = std::fs::read(&run.module)
+            .map_err(|error| format!("can't read {}: {error}", run.module.display()))?;
+        let words: Vec<&str> = run.uses.iter().map(String::as_str).collect();
+        let (uses, network) =
+            crate::idea::constraints(&words, &run.network).map_err(|problems| {
+                problems
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })?;
+        Ok(ModuleOrder {
+            run: &run,
+            wasm,
+            policy: Policy::of(&uses, &network),
+            listen: network.listens.map(|port| (port, network.serves_anywhere)),
+        })
     })?;
-    let here = Here {
-        args: &run.args,
-        env: &run.env,
-        folder: &run.folder,
-        policy: Policy::of(&uses, &network),
-        listen: network.listens.map(|port| (port, network.serves_anywhere)),
-        connections: &[],
-        cache: run.cache.as_deref(),
-        source: Source::Unknown,
-    };
-    match run_here(&wasm, &here).map_err(|error| format!("couldn't run the module: {error}"))? {
+    match ended.map_err(|error| format!("couldn't run the module: {error}"))? {
         End::Exited(code) => Ok(code),
         trapped @ End::Trapped(..) => {
             eprintln!(

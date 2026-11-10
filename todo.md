@@ -205,7 +205,9 @@ Each can be reversed.
   it, or main.wat built again where none is kept); C, C++ and Rust's modules in
   lengua's host through `lengua-mcp measure`, with the same engine and the same cache of compiled
   modules, the policy from the words of lengua's program's idea, and memory that may grow to
-  4 GiB, as lengua's host holds a module to the maximum it declares. The native builds use each
+  4 GiB, as lengua's host holds a module to the maximum it declares. On both paths the engine
+  starts on the program's thread while the caller reads what runs, lengua's checks or a module's
+  file and words, and compiles nothing before they end (W12c). The native builds use each
   system's own compilers: GCC on Linux, Apple's clang on macOS, LLVM's clang on Windows, rustc
   everywhere, each for this CPU with link-time optimization, falling back to a CPU flag every
   runner of its kind has where the compiler doesn't take `native`.
