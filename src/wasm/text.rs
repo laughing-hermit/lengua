@@ -330,12 +330,12 @@ fn own_imports<'a>(fields: &[ModuleField<'a>]) -> BTreeMap<&'a str, Id<'a>> {
                 ImportItems::Single { module, name, sig }
                     if matches!(sig.kind, ItemKind::Func(_)) =>
                 {
-                    keep(*module, *name, sig.id);
+                    keep(module, name, sig.id);
                 }
                 ImportItems::Group1 { module, items } => {
                     for item in items {
                         if matches!(item.sig.kind, ItemKind::Func(_)) {
-                            keep(*module, item.name, item.sig.id);
+                            keep(module, item.name, item.sig.id);
                         }
                     }
                 }
