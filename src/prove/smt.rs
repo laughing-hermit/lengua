@@ -141,9 +141,7 @@ impl Found {
     #[must_use]
     pub fn program(&self) -> Program {
         match self {
-            Self::Beside(path) | Self::OnPath(path) => {
-                Program::Native(path.as_os_str().to_owned())
-            }
+            Self::Beside(path) | Self::OnPath(path) => Program::Native(path.as_os_str().to_owned()),
             Self::ModuleBeside(module) | Self::ModuleNamed(module) => Program::Wasm {
                 host: host(),
                 module: module.clone(),

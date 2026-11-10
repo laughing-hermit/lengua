@@ -34,8 +34,7 @@ fn stand_in(folder: &Path) -> PathBuf {
         panic!("the stand-in isn't a module");
     };
     let path = folder.join("stand-in.wasm");
-    std::fs::write(&path, module.encode().expect("the module's bytes"))
-        .expect("the module's file");
+    std::fs::write(&path, module.encode().expect("the module's bytes")).expect("the module's file");
     path
 }
 

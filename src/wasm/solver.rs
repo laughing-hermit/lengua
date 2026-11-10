@@ -128,9 +128,7 @@ fn parse(mut words: impl Iterator<Item = OsString>) -> Result<Order, String> {
                 word.to_string_lossy()
             ));
         }
-        cache = Some(PathBuf::from(
-            words.next().ok_or("--cache needs a folder")?,
-        ));
+        cache = Some(PathBuf::from(words.next().ok_or("--cache needs a folder")?));
     }
     let args = words
         .map(|word| {
@@ -393,7 +391,10 @@ mod tests {
     /// The exit code and the words of each end: a solver's own exit says nothing.
     #[test]
     fn each_end_has_its_code_and_words() {
-        assert_eq!((Ended::Exited(3).code(), Ended::Exited(3).said()), (3, None));
+        assert_eq!(
+            (Ended::Exited(3).code(), Ended::Exited(3).said()),
+            (3, None)
+        );
         assert_eq!(Ended::Uncaught.code(), TRAPPED);
         let trapped = Ended::Trapped(Trap::StackOverflow);
         assert_eq!(trapped.code(), TRAPPED);
