@@ -536,6 +536,10 @@ const HELD_TO_TIME: [&str; 2] = ["sort-large", "tally"];
 /// The time each proof of [`HELD_TO_TIME`] gets in the test below, in seconds.
 const SHORT_SECONDS: u64 = 5;
 
+/// The longest a program of [`HELD_TO_TIME`] may take in the test below, in seconds: GitHub's
+/// runners took 40 for the two (run 42846675507).
+const LONGEST_SECONDS: u64 = 300;
+
 /// A proof ends with its budget: every block of the programs in [`HELD_TO_TIME`], its samples
 /// run and its proofs made with [`SHORT_SECONDS`] each, is done in minutes, where one of them
 /// once ran for hours past a budget of 300 seconds.
@@ -552,6 +556,12 @@ fn a_proof_ends_within_its_budget() {
         record_program(&program, SHORT_SECONDS, &mut recording);
         eprintln!("{}: {:.1} s", program.name, began.elapsed().as_secs_f64());
         assert!(recording.contains(" proofs: "), "{recording}");
+        assert!(
+            began.elapsed() < Duration::from_secs(LONGEST_SECONDS),
+            "{} took {:?}",
+            program.name,
+            began.elapsed()
+        );
     }
 }
 
