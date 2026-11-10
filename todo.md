@@ -92,6 +92,49 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 | 6. Truthful documents | Describe the native lengua | W15 |
 | 7. Shippable | Native archives for two Linux targets | W14 |
 
+## Still open (2026-11-09)
+
+### Where C, C++ and Rust still win
+
+- Raw speed against native builds. lengua runs in WebAssembly, so a native C, C++ or Rust build
+  is 1.1 to 7 times faster. That gap is published, not hidden.
+- Programs lengua can't express yet: threads, GUIs, network connections a program opens on its
+  own, and UDP.
+- A few workloads: tally, sort and histogram, where lengua's own programs are slower; W12c is on
+  those now. lengua also uses about 1 MiB more memory per run, the last of run's own overhead.
+
+In short, lengua trades some raw speed for guarantees none of those languages make: the program
+is proven against a readable spec, holds only the permissions it declares, and can't corrupt
+memory.
+
+### What the safety filter stopped, still the owner's
+
+Each was stopped once or more, recorded below under "Stopped by the safety filter", and never
+retried, reworded or passed to another model:
+- **Tests that try to get past the sandbox on macOS and Windows** (stopped 2026-11-05, after
+  three stops near that ground). ROADMAP's bypass cells and the spikes' checks of what the sandbox
+  refuses are left for the owner or another engineer.
+- **A soundness review of the secret rule** (W10, stopped 2026-11-07). The rule over main.wat
+  stands and its tests pass, but no review has confirmed it can't be fooled.
+- **Constant time in the engine's machine code** (W13, stopped 2026-11-07). The secret rule
+  holds main.wat; the machine code Wasmtime compiles from it is trusted for timing. The tag
+  `native-final` keeps the decoders such a check would use.
+
+Earlier stops (2026-10-31 to 2026-11-04) left nothing open: their items were done with the
+owner's permission, or their topics left alone.
+
+### What the permission checks refused
+
+Claude Code's permission checks refused these actions. Each refusal was taken as given, with
+nothing to route around it:
+- **Force-pushing rebased branches** (2026-11-07), as a destructive git action. Rebased work went
+  up under new branch names, or main came in through merge commits. At the end, only main
+  remains (W16).
+- **`python3 --version`** in a command one of W12b's agents wrote (2026-11-09). It never ran:
+  this computer runs no interpreter.
+- **A broad delete with `rm -rf` on a glob** (2026-11-07). It wasn't needed: a fresh folder was
+  used instead.
+
 ## Decisions made during the pivot, for the owner to review
 
 The owner was away while these were made (2026-11-06: "im not going to check up on you anymore").
