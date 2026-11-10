@@ -329,10 +329,9 @@ natively on all five runners (run 42760180544); among its tests, every program o
 and `tests/fixtures` goes from its request to done. W17a, lengua's tooling in Rust, passed the
 suite on all five runners (run 42753840475), and built each runner's archive, then installed and
 checked it on a clean runner of its own system and CPU (run 42753851417). In an interactive
-Claude Code session, the agent
-followed the Linux on x86-64 archive's two skills and drove its `lengua-mcp` as the MCP client,
-from a request to done; loading the plugin into Claude Code itself is left for the owner
-([todo.md](todo.md), W14's test).
+Claude Code session, the agent followed the Linux on x86-64 archive's two skills and drove its
+`lengua-mcp` as the MCP client, from a request to done; loading the plugin into Claude Code
+itself is left for the owner ([todo.md](todo.md), W14's test).
 
 The finish line, seven points in [todo.md](todo.md), isn't reached. The gate doesn't pass yet on
 any runner; `check` doesn't yet compile each module ahead of time for the machine's CPU; and this
