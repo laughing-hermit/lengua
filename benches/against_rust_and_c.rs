@@ -266,11 +266,14 @@ fn workload(name: &str) -> Option<Workload> {
                  8 bytes, its start below 4 bytes of the line as a key that compares as one \
                  number, and orders the records in place with a multikey quicksort without \
                  recursion, whose two splits around a median of three keys take no branch on a \
-                 record, and whose lines that are the same as the pivot go on with their next 4 \
-                 bytes; it prints the lines 16 bytes a step with SIMD128, written by hand. C \
-                 sorts with its C library's qsort (wasi-libc's in WebAssembly), C++ with \
-                 std::sort and Rust with sort_unstable, each comparing lines with its library's \
-                 memcmp or comparison of slices. Every version prints through a 64 KiB buffer.",
+                 record, whose lines that are the same as the pivot go on with their next 4 \
+                 bytes, and which sorts a part with a heap sort once it has been split below or \
+                 above a pivot more than twice as many times as the lines' count has bits, as \
+                 introsort does; it prints the lines 16 bytes a step with SIMD128, written by \
+                 hand. C sorts with its C library's qsort (wasi-libc's in WebAssembly), C++ \
+                 with std::sort and Rust with sort_unstable, each comparing lines with its \
+                 library's memcmp or comparison of slices. Every version prints through a 64 KiB \
+                 buffer.",
             )
         },
         "tally" => Workload {
