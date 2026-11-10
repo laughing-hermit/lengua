@@ -271,10 +271,12 @@ jobs:
       # The base predates some of the task crate the steps below run (a base leg needs the full
       # history, which brings the dispatched commit with it), so the leg runs the base's code with
       # the dispatched ref's Rust and task crate: the crate checked out beside the base, where
-      # `cargo xtask` builds and runs it on the base's folder.
+      # `cargo xtask` builds and runs it on the base's folder. The two files the solvers' cache
+      # key hashes come into the base's folder too, so that both legs' key names the pins the
+      # dispatched ref's crate installs (the base leg builds only the base's lengua-mcp).
       - name: The dispatched ref's task crate
         if: ${{ matrix.ref != '' }}
-        run: git checkout ${{ github.sha }} -- rust-toolchain.toml && git worktree add "$RUNNER_TEMP/tooling" ${{ github.sha }} && echo "CARGO_ALIAS_XTASK=run --locked --manifest-path $RUNNER_TEMP/tooling/Cargo.toml --package xtask --" >> "$GITHUB_ENV"
+        run: git checkout ${{ github.sha }} -- rust-toolchain.toml xtask/tools.tsv xtask/src/fetch.rs && git worktree add "$RUNNER_TEMP/tooling" ${{ github.sha }} && echo "CARGO_ALIAS_XTASK=run --locked --manifest-path $RUNNER_TEMP/tooling/Cargo.toml --package xtask --" >> "$GITHUB_ENV"
 
       # Rust as rust-toolchain.toml pins it, which rustup installs when it first runs here; rustup
       # itself where an image lacks it.
@@ -301,7 +303,11 @@ jobs:
           key: ci-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: ci-${{ matrix.target }}-
 
+      # The runner's facts, in the log and the summary: they decide nothing, so a task crate that
+      # doesn't build here stops nothing either, and clippy still says what doesn't build, every
+      # crate's at once.
       - name: The machine
+        continue-on-error: true
         run: cargo xtask machine ${{ matrix.target }}
 
       # The solvers are kept between runs. A release doesn't need them: the archive brings its own,
@@ -520,12 +526,13 @@ jobs:
       # --prefix` refuse to replace a lengua folder that isn't lengua's; installs it with
       # `lengua-mcp install` where it installs for any user, which ends with doctor, whose exit
       # code it keeps; then runs doctor and checks the installed plugin through a plain MCP client
-      # (tests/release_check.rs, which also holds this step to its name).
+      # (tests/release_check.rs, which also holds this step to its name). Its last line says it
+      # passed: the step holds it to that line, as a run that matched no test passes too.
       - name: Unpacked, installed and checked as a user does
         env:
           LENGUA_RELEASE: downloaded
           CHECK: downloaded/release-check${{ runner.os == 'Windows' && '.exe' || '' }}
-        run: chmod +x "$CHECK" && "$CHECK" --ignored --exact the_archive_works_as_a_user_gets_it --nocapture 2>&1 | tee release-check.log
+        run: 'chmod +x "$CHECK" && "$CHECK" --ignored --exact the_archive_works_as_a_user_gets_it --nocapture 2>&1 | tee release-check.log && grep -q "^release check: ${{ matrix.target }} passed" release-check.log'
 
       - name: Keep the release check's log
         if: always()

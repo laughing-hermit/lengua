@@ -396,8 +396,9 @@ fn any_line(lines: &Value, needle: &str) -> bool {
 }
 
 /// CI's install job runs this check, by its name, on the archive it downloaded, which
-/// `LENGUA_RELEASE` names: with the test or the variable renamed, the job would pass having
-/// checked nothing.
+/// `LENGUA_RELEASE` names, and holds it to its last line, which says it passed: with the test or
+/// the variable renamed, or with `--ignored` matching no test (as without the test's `#[ignore]`),
+/// the job would pass having checked nothing.
 #[test]
 fn the_install_job_runs_this_check() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/ci.yml");
@@ -407,14 +408,19 @@ fn the_install_job_runs_this_check() {
         .as_array()
         .expect("the install job's steps");
     let exact = format!("--exact {CHECK} ");
+    let passed = "grep -q \"^release check: ${{ matrix.target }} passed\" release-check.log";
     let runs = steps.iter().any(|step| {
-        let named = step["run"].as_str().is_some_and(|run| run.contains(&exact));
+        let named = step["run"]
+            .as_str()
+            .is_some_and(|run| run.contains(&exact) && run.contains(passed));
         named && step["env"]["LENGUA_RELEASE"].is_string()
     });
-    assert!(runs, "the install job doesn't run {CHECK}");
+    assert!(runs, "the install job doesn't run {CHECK} to its last line");
     let source = include_str!("release_check.rs");
     let defined = format!("async fn {CHECK}()");
     assert!(source.contains(&defined), "no test here is {CHECK}");
+    let last = "println!(\"release check: {} passed\", target());";
+    assert!(source.contains(last), "{CHECK} doesn't say that it passed");
 }
 
 #[tokio::test]
