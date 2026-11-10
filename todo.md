@@ -118,16 +118,34 @@ memory.
 
 ### What the safety filter stopped, still the owner's
 
-Each was stopped once or more, recorded below under "Stopped by the safety filter", and never
-retried, reworded or passed to another model:
+Each was stopped once or more, recorded below under "Stopped by the safety filter", and not
+retried, reworded or passed to another model. On 2026-11-10 the owner changed the model to Fable
+5.2 themselves and said of these three: "yes try them". Each gets one try; one stopped again is
+recorded and left.
 - **Tests that try to get past the sandbox on macOS and Windows** (stopped 2026-11-05, after
   three stops near that ground). ROADMAP's bypass cells and the spikes' checks of what the sandbox
-  refuses are left for the owner or another engineer.
-- **A soundness review of the secret rule** (W10, stopped 2026-11-07). The rule over main.wat
-  stands and its tests pass, but no review has confirmed it can't be fooled.
+  refuses are left for the owner or another engineer. Not tried again yet.
+- **A soundness review of the secret rule** (W10, stopped 2026-11-07). **Done on 2026-11-10**:
+  the review is [docs/reviews/secret-rule-2026-11-10.md](docs/reviews/secret-rule-2026-11-10.md).
+  It found the rule unsound in five places, each then shown by a test that failed (42877251634)
+  and fixed (42881405730; the suite on Linux on x86-64, 42884257361):
+  - a fill or a copy of a length that varies made bytes public that it may not write;
+  - a secret written to a file or sent to a peer was public when read back;
+  - an access the memory rules leave to the proof was taken to stay in its region;
+  - a secret stored outside every region was not followed;
+  - the count of one `fd_read` of a secret standard input, which shows where its lines end, was
+    public.
+  Still open from it, for the owner:
+  - Arguments or environment text longer than their region can spill secret text that the rule
+    doesn't mark. The fix belongs to the memory rules: hold the program to check
+    `args_sizes_get` against the region.
+  - The memory rules' own gap behind the third finding stays: a store past a limit the rules
+    don't follow can overwrite another region. The secret rule is sound against it now; whether
+    the prover refuses it wasn't examined.
+  - The rule's limits on depth and on operators followed have no test.
 - **Constant time in the engine's machine code** (W13, stopped 2026-11-07). The secret rule
   holds main.wat; the machine code Wasmtime compiles from it is trusted for timing. The tag
-  `native-final` keeps the decoders such a check would use.
+  `native-final` keeps the decoders such a check would use. Not tried again yet.
 
 Earlier stops (2026-10-31 to 2026-11-04) left nothing open: their items were done with the
 owner's permission, or their topics left alone.

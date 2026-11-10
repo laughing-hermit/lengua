@@ -185,7 +185,9 @@ Within lengua, for a program at `done`:
   that the bits don't settle go to cvc5 alone, and the line says so. Inputs a proof finds are run
   for real before lengua says the code is wrong.
 - **An idea's secrets don't steer its code.** For an idea with a `- Secret:` line, `main.wat` may
-  not branch on, index with, divide by or loop over those inputs.
+  not branch on, index with, divide by or loop over those inputs. A review on 2026-11-10 found
+  five ways around the rule; each has a test and is closed, and what it left open is in
+  [todo.md](todo.md).
 - **The clock is rounded down to a microsecond**, so it can't carry finer timing.
 
 What it doesn't promise:
@@ -199,8 +201,7 @@ What it doesn't promise:
 - **The engine is trusted.** Isolation rests on Wasmtime, lengua's host and `cap-std`, with no
   operating system sandbox around them. The secret rule checks the WebAssembly; the machine code
   Wasmtime compiles from it is trusted to keep its timing. Checking that code (W13) was stopped by
-  the safety filter, and no review has confirmed the secret rule can't be fooled. Both are the
-  owner's ([todo.md](todo.md)).
+  the safety filter ([todo.md](todo.md)).
 - **No security product.** The examples show algorithms, such as AES-128 and SHA-256. They
   aren't built to resist an attacker, and lengua isn't presented as covering security because
   of them.

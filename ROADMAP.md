@@ -164,8 +164,9 @@ The `- Secret:` line and the taint pass over the WebAssembly (no secret in a con
 32 KiB for L1 and 256 KiB for L2, 128-byte padding, strides that avoid 4 KiB aliasing).
 *Verified by:* planted leaks found on their lines, and caches shown on every runner: at df1e8ae,
 format, the suite on all five runners and the gate, green (42386323947); on main, stacked with
-W8's steps 3 and 4, at 2727216 (42391963513). The rule hasn't passed a soundness review: one was
-stopped by the safety filter (todo.md).
+W8's steps 3 and 4, at 2727216 (42391963513). A soundness review on 2026-11-10
+(docs/reviews/secret-rule-2026-11-10.md) found five ways around the rule, each then shown by a
+failing test and closed (42877251634, 42881405730, 42884257361); todo.md has what it left open.
 
 ## W11. The native product retired
 

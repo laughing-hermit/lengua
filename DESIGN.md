@@ -703,9 +703,10 @@ own work to the microsecond.
 
 ### What the safety filter stopped
 
-Three items here were stopped by Claude's safety filter and are the owner's (todo.md): the tests
-that try to get past the sandbox on macOS and Windows; a soundness review of the secret rule; and
-W13, checking the engine's machine code for constant time. lengua isn't to be presented as covering
+Three items here were stopped by Claude's safety filter (todo.md). The soundness review of the
+secret rule was done on 2026-11-10 (docs/reviews/secret-rule-2026-11-10.md): its five findings
+have tests and are closed. Two are still open: the tests that try to get past the sandbox on
+macOS and Windows, and W13, checking the engine's machine code for constant time. lengua isn't to be presented as covering
 security because of its examples or its checksums: they show algorithms, not a product that
 resists an attacker.
 
