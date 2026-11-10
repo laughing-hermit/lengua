@@ -27,9 +27,9 @@ Given such a folder, it:
    runs the build only when it is that same module: after lengua itself changed, a build that
    differs doesn't run until `check` tests it;
 2. runs it on Wasmtime, in lengua's own WASI host, in this process, with this shell's standard
-   input, output and error. The working folder is the current one, or the existing absolute
-   folder `--in` names, never `/`. The words after the program folder are the program's
-   arguments, and one that starts with `-` goes after `--`.
+   input, output and error. The working folder is the current one, or the existing folder `--in`
+   names, from the current folder when it isn't absolute, never `/`. The words after the program
+   folder are the program's arguments, and one that starts with `-` goes after `--`.
 
 Any other folder it refuses, saying why on standard error, and exits with 125. To check a folder
 that came from another computer, where this user's key never signed its lock, use
@@ -104,10 +104,10 @@ and the size of what ran, as the system counts them for that process (`getrusage
 macOS, the process's own counters on Windows). Standard input comes from the file `--stdin`
 names, and standard output and error go to the files `--stdout` and `--stderr` name. The program
 gets only the environment variables `--env` gives, and on Windows also `SystemRoot`, without
-which its sockets don't start. On Linux the
-program starts from `lengua-spawn`, a small process beside `lengua-mcp`, so that its peak memory
-counts from that process's few hundred KiB and not from `lengua-mcp`'s; `--counters` adds the
-CPU's counts of its L1 data, last-level and data TLB read misses, on Linux.
+which its sockets don't start. On Linux the program starts from `lengua-spawn`, a small process
+beside `lengua-mcp`, so that its peak memory counts from that process's few hundred KiB and not
+from `lengua-mcp`'s; `--counters` adds the CPU's counts of its L1 data, last-level and data TLB
+read misses, on Linux.
 
 A program folder runs as `lengua-mcp run` runs it, with every check `run` makes. Any other
 WebAssembly module of WASI preview 1, such as a C, C++ or Rust toolchain makes, runs in lengua's
