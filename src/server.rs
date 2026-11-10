@@ -2484,8 +2484,8 @@ mod tests {
             unproven: vec![("B4".into(), "a float".into())],
         };
         let recorded = stamped(b"theirs", Some(theirs.clone()));
-        let merged = written_proofs(&recorded, &files, found(b"ours"))
-            .expect("the wrong verdict goes on");
+        let merged =
+            written_proofs(&recorded, &files, found(b"ours")).expect("the wrong verdict goes on");
         let expected = ProofStamp {
             proven: vec!["B2".into()],
             wrong: found(b"ours").wrong,

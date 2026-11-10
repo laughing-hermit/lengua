@@ -771,16 +771,12 @@ pub(super) fn run_from_shell(
         env: &request.env,
         folder: workspace,
         policy: Policy::of(&ready.uses, network),
-        listen: network
-            .listens
-            .map(|port| (port, network.serves_anywhere)),
+        listen: network.listens.map(|port| (port, network.serves_anywhere)),
         connections: &connections,
         cache: Some(cache.as_path()),
         source,
     };
-    match run_here(wasm, &here)
-        .map_err(|error| format!("couldn't run the program: {error}"))?
-    {
+    match run_here(wasm, &here).map_err(|error| format!("couldn't run the program: {error}"))? {
         End::Exited(code) => Ok(code),
         trapped @ End::Trapped(..) => {
             eprintln!(
@@ -1229,9 +1225,7 @@ impl LenguaServer {
             folder: workspace.as_deref(),
             env: &params.env,
             connections: &connections,
-            listen: network
-                .listens
-                .map(|port| (port, network.serves_anywhere)),
+            listen: network.listens.map(|port| (port, network.serves_anywhere)),
             setup: Setup::Run,
             max_written: None,
             alone: true,

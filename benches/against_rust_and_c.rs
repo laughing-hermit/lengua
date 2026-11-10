@@ -803,13 +803,20 @@ fn welch(after: &[u64], before: &[u64]) -> Option<(f64, f64, f64)> {
             .iter()
             .map(|value| (value - average) * (value - average))
             .sum();
-        Some((average, squares / (values.len() - 1) as f64 / values.len() as f64))
+        Some((
+            average,
+            squares / (values.len() - 1) as f64 / values.len() as f64,
+        ))
     };
     let (after_mean, after_share) = spread(after)?;
     let (before_mean, before_share) = spread(before)?;
     let difference = after_mean - before_mean;
     let error = (after_share + before_share).sqrt();
-    Some((difference, difference - 1.96 * error, difference + 1.96 * error))
+    Some((
+        difference,
+        difference - 1.96 * error,
+        difference + 1.96 * error,
+    ))
 }
 
 /// The gate's verdict at a look on lengua's values against the other version's, over the runs
@@ -1493,9 +1500,12 @@ fn measure_versions(
         .filter(|one| one.problem.is_none())
         .map(|one| one.size);
     let apart = match (module, lengua, ran) {
-        (Some(module), Some(lengua), Some(size)) => {
-            Some(apart_rounds(&context.runner, prepared, (lengua, size), module))
-        }
+        (Some(module), Some(lengua), Some(size)) => Some(apart_rounds(
+            &context.runner,
+            prepared,
+            (lengua, size),
+            module,
+        )),
         _ => None,
     };
     for (version, one) in versions.iter().zip(&mut measured) {
@@ -2406,7 +2416,10 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
         }
         // lengua-module tests itself as every version does: one that can't be measured, or
         // gives another output, fails the bench, and so does lengua's run in its rounds.
-        let apart = outcome.apart.iter().flat_map(|apart| [&apart.lengua, &apart.module]);
+        let apart = outcome
+            .apart
+            .iter()
+            .flat_map(|apart| [&apart.lengua, &apart.module]);
         for measured in apart {
             if let Some(problem) = &measured.problem {
                 let (name, version) = (&outcome.name, &measured.name);

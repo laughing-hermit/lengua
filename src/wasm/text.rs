@@ -682,9 +682,8 @@ fn sections(module: &[u8]) -> Option<Vec<Section>> {
 /// that ends the module. A cut that fails is a fault of lengua's own build, which only a change
 /// of wast's, such as names written before the code, could cause.
 fn without_names(named: &[u8]) -> Result<Vec<u8>, Problem> {
-    let broken = || {
-        library_problem(&"the module's sections couldn't be told apart to leave its names out")
-    };
+    let broken =
+        || library_problem(&"the module's sections couldn't be told apart to leave its names out");
     let starts = section_starts(named).ok_or_else(broken)?;
     let cut = starts
         .last()
