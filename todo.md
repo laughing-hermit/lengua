@@ -254,6 +254,13 @@ Each can be reversed.
   TOML's checks of its content hold (one to six request words, proofs only of the code's
   module), so both readers give the same lock from the same text. The fuzzer's mutations seldom
   keep a body as lengua writes it, so a seeded test reads 2,000 random locks both ways.
+- **files reads each file with its own `fd_read`** (W12c, 0da6aec), on a local disk's promise of
+  every byte up to the end, which host.md now says. So its reads no longer go through `$fill`:
+  where the golden ledger records a proof of files' B1 or B3, its `cut` turns from true to false
+  and its paths may change. That says nothing of a program with no standard input or network,
+  whose reply never named it. No proof by induction is lost: those tests give files on disk and
+  no standard input, and the induction over a read loop takes only standard input as one text,
+  so it never took them (src/prove/induction.rs, `streamed`).
 
 ## Roadmap: the pivot's milestones (2026-11-06)
 
