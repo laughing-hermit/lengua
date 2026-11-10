@@ -317,7 +317,12 @@ fn readers() -> Vec<Reader> {
         (
             "lock",
             Box::new(|input: &[u8]| {
-                let _ = crate::lock::parse_body(&String::from_utf8_lossy(input));
+                let text = String::from_utf8_lossy(input);
+                // What is read with no TOML is the very lock TOML reads from the same text.
+                if let Some(lock) = crate::lock::as_written(&text) {
+                    assert_eq!(crate::lock::parse_toml(&text), Ok(lock));
+                }
+                let _ = crate::lock::parse_body(&text);
             }),
         ),
     ]
@@ -329,14 +334,15 @@ fn fuzz(count: usize, seed: u64) {
     assert!(corpus.len() > 20, "the repository's own ideas and programs");
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     for (reader, read) in readers() {
-        // Readers start from their own kind of text; the lock from a lock lengua writes.
+        // Readers start from their own kind of text; the lock from a lock exactly as lengua
+        // writes it, and from one that isn't quite.
         let starts: Vec<Vec<u8>> = match reader {
             "idea" | "formula" | "okf" => corpus
                 .iter()
                 .filter(|(path, _)| path.extension().is_some_and(|extension| extension == "md"))
                 .map(|(_, bytes)| shrunk(bytes))
                 .collect(),
-            "lock" => vec![LOCK.as_bytes().to_vec()],
+            "lock" => vec![LOCK.as_bytes().to_vec(), written_lock()],
             _ => corpus
                 .iter()
                 .filter(|(path, _)| path.extension().is_some_and(|extension| extension == "wat"))
@@ -357,7 +363,8 @@ fn fuzz(count: usize, seed: u64) {
     }
 }
 
-/// A lock as lengua writes one, its signature aside, to start mutating from.
+/// A lock as lengua writes one but for its fingerprint, which it leaves out, its signature aside,
+/// to start mutating from: TOML's to read.
 const LOCK: &str = "# lengua.lock: written only by the lengua MCP server. Do not edit.\n\
     version = 7\n\
     dialect = \"webassembly 1\"\n\
@@ -382,6 +389,46 @@ const LOCK: &str = "# lengua.lock: written only by the lengua MCP server. Do not
     module_sha256 = \"2222222222222222222222222222222222222222222222222222222222222222\"\n\
     proven = [\"B1\"]\n\
     solvers = \"z3 and cvc5\"\n";
+
+/// A lock exactly as lengua writes one, its signature aside, with proofs of every kind: what the
+/// lock's reader with no TOML takes, to start mutating from too.
+fn written_lock() -> Vec<u8> {
+    use crate::hash::Sha256Hex;
+    use crate::lock::{Bounded, CodeStamp, IdeaStamp, Key, Lock, ProofStamp, RequestStamp};
+    let lock = Lock {
+        request: RequestStamp {
+            words: vec!["add two numbers".into(), "and \"negative\" ones".into()],
+            idea: Sha256Hex::of(b"first idea"),
+        },
+        idea: IdeaStamp {
+            sha256: Sha256Hex::of(b"idea"),
+        },
+        code: Some(CodeStamp {
+            sha256: Sha256Hex::of(b"main.wat"),
+            module_sha256: Sha256Hex::of(b"module"),
+            engine: "wasmtime 50.0.1".into(),
+            max_stack_bytes: 64,
+            unsafe_blocks: 0,
+            features: vec!["bulk-memory".into(), "simd".into()],
+        }),
+        proofs: Some(Box::new(ProofStamp {
+            module_sha256: Sha256Hex::of(b"module"),
+            proven: vec!["B1".into()],
+            bounded: vec![Bounded {
+                id: "B2".into(),
+                bytes: 64,
+                of: 4096,
+                more: true,
+            }],
+            solvers: "z3 and cvc5".into(),
+            wrong: vec![("B3".into(), "it printed \"5\"".into())],
+            unproven: vec![("B4".into(), "the time ran out".into())],
+        })),
+    };
+    let signed = lock.to_signed_text(&Key::from_bytes([0; 32]));
+    let body = signed.split("\n[signature]").next().unwrap_or_default();
+    body.as_bytes().to_vec()
+}
 
 #[test]
 fn fuzzing_finds_nothing() {
