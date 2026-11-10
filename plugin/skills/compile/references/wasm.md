@@ -97,6 +97,11 @@ follows it for the next line.
   first newline in what came, as `$find_newline` does: a newline may come before the last byte.
 - **Any length**: `stop` is -1 and `room` a whole buffer, 64 KiB. A count below the buffer's size
   is the input's last piece; a loop of buffer-fulls keeps only what crosses from one to the next.
+- **A file**: a read of a file gives every byte it asks for up to the file's end
+  ([the host](host.md)), so `fd_read` into the whole buffer, its iovec written just before the
+  call, needs no second read to find the end: a count below the buffer's size is the file's
+  last. `$fill` reads a file the same way, with one more read that gives 0 at the end, which
+  costs a call for each file where a program reads many small ones.
 
 ## Writing with `$write_all`
 
@@ -220,6 +225,16 @@ callee's parameters, and the bounds checks above, are the usual ones. `$assert_f
   `i8x16.sub`, `i8x16.add` or `v128.xor` applies it; `v128.bitselect` picks between two vectors.
 - **Find a byte** with `i8x16.eq` against a splat of it, `i8x16.bitmask` (a bit for each lane),
   and `i32.ctz` of a mask that isn't 0: the first match's place in the vector.
+- **Count matches** in the lanes, not through a bitmask, which ARM64 has no one instruction
+  for: a compare's all ones moved down by 7 (`i8x16.shr_u`) is 1 where it holds, which
+  `i8x16.add` adds to a counter of a byte in each lane. Before 255 steps, widen the bytes in
+  pairs into lanes of 16 bits, `i16x8.shl` then `i16x8.shr_u` by 8 for the first of each pair and
+  `i16x8.shr_u` by 8 for the second, and the same at 16 bits into lanes of 32 bits at the end,
+  then add the lanes with `i32x4.extract_lane`. Shifts keep each count a sum of the compares'
+  conditions, which the proofs follow; `extadd_pairwise` does the same in one instruction, but
+  the proofs don't follow it yet.
+- **The byte before each lane** is `i8x16.shuffle` of the step before's vector and this one's,
+  lanes 15 to 30: the last lane of the one before, then this one's first fifteen.
 - **Bound every vector access** to the region's size less 16, so a 16-byte access never crosses
   the end; round a region up to whole vectors where a loop reads them all, as `$line`'s 80 bytes
   hold `READ_MAX`, 65.

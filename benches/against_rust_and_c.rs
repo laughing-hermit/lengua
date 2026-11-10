@@ -232,16 +232,18 @@ fn workload(name: &str) -> Option<Workload> {
                 "wc",
                 "Counts the lines and words of 64 MiB of standard input, as `wc -lw` does. \
                  lengua's program compares 16 bytes a step with SIMD128, written by hand, and \
-                 counts the bits of each comparison's bitmask; C, C++ and Rust compare each byte \
-                 and the byte before it in a plain loop, counted 255 bytes at a time in counters \
-                 of a byte, for their compilers to vectorize.",
+                 adds each comparison's lanes to counters of a byte, widened every 255 steps; C, \
+                 C++ and Rust compare each byte and the byte before it in a plain loop, counted \
+                 255 bytes at a time in counters of a byte, for their compilers to vectorize.",
             )
         },
         "histogram" => Workload {
             stdin: Some(text(LARGE)),
             ..Workload::new(
                 "histogram",
-                "Counts each byte value of 64 MiB of standard input.",
+                "Counts each byte value of 64 MiB of standard input. Every version counts in \
+                 four tables, so that neighboring bytes don't wait on one counter: C, C++ and \
+                 Rust four bytes a step, lengua's program eight, each byte loaded on its own.",
             )
         },
         "crc32c" => Workload {
@@ -249,8 +251,9 @@ fn workload(name: &str) -> Option<Workload> {
             ..Workload::new(
                 "crc32c",
                 "The CRC-32C of 64 MiB of standard input. Natively, C, C++ and Rust use the \
-                 CPU's CRC instruction; WebAssembly has none, so every module takes eight bytes \
-                 a step through eight tables.",
+                 CPU's CRC instruction; WebAssembly has none, so the modules take the bytes \
+                 through tables: C, C++ and Rust eight bytes a step through eight tables, \
+                 lengua's program sixteen through sixteen.",
             )
         },
         "sort" => Workload {
@@ -299,7 +302,10 @@ fn workload(name: &str) -> Option<Workload> {
             ..Workload::new(
                 "files",
                 "Reads each of the 4,096 small files of its folder, of 1 to 4,096 bytes, to its \
-                 end, and prints how many files and bytes it read.",
+                 end, and prints how many files and bytes it read. A read of a file gives every \
+                 byte it asks for up to the file's end, so lengua's program takes a read that \
+                 gives less than its 64 KiB buffer as a file's last, one read for each of these \
+                 files; C, C++ and Rust read until a read gives nothing, two reads a file.",
             )
         },
         "readings" => Workload {
