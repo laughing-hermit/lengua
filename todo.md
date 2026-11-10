@@ -245,6 +245,15 @@ Each can be reversed.
   five (42387777039).
 - **Five runners**, as above; macOS on x86-64 stays dropped (the design pass would have kept it;
   the owner's earlier word stands).
+- **The lock is read with no TOML where it is exactly as lengua writes it** (W12c, ca4905a). A
+  run's lock goes through `as_written`, which reads the lines `Lock::body_in` writes, and only a
+  body it doesn't take goes to TOML, which still reads format 6 and says what is wrong with a
+  lock lengua can't take. This reverses W12b's choice to keep one parser for the lock, which G2
+  rests on (its brief's "Left out"). G2 still holds: the HMAC over the body is verified first,
+  as before, and `as_written` takes a body only when `body_in` writes it back byte for byte and
+  TOML's checks of its content hold (one to six request words, proofs only of the code's
+  module), so both readers give the same lock from the same text. The fuzzer's mutations seldom
+  keep a body as lengua writes it, so a seeded test reads 2,000 random locks both ways.
 
 ## Roadmap: the pivot's milestones (2026-11-06)
 

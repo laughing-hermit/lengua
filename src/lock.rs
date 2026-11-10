@@ -1083,6 +1083,9 @@ pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use rand::rngs::ChaCha8Rng;
+    use rand::{RngExt, SeedableRng};
+
     use super::*;
 
     fn key(byte: u8) -> Key {
@@ -1561,6 +1564,139 @@ mod tests {
             assert_eq!(as_written(&other), None, "{other}");
         }
         assert!(matches!(parse_body(&past), Err(LockError::Malformed(_))));
+    }
+
+    /// Text of up to 12 characters, none a tenth of the time, each of a kind toml_string treats
+    /// its own way: ASCII it writes as it is, the five it escapes by name, the C0 controls, DEL
+    /// and the C1 controls it writes as `\u` escapes, the rest of Latin-1, the rest of the Basic
+    /// Multilingual Plane, the planes above it, and pieces of a lock's own layout.
+    fn random_text(rng: &mut ChaCha8Rng) -> String {
+        const ESCAPED: [char; 5] = ['"', '\\', '\n', '\t', '\r'];
+        const PIECES: [&str; 8] = [
+            "\", \"",
+            "]",
+            " }",
+            "\\u0041",
+            "[proofs]\nproven = []\n",
+            " = ",
+            "# ",
+            "\"\"\"",
+        ];
+        let mut text = String::new();
+        if rng.random_range(0..10) == 0 {
+            return text;
+        }
+        for _ in 0..rng.random_range(1..=12) {
+            let character = match rng.random_range(0..9) {
+                0 => rng.random_range(' '..='~'),
+                1 => ESCAPED[rng.random_range(0..ESCAPED.len())],
+                2 => rng.random_range('\u{0}'..='\u{1f}'),
+                3 => '\u{7f}',
+                4 => rng.random_range('\u{80}'..='\u{9f}'),
+                5 => rng.random_range('\u{a0}'..='\u{ff}'),
+                6 => rng.random_range('\u{100}'..='\u{ffff}'),
+                7 => rng.random_range('\u{10000}'..='\u{10ffff}'),
+                _ => {
+                    text.push_str(PIECES[rng.random_range(0..PIECES.len())]);
+                    continue;
+                }
+            };
+            text.push(character);
+        }
+        text
+    }
+
+    /// Up to `most` texts of [`random_text`]'s.
+    fn random_texts(rng: &mut ChaCha8Rng, most: usize) -> Vec<String> {
+        (0..rng.random_range(0..=most))
+            .map(|_| random_text(rng))
+            .collect()
+    }
+
+    /// The SHA-256 of 8 random bytes.
+    fn random_hash(rng: &mut ChaCha8Rng) -> Sha256Hex {
+        Sha256Hex::of(&rng.random::<u64>().to_le_bytes())
+    }
+
+    /// A whole number from 0 to TOML's largest integer, an `i64`'s, its two ends and small
+    /// numbers often.
+    fn random_number(rng: &mut ChaCha8Rng) -> u64 {
+        let most = u64::try_from(i64::MAX).expect("an i64's largest is a u64");
+        match rng.random_range(0..4) {
+            0 => 0,
+            1 => most,
+            2 => rng.random_range(0..10_000),
+            _ => rng.random_range(0..=most),
+        }
+    }
+
+    /// A lock lengua may write, made at random: one to [`MAX_REQUESTS`] request words, code or
+    /// none, and proofs of the code's module or none, each text one of [`random_text`]'s.
+    fn random_lock(rng: &mut ChaCha8Rng) -> Lock {
+        let words = (0..rng.random_range(1..=MAX_REQUESTS))
+            .map(|_| random_text(rng))
+            .collect();
+        let code = rng.random_bool(0.75).then(|| CodeStamp {
+            sha256: random_hash(rng),
+            module_sha256: random_hash(rng),
+            engine: random_text(rng),
+            max_stack_bytes: random_number(rng),
+            unsafe_blocks: match rng.random_range(0..3) {
+                0 => 0,
+                1 => u32::MAX,
+                _ => rng.random(),
+            },
+            features: random_texts(rng, 4),
+        });
+        let proofs = match &code {
+            Some(code) if rng.random_bool(0.75) => Some(Box::new(ProofStamp {
+                module_sha256: code.module_sha256.clone(),
+                proven: random_texts(rng, 3),
+                bounded: (0..rng.random_range(0..=3))
+                    .map(|_| Bounded {
+                        id: random_text(rng),
+                        bytes: usize::try_from(random_number(rng)).unwrap_or(usize::MAX),
+                        of: usize::try_from(random_number(rng)).unwrap_or(usize::MAX),
+                        more: rng.random_bool(0.5),
+                    })
+                    .collect(),
+                solvers: random_text(rng),
+                wrong: (0..rng.random_range(0..=3))
+                    .map(|_| (random_text(rng), random_text(rng)))
+                    .collect(),
+                unproven: (0..rng.random_range(0..=3))
+                    .map(|_| (random_text(rng), random_text(rng)))
+                    .collect(),
+            })),
+            _ => None,
+        };
+        Lock {
+            request: RequestStamp {
+                words,
+                idea: random_hash(rng),
+            },
+            idea: IdeaStamp {
+                sha256: random_hash(rng),
+            },
+            code,
+            proofs,
+        }
+    }
+
+    /// Locks made at random, 2,000 of them, read with no TOML as the very locks TOML reads from
+    /// the same text: words, engines, features, ids, solvers and reasons of every kind of
+    /// character toml_string treats its own way, the C0 and C1 controls among them, and empty
+    /// ones; numbers from 0 to TOML's largest. Each is a body exactly as lengua writes it, which
+    /// the fuzzer's mutations seldom keep, so its check that the two readers agree seldom fires.
+    #[test]
+    fn random_locks_read_without_toml_as_toml_reads_them() {
+        let mut rng = ChaCha8Rng::seed_from_u64(0x6c6f_636b);
+        for _ in 0..2000 {
+            let lock = random_lock(&mut rng);
+            let body = lock.body();
+            assert_eq!(as_written(&body).as_ref(), Some(&lock), "{body}");
+            assert_eq!(parse_toml(&body).as_ref(), Ok(&lock), "{body}");
+        }
     }
 
     #[test]
