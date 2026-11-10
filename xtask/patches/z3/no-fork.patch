@@ -1,0 +1,32 @@
+vibe-lang's patch for z3's timer (mizchi/vibe-lang#3883, scripts/z3_wasi/z3.patch, made for z3
+4.15.8; src/util/scoped_timer.cpp is the same file in 4.16.0, so it applies unchanged).
+
+z3's timer registers a handler with pthread_atfork, which stops the timer's threads in a forked
+child. WASI has no fork, and the single-threaded libc of wasi-sdk 34 declares pthread_atfork but
+defines it nowhere, so the executable doesn't link. On WASI the patch leaves the call out, and
+pthread.h with it, which vibe-lang's toolchain didn't have. wasi-sdk 34 has pthread.h, so that
+part changes nothing here. With the polling timer (Z3_POLLING_TIMER) the limit of try-for, which
+every question of lengua's carries, starts no thread: z3 reads the clock as it works.
+
+diff --git a/src/util/scoped_timer.cpp b/src/util/scoped_timer.cpp
+index 286dcda..2adf2bf 100644
+--- a/src/util/scoped_timer.cpp
++++ b/src/util/scoped_timer.cpp
+@@ -31,7 +31,7 @@ Revision History:
+ #include <mutex>
+ #include <thread>
+ #include <vector>
+-#ifndef _WINDOWS
++#if !defined(_WINDOWS) && !defined(__wasi__)
+ #include <pthread.h>
+ #endif
+
+@@ -119,7 +119,7 @@ scoped_timer::~scoped_timer() {
+ }
+
+ void scoped_timer::initialize() {
+-#ifndef _WINDOWS
++#if !defined(_WINDOWS) && !defined(__wasi__)
+     static bool pthread_atfork_set = false;
+     if (!pthread_atfork_set) {
+         pthread_atfork(finalize, nullptr, nullptr);

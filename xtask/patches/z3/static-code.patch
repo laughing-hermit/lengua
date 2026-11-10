@@ -1,0 +1,37 @@
+lengua's own patch for z3's build.
+
+z3 compiles each of its parts, and its executable, as position-independent code, which its shared
+library needs. The WebAssembly z3 is one static module and needs none. wasi-sdk 34 doesn't support
+C++ exceptions in shared libraries yet (its CppExceptions.md), and it builds its own libraries
+with exceptions as plain code ("lots of builds fail with shared libraries and -fPIC",
+cmake/wasi-sdk-sysroot.cmake). In WebAssembly, position-independent code also reads the place of
+each of z3's data through a global as it runs, which costs time. So the patch compiles the parts
+and the executable as plain code: CMAKE_POSITION_INDEPENDENT_CODE, which the build sets to OFF,
+decides for nothing else in z3.
+
+diff --git a/cmake/z3_add_component.cmake b/cmake/z3_add_component.cmake
+index 962b02f..e1d9f06 100644
+--- a/cmake/z3_add_component.cmake
++++ b/cmake/z3_add_component.cmake
+@@ -208,7 +208,7 @@ macro(z3_add_component component_name)
+   endforeach()
+   set_target_properties(${component_name} PROPERTIES
+     # Position independent code needed in shared libraries
+-    POSITION_INDEPENDENT_CODE ON
++    POSITION_INDEPENDENT_CODE OFF
+     # Symbol visibility
+     CXX_VISIBILITY_PRESET hidden
+     VISIBILITY_INLINES_HIDDEN ON)
+diff --git a/src/shell/CMakeLists.txt b/src/shell/CMakeLists.txt
+index c0e9c85..346a11d 100644
+--- a/src/shell/CMakeLists.txt
++++ b/src/shell/CMakeLists.txt
+@@ -36,7 +36,7 @@ add_executable(shell
+
+ set_target_properties(shell PROPERTIES
+     # Position independent code needed in shared libraries
+-    POSITION_INDEPENDENT_CODE ON
++    POSITION_INDEPENDENT_CODE OFF
+     # Symbol visibility
+     CXX_VISIBILITY_PRESET hidden
+     VISIBILITY_INLINES_HIDDEN ON)

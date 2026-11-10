@@ -3220,6 +3220,7 @@ dependencies = [
  "similar",
  "tar",
  "tempfile",
+ "wasmparser",
  "webpki-roots",
  "zip",
 ]

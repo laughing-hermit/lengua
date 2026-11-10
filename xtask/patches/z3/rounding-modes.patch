@@ -1,0 +1,29 @@
+vibe-lang's patch for z3's hardware floats (mizchi/vibe-lang#3883, scripts/z3_wasi/z3.patch, made
+for z3 4.15.8; src/util/hwf.cpp is the same file in 4.16.0, so it applies unchanged).
+
+z3 sets the rounding mode of the CPU's floats with fesetround. WebAssembly has one rounding mode,
+to nearest with ties to even, so wasi-libc's fenv.h for wasm32 defines FE_TONEAREST and no other
+mode, and the file doesn't compile. On WASI the patch keeps that one mode and makes every other one
+unreachable: z3 stops with an error where it would otherwise round to nearest in place of the mode
+it asked for. lengua asks z3 no questions with floats; cvc5 answers those.
+
+diff --git a/src/util/hwf.cpp b/src/util/hwf.cpp
+index 52ba280..9496c0d 100644
+--- a/src/util/hwf.cpp
++++ b/src/util/hwf.cpp
+@@ -588,6 +588,15 @@ void hwf_manager::set_rounding_mode(mpf_rounding_mode rm)
+         UNREACHABLE(); // Note: MPF_ROUND_NEAREST_TAWAY is not supported by the hardware!
+     }
+ #endif
++#elif defined(__wasi__)
++    // wasm has round-to-nearest-even only (no fesetround modes): any other
++    // mode is unreachable rather than silently computed at nearest.
++    switch (rm) {
++    case MPF_ROUND_NEAREST_TEVEN:
++        break;
++    default:
++        UNREACHABLE();
++    }
+ #else // macOS/Linux
+     switch (rm) {
+     case MPF_ROUND_NEAREST_TEVEN:

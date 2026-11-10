@@ -126,7 +126,7 @@ pub fn program(folder: &Path, name: &str) -> Option<PathBuf> {
 }
 
 /// The pins `pins` as a folder's pinned.tsv keeps them.
-fn stamp(pins: &[(&str, Pin<'_>)]) -> String {
+pub fn stamp(pins: &[(&str, Pin<'_>)]) -> String {
     let mut stamp = String::new();
     for (tool, pin) in pins {
         let _ = writeln!(stamp, "{tool}\t{}\t{}", pin.url, pin.sha256);
@@ -135,7 +135,7 @@ fn stamp(pins: &[(&str, Pin<'_>)]) -> String {
 }
 
 /// The pins the folder `folder` was fetched by, or nothing.
-fn kept(folder: &Path) -> String {
+pub fn kept(folder: &Path) -> String {
     std::fs::read_to_string(folder.join(STAMP)).unwrap_or_default()
 }
 
@@ -268,8 +268,8 @@ mod tests {
         "windows-aarch64",
     ];
 
-    /// tools.tsv pins z3 and cvc5 for each of the five runners, and wasi-sdk for the one that
-    /// compiles the bench's modules, each from GitHub's releases with a SHA-256.
+    /// tools.tsv pins z3 and cvc5 for each of the five runners, and wasi-sdk and z3's source for
+    /// the one that compiles the bench's modules and z3's, each from GitHub with a SHA-256.
     #[test]
     fn every_tool_is_pinned_where_it_is_used() {
         let mut pinned: Vec<Pin<'_>> = Vec::new();
@@ -279,6 +279,7 @@ mod tests {
             }
         }
         pinned.push(pin("wasi-sdk", "linux-x86_64").expect("pinned"));
+        pinned.push(pin("z3-source", "wasm32-wasip1").expect("pinned"));
         for pin in pinned {
             assert!(pin.url.starts_with("https://github.com/"), "{pin:?}");
             assert!(
