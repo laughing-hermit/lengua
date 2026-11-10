@@ -8,7 +8,8 @@
 //! needs here, and exits with doctor's code: 0 when nothing is wrong. The archive ships every
 //! part lengua needs, the solvers included, so nothing else is installed.
 //!
-//! A folder it would replace must be lengua's (an earlier install), or not there yet. A browser
+//! A folder it would replace must be lengua's (an earlier install), or not there yet, and the
+//! archive goes neither into a folder inside itself nor over the folder it runs from. A browser
 //! marks what it downloads, and the archive isn't signed, so whether to trust it is the user's:
 //! the install says how to clear the mark and clears nothing itself.
 
@@ -21,6 +22,20 @@ use crate::data_dir::DataDir;
 /// What a folder with no TARGET file says.
 const NO_TARGET: &str =
     "This folder has no TARGET file: install lengua from its release archive, unpacked.";
+
+/// What an install says when the system names no folder of the user's to install into.
+#[cfg(windows)]
+const NOWHERE: &str =
+    "can't find where to install lengua: set LOCALAPPDATA, or give --prefix <folder>";
+
+/// What an install says when the system names no folder of the user's to install into.
+#[cfg(target_os = "macos")]
+const NOWHERE: &str = "can't find where to install lengua: set HOME, or give --prefix <folder>";
+
+/// What an install says when the system names no folder of the user's to install into.
+#[cfg(not(any(windows, target_os = "macos")))]
+const NOWHERE: &str =
+    "can't find where to install lengua: set HOME or XDG_DATA_HOME, or give --prefix <folder>";
 
 /// What `--link` on Windows says.
 const LINK_ON_WINDOWS: &str =
@@ -195,6 +210,54 @@ pub fn replaceable(market: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `path`, an absolute path, as the system finds it: the folders of it that are there with their
+/// links followed (on Windows, in their own case), and those that aren't yet as named. The
+/// install compares folders by it.
+fn resolved(path: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut existing = path;
+    loop {
+        if let Ok(mut found) = std::fs::canonicalize(existing) {
+            for name in missing.iter().rev() {
+                found.push(name);
+            }
+            return found;
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name);
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
+/// Whether the unpacked archive `here` may be copied into the marketplace folder `market`, both
+/// as [`resolved`] gives them: not into a folder inside the archive, where the copy would copy
+/// itself again and again, and not in place of the folder it is copied from, as the install of
+/// an installed lengua's own lengua-mcp would be, which Windows won't let it remove as it runs.
+/// When not, says why, and what to do.
+fn apart(here: &Path, market: &Path) -> Result<(), String> {
+    let staging = market.join("lengua.new");
+    if staging.starts_with(here) {
+        return Err(format!(
+            "{} is this archive's own folder or inside it, so the install would copy the archive \
+             into itself: give --prefix a folder outside {}.",
+            market.display(),
+            here.display()
+        ));
+    }
+    if here.starts_with(market.join("lengua")) || here.starts_with(&staging) {
+        return Err(format!(
+            "This lengua-mcp runs from {}, which the install would replace: run the install from \
+             the unpacked archive, in a folder of its own.",
+            here.display()
+        ));
+    }
+    Ok(())
+}
+
 /// Copies the unpacked archive `here` into the marketplace folder `market` as its lengua folder,
 /// in place of an earlier install, without the archive's own INSTALL.md, and writes the
 /// marketplace.json that names it at `version`: gives the plugin's folder.
@@ -268,13 +331,16 @@ fn printed(program: &str, args: &[&str]) -> Option<String> {
 /// This computer's system and CPU, as a target names them: the system this lengua-mcp runs on,
 /// and the hardware's own CPU, as `uname -m` says it on Linux, `hw.optional.arm64` on macOS
 /// (a shell under Rosetta says x86_64), and the system's own environment on Windows (an x64
-/// program emulated on ARM64 is told AMD64).
+/// program emulated on ARM64 is told AMD64); where the system's program doesn't run, the CPU
+/// this lengua-mcp is built for.
 #[must_use]
 pub fn this_computer() -> String {
     let cpu = if cfg!(target_os = "macos") {
-        let arm =
-            printed("sysctl", &["-n", "hw.optional.arm64"]).is_some_and(|said| said.trim() == "1");
-        Some(if arm { "aarch64" } else { "x86_64" }.to_owned())
+        // sysctl by its path, which a shell's PATH may lack; where it doesn't run, the CPU this
+        // lengua-mcp is built for, which an arm64 lengua-mcp, running, shows is Apple silicon.
+        let said = printed("/usr/sbin/sysctl", &["-n", "hw.optional.arm64"]);
+        let arm = said.map(|said| said.trim() == "1");
+        arm.map(|arm| if arm { "aarch64" } else { "x86_64" }.to_owned())
     } else if cfg!(windows) {
         let key = r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
         printed("reg", &["query", key, "/v", "PROCESSOR_ARCHITECTURE"]).and_then(|said| {
@@ -494,14 +560,14 @@ fn installed(options: &Options, data_dir: Option<&DataDir>) -> Result<u8, String
     }
 
     // lengua's marketplace folder: the plugin in lengua, and .claude-plugin's marketplace.json,
-    // which names it for Claude Code.
+    // which names it for Claude Code. A folder given is taken from the current one and named in
+    // full from then on, as the link, the claude command and what the install prints need it.
+    let own = DataDir::from_env().map(|data| data.path().join("plugins"));
     let market = match &options.prefix {
-        Some(prefix) => prefix.clone(),
-        None => DataDir::from_env()
-            .ok_or(crate::data_dir::NOT_FOUND)?
-            .path()
-            .join("plugins"),
+        Some(prefix) => absolute(prefix)?,
+        None => own.ok_or(NOWHERE)?,
     };
+    apart(&resolved(&here), &resolved(&market))?;
     replaceable(&market)?;
     let dest = place(&here, &market, &version)?;
     quarantine_note(&dest);
@@ -539,6 +605,11 @@ fn installed(options: &Options, data_dir: Option<&DataDir>) -> Result<u8, String
     }
     println!();
     Ok(installed_doctor(&server, data_dir))
+}
+
+/// `folder`, named from the current folder, named in full.
+fn absolute(folder: &Path) -> Result<PathBuf, String> {
+    std::path::absolute(folder).map_err(|error| format!("{}: {error}", folder.display()))
 }
 
 /// Links lengua-mcp, `server`, into ~/.local/bin, as `ln -sf` does.
@@ -652,5 +723,27 @@ mod tests {
         std::fs::write(&manifest, "{\"name\": \"someone\"}").expect("another marketplace");
         let refused = replaceable(&ours).expect_err("another marketplace's");
         assert!(refused.contains("is another marketplace's"), "{refused}");
+    }
+
+    /// The archive is copied into no folder of its own, there or not there yet, and not over the
+    /// folder it runs from, as an installed lengua's own install would copy it; a marketplace
+    /// folder beside the archive, or one that holds it, takes it.
+    #[test]
+    fn the_archive_is_copied_neither_into_itself_nor_over_itself() {
+        let root = tempfile::tempdir().expect("a folder");
+        let here = root.path().join("lengua-0.2.0-linux-x86_64");
+        std::fs::create_dir_all(&here).expect("the archive's folder");
+        let here = resolved(&here);
+        for market in [here.clone(), here.join("new").join("market")] {
+            let refused = apart(&here, &resolved(&market)).expect_err("inside the archive");
+            assert!(refused.contains("give --prefix a folder outside"), "{refused}");
+        }
+        let market = resolved(&root.path().join("market"));
+        assert!(apart(&here, &market).is_ok());
+        assert!(apart(&here, &resolved(root.path())).is_ok());
+        let installed = market.join("lengua");
+        let refused = apart(&installed, &market).expect_err("an installed lengua's own");
+        assert!(refused.contains("which the install would replace"), "{refused}");
+        assert!(apart(&market.join("lengua.new").join("server"), &market).is_err());
     }
 }
