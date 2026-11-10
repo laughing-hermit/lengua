@@ -164,7 +164,11 @@ If this computer isn't the system and CPU this archive is for, Windows may refus
 `server\\lengua-mcp.exe` before lengua can check it: for a program of another CPU, as an ARM64
 program is on an x86-64 computer, PowerShell prints `The specified executable is not a valid
 application for this OS platform.` Windows on ARM64 runs an x86-64 program through its own
-emulation, and then `lengua-mcp install` itself says which archive to use.",
+emulation, and then `lengua-mcp install` itself says which archive to use. Linux and macOS don't
+run a Windows program at all: the shell prints `Permission denied`, as the zip archive keeps no
+mode to run it by, or else `cannot execute binary file: Exec format error` (in zsh, macOS's own
+shell, `exec format error`). Use the archive for that system and CPU: linux-x86_64,
+linux-aarch64 or macos-aarch64.",
     try_it: "load this folder for one session:",
 };
 
@@ -179,7 +183,8 @@ const LINUX: Words = Words {
     loader: "\
 If this computer isn't the system and CPU this archive is for, its system may refuse to start
 `server/lengua-mcp` before lengua can check it, and the shell prints the system's own message:
-`cannot execute binary file: Exec format error` for a program of another CPU or system,
+`cannot execute binary file: Exec format error` for a program of another CPU or system (in zsh,
+macOS's own shell, `exec format error`; Windows doesn't run it at all),
 ``version `GLIBC_2.39' not found`` for a C library older than glibc 2.39, which lengua's
 programs and solvers are built against (Ubuntu 24.04, Debian 13, Fedora 40 and later have it),
 and `No such file or directory` or `not found`, of a program that is there, on a system without
@@ -203,7 +208,10 @@ const MACOS: Words = Words {
     destination: "`~/Library/Application Support/lengua/plugins/lengua`",
     loader: "\
 This archive is for Apple silicon. On an Intel Mac, macOS refuses to start `server/lengua-mcp`
-before lengua can check the computer, and the shell prints `bad CPU type in executable`.",
+before lengua can check the computer, and the shell prints `bad CPU type in executable`. On
+Linux the shell prints `cannot execute binary file: Exec format error`, and Windows doesn't run
+it at all: use the archive for that system and CPU (linux-x86_64, linux-aarch64, windows-x86_64
+or windows-aarch64).",
     try_it: "clear that mark from this folder first (`xattr -dr com.apple.quarantine <this \
              folder>`), then load it for one session:",
 };
@@ -785,6 +793,34 @@ is unsigned.
     write(&out.join("INSTALL.md"), text)
 }
 
+/// Claude Code's own check of the plugin `out` as the archive holds it, where the claude command
+/// is installed (CI's runners have none; tests/manifests.rs holds the manifests to the Agent
+/// Plugins schemas). On Windows the command may be the npm package's claude.cmd, found only by
+/// that name: a search for claude finds claude.exe alone.
+fn validate(out: &Path) -> Result<(), String> {
+    let names: &[&str] = if cfg!(windows) {
+        &["claude", "claude.cmd"]
+    } else {
+        &["claude"]
+    };
+    for name in names {
+        let validated = Command::new(name)
+            .args(["plugin", "validate"])
+            .arg(out)
+            .arg("--strict")
+            .status();
+        match validated {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => {
+                return Err(format!("claude plugin validate found the plugin wrong: {status}"));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("{name} didn't start: {error}")),
+        }
+    }
+    Ok(())
+}
+
 /// Every folder and file below `top`, in order, each as its path and whether it is a folder.
 fn entries(top: &Path) -> Vec<(PathBuf, bool)> {
     let mut listed: Vec<(PathBuf, bool)> = std::fs::read_dir(top)
@@ -978,23 +1014,7 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
     write(&out.join("TARGET"), format!("{target}\n"))?;
     install_md(&out, target, &version, described)?;
 
-    // Claude Code's own check of the plugin as the archive holds it, where claude is installed
-    // (CI's runners have none; tests/manifests.rs holds the manifests to the Agent Plugins
-    // schemas).
-    let validated = Command::new("claude")
-        .args(["plugin", "validate"])
-        .arg(&out)
-        .arg("--strict")
-        .status();
-    match validated {
-        Ok(status) if !status.success() => {
-            return Err(format!("claude plugin validate found the plugin wrong: {status}"));
-        }
-        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-            return Err(format!("claude didn't start: {error}"));
-        }
-        _ => {}
-    }
+    validate(&out)?;
 
     let dist = root.join("dist");
     files::folder(&dist)?;
