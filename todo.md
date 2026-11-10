@@ -102,6 +102,13 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
   own, and UDP.
 - A few workloads: tally, sort and histogram, where lengua's own programs are slower; W12c is on
   those now. lengua also uses about 1 MiB more memory per run, the last of run's own overhead.
+  - 2026-11-10, after W12c (bench 42756074550, at 076bcc1): on all five runners, lengua's tally,
+    sort and histogram take less CPU and wall time than C's, C++'s and Rust's WebAssembly builds.
+    The one exception is histogram's CPU time against Rust's on Windows on ARM64, which the gate
+    can't decide. tally also beats the native C and Rust builds on all five, and the native C++
+    build on the three runners that ran it, which leave out Windows. sort beats native C on all
+    five. wc on macOS on ARM64 is now behind C's and Rust's WebAssembly builds. A run uses
+    0.3 to 1.1 MiB more memory than its module alone, depending on the runner.
 
 In short, lengua trades some raw speed for guarantees none of those languages make: the program
 is proven against a readable spec, holds only the permissions it declares, and can't corrupt
@@ -409,8 +416,11 @@ Runs, as they land:
 | W10 | 42386323947 (the secret rule over main.wat and the caches on every system, at df1e8ae: format, the suite on all five runners and the gate, green); on main, stacked with W8's steps 3 and 4, at 2727216 (42391963513: the suite on all five runners and the gate, green) |
 | W11 | 42713054140 (the native product retired, at 9ab14a5: format, the suite on all five runners and the gate, green); 42707398628 (release at 8d196ee: the five archives built without it, each installed on a clean runner, doctor and the release check, green); main at 3dae90d, whose push suite 42716434491 is green; 42716553289 (the golden baseline for WebAssembly, recorded twice at 3dae90d and the same both times); its three reviews' 15 findings fixed before them |
 | W12 | 42393960971 (the benchmark, its workloads and the gate, at 9a549b3: the suite on all five runners and the gate, green); 42661776298 (the first gate run on all five runners: each runner's KNOWN_BEHIND, from its own KNOWN_BEHIND-<runner>.txt, at 2bad55a); on main with W11 |
+| W12b | 42728146781 (lengua's run made lean, at d6496e3: the suite on all five runners and the gate, green); 42728160641 (its bench on all five runners at d6496e3: on Linux on x86-64 a run's own cost fell from about 0.75 ms of CPU time and 5 MiB to 0.15 to 0.32 ms and 0.7 to 1.0 MiB; 94 rows newly ahead, taken out of KNOWN_BEHIND at 59f76f9); main at eff6b98, whose push suite 42732412732 is green |
+| W12c | 42756064246 (the programs made faster, at 076bcc1: the suite on all five runners, green, with the format job's layout applied at f4cf505, which 42759059023 compiles clean); 42756074550 (its bench on all five runners at 076bcc1: on Linux on x86-64, lengua's CPU time is 0.36 of the fastest WebAssembly build of C, C++ or Rust on tally, 0.61 on sort, 0.79 on histogram and crc32c, 0.90 on wc and files, and 1.10 on empty, as the report rounds them; 208 rows newly ahead on the five runners, taken out of KNOWN_BEHIND at 5714b42); its review's 5 findings fixed before them; main at f4cf505, whose push suite 42760180544 is green |
 | W13 | Stopped by the safety filter, left for the owner (below) |
 | W14 | 42387284972 (the suite on all five runners and the gate at 83641b5); 42387777039 (release at 7835d9a: the five archives built, each installed on a clean runner of its system and CPU, doctor and the release check, green); main at 7835d9a. The agent's test in this session, 2026-11-07, with that Linux x86-64 archive: below |
+| W17a | 42753840475 (lengua's tooling in Rust, at d0e9ea6: the suite on all five runners and the gate, green); 42753851417 (release at d0e9ea6: the five archives built by `cargo xtask release`, each installed by `lengua-mcp install` on a clean runner of its system and CPU, doctor and the release check, green); 42753863525 (the goldens recorded by `cargo xtask golden` and compared by `cargo xtask golden-diff`: the raw view differs only in four proof lines that ran out of time, which the runner's load decides); 42753874793 (the bench through `cargo xtask bench-wasm` and `bench-report` on Linux on x86-64, to its report); with W12c merged, at bce6cd5: 42765232534 (the suite on all five runners and the gate, green) and 42765242004 (release on all five, each archive installed on a clean runner, green); main at bce6cd5 |
 | W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](docs/history/PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
 
 ## Superseded by the pivot
@@ -571,3 +581,5 @@ none changed a result, and each is recorded here for the owner:
 - W5's implementer ran `rustfmt` on files here.
 - W12's implementer, the session itself on W14's scripts/release.sh, and W11's part C each ran
   `bash -n`, a shell's syntax check that runs nothing.
+- W12c's fixer ran `awk` twice to count line lengths. awk is a text tool like the grep and sed
+  the rule allows, not a build or a run of code. It is listed because the fixer reported it.
