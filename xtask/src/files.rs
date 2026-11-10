@@ -51,6 +51,17 @@ pub fn files(folder: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// `path` below `folder`, its parts joined by `/` on every system, as an archive or a listing
+/// names it.
+pub fn relative(path: &Path, folder: &Path) -> String {
+    let below = path.strip_prefix(folder).unwrap_or(path);
+    let parts: Vec<String> = below
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    parts.join("/")
+}
+
 /// Copies everything in the folder `from` into the folder `into`, folders and all, as
 /// `cp -R <from>/. <into>/` does: a link stays a link on Unix, and is copied as what it names on
 /// Windows.

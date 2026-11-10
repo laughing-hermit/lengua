@@ -333,7 +333,7 @@ jobs:
         run: cargo xtask machine ${{ matrix.target }}
 
       # The solvers are kept between runs. A release doesn't need them: the archive brings its own,
-      # which scripts/release.sh fetches as tools.tsv pins them.
+      # which `cargo xtask release` fetches as tools.tsv pins them.
       - uses: actions/cache@v4
         if: ${{ matrix.mode != 'compile' && matrix.mode != 'release' }}
         with:
@@ -430,32 +430,17 @@ jobs:
         run: |
           if [ -f "$REPORT" ]; then cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"; fi
 
-      # This runner's archive (scripts/release.sh), and the release check built beside it, to run
-      # where the archive is installed, on a runner that builds nothing.
+      # This runner's archive (cargo xtask release, which also gives its version), and the release
+      # check built beside it, to run where the archive is installed, on a runner that builds
+      # nothing.
       - name: The release archive
         id: release
         if: ${{ matrix.mode == 'release' }}
-        run: |
-          bash scripts/release.sh ${{ matrix.target }}
-          echo "version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)" >> "$GITHUB_OUTPUT"
+        run: cargo xtask release ${{ matrix.target }}
 
       - name: The release check, built
         if: ${{ matrix.mode == 'release' }}
-        run: |
-          cargo test --release --locked --test release_check --no-run --message-format=json > release-check.json
-          # The test binary's path, from the artifact message that names it (Windows's with its
-          # backslashes escaped).
-          built=$(grep '"name":"release_check"' release-check.json | grep -o '"executable":"[^"]*"' \
-            | head -n 1 | sed 's/^"executable":"//; s/"$//; s/\\\\/\\/g') || true
-          if [ -z "$built" ]; then
-            echo "cargo built no release check" >&2
-            exit 1
-          fi
-          mkdir -p dist/check
-          case "${{ matrix.target }}" in
-            windows-*) cp "$(cygpath -u "$built")" dist/check/release-check.exe ;;
-            *) cp "$built" dist/check/release-check ;;
-          esac
+        run: cargo xtask release-check
 
       # The archive, named with its version, system and CPU; it is kept nowhere else.
       - name: Keep the archive

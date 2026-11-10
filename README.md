@@ -132,7 +132,7 @@ This builds the server and installs it at `plugin/server/lengua-mcp`, where both
 expect it. Run it again after every change to the Rust code. `cargo xtask` runs lengua's tooling,
 the task crate in `xtask/`, with the Rust that `rust-toolchain.toml` pins (rustup installs it).
 
-`scripts/release.sh` builds the release archive of the computer it runs on, one of the five lengua
+`cargo xtask release` builds the release archive of the computer it runs on, one of the five lengua
 is built for: `dist/lengua-<version>-<target>.tar.gz` for `linux-x86_64`, `linux-aarch64` and
 `macos-aarch64`, or a `.zip` for `windows-x86_64` and `windows-aarch64`. It holds the plugin with
 its server built, the z3 and cvc5 that CI pins for that system and CPU, the licences of all of it,

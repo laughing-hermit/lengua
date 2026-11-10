@@ -11,6 +11,7 @@ mod files;
 mod http;
 mod machine;
 mod plugin;
+mod release;
 mod skips;
 mod stall;
 mod test;
@@ -31,6 +32,8 @@ Tasks:
                       a program, stopped with where it stood after that long
   skips [<log>]       what the tests skipped, in the job's summary
   plugin              the server built into plugin/server/
+  release [<target>]  this computer's release archive, in dist/
+  release-check       the release check, built into dist/check/
   help                this list";
 
 fn main() -> ExitCode {
@@ -47,6 +50,8 @@ fn main() -> ExitCode {
         "stall" => stall::task(rest),
         "skips" => skips::task(rest),
         "plugin" => plugin::task(rest),
+        "release" => release::task(rest),
+        "release-check" => release::check(rest),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");
             Ok(0)
