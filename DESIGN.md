@@ -3,8 +3,8 @@
 This file says how lengua works, as the code does it: each part, its limits, and what lengua
 defends and trusts. Where the code and this file disagree, fix one of them. The finish line and
 what is left are in [todo.md](todo.md); each milestone, with the runs that verify it, is in
-[ROADMAP.md](ROADMAP.md). The native lengua, which compiled ideas to assembly for Linux, is kept
-at the tag `native-final`.
+[ROADMAP.md](ROADMAP.md). The native lengua, which compiled ideas to assembly for Linux on x86-64
+and Linux on ARM64, is kept at the tag `native-final`.
 
 ## What lengua is
 
@@ -128,9 +128,10 @@ is a problem, with a rewrite built from its own values.
 A generated test's rows draw from generators: `int`, `decimal`, `choice` and `string`. A `runs`
 column gives 1 to 1000 runs, 100 when empty. Boundary values run first on every check, and the
 other inputs are drawn fresh from a seed each check draws. A block with no `choice` and at most
-5,000 combinations runs every one instead, while the whole suite stays within 20,000 runs. Expected results come from
-formulas: checked 128-bit whole numbers, exact decimals, doubles and singles, and text, with 31
-functions, from `len` to `tally`, `sha256`, `aes128`, `crc32` and `fma` among them.
+5,000 combinations runs every one instead, while the whole suite stays within 20,000 runs.
+Expected results come from formulas: checked 128-bit whole numbers, exact decimals, doubles and
+singles, and text, with 31 functions, from `len` to `tally`, `sha256`, `aes128`, `crc32` and
+`fma` among them.
 
 `check` holds the generated tests to their behavior before anything runs: the formulas must give
 the example's results from its inputs, a behavior whose example gives the program anything must
@@ -492,14 +493,13 @@ A build that differs from the tested one, as after lengua itself changed, doesn'
 
 `lengua-mcp check <folder>` attests a folder on any computer, as the idea's attester names it. It
 needs no lock and no key, and writes no lock, no index.md, no log.md and no cache: only the
-temporary folders its module and its tests run in. It
-checks lengua's last `verified` entry against the idea's hash and main.wat's SHA-256; parses the
-idea and its tests; builds main.wat and checks every rule; runs every test in workers of its own,
-from a fresh seed; and, when everything else passed and the entry names both files, proves each
-generated test within 300 seconds, the model held to 24 sample runs. A proof that doesn't finish
-leaves the folder attested; a confirmed wrong one doesn't. It prints its lines, then `attested`
-(exit 0) or `not attested` (exit 1). It doesn't check the parts an idea builds on, which `check`
-does, and it can't prove further.
+temporary folders its module and its tests run in. It checks lengua's last `verified` entry
+against the idea's hash and main.wat's SHA-256; parses the idea and its tests; builds main.wat and
+checks every rule; runs every test in workers of its own, from a fresh seed; and, when everything
+else passed and the entry names both files, proves each generated test within 300 seconds, the
+model held to 24 sample runs. A proof that doesn't finish leaves the folder attested; a confirmed
+wrong one doesn't. It prints its lines, then `attested` (exit 0) or `not attested` (exit 1). It
+doesn't check the parts an idea builds on, which `check` does, and it can't prove further.
 
 ## The knowledge graph
 
@@ -593,7 +593,9 @@ are 48 on Linux on x86-64, 33 on Linux on ARM64, 58 on macOS on ARM64, 68 on Win
 69 on Windows on ARM64, with peak memory the most common measure among them. Against the native
 builds they are 153 to 160 of each runner's 168 rows: tally is the one workload whose time is
 below the best native build's, on every runner, at 0.47 to 0.65 times. Windows counts CPU time in
-15.6 ms ticks, so a short run's CPU rows can't be decided there (todo.md, "The owner's").
+15.6 ms ticks, so a short run's CPU time there is a whole number of ticks. Against the other
+modules, most of those rows stay undecided and three came out behind; the native builds' short
+runs read no ticks at all (todo.md, "The owner's").
 
 ## The release and the install
 
@@ -618,12 +620,12 @@ CI (`.github/workflows/ci.yml`) runs on GitHub's free runners: `ubuntu-24.04`, `
 `macos-26`, `windows-2025` and `windows-11-arm`. A push that changes the code, to a branch not
 named `wip/…`, runs the suite on all five; every Monday the suite, the slow ignored tests and the
 bench run on all five; and a dispatch picks the targets and the mode: compile, test, ignored,
-golden, bench or release. In release mode a clean runner of
-each system and CPU unpacks the archive, installs it with its own `lengua-mcp install`, and checks
-it through a plain MCP client: add from its idea to done, run through `run` and from a shell, and
-attested. Each step of the workflow is one command, most of them calls into the task crate
-(`cargo xtask`), and Rust 1.99.1 is pinned in `rust-toolchain.toml`. Nothing builds on the owner's
-computer: the format job hands back the formatting patch and the resolved `Cargo.lock`.
+golden, bench or release. In release mode a clean runner of each system and CPU unpacks the
+archive, installs it with its own `lengua-mcp install`, and checks it through a plain MCP client:
+add from its idea to done, run through `run` and from a shell, and attested. Each step of the
+workflow is one command, most of them calls into the task crate (`cargo xtask`), and Rust 1.99.1
+is pinned in `rust-toolchain.toml`. Nothing builds on the owner's computer: the format job hands
+back the formatting patch and the resolved `Cargo.lock`.
 
 ## The threat model
 
