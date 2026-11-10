@@ -107,7 +107,10 @@ pub fn untar_stripped(file: &Path, into: &Path) -> Result<(), String> {
         .map(|entry| entry.path())
         .collect();
     let [top] = tops.as_slice() else {
-        return Err(format!("{} doesn't keep everything in one folder", file.display()));
+        return Err(format!(
+            "{} doesn't keep everything in one folder",
+            file.display()
+        ));
     };
     std::fs::rename(top, into).map_err(|error| format!("{}: {error}", into.display()))?;
     files::remove(&unpacked)
@@ -116,9 +119,10 @@ pub fn untar_stripped(file: &Path, into: &Path) -> Result<(), String> {
 /// The first file named `name` or `name.exe` at any depth of `folder`, as `find` meets them.
 pub fn program(folder: &Path, name: &str) -> Option<PathBuf> {
     let exe = format!("{name}.exe");
-    files::files(folder)
-        .into_iter()
-        .find(|file| file.file_name().is_some_and(|file| file == name || file == exe.as_str()))
+    files::files(folder).into_iter().find(|file| {
+        file.file_name()
+            .is_some_and(|file| file == name || file == exe.as_str())
+    })
 }
 
 /// The pins `pins` as a folder's pinned.tsv keeps them.
@@ -152,7 +156,11 @@ fn version(program: &Path) -> Result<String, String> {
         .output()
         .map_err(|error| format!("{} didn't start: {error}", program.display()))?;
     if !output.status.success() {
-        return Err(format!("{} --version failed: {}", program.display(), output.status));
+        return Err(format!(
+            "{} --version failed: {}",
+            program.display(),
+            output.status
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -307,8 +315,12 @@ mod tests {
         let file = std::fs::File::create(&zipped).expect("a zip");
         let mut writer = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default();
-        writer.add_directory("tool-1.0/bin", options).expect("a folder");
-        writer.start_file("tool-1.0/bin/tool", options).expect("a file");
+        writer
+            .add_directory("tool-1.0/bin", options)
+            .expect("a folder");
+        writer
+            .start_file("tool-1.0/bin/tool", options)
+            .expect("a file");
         std::io::Write::write_all(&mut writer, b"#!/bin/sh\n").expect("its bytes");
         writer.finish().expect("the zip");
         let into = root.path().join("unzipped");

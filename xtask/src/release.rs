@@ -327,7 +327,12 @@ fn files_in(folder: &Path) -> Vec<(String, PathBuf)> {
         .flatten()
         .flatten()
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-        .map(|entry| (entry.file_name().to_string_lossy().into_owned(), entry.path()))
+        .map(|entry| {
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                entry.path(),
+            )
+        })
         .collect();
     found.sort();
     found
@@ -501,7 +506,10 @@ fn cvc5_parts(root: &Path, licences: &Path, windows: bool) -> Result<(), String>
                 part.object
             ));
         }
-        println!("cvc5's part's licence {}/{name}, from {source}", part.folder);
+        println!(
+            "cvc5's part's licence {}/{name}, from {source}",
+            part.folder
+        );
     }
     Ok(())
 }
@@ -812,7 +820,9 @@ fn validate(out: &Path) -> Result<(), String> {
         match validated {
             Ok(status) if status.success() => return Ok(()),
             Ok(status) => {
-                return Err(format!("claude plugin validate found the plugin wrong: {status}"));
+                return Err(format!(
+                    "claude plugin validate found the plugin wrong: {status}"
+                ));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(format!("{name} didn't start: {error}")),
@@ -973,8 +983,8 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
             beside_z3(&program, folder, &solvers, windows)?;
         }
         solver_licences(tool, &unpacked, url, &licences.join(tool))?;
-        let (repository, tag) =
-            github_release(url).ok_or_else(|| format!("{url} isn't a GitHub release's download"))?;
+        let (repository, tag) = github_release(url)
+            .ok_or_else(|| format!("{url} isn't a GitHub release's download"))?;
         *source = format!("https://github.com/{repository}/tree/{tag}");
     }
     let names: Vec<String> = files_in(&solvers)

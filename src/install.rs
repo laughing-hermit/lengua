@@ -630,7 +630,9 @@ fn link(server: &Path) -> Result<(), String> {
 #[cfg(not(unix))]
 fn link(server: &Path) -> Result<(), String> {
     let shown = server.display();
-    Err(format!("--link is for Linux and macOS: run {shown} by its path"))
+    Err(format!(
+        "--link is for Linux and macOS: run {shown} by its path"
+    ))
 }
 
 #[cfg(test)]
@@ -705,8 +707,7 @@ mod tests {
         for (file, text) in [("TARGET", "linux-x86_64\n"), ("INSTALL.md", "# lengua\n")] {
             std::fs::write(here.join(file), text).expect("an archive's file");
         }
-        std::fs::write(here.join("server").join("lengua-mcp"), "a server")
-            .expect("the server");
+        std::fs::write(here.join("server").join("lengua-mcp"), "a server").expect("the server");
         let ours = root.path().join("ours");
         assert!(replaceable(&ours).is_ok());
         for _ in 0..2 {
@@ -736,7 +737,10 @@ mod tests {
         std::fs::create_dir_all(&here).expect("the archive's folder");
         for market in [here.clone(), here.join("new").join("market")] {
             let refused = apart(&here, &market).expect_err("inside the archive");
-            assert!(refused.contains("give --prefix a folder outside"), "{refused}");
+            assert!(
+                refused.contains("give --prefix a folder outside"),
+                "{refused}"
+            );
         }
         #[cfg(unix)]
         {
@@ -749,7 +753,10 @@ mod tests {
         assert!(apart(&here, root.path()).is_ok());
         let installed = market.join("lengua");
         let refused = apart(&installed, &market).expect_err("an installed lengua's own");
-        assert!(refused.contains("which the install would replace"), "{refused}");
+        assert!(
+            refused.contains("which the install would replace"),
+            "{refused}"
+        );
         assert!(apart(&market.join("lengua.new").join("server"), &market).is_err());
     }
 }

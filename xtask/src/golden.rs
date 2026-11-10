@@ -199,7 +199,11 @@ fn keyed(
 /// exit code it gives.
 fn compare(name: &str, base: &Ledger, head: &Ledger) -> (String, u8) {
     let limited = Regex::new(LIMITED).ok();
-    let unknown = |verdict: &str| limited.as_ref().is_some_and(|regex| regex.is_match(verdict));
+    let unknown = |verdict: &str| {
+        limited
+            .as_ref()
+            .is_some_and(|regex| regex.is_match(verdict))
+    };
     let mut said = String::new();
     let (mut same, mut differ, mut rerun, mut missing) = (0, 0, 0, 0);
     for (key, was) in base {
@@ -219,7 +223,10 @@ fn compare(name: &str, base: &Ledger, head: &Ledger) -> (String, u8) {
             differ += 1;
             "DIFFERS"
         };
-        let _ = writeln!(said, "{name}: {kind} {key}\n    base: {was}\n    head: {is}");
+        let _ = writeln!(
+            said,
+            "{name}: {kind} {key}\n    base: {was}\n    head: {is}"
+        );
     }
     for key in head.keys().filter(|key| !base.contains_key(*key)) {
         let _ = writeln!(said, "{name}: only in the head: {key}");
@@ -280,7 +287,10 @@ pub fn diff(arguments: &[String]) -> Result<u8, String> {
                     .map_or_else(|| "none".to_owned(), |path| path.display().to_string())
             };
             let (was, is) = (shown(&in_base), shown(&in_head));
-            let _ = writeln!(said, "{name}: a recording is missing (base: {was}, head: {is})");
+            let _ = writeln!(
+                said,
+                "{name}: a recording is missing (base: {was}, head: {is})"
+            );
             status = 1;
             continue;
         };
@@ -288,7 +298,11 @@ pub fn diff(arguments: &[String]) -> Result<u8, String> {
             let was = without_expected(&read(was)?, &expected);
             let is = without_expected(&read(is)?, &expected);
             if was == is {
-                let _ = writeln!(said, "{name}: identical, {} lines", is.matches('\n').count());
+                let _ = writeln!(
+                    said,
+                    "{name}: identical, {} lines",
+                    is.matches('\n').count()
+                );
             } else {
                 let _ = writeln!(
                     said,

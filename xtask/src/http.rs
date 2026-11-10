@@ -70,7 +70,9 @@ fn follow(url: &str) -> Result<Vec<u8>, Failure> {
             status => return Err(Failure::Final(format!("{at}: HTTP {status}"))),
         }
     }
-    Err(Failure::Final(format!("{url}: more than {REDIRECTS} redirects")))
+    Err(Failure::Final(format!(
+        "{url}: more than {REDIRECTS} redirects"
+    )))
 }
 
 /// The first header field of `headers` named `name`, in lowercase.
@@ -101,7 +103,9 @@ fn parts(url: &str) -> Result<(&str, &str), String> {
         .strip_prefix("https://")
         .ok_or_else(|| format!("{url} isn't an https:// address"))?;
     let rest = rest.split_once('#').map_or(rest, |(before, _)| before);
-    Ok(rest.find('/').map_or((rest, "/"), |slash| rest.split_at(slash)))
+    Ok(rest
+        .find('/')
+        .map_or((rest, "/"), |slash| rest.split_at(slash)))
 }
 
 /// How every download checks its server's certificate: against Mozilla's roots, with ring's
@@ -197,7 +201,9 @@ fn parse(received: &[u8]) -> Result<Answer, String> {
     let body = if chunked {
         dechunked(rest)?
     } else if let Some(length) = field(&headers, "content-length") {
-        let length: usize = length.parse().map_err(|_| format!("a length of {length:?}"))?;
+        let length: usize = length
+            .parse()
+            .map_err(|_| format!("a length of {length:?}"))?;
         let whole = rest
             .get(..length)
             .ok_or_else(|| format!("an answer cut short: {} of {length} bytes", rest.len()))?;

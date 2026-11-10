@@ -124,7 +124,10 @@ pub fn plan(
     } else {
         ("all", "test")
     };
-    let targets: String = targets.chars().filter(|character| *character != ' ').collect();
+    let targets: String = targets
+        .chars()
+        .filter(|character| *character != ' ')
+        .collect();
     let listed = format!(",{targets},");
     let everything = targets.is_empty() || targets == "all";
     let mut jobs = Vec::new();
@@ -151,7 +154,10 @@ pub fn plan(
             legs.push(("base".to_owned(), full(&asked.golden_base)?));
         }
         jobs.clear();
-        for runner in runners.iter().filter(|runner| runner.target == "linux-x86_64") {
+        for runner in runners
+            .iter()
+            .filter(|runner| runner.target == "linux-x86_64")
+        {
             for (label, reference) in &legs {
                 jobs.push(Job {
                     runner: runner.clone(),

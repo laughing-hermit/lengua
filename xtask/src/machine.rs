@@ -186,7 +186,10 @@ mod tests {
             features(line, &["aes", "avx2", "sse4_2"]),
             "- aes: no\n- avx2: yes\n- sse4_2: yes\n"
         );
-        assert_eq!(starting("model\nflags : a\nflags : b\n", "flags"), "flags : a");
+        assert_eq!(
+            starting("model\nflags : a\nflags : b\n", "flags"),
+            "flags : a"
+        );
         assert_eq!(starting("model\n", "flags"), "");
     }
 

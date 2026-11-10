@@ -171,7 +171,11 @@ fn checked_and_unpacked(archive: &Path, into: &Path) -> PathBuf {
         );
         ran(Command::new("powershell").args(["-NoProfile", "-Command", &script]))
     } else {
-        ran(Command::new("tar").arg("-C").arg(into).arg("-xzf").arg(archive))
+        ran(Command::new("tar")
+            .arg("-C")
+            .arg(into)
+            .arg("-xzf")
+            .arg(archive))
     };
     assert_eq!(unpacked.status.code(), Some(0), "{name}: {unpacked:?}");
     let stem = name

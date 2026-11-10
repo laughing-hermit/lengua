@@ -152,7 +152,10 @@ pub fn golden(arguments: &[String]) -> Result<u8, String> {
         .map_err(|error| format!("{}: {error}", recordings.display()))?;
     for entry in entries.flatten() {
         let size = entry.metadata().map_or(0, |metadata| metadata.len());
-        names.push(format!("{size:>12} {}", entry.file_name().to_string_lossy()));
+        names.push(format!(
+            "{size:>12} {}",
+            entry.file_name().to_string_lossy()
+        ));
     }
     names.sort();
     println!("{}:", recordings.display());
