@@ -693,16 +693,24 @@ decide is undecided, never level.
 `KNOWN_BEHIND` names the rows where lengua isn't ahead yet, and it may only shrink: a run fails
 where lengua is behind or undecided on a row the list doesn't name, or ahead on one it names, and
 where a change in the list's history named a row the list before it didn't. Each run writes a
-report, BENCHMARKS-<runner>.md, from its results alone. The latest run's five reports, from run
-42756074550, are in [docs/benchmarks](docs/benchmarks/README.md). In that run the gate passed on no
-runner. KNOWN_BEHIND now names 1,057 rows. Against C, C++ and Rust compiled to WebAssembly they
-are 48 on Linux on x86-64, 33 on Linux on ARM64, 58 on macOS on ARM64, 68 on Windows on x86-64 and
-69 on Windows on ARM64, with peak memory the most common measure among them. Against the native
-builds they are 153 to 160 of each runner's 168 rows: tally is the one workload whose time is
-below the best native build's, on every runner, at 0.47 to 0.65 times. Windows counts CPU time in
-15.6 ms ticks, so a short run's CPU time there is a whole number of ticks. Against the other
-modules, most of those rows stay undecided and three came out behind; the native builds' short
-runs read no ticks at all (todo.md, "The owner's").
+report, BENCHMARKS-<runner>.md, from its results alone. The latest run's five reports, from the
+finish-line run 42947294489 at main 33ed7fe, are in [docs/benchmarks](docs/benchmarks/README.md).
+In that run the gate passed on no runner. It found lengua ahead on 20 rows the list named, which
+have left it, and behind or undecided on 22 rows it doesn't name. KNOWN_BEHIND now names 1,037
+rows. Against C, C++ and Rust compiled to WebAssembly they are 46 on Linux on x86-64, 31 on Linux
+on ARM64, 48 on macOS on ARM64, 66 on Windows on x86-64 and 66 on Windows on ARM64, with peak
+memory the most common measure among them. Against the native builds they are 152 to 160 of each
+runner's 168 rows: tally is the one workload whose time is below the best native build's, on
+every runner, at 0.46 to 0.69 times. Windows counts CPU time in 15.6 ms ticks, so a short run's
+CPU time there is a whole number of ticks. Against the other modules, 37 CPU rows of the two
+Windows runners were undecided in that run and 4 behind, each at 0.99× or 1.00×; the native
+builds' shortest runs read no ticks at all.
+
+The ratchet has a limit the runs show. Each of the 22 rows was ahead in an earlier run, which is
+why the list doesn't hold it, and 14 of them left the list one run before. They are CPU time and
+wall time of short workloads and peak memory, at 0.99× to 1.07×. Such rows move between ahead and
+behind from run to run, and the list may not take a row back, so the list alone doesn't bring
+the gate to pass. What to do with them is the owner's (todo.md, "The owner's").
 
 ## The release and the install
 
@@ -835,9 +843,11 @@ secret rule was done on 2026-11-10 (docs/reviews/secret-rule-2026-11-10.md): its
 have tests and are closed. The review of the host was done the same day
 (docs/reviews/host-2026-11-10.md): its eleven findings have tests (tests/host_hard.rs and unit
 tests) and are closed, and what it left open is in todo.md. W13, the check of the engine's
-machine code for an idea's secrets, was built on 2026-11-10 (Secrets, above). One is still open:
-the tests that try to get past the sandbox on macOS and Windows, of which the host review's tests
-are a first part. lengua isn't to be presented as covering
+machine code for an idea's secrets, was built on 2026-11-10 (Secrets, above). The third item, the
+tests that try to get past the sandbox on macOS and Windows, was tried as that review of the host
+and its tests, which run on all five runners. None of the three was stopped again. Of the third,
+Windows's junctions and macOS's own name folding against APFS still have no test of their own
+(todo.md). lengua isn't to be presented as covering
 security because of its examples or its checksums: they show algorithms, not a product that
 resists an attacker.
 

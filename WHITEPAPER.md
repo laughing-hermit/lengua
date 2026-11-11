@@ -182,13 +182,15 @@ streams and files [47].
 It costs speed. lengua's program runs in an engine, with lengua's checks before every run [48].
 On the latest run of the gate, on each of the five runners, against C, C++ and Rust compiled to
 WebAssembly and run in the same engine, lengua's program was ahead on module size in 40 of 42
-rows, on wall time in 30 to 38, and on CPU time in 21 to 39; Windows counts CPU time in 15.6 ms
+rows, on wall time in 34 to 39, and on CPU time in 21 to 36; Windows counts CPU time in 15.6 ms
 ticks, which leaves most of its short rows' CPU time undecided. Its peak memory was 0.90 to 1.14
 times theirs, and behind on most rows [49]. Against the same languages' native builds, it was
-behind on most rows: its CPU time was 0.47 to 6.05 times the best native build's, below 1 only on
+behind on most rows: its CPU time was 0.46 to 6.56 times the best native build's, below 1 only on
 the word tally [49]. Those gaps are published per runner, and the list of rows where lengua isn't
-ahead may only shrink [50]. W19 plans a lean runner and native builds of the proven `main.wat`
-[51].
+ahead may only shrink [50]. The gate passed on no runner in that run. Rows within a few percent of
+level, of short workloads and of peak memory, move between ahead and behind from one run to the
+next: 22 rows that an earlier run had found ahead came out behind or undecided [49]. W19 plans a
+lean runner and native builds of the proven `main.wat` [51].
 
 ## Why the idea is the mother
 
@@ -271,10 +273,11 @@ built on that runner, then installed and checked on a clean runner of its own sy
 through a plain MCP client [59]. In an interactive Claude Code session, an agent followed an
 archive's two skills from a request to done, driving its server as the MCP client [60]. The
 finish line isn't reached: the gate against C, C++ and Rust doesn't pass on any runner yet [49].
-Next is a try to run z3 as WebAssembly, kept only if it gives the same verdicts on all five
-runners with the replayed questions taking at most twice as long, then one bounded try for cvc5
-[61]. After that, four milestones aim at a replacement for C, C++ and Rust: reach, native speed,
-parallelism, and a library of proven parts [51].
+A try to run z3 as WebAssembly was measured against its bar, the same verdicts on all five
+runners with the replayed questions taking at most twice as long: it took 1.70 to 2.28 times as
+long and lost a proof on three runners, so native z3 stays, and the try for cvc5 wasn't made
+[61]. After the finish line, four milestones aim at a replacement for C, C++ and Rust: reach,
+native speed, parallelism, and a library of proven parts [51].
 
 lengua is an Agent Plugin: two skills and one MCP server, using only open standards, with its
 manifests held to the Agent Plugins 1.1.0 schemas [6]. No run has loaded it in a harness yet, and
@@ -362,8 +365,8 @@ https://github.com/laughing-hermit/lengua.
 42. `src/server.rs` (`CHECK_WAIT`, 40 seconds; `PROOF_TIME`, 300 seconds).
 43. [todo.md](todo.md), "Where lengua stands" and "Superseded by the pivot"; the tag
     `native-final`.
-44. `tests/wasm_every_program.rs`; run 42760180544 (the suite on all five runners, main at
-    f4cf505).
+44. `tests/wasm_every_program.rs`; run 42947270993 (the suite on all five runners, main at
+    33ed7fe).
 45. `tests/wasm_model.rs` (the model against the engine, each float and SIMD128 operator against
     the engine's bits); `src/prove/wasm/image.rs` (the SIMD128 forms the model doesn't follow).
 46. `src/wasm/runner.rs` (an access out of bounds traps); `src/wasm/host/limits.rs` (memory held
@@ -371,8 +374,9 @@ https://github.com/laughing-hermit/lengua.
 47. `src/main.rs` (`lengua-mcp wasm`, a WASI preview 1 module); [todo.md](todo.md), the
     decisions on WASI preview 1.
 48. `src/server/wat.rs` (`run_from_shell`: run's checks, then the module).
-49. Run 42756074550, at 076bcc1, on all five runners: each runner's report in
-    [docs/benchmarks/](docs/benchmarks/), its gate table and its native gaps.
+49. Run 42947294489, at main 33ed7fe, on all five runners: each runner's report in
+    [docs/benchmarks/](docs/benchmarks/), its gate table, its native gaps and where the run and
+    KNOWN_BEHIND disagree.
 50. [KNOWN_BEHIND](KNOWN_BEHIND); `src/gate.rs`; `benches/against_rust_and_c.rs`.
 51. [todo.md](todo.md), "After the finish line" (W18 to W21) and "Deferred, and why".
 52. `plugin/skills/compile/SKILL.md`, "Shared ideas".
@@ -385,7 +389,7 @@ https://github.com/laughing-hermit/lengua.
 57. `src/server/wat.rs` (an idea with a `- Threads:` line is refused); [todo.md](todo.md), the
     finish line's point 5 and "Deferred, and why".
 58. [todo.md](todo.md), "Stopped by the safety filter".
-59. Run 42753851417, at d0e9ea6 (each runner's archive built, installed and checked);
+59. Run 42947303258, at main 33ed7fe (each runner's archive built, installed and checked);
     `tests/release_check.rs`; `.github/workflows/ci.yml` (the install job).
 60. [todo.md](todo.md), "The agent's test in this session".
 61. [todo.md](todo.md), the decisions on z3 and cvc5 as WebAssembly.

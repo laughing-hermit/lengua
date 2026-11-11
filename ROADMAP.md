@@ -16,8 +16,11 @@ path and the WebAssembly path lived side by side, chosen by the code file (`main
 `main.wat`); W11 removed the native one. Nothing builds on the owner's computer: the format job
 hands back the formatting patch and, for a new dependency, the resolved `Cargo.lock`.
 
-What is left goes in this order (todo.md): W17b, W15 and W16, then, after the finish line, W18 to
-W21.
+W0 to W14 and W17a are on main, W17b is measured, and W15's finish-line run is done
+(42947270993, 42947285372, 42947294489 and 42947303258, at main 33ed7fe). The finish line itself
+isn't reached: the gate passed on no runner in that run. What is left goes in this order
+(todo.md): W15's report to the owner, the agent's test once more with the final archive, and W16;
+then, after the finish line, W18 to W21.
 
 ## W0. Record the decision
 
@@ -195,7 +198,8 @@ by:* the gate green on all five runners against WebAssembly builds, and the nati
 published. So far: the bench, its workloads and the gate at 9a549b3, with the suite on all five
 runners and the gate job green (42393960971); the first gate run on all five runners, at 9a549b3
 (42661776298), whose rows became each runner's lines of KNOWN_BEHIND at 2bad55a. The gate hasn't
-passed on any runner yet. W12b and W12c work on that, and the latest reports are in
+passed on any runner yet, in four runs. W12b and W12c worked on that. The latest run is the
+finish-line run (42947294489, W15), and its reports are in
 [docs/benchmarks](docs/benchmarks/README.md).
 
 ## W12b. lengua's run made lean
@@ -236,11 +240,13 @@ lengua writes it is read with no TOML (todo.md's decisions say why the lock's gu
 *Verified by:* at 076bcc1, the suite on all five runners, green (42756064246; its format job's
 layout fixed at f4cf505); the gate run on all five runners at 076bcc1 (42756074550), where lengua
 came out ahead on 208 rows KNOWN_BEHIND named, which left the list in 5714b42, and whose reports
-are in [docs/benchmarks](docs/benchmarks/README.md); main at f4cf505, whose push run, format, the
+were in [docs/benchmarks](docs/benchmarks/README.md) until the finish-line run's took their place
+(they are in the history, at 33ed7fe); main at f4cf505, whose push run, format, the
 suite on all five runners and the gate, is green (42760180544). In 42756074550 the gate passed on
 no runner: besides those 208 rows, its problems were five rows the list doesn't name, which came
 out behind or undecided and are the owner's (todo.md), and native C++ builds that failed on macOS
-on ARM64 and on both Windows runners.
+on ARM64 and on both Windows runners. One run later, at 33ed7fe (42947294489, W15), 14 of those
+208 rows were behind or undecided again.
 
 ## W13. Constant time in the machine code
 
@@ -292,7 +298,29 @@ the skills say what the runs show. The native lengua's parity ledger, sessions a
 to [docs/history](docs/history), and the latest bench run's reports are kept in
 [docs/benchmarks](docs/benchmarks/README.md). Then `test`, `ignored`, `bench` and `release` on all
 five runners at the final commit, their ids against each point in todo.md, and the report to the
-owner. *Under way.*
+owner.
+
+*The finish-line run,* all at main 33ed7fe, on all five runners:
+- `test`: main's push run, format, the suite and the gate job, green (42947270993).
+- `ignored`: the slow tests the suite leaves out, green (42947285372).
+- `release`: the five archives built, each installed and checked on a clean runner of its system
+  and CPU, green (42947303258).
+- `bench`: it ran to its five reports, and the gate failed on every runner (42947294489). It
+  found lengua ahead on 20 rows KNOWN_BEHIND named, which left the list at 28afe67 (1,037 rows
+  now), and behind or undecided on 22 rows the list doesn't name: 3 on Linux on x86-64, 12 on
+  Linux on ARM64, 2 on macOS on ARM64, 1 on Windows on x86-64 and 4 on Windows on ARM64. The
+  native C++ builds failed again on macOS on ARM64 (2) and on both Windows runners (5 each).
+  Against C, C++ and Rust compiled to WebAssembly, of each runner's 42 rows a measure, lengua
+  was ahead on 40 for size, 34 to 39 for wall time, 21 to 36 for CPU time and 2 to 16 for peak
+  memory. Against the best native build its CPU time was 0.46 to 6.56 times.
+
+Each of the 22 rows was ahead in an earlier run, and 19 of them in the run before: rows of short
+workloads and of peak memory, at 0.99× to 1.07× in this run, move between ahead and behind from
+run to run, and the list may not take a row back. What to do with them is the owner's (todo.md,
+"A row the gate can't decide"). The five reports are in
+[docs/benchmarks](docs/benchmarks/README.md).
+
+*Left:* the report to the owner, and the agent's test once more with the final archive.
 
 ## W16. The repository tidied and presentable on GitHub
 
