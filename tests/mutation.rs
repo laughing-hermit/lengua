@@ -61,6 +61,16 @@ const EQUIVALENT: &[(&str, &str)] = &[
          pages, it is the last region, and $fill and $write_all are both lent the same address",
     ),
     (
+        "examples/computer/main.wat L42:const+1",
+        "$nothing moves from 1152 to 1153: its 4 bytes end at 1157, below $results at 1160, and \
+         no byte of it is read, since a started program is given none of them",
+    ),
+    (
+        "examples/computer/main.wat L48:const+1",
+        "$said moves from 2048 to 2049: its 256 bytes end at 2305, inside the one page, it is \
+         the last region, and program_run and $write_all are both lent the same address",
+    ),
+    (
         "examples/key/main.wat L40:const+1",
         "$key moves from 1088 to 1089: it is one byte and the last region, $fill is lent the \
          same address, and the program never reads the key's value",
