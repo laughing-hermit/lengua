@@ -358,9 +358,10 @@ Still open from it, for the owner:
   with none, which came after that run, and `examples/follow`'s refused redirect.
 - **Not proven**: a program that imports from `lengua_net_1` has no proof at all, of anything.
 - **The real network has no test on a runner**: a test's own servers stand in for every
-  computer, and the resolver in lengua's own tests is the test's. The system's resolver, and TLS
-  on a connection a program opened, run only in a real run (the same code as a connection made
-  before the start, for TLS).
+  computer, and the resolver in lengua's own tests is the test's. The system's resolver runs
+  only in a real run. TLS on a connection a program opened is tested against a server of the
+  test's own, with a certificate of its own, and not through `tcp_open` in a module: in a test's
+  internet a program's bytes are plain.
 - **The `run` tool's time**: a client that opens connections runs within `run`'s 10 to 40
   seconds; a UDP server serves in the background as a TCP one does.
 - **No limit on how many connections in all**, or a second: 64 at once, and the other end's

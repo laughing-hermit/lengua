@@ -1143,4 +1143,81 @@ mod tests {
         );
         assert!(matches!(untried, Err(Refusal::NoAnswer(_))), "{untried:?}");
     }
+
+    /// Over TLS, a connection a program opened is one lengua checked the computer's certificate
+    /// on, for the name the program gave: with the name the certificate is for, the program's
+    /// end reads the plain bytes the server sent; with any other name, the connection isn't
+    /// made, whoever answers at the address.
+    #[test]
+    fn tls_on_an_opened_connection_checks_the_certificate_for_the_name() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let made = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()])
+            .expect("a certificate");
+        let certificate = made.cert.der().clone();
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(made.signing_key.serialize_der()),
+        );
+        let server = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("TLS versions")
+        .with_no_client_auth()
+        .with_single_cert(vec![certificate.clone()], key)
+        .expect("the server's certificate");
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(certificate).expect("a root");
+        let trust = Arc::new(crate::connect::client_config(roots));
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server));
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a free port");
+        let port = listener.local_addr().expect("an address").port();
+        // The server takes two connections, and sends a word on each that gets through TLS.
+        let served = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("the server's runtime");
+            runtime.block_on(async move {
+                listener
+                    .set_nonblocking(true)
+                    .expect("a listener that never waits");
+                let listener =
+                    tokio::net::TcpListener::from_std(listener).expect("a listener in the runtime");
+                for _ in 0..2 {
+                    let (stream, _) = listener.accept().await.expect("the client");
+                    if let Ok(mut stream) = acceptor.accept(stream).await {
+                        let _ = stream.write_all(b"hello").await;
+                        let _ = stream.shutdown().await;
+                    }
+                }
+            });
+        });
+        let here = [IpAddr::V4(Ipv4Addr::LOCALHOST)];
+        let within = Duration::from_secs(10);
+        // A test's server is on this computer, which only a test reaches by a name.
+        let named = |text: &str| Spelled {
+            text: text.to_owned(),
+            address: None,
+        };
+        let stream = dial("the test's server", &here, port, within).expect("a connection");
+        let (mut place, runtime) =
+            match secure(stream, &named("localhost"), Arc::clone(&trust), within) {
+                Ok(made) => made,
+                Err(refusal) => panic!("TLS with the name the certificate is for: {refusal:?}"),
+            };
+        let mut word = [0_u8; 5];
+        runtime
+            .block_on(place.read_exact(&mut word))
+            .expect("what the server sent");
+        assert_eq!(&word, b"hello");
+        drop(place);
+        let stream = dial("the test's server", &here, port, within).expect("a connection");
+        let refused = secure(stream, &named("example.org"), trust, within).err();
+        assert!(
+            matches!(&refused, Some(Refusal::NotMade(why)) if why.contains("TLS with example.org")),
+            "{refused:?}"
+        );
+        served.join().expect("the server");
+    }
 }
