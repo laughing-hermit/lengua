@@ -996,3 +996,132 @@ fn a_worker_ends_when_its_server_does() {
         "the worker kept its program running after its server ended"
     );
 }
+
+/// What the review of the host left open (todo.md): a test that failed before its fix, and the
+/// tests the review found missing.
+mod review_gaps {
+use super::*;
+
+/// A hard link in the working folder to a file elsewhere is that file, and no symbolic link: the
+/// system resolves nothing on the way to it. So a file with more than one name is not opened,
+/// to read or to write, whichever folder its other name is in, since the names can't be told
+/// apart: `ACCES`, as for a link. A write that would empty it leaves it as it was. A file with
+/// one name opens.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_with_a_second_name_is_not_opened() {
+    let outside = tempfile::tempdir().expect("a folder outside");
+    let secret = outside.path().join("secret.txt");
+    std::fs::write(&secret, "no").expect("a file outside");
+    let folder = tempfile::tempdir().expect("the working folder");
+    std::fs::write(folder.path().join("plain.txt"), "one name").expect("a file");
+    std::fs::write(folder.path().join("own.txt"), "two names").expect("a file");
+    let linked = std::fs::hard_link(&secret, folder.path().join("linked.txt"))
+        .and_then(|()| std::fs::hard_link(folder.path().join("own.txt"), folder.path().join("twin.txt")));
+    if linked.is_err() {
+        lengua::skiplog::note("this system doesn't let the test make a hard link");
+        return;
+    }
+    for name in ["linked.txt", "own.txt", "twin.txt"] {
+        for create in [false, true] {
+            let (text, spec) = in_folder(folder.path(), name, create);
+            assert_eq!(
+                exited(&run(&text, spec, Limits::default()).await),
+                2,
+                "{name}, to write: {create}"
+            );
+        }
+    }
+    assert_eq!(std::fs::read(&secret).expect("the file outside"), b"no");
+    assert_eq!(
+        std::fs::read(folder.path().join("own.txt")).expect("the file"),
+        b"two names"
+    );
+    let (text, spec) = in_folder(folder.path(), "plain.txt", false);
+    assert_eq!(exited(&run(&text, spec, Limits::default()).await), 0);
+}
+
+/// On Windows, a junction is a link that any user may make, with no privilege: it is no way out
+/// of the working folder either, by itself or as a folder on the way, to read or to make a file.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_junction_in_the_working_folder_is_no_way_out() {
+    let outside = tempfile::tempdir().expect("a folder outside");
+    std::fs::write(outside.path().join("secret.txt"), "no").expect("a file outside");
+    let folder = tempfile::tempdir().expect("the working folder");
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(folder.path().join("away"))
+        .arg(outside.path())
+        .stdin(Stdio::null())
+        .output();
+    let there = std::fs::read(folder.path().join("away").join("secret.txt")).unwrap_or_default();
+    if !made.is_ok_and(|made| made.status.success()) || there != b"no" {
+        lengua::skiplog::note("this system doesn't let the test make a junction");
+        return;
+    }
+    for name in ["away/secret.txt", "away"] {
+        let (text, spec) = in_folder(folder.path(), name, false);
+        assert_eq!(
+            exited(&run(&text, spec, Limits::default()).await),
+            2,
+            "{name}"
+        );
+    }
+    let (text, spec) = in_folder(folder.path(), "away/made.txt", true);
+    assert_eq!(exited(&run(&text, spec, Limits::default()).await), 2);
+    assert!(!outside.path().join("made.txt").exists());
+}
+
+/// On macOS, the file system itself takes two names that differ in case or in normalization as
+/// one, where the volume folds them, as the system's own does: the test first shows which of
+/// the two this volume folds. lengua's names stay byte-exact on it: the other spelling of a name
+/// that is there isn't found, and can't be made beside it, so no program reaches a file through
+/// a spelling its folder doesn't list.
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+async fn names_macos_folds_together_stay_apart() {
+    let folder = tempfile::tempdir().expect("the working folder");
+    // é as one character, and as e with a combining accent.
+    let (composed, decomposed) = ("caf\u{e9}.txt", "cafe\u{301}.txt");
+    std::fs::write(folder.path().join("readme.txt"), "lower").expect("a file");
+    std::fs::write(folder.path().join(composed), "composed").expect("a file");
+    for (other, what) in [("README.TXT", "case"), (decomposed, "normalization")] {
+        if std::fs::metadata(folder.path().join(other)).is_err() {
+            lengua::skiplog::note(&format!("this volume doesn't fold {what} in names"));
+        }
+        // Not found, though the system would open the file; and not made, though on a volume
+        // that doesn't fold, the system would make a second file.
+        let (text, spec) = in_folder(folder.path(), other, false);
+        assert_eq!(
+            exited(&run(&text, spec, Limits::default()).await),
+            44,
+            "{what}"
+        );
+        let (text, spec) = in_folder(folder.path(), other, true);
+        assert_eq!(
+            exited(&run(&text, spec, Limits::default()).await),
+            20,
+            "{what}"
+        );
+    }
+    let mut names: Vec<String> = std::fs::read_dir(folder.path())
+        .expect("the folder")
+        .map(|entry| entry.expect("an entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert_eq!(
+        std::fs::read(folder.path().join("readme.txt")).expect("the file"),
+        b"lower"
+    );
+    assert_eq!(
+        std::fs::read(folder.path().join(composed)).expect("the file"),
+        b"composed"
+    );
+    // The names as they are open.
+    for name in ["readme.txt", composed] {
+        let (text, spec) = in_folder(folder.path(), name, false);
+        assert_eq!(exited(&run(&text, spec, Limits::default()).await), 0, "{name}");
+    }
+}
+}
