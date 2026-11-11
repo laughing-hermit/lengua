@@ -807,12 +807,20 @@ fn run_on_this_thread(
     if here.policy.terminal {
         eprintln!("lengua-mcp: {}", crate::server::TERMINAL_GRANT);
     }
-    // The paths its arguments name count from the shell's own folder, as any command's do.
-    let ground = Ground::Anywhere {
-        from: std::env::current_dir().unwrap_or_else(|_| here.folder.to_path_buf()),
-        own: here.own.to_vec(),
+    // The paths its arguments name count from the shell's own folder, as any command's do. A
+    // program whose idea names no such file has nowhere to count from, and nothing is asked
+    // of the system for it.
+    let ground = if reach.files.is_empty() {
+        Ground::Nowhere
+    } else {
+        Ground::Anywhere {
+            from: std::env::current_dir().unwrap_or_else(|_| here.folder.to_path_buf()),
+            own: here.own.to_vec(),
+        }
     };
-    say_places(here, &ground);
+    if !reach.files.is_empty() || !reach.runs.is_empty() {
+        say_places(here, &ground);
+    }
     let datagrams = match reach.receives {
         Some((port, anywhere)) => Some(Datagrams::bind(port, anywhere)?),
         None => None,

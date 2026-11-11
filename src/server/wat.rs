@@ -940,13 +940,20 @@ pub(super) fn run_from_shell(
             .iter()
             .map(|reach| made(reach, &request.args))
             .collect();
+        // lengua's own folders are found only for an idea that lets its program open what an
+        // argument names: no other run pays for the look.
+        let own = if ready.network.reach.files.is_empty() {
+            Vec::new()
+        } else {
+            own_folders(data_dir)
+        };
         Ok(Checked {
             request,
             workspace,
             ready,
             to_run,
             connections,
-            own: own_folders(data_dir),
+            own,
         })
     })?;
     match ended.map_err(|error| format!("couldn't run the program: {error}"))? {
@@ -1424,7 +1431,11 @@ impl LenguaServer {
                 .map_err(|error| format!("lengua couldn't keep the module: {error}"))?,
         );
         let connections = reaches(&network);
-        let own = own_folders(&self.data_dir);
+        let own = if network.reach.files.is_empty() {
+            Vec::new()
+        } else {
+            own_folders(&self.data_dir)
+        };
         let (max_file_size, max_written) = run_file_limits(workspace.is_some());
         let spec = Spec {
             folder: workspace.as_deref(),

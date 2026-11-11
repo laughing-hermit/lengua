@@ -328,7 +328,9 @@ pub mod terminal {
         Ok((size.ws_col, size.ws_row))
     }
 
-    /// The mode of the terminal `terminal` is, as numbers: equal when the mode is the same.
+    /// The mode of the terminal `terminal` is, as numbers: equal when the mode is the same. The
+    /// flag `PENDIN` is left out: it is no mode but the system's own note that typed input waits
+    /// to be read again, which macOS sets when a terminal goes back to lines.
     ///
     /// # Errors
     ///
@@ -339,7 +341,7 @@ pub mod terminal {
             wide(now.c_iflag),
             wide(now.c_oflag),
             wide(now.c_cflag),
-            wide(now.c_lflag),
+            wide(now.c_lflag & !libc::PENDIN),
         ];
         mode.extend(now.c_cc.iter().map(|code| u64::from(*code)));
         Ok(mode)

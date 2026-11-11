@@ -311,6 +311,38 @@ mod tests {
         assert_eq!(long.ready(), (0, true));
     }
 
+    /// Keys a thread of lengua's reads, as a raw terminal's are: a wait finds nothing until a
+    /// key is there, then what is there, and the end once the thread has ended and every key
+    /// was read. A read gives what has come, and never more than the buffer holds.
+    #[test]
+    fn keys_wait_until_one_is_there_and_end_with_their_thread() {
+        let (keys, from) = std::sync::mpsc::channel();
+        let mut input = Input::Keys {
+            from,
+            waiting: VecDeque::new(),
+            ended: false,
+        };
+        assert_eq!(input.pending(), None);
+        keys.send(b"ab".to_vec()).expect("the input takes keys");
+        keys.send(b"\x1b[A".to_vec()).expect("the input takes keys");
+        assert_eq!(input.pending(), Some((5, false)));
+        let mut one = [0_u8; 1];
+        assert_eq!(input.read(&mut one), Ok(1));
+        assert_eq!(&one, b"a");
+        let mut rest = [0_u8; 16];
+        assert_eq!(input.read(&mut rest), Ok(4));
+        assert_eq!(&rest[..4], b"b\x1b[A");
+        assert_eq!(input.pending(), None);
+        drop(keys);
+        assert_eq!(input.pending(), Some((0, true)));
+        assert_eq!(input.read(&mut rest), Ok(0));
+        // Input given up front never waits, and watching it changes nothing.
+        let mut given = Input::given(b"x".to_vec(), &[]);
+        given.watch();
+        assert_eq!(given.pending(), Some((1, false)));
+        assert!(matches!(given, Input::Given { .. }));
+    }
+
     #[test]
     fn output_is_kept_up_to_its_cap_and_a_closed_stream_is_a_broken_pipe() {
         let mut kept = Output::kept(4);
