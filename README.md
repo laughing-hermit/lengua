@@ -110,7 +110,8 @@ The install:
    nothing is wrong.
 
 `--check` only checks. `--prefix <folder>` installs into another marketplace folder, and replaces
-there only an earlier lengua install. `--link` (Linux and macOS) also puts `lengua-mcp` in
+there only an earlier lengua install. `--link` (Linux and macOS) also puts `lengua-mcp` and
+`lengua-run` in
 `~/.local/bin`. A browser marks what it downloads, and macOS won't start the unsigned server so
 marked: if you trust the archive, clear the mark first with `xattr -dr com.apple.quarantine
 <folder>`. The install says how on macOS and on Windows, and clears nothing itself.
@@ -148,11 +149,13 @@ until `run` stops it, ten minutes pass, or the session ends. From your own shell
 services, the `done` reply gives the command:
 
 ```sh
-lengua-mcp run <program folder> -- <arguments>
+lengua-run <program folder> -- <arguments>
 ```
 
-It runs only a folder whose idea and code match the signed `lengua.lock`, with the module `check`
-tested; otherwise it says why and exits with 125. It has no time limit, works in the current
+`lengua-run` is a small program beside `lengua-mcp` with no compiler in it, so it starts sooner
+and holds less memory; `lengua-mcp run` takes the same words and does the same. It runs only a
+folder whose idea and code match the signed `lengua.lock`, with the module `check` tested, in
+the form `check` compiled under your key; otherwise it says why and exits with 125. It has no time limit, works in the current
 folder (or the one `--in` names), gives the program only the environment variables `--env` names,
 and exits with the program's own code, or 134 when the program trapped
 ([docs/run.md](docs/run.md)).

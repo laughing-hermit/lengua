@@ -64,7 +64,7 @@ const WARM_UP: usize = 2;
 const COUNTER_RUNS: usize = 5;
 
 /// The version that runs lengua's own module the way the other modules run: built from the
-/// checked program's main.wat by lengua's build, the module `lengua-mcp run` runs, and run by
+/// checked program's main.wat by lengua's build, the module a run from a shell runs, and run by
 /// `lengua-mcp measure` in lengua's host. It runs only in rounds of its own with lengua's
 /// program, and is no row of the gate's.
 const MODULE_VERSION: &str = "lengua-module";
@@ -607,7 +607,7 @@ struct Made {
 }
 
 /// What measures every run: lengua-mcp's `measure`, with the data folder whose key signs
-/// lengua's locks and whose cache keeps every module compiled, lengua's and the others' alike.
+/// lengua's locks and seals every module's compiled form, lengua's and the others' alike.
 struct Runner {
     /// lengua-mcp, as Cargo built it for the bench.
     lengua: PathBuf,
@@ -1091,8 +1091,8 @@ struct Row {
 /// The row of `other` against `lengua`, over the runs both have: CPU and wall time decided by
 /// the test at a look's level, peak memory by the median of each one's peaks, and size as it is.
 /// Against a native build, lengua's size is its module's and `runtime`'s, the bytes of the
-/// lengua-mcp that runs it, as a native build needs nothing of lengua's to run; against another
-/// module, which runs in the same lengua-mcp, it is the module's alone.
+/// program that runs it, lengua-run, as a native build needs nothing of lengua's to run; against
+/// another module, which the same program runs, it is the module's alone.
 fn row(lengua: &Measured, other: &Measured, runtime: u64) -> Row {
     let runs = lengua.cpu_ns.len().min(other.cpu_ns.len());
     let problem = other.problem.clone().or_else(|| lengua.problem.clone());
@@ -1131,7 +1131,8 @@ fn row(lengua: &Measured, other: &Measured, runtime: u64) -> Row {
 }
 
 /// The rows of a workload's `versions`, lengua's first: one for each other version, with
-/// `runtime`, lengua-mcp's bytes, in lengua's size against a native build.
+/// `runtime`, the bytes of the program that runs lengua's, in lengua's size against a native
+/// build.
 fn rows_of(versions: &[Measured], runtime: u64) -> Vec<Row> {
     match versions.split_first() {
         Some((lengua, others)) => others
@@ -1164,7 +1165,7 @@ struct Outcome {
 }
 
 /// lengua's run apart from its module, as a workload's rounds of their own measured it: lengua's
-/// program, run as `lengua-mcp run` runs it, and lengua-module, the very module that run runs,
+/// program, run as a shell runs it, and lengua-module, the very module that run runs,
 /// run as the other modules are.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Apart {
@@ -1476,7 +1477,7 @@ fn lengua_made(
 }
 
 /// lengua-module's bytes for lengua's checked program `checked`: the module lengua's build makes
-/// from its main.wat, which `lengua-mcp run` runs, or why there are none.
+/// from its main.wat, which a run from a shell runs, or why there are none.
 fn lengua_module(checked: Option<&Result<Program, String>>) -> Result<Vec<u8>, String> {
     let program = match checked {
         Some(Ok(program)) => program,
@@ -2400,8 +2401,8 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
     let against = setting("LENGUA_BENCH_AGAINST");
 
     // lengua's programs, each from its idea to done in one session, as an agent takes them: the
-    // session's data folder then holds the key their locks are signed with, and the engine's
-    // cache of compiled modules, which every module's runs share.
+    // session's data folder then holds the key their locks are signed with, and each module's
+    // compiled form, sealed with that key, which its runs load.
     let session = Session::start(Protocol::Discover).await;
     let (mut now, mut then) = (Checked::new(), Checked::new());
     for &name in &names {

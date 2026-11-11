@@ -125,7 +125,7 @@ impl Checked {
 
     /// Compiles the module and seals it, as check does once its tests pass: the sealed bytes.
     fn compile(&self) -> Vec<u8> {
-        lengua::server::compile_and_keep(&self.data, &self.key, &self.module, &self.wasm)
+        lengua::server::compile_and_keep(&self.data, &self.key, &self.module, &self.wasm, None)
             .expect("the module compiles")
     }
 

@@ -855,6 +855,11 @@ none changed a result, and each is recorded here for the owner:
 - W12c's fixer ran `awk` twice to count line lengths, and W15's fixer once as a filter over the
   bench reports, whose output it didn't use. awk is a text tool like the grep and sed the rule
   allows, not a build or a run of code. Both are listed because the fixers reported them.
+- W19's builder (2026-11-11) ran `awk` several times, to pick lines out of CI's logs and once to
+  count line lengths, before it read this list; it used grep, sed and cut from then on. It also
+  asked for `python3 --version`, which the permission check refused, so nothing ran. And it
+  staged one commit with `git add -u`, tracked files only, where its brief said to name each
+  file: the commit holds only W19's files.
 - On 2026-11-11 the session ran `git add -A` in the owner's own checkout, and commit fe77cc5 took
   in `site/`: the old site's `node_modules` and build output, 12,225 files left untracked on the
   owner's computer since W17a deleted the site. The next commit took them out, and `.gitignore`

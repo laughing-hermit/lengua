@@ -831,7 +831,11 @@ impl From<String> for NotRun {
 /// Compiles `wasm`, the module whose SHA-256 is `module`, for a run from a shell on this
 /// computer, seals it with `key`, and keeps it in the data folder ([`compiled_module`]), written
 /// atomically: what later runs load in place of compiling. Gives the sealed bytes, kept or not:
-/// a run never fails for a compiled module it couldn't keep.
+/// a run never fails for a compiled module it couldn't keep. `cache` is where the process's
+/// engine that compiles for a run from a shell keeps compiled modules, if it is made here: the
+/// server gives its cache's folder, as its check of a secret idea's machine code does, and a
+/// run from a shell gives none, so it reads and writes no cache. What is sealed goes through no
+/// cache either way.
 ///
 /// # Errors
 ///
@@ -841,12 +845,10 @@ pub fn compile_and_keep(
     key: &Key,
     module: &Sha256Hex,
     wasm: &[u8],
+    cache: Option<&Path>,
 ) -> Result<Vec<u8>, String> {
     use std::io::Write as _;
-    // The process's one engine that compiles for a run from a shell, which the check of a
-    // secret idea's machine code makes with the cache too; what is sealed here goes through no
-    // cache.
-    let compiler = engine::engine(Setup::Shell, Some(engine::cache_folder(data_dir).as_path()))?;
+    let compiler = engine::engine(Setup::Shell, cache)?;
     let sealed = key.compile_sealed(&compiler, module, wasm)?;
     let path = compiled_module(data_dir.path(), text::BUILDER, module);
     if let Some(folder) = path.parent()
@@ -883,7 +885,7 @@ pub(crate) fn loaded_or_compiled(
     if !engine::compiles() {
         return Err(NotRun::NotCompiled(why));
     }
-    let sealed = compile_and_keep(data_dir, key, module, &wasm()?)
+    let sealed = compile_and_keep(data_dir, key, module, &wasm()?, None)
         .map_err(|error| format!("the engine couldn't compile the module: {error}"))?;
     key.load_sealed(&runner, module, &sealed)
         .map_err(|unsealed| NotRun::Refused(format!("lengua couldn't load what it compiled: {unsealed}")))
@@ -1267,8 +1269,10 @@ impl LenguaServer {
         // And compiled for this computer ahead of its runs, sealed with the user's key: a run
         // from a shell loads that and compiles nothing. A module that couldn't be compiled or
         // kept here still runs, since its first run from lengua-mcp compiles it.
+        let cache = engine::cache_folder(&self.data_dir);
         if let Ok(Some(key)) = Key::load(&self.data_dir)
-            && let Err(error) = compile_and_keep(&self.data_dir, &key, &checking.module, tested)
+            && let Err(error) =
+                compile_and_keep(&self.data_dir, &key, &checking.module, tested, Some(cache.as_path()))
         {
             tracing::warn!("couldn't compile the module ahead of its runs: {error}");
         }

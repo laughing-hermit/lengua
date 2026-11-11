@@ -6,13 +6,18 @@
 //! - `stamped/<sha256>`, each idea.md check recorded, by lengua's hash of it, which later
 //!   changes are shown against ([`crate::state::stamped_copy`]);
 //! - `tested/<builder>/<sha256>.wasm`, each module whose tests passed, by the build that made it
-//!   and the module's SHA-256, which a run from a shell runs once its bytes hash to the module
-//!   hash its lock records ([`crate::state::tested_module`]);
+//!   and the module's SHA-256, which a run from a shell compiles, once its bytes hash to the
+//!   module hash its lock records, when it has no compiled form to load
+//!   ([`crate::state::tested_module`]);
+//! - `tested/<builder>/<sha256>.shell.cwasm`, that module compiled for this computer ahead of
+//!   its runs, with the seal of the user's key, which a run from a shell loads once the seal
+//!   holds ([`crate::state::compiled_module`]);
 //! - `wrong/<idea's hash>-<module's hash>`, what a proof found wrong about a module of an idea,
 //!   which keeps `run` from running it whatever lock its folder holds
 //!   ([`crate::state::wrong_record`]);
-//! - `cache/`, the engine's compiled modules, unless the agent's harness gives the plugin a data
-//!   folder of its own ([`crate::wasm::engine::cache_folder`]);
+//! - `cache/`, the compiled modules of the engine that compiles, which the tests' workers and
+//!   the `run` tool use and no run from a shell reads, unless the agent's harness gives the
+//!   plugin a data folder of its own ([`crate::wasm::engine::cache_folder`]);
 //! - `graph/<sha256>.lock`, which keeps lengua's processes from writing one bundle's index.md and
 //!   log.md at once ([`DataDir::graph_lock`]).
 

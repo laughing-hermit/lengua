@@ -178,7 +178,8 @@ const LINUX: Words = Words {
     install: "In this folder, run `server/lengua-mcp install`.",
     options: "`--check` only checks, `--prefix <folder>` makes `<folder>` lengua's marketplace \
               folder, with the plugin in its `lengua/` folder, where what it replaces must be an \
-              earlier lengua install, and `--link` also puts `lengua-mcp` in `~/.local/bin`, to \
+              earlier lengua install, and `--link` also puts `lengua-mcp` and `lengua-run` in \
+              `~/.local/bin`, to \
               run programs from a shell.",
     destination: "`~/.local/share/lengua/plugins/lengua` (under `$XDG_DATA_HOME` when it is set)",
     loader: "\
@@ -200,7 +201,8 @@ const MACOS: Words = Words {
     install: "In this folder, run `server/lengua-mcp install`.",
     options: "`--check` only checks, `--prefix <folder>` makes `<folder>` lengua's marketplace \
               folder, with the plugin in its `lengua/` folder, where what it replaces must be an \
-              earlier lengua install, and `--link` also puts `lengua-mcp` in `~/.local/bin`, to \
+              earlier lengua install, and `--link` also puts `lengua-mcp` and `lengua-run` in \
+              `~/.local/bin`, to \
               run programs from a shell. On macOS a browser marks what it downloads, and macOS \
               won't start the unsigned server or solvers so marked, the install included: if \
               you trust this archive, clear the mark from this folder first, with `xattr -dr \

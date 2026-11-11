@@ -54,9 +54,6 @@ iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "
 lengua-os = { path = "crates/lengua-os" }
 rand = { version = "0.10", default-features = false, features = ["chacha"] }
 rmcp = { version = "3.8.0", features = ["transport-io"] }
-# SHA-256 of a program's files, which every run takes: ring's, which the TLS below brings and which
-# uses the CPU's SHA-256 instructions on every target (the sha2 crate does so on x86-64 alone).
-ring = "0.17.14"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustix = { version = "1", features = ["process", "thread"] }
 schemars = "1"
@@ -92,6 +89,8 @@ nix = { version = "0.31", default-features = false, features = ["process", "reso
 perf-event2 = "0.7.4"
 
 [dev-dependencies]
+# Temporary, for W19's measurements: the seal's HMAC, timed against the sha2 crate's.
+ring = "0.17.14"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 jsonschema = { version = "0.60", default-features = false }
 rmcp = { version = "3.8.0", features = ["client", "transport-child-process"] }

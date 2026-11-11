@@ -8,27 +8,40 @@ this is how a lengua computation runs.
 ## Run it
 
 ```sh
+lengua-run [--data-dir <absolute path>] <program folder> [--in <folder>] [--env NAME=value]... [--] [<argument>...]
 lengua-mcp [--data-dir <absolute path>] run <program folder> [--in <folder>] [--env NAME=value]... [--] [<argument>...]
 ```
 
-`lengua-mcp` is lengua's MCP server, `server/lengua-mcp` in the lengua plugin's folder;
-`lengua-mcp install --link` also puts it in `~/.local/bin` on Linux and macOS. It runs a folder
-whose `lengua.lock`, signed with this user's key, records `idea.md` and `main.wat` as they are.
-`check` writes that record on this computer once `main.wat` builds, follows every rule of
-lengua's WebAssembly dialect and passes every test of its idea. The proofs may still be running
-then. A proof that finds inputs where `main.wat` is wrong is recorded in the lock, and from then
-on `run` refuses that build.
+Both are in `server/` of the lengua plugin's folder, and `lengua-mcp install --link` also puts
+them in `~/.local/bin` on Linux and macOS. `lengua-run` only runs checked programs. It is lengua
+built without the engine's compiler, so it starts sooner and holds less memory, and `check`'s
+done reply names it. `lengua-mcp` is lengua's MCP server, whose `run` runs every checked program
+and compiles what `lengua-run` can't load. Both make the same checks and give the program the
+same things.
 
-Given such a folder, it:
+They run a folder whose `lengua.lock`, signed with this user's key, records `idea.md` and
+`main.wat` as they are. `check` writes that record on this computer once `main.wat` builds,
+follows every rule of lengua's WebAssembly dialect and passes every test of its idea. The proofs
+may still be running then. A proof that finds inputs where `main.wat` is wrong is recorded in the
+lock, and from then on `run` refuses that build.
 
-1. takes the module `check` tested, `main.wat` with lengua's small library merged in, which
-   `check` kept in lengua's data folder, and runs it only when its SHA-256 is the one
-   `lengua.lock` records. Where that module is missing or another, it builds `main.wat`, and
-   runs the build only when it is that same module: after lengua itself changed, a build that
-   differs doesn't run until `check` tests it. For an idea with a `- Secret:` line, it builds
-   `main.wat` every time, finds the operators that take a secret as `check` does, compiles the
-   module, and reads the machine code the engine made for them on this computer's CPU
-   ([check.md](check.md), step 4): code that doesn't keep the secret rule isn't run;
+Given such a folder, a run:
+
+1. loads the module `check` tested, `main.wat` with lengua's small library merged in, in the
+   form `check` compiled it to for this computer. lengua keeps that form in its data folder with
+   a seal: an HMAC-SHA256, made with this user's key, of the compiled bytes and of the module's
+   SHA-256, which must be the one `lengua.lock` records. A file without that seal is never
+   loaded, and neither is one the engine doesn't take, as after the data folder moved to another
+   kind of CPU. Where no compiled form loads, `lengua-mcp run` takes the module `check` kept,
+   when its SHA-256 is the lock's, or builds `main.wat` and takes the build only when it is that
+   same module: after lengua itself changed, a build that differs doesn't run until `check`
+   tests it. It compiles that module, seals it and keeps it, and the next run loads it.
+   `lengua-run` has no compiler: it says on standard error that the module has no compiled form
+   here, and starts `lengua-mcp run`, beside it, with the same words. For an idea with a
+   `- Secret:` line, `lengua-run` always starts `lengua-mcp run`, which builds `main.wat` every
+   time, finds the operators that take a secret as `check` does, and reads the machine code of
+   the module it loaded, on this computer's CPU ([check.md](check.md), step 4): code that
+   doesn't keep the secret rule isn't run;
 2. runs it on Wasmtime, in lengua's own WASI host, in this process, with this shell's standard
    input, output and error. The working folder is the current one, or the existing folder `--in`
    names, from the current folder when it isn't absolute, never `/`. For a program whose idea uses
@@ -38,8 +51,8 @@ Given such a folder, it:
    working folder. The words after the program
    folder are the program's arguments, and one that starts with `-` goes after `--`.
 
-Any other folder it refuses, saying why on standard error, and exits with 125. To check a folder
-that came from another computer, where this user's key never signed its lock, use
+Any other folder a run refuses, saying why on standard error, and exits with 125. To check a
+folder that came from another computer, where this user's key never signed its lock, use
 [`lengua-mcp check`](check.md), or have the agent call `check` on it.
 
 ## What the program reaches
@@ -66,7 +79,7 @@ From a shell, a run has no time limit, no limit on its output and none on its fi
 up to what the module declares, a program's calls take at most 512 KiB of stack, and it holds at
 most 4,352 open descriptors, its standard streams included.
 
-`lengua-mcp run` exits with:
+`lengua-run` and `lengua-mcp run` exit with:
 
 - the program's own exit code, the low 8 bits of what it gives `proc_exit`;
 - 134 when the program trapped: the engine stopped it at an instruction that can't go on, which
@@ -116,10 +129,14 @@ beside `lengua-mcp`, so that its peak memory counts from that process's few hund
 from `lengua-mcp`'s; `--counters` adds the CPU's counts of its L1 data, last-level and data TLB
 read misses, on Linux.
 
-A program folder runs as `lengua-mcp run` runs it, with every check `run` makes. Any other
-WebAssembly module of WASI preview 1, such as a C, C++ or Rust toolchain makes, runs in lengua's
-own host, in the same configuration of the engine, with what `--uses` and `--network` allow,
-written as an idea's `- Uses:` and `- Network:` lines are. A native executable runs as a shell
+A program folder runs as `lengua-run` runs it, with every check a run makes, or as `lengua-mcp
+run` does where `lengua-run` isn't beside `lengua-mcp`. Any other WebAssembly module of WASI
+preview 1, such as a C, C++ or Rust toolchain makes, runs in lengua's own host, by the same
+program in the same configuration of the engine, with what `--uses` and `--network` allow,
+written as an idea's `- Uses:` and `- Network:` lines are. It runs from its compiled form too,
+kept in the data folder under the user's key as a checked program's is: its first run compiles
+it, and `measure` reads and hashes its file, so the run it measures does neither. A native
+executable runs as a shell
 starts it. With `--serve <port>`, the program is a server: 64 clients (`--clients`) each send
 1,000 lines (`--requests`) of 64 bytes, one at a time, and must get each back in capitals, and
 its time on the clock runs from its first connection to its last answer. The gate that holds

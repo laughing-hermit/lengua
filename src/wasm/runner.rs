@@ -659,7 +659,15 @@ pub fn run_once_checked<O: Order, E>(
     let checked = checks()?;
     crate::stages::mark("checked");
     if on == On::Main && !crate::stages::variant("thread") {
-        return Ok(run_on_this_thread(checked.module(), &checked.here()));
+        let ended = run_on_this_thread(checked.module(), &checked.here());
+        // The process that runs a program on its main thread ends with it: the compiled module
+        // and the rest of what the checks handed over are left for the system to take back at
+        // the process's end, all at once, in place of being handed back piece by piece first.
+        // The program's host, with its files and connections, was closed when the run ended.
+        if !crate::stages::variant("tidy") {
+            std::mem::forget(checked);
+        }
+        return Ok(ended);
     }
     let ended = std::thread::scope(|scope| {
         let order = &checked;

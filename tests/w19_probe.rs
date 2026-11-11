@@ -134,6 +134,41 @@ async fn w19_probe() {
     println!("SHELL {}", done["shell"]);
     let data = session.data_dir.path().to_path_buf();
 
+    // The seal's HMAC over add's compiled module, by ring and by the sha2 crate.
+    let add = lengua::wasm::text::build(CODE).expect("it builds").wasm;
+    let compiled = lengua::state::compiled_module(
+        &data,
+        lengua::wasm::text::BUILDER,
+        &lengua::hash::Sha256Hex::of(&add),
+    );
+    let sealed = std::fs::read(&compiled).expect("check compiled add");
+    println!("SIZE add.wasm {}", add.len());
+    println!("SIZE add's compiled module, sealed {}", sealed.len());
+    let times = 2000_u32;
+    let started = std::time::Instant::now();
+    let mut sum = 0_u64;
+    for _ in 0..times {
+        let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &[7; 32]);
+        let tag = ring::hmac::sign(&key, &sealed);
+        sum += u64::from(tag.as_ref()[0]);
+    }
+    let by_ring = started.elapsed() / times;
+    let started = std::time::Instant::now();
+    for _ in 0..times {
+        use hmac::Mac as _;
+        let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(&[7; 32])
+            .expect("a key");
+        mac.update(&sealed);
+        sum += u64::from(mac.finalize().into_bytes()[0]);
+    }
+    let by_sha2 = started.elapsed() / times;
+    println!(
+        "MAC of {} bytes: ring {} ns, the sha2 crate {} ns ({sum})",
+        sealed.len(),
+        by_ring.as_nanos(),
+        by_sha2.as_nanos()
+    );
+
     let tiny = lengua::wasm::text::build(TINY).expect("it builds").wasm;
     let tiny_wasm = folder.path().join("tiny.wasm");
     std::fs::write(&tiny_wasm, &tiny).expect("written");
@@ -167,7 +202,7 @@ async fn w19_probe() {
         run("run: lengua-run", "", &with_lean),
         run("run: lengua-run, a thread", "thread", &with_lean),
         run("run: lengua-run, every function", "linkall", &with_lean),
-        run("run: lengua-run, the sha2 crate", "sha2", &with_lean),
+        run("run: lengua-run, all handed back", "tidy", &with_lean),
         module("module: lengua-mcp", "", &without),
         module("module: lengua-run", "", &with_lean),
         module("module: lengua-run, a thread", "thread", &with_lean),
