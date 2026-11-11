@@ -101,10 +101,11 @@ impl Grant {
         } else {
             return Err(USAGE.to_owned());
         };
-        let Some(index) = place
-            .strip_suffix(" argument names")
-            .and_then(|ordinal| crate::idea::ORDINALS.iter().position(|word| *word == ordinal))
-        else {
+        let Some(index) = place.strip_suffix(" argument names").and_then(|ordinal| {
+            crate::idea::ORDINALS
+                .iter()
+                .position(|word| *word == ordinal)
+        }) else {
             return Err(USAGE.to_owned());
         };
         if folder && !reads {
@@ -148,11 +149,7 @@ impl Grant {
                     .get(index.saturating_sub(1))
                     .copied()
                     .unwrap_or("first"),
-                if folder {
-                    ", and everything in it"
-                } else {
-                    ""
-                }
+                if folder { ", and everything in it" } else { "" }
             ),
         }
     }
@@ -310,7 +307,9 @@ const SYSTEM: [&str; 3] = ["/proc", "/sys", "/dev"];
 /// Why the system's own rules refuse `place`, when they do.
 #[cfg(unix)]
 fn system_problem(place: &Path) -> Option<String> {
-    let system = SYSTEM.into_iter().find(|system| place.starts_with(system))?;
+    let system = SYSTEM
+        .into_iter()
+        .find(|system| place.starts_with(system))?;
     Some(format!(
         "{} is inside {system}, the system's own: its files are this computer's processes, their \
          memory and its devices, not the user's files",
@@ -382,21 +381,23 @@ pub fn resolve(ground: &Ground, text: &str, folder: bool) -> Result<Place, Unpla
 /// A test's place: beneath the test's own folder, by the working folder's rules.
 fn beneath(base: &Path, text: &str, folder: bool) -> Result<Place, Unplaced> {
     let shown = text.escape_debug();
-    let mut names =
-        crate::wasm::host::files::names_in(&[], text.as_bytes()).map_err(|number| {
-            if number == errno::NOTCAPABLE {
-                refused(format!(
-                    "`{shown}` leads out of the test's own folder, and a test reaches no other"
-                ))
-            } else {
-                missing(number, format!("`{shown}` isn't a path every system takes"))
-            }
-        })?;
+    let mut names = crate::wasm::host::files::names_in(&[], text.as_bytes()).map_err(|number| {
+        if number == errno::NOTCAPABLE {
+            refused(format!(
+                "`{shown}` leads out of the test's own folder, and a test reaches no other"
+            ))
+        } else {
+            missing(number, format!("`{shown}` isn't a path every system takes"))
+        }
+    })?;
     let leaf = if folder {
         None
     } else {
         Some(names.pop().ok_or_else(|| {
-            missing(errno::ISDIR, format!("`{shown}` names the folder, not a file"))
+            missing(
+                errno::ISDIR,
+                format!("`{shown}` names the folder, not a file"),
+            )
         })?)
     };
     Ok(Place {
@@ -534,9 +535,21 @@ mod tests {
     #[test]
     fn grants_add_up_and_cover_their_own_argument() {
         let mut grants = Vec::new();
-        add(&mut grants, grant("reads the file its first argument names")).expect("the first");
-        add(&mut grants, grant("writes the file its first argument names")).expect("the same");
-        add(&mut grants, grant("reads the folder its second argument names")).expect("a folder");
+        add(
+            &mut grants,
+            grant("reads the file its first argument names"),
+        )
+        .expect("the first");
+        add(
+            &mut grants,
+            grant("writes the file its first argument names"),
+        )
+        .expect("the same");
+        add(
+            &mut grants,
+            grant("reads the folder its second argument names"),
+        )
+        .expect("a folder");
         assert_eq!(grants.len(), 2);
         let first = granted(&grants, 1, false).expect("the first argument's");
         assert!(first.reads && first.writes);
@@ -597,7 +610,10 @@ mod tests {
         };
         // The user's own file, by a path from the folder and by a whole path.
         let near = resolve(&ground, "in.txt", false).expect("a file of the user's");
-        assert_eq!((near.root.clone(), near.leaf.as_deref()), (notes.clone(), Some("in.txt")));
+        assert_eq!(
+            (near.root.clone(), near.leaf.as_deref()),
+            (notes.clone(), Some("in.txt"))
+        );
         let whole = notes.join("in.txt");
         let far = resolve(&ground, &whole.to_string_lossy(), false).expect("the same file");
         assert_eq!(far, near);
@@ -633,7 +649,12 @@ mod tests {
         );
         // The system's own.
         #[cfg(unix)]
-        for system in ["/proc/self/mem", "/sys/kernel", "/dev/null", "/dev/../dev/zero"] {
+        for system in [
+            "/proc/self/mem",
+            "/sys/kernel",
+            "/dev/null",
+            "/dev/../dev/zero",
+        ] {
             if !Path::new(system).parent().is_some_and(Path::exists) {
                 continue;
             }
@@ -643,8 +664,15 @@ mod tests {
         #[cfg(unix)]
         assert!(forbidden(Path::new("/proc/1/environ"), &[], false).is_some());
         #[cfg(windows)]
-        for system in [r"\\.\PhysicalDrive0", r"\\.\pipe\lengua", r"\\?\GLOBALROOT\Device\Null"] {
-            assert!(forbidden(Path::new(system), &[], false).is_some(), "{system}");
+        for system in [
+            r"\\.\PhysicalDrive0",
+            r"\\.\pipe\lengua",
+            r"\\?\GLOBALROOT\Device\Null",
+        ] {
+            assert!(
+                forbidden(Path::new(system), &[], false).is_some(),
+                "{system}"
+            );
         }
         assert_eq!(forbidden(&whole, &[], false), None);
     }

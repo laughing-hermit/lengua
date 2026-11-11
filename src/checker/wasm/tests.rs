@@ -2459,7 +2459,11 @@ fn rule_3_takes_the_files_and_programs_only_as_the_idea_grants_them() {
         "it needs `- Files:",
     );
     // Each function is in its own module alone.
-    let moved = REACHER.replacen("\"lengua_fs_1\" \"file_open\"", "\"lengua_net_1\" \"file_open\"", 1);
+    let moved = REACHER.replacen(
+        "\"lengua_fs_1\" \"file_open\"",
+        "\"lengua_net_1\" \"file_open\"",
+        1,
+    );
     let report = check_lines(&moved, &[terminal, file, folder, runs], &[]);
     assert_violation(
         &report,

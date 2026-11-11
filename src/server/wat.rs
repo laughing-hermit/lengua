@@ -22,9 +22,8 @@ use super::{
     LenguaServer, Model, Passed, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun, Stage,
     VERIFIED_NOTE, Witness, already_serving, background_limits, check_wait, cost_line, counted,
     ended_report, idea_problems, keep_tested, may_reach, own_folder_problem, own_folders,
-    proof_time, proven_detail,
-    random_seed, reaches, read_optional, settled, state_for_run, state_of, wait_for,
-    working_folder,
+    proof_time, proven_detail, random_seed, reaches, read_optional, settled, state_for_run,
+    state_of, wait_for, working_folder,
 };
 use crate::checker::{
     self,

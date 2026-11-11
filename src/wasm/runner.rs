@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use wasmtime::{Engine, Linker, Module, Store, UpdateDeadline, WasmBacktrace};
 
 use crate::connect::{CONNECT_TIMEOUT, CONNECT_TOTAL, Made, Reach};
+use crate::named::Ground;
 use crate::runner::{End, Run, Trap};
 use crate::supply::Time;
 use crate::wasm::engine::Setup;
@@ -23,7 +24,6 @@ use crate::wasm::host::net::{self, Link, Listener, Socket};
 use crate::wasm::host::open::Datagrams;
 use crate::wasm::host::policy::Policy;
 use crate::wasm::host::stdio::{Input, Output, Stream};
-use crate::named::Ground;
 use crate::wasm::host::term::{Own, Terminal};
 use crate::wasm::host::{Beyond, Host, Stop, World};
 use crate::wasm::job::{self, Connection, Done, Ending, Event, Job, Reached};

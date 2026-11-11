@@ -194,8 +194,7 @@ impl Rule {
                 if !headed || bare || rule.more > 0 || timed {
                     return Err(USAGE.to_owned());
                 }
-                if part.is_empty() || part.len() > MAX_VALUE || part.chars().any(char::is_control)
-                {
+                if part.is_empty() || part.len() > MAX_VALUE || part.chars().any(char::is_control) {
                     return Err(format!(
                         "an argument is 1 to {MAX_VALUE} bytes of text with no control \
                          character; {USAGE}"
@@ -661,11 +660,9 @@ mod tests {
             }
         );
         assert!(bare.describe().contains("`hostname` with no arguments"));
-        let tar = rule("`tar` with the arguments `-tf`, a value and up to 4 values, within 60 seconds.");
-        assert_eq!(
-            tar.arguments,
-            [Slot::Text("-tf".to_owned()), Slot::Value]
-        );
+        let tar =
+            rule("`tar` with the arguments `-tf`, a value and up to 4 values, within 60 seconds.");
+        assert_eq!(tar.arguments, [Slot::Text("-tf".to_owned()), Slot::Value]);
         assert_eq!((tar.more, tar.seconds), (4, 60));
         let git = rule("`git` with the arguments `rev-parse` and `HEAD`");
         assert_eq!(git.arguments.len(), 2);
@@ -675,7 +672,10 @@ mod tests {
         );
         // An argument is the idea's text as it is written: its case, its spaces, its commas.
         let exact = rule("`Tool` with the argument `--Format=a, b and c`");
-        assert_eq!(exact.arguments, [Slot::Text("--Format=a, b and c".to_owned())]);
+        assert_eq!(
+            exact.arguments,
+            [Slot::Text("--Format=a, b and c".to_owned())]
+        );
         assert_eq!(exact.program, "Tool");
         let timed = rule("`hostname` with no arguments, within 1 second");
         assert_eq!(timed.seconds, 1);
@@ -706,8 +706,18 @@ mod tests {
     #[test]
     fn a_line_never_names_a_shell() {
         for shell in [
-            "sh", "bash", "zsh", "cmd", "CMD.EXE", "powershell", "pwsh.exe", "env", "xargs",
-            "sudo", "busybox", "Bash",
+            "sh",
+            "bash",
+            "zsh",
+            "cmd",
+            "CMD.EXE",
+            "powershell",
+            "pwsh.exe",
+            "env",
+            "xargs",
+            "sudo",
+            "busybox",
+            "Bash",
         ] {
             let line = format!("`{shell}` with the arguments `-c` and a value");
             let problem = Rule::read(&line).expect_err(shell);

@@ -303,7 +303,12 @@ mod tests {
         // The run's report has what it opened and what lengua refused.
         let noted = &host.notes.opened;
         assert!(noted[0].problem.is_none() && noted[0].place.ends_with("in.txt"));
-        assert!(noted[1].problem.as_deref().is_some_and(|why| why.contains("no `- Files:` line")));
+        assert!(
+            noted[1]
+                .problem
+                .as_deref()
+                .is_some_and(|why| why.contains("no `- Files:` line"))
+        );
         // Under a grant of every argument, each is opened, and one that isn't there is INVAL.
         let mut every = host_with(
             &["reads the files its arguments name"],
@@ -339,7 +344,11 @@ mod tests {
             mode::WRITE | mode::CREATE,
             mode::WRITE | mode::APPEND,
         ] {
-            assert_eq!(opened(&mut host, 1, asked), Err(errno::NOTCAPABLE), "{asked}");
+            assert_eq!(
+                opened(&mut host, 1, asked),
+                Err(errno::NOTCAPABLE),
+                "{asked}"
+            );
         }
         assert_eq!(
             std::fs::read(folder.path().join("in.txt")).expect("the file"),
@@ -382,17 +391,35 @@ mod tests {
         let fd = folder_opened(&mut host, 1).expect("the folder");
         let file = path_opened(&mut host, fd, "in.txt", false).expect("a file in it");
         assert_eq!(contents(&mut host, file), b"hello");
-        assert_eq!(path_opened(&mut host, fd, "in.txt", true), Err(errno::NOTCAPABLE));
-        assert_eq!(path_opened(&mut host, fd, "new.txt", true), Err(errno::NOTCAPABLE));
-        assert_eq!(path_opened(&mut host, fd, "../x", false), Err(errno::NOTCAPABLE));
+        assert_eq!(
+            path_opened(&mut host, fd, "in.txt", true),
+            Err(errno::NOTCAPABLE)
+        );
+        assert_eq!(
+            path_opened(&mut host, fd, "new.txt", true),
+            Err(errno::NOTCAPABLE)
+        );
+        assert_eq!(
+            path_opened(&mut host, fd, "../x", false),
+            Err(errno::NOTCAPABLE)
+        );
         let mut memory = vec![0_u8; 65_536];
         memory[100..106].copy_from_slice(b"in.txt");
         memory[200..203].copy_from_slice(b"sub");
         memory[300..305].copy_from_slice(b"b.txt");
         let refused = Err(Fail::Errno(errno::NOTCAPABLE));
-        assert_eq!(files::path_unlink_file(&mut host, &memory, fd, (100, 6)), refused);
-        assert_eq!(files::path_remove_directory(&mut host, &memory, fd, (200, 3)), refused);
-        assert_eq!(files::path_create_directory(&mut host, &memory, fd, (300, 5)), refused);
+        assert_eq!(
+            files::path_unlink_file(&mut host, &memory, fd, (100, 6)),
+            refused
+        );
+        assert_eq!(
+            files::path_remove_directory(&mut host, &memory, fd, (200, 3)),
+            refused
+        );
+        assert_eq!(
+            files::path_create_directory(&mut host, &memory, fd, (300, 5)),
+            refused
+        );
         assert_eq!(
             files::path_rename(&mut host, &memory, (fd, 100, 6), (fd, 300, 5)),
             refused
@@ -449,13 +476,16 @@ mod tests {
         );
         assert_eq!(folder_opened(&mut host, 2), Err(errno::NOTCAPABLE));
         assert_eq!(folder_opened(&mut host, 3), Err(errno::NOTCAPABLE));
-        assert_eq!(std::fs::read(data.join("key")).expect("the key"), b"the key");
-        assert!(
-            host.notes
-                .opened
-                .iter()
-                .all(|noted| noted.problem.as_deref().is_some_and(|why| why.contains("lengua's own")))
+        assert_eq!(
+            std::fs::read(data.join("key")).expect("the key"),
+            b"the key"
         );
+        assert!(host.notes.opened.iter().all(|noted| {
+            noted
+                .problem
+                .as_deref()
+                .is_some_and(|why| why.contains("lengua's own"))
+        }));
     }
 
     /// The threat: a handed folder's file is a link to a private file. The last name is never
@@ -508,7 +538,13 @@ mod tests {
         std::fs::write(folder.path().join("sub").join("deep.txt"), "deep").expect("a file");
         let mut host = host_with(
             &["reads and writes the files its arguments name"],
-            &["in.txt", "sub/deep.txt", "/etc/passwd", "../in.txt", "sub/../../x"],
+            &[
+                "in.txt",
+                "sub/deep.txt",
+                "/etc/passwd",
+                "../in.txt",
+                "sub/../../x",
+            ],
             Ground::Beneath(folder.path().to_path_buf()),
         );
         let fd = opened(&mut host, 1, mode::READ).expect("a file of the test's");
@@ -516,7 +552,10 @@ mod tests {
         let deep = opened(&mut host, 2, mode::READ).expect("a file beneath");
         assert_eq!(contents(&mut host, deep), b"deep");
         for outside in [3, 4, 5] {
-            assert_eq!(opened(&mut host, outside, mode::READ), Err(errno::NOTCAPABLE));
+            assert_eq!(
+                opened(&mut host, outside, mode::READ),
+                Err(errno::NOTCAPABLE)
+            );
             assert_eq!(
                 opened(&mut host, outside, mode::WRITE | mode::CREATE),
                 Err(errno::NOTCAPABLE)
@@ -556,7 +595,9 @@ mod tests {
         assert_eq!(total, 1 << 20);
         assert_eq!(last, Err(Fail::Errno(errno::FBIG)));
         assert_eq!(
-            std::fs::metadata(folder.path().join("out.bin")).expect("the file").len(),
+            std::fs::metadata(folder.path().join("out.bin"))
+                .expect("the file")
+                .len(),
             1 << 20
         );
     }

@@ -760,8 +760,8 @@ pub mod terminal {
             let (columns, rows) = size_of(&open("CONOUT$")).expect("its size");
             assert!(columns > 0 && rows > 0, "{columns} by {rows}");
             // A file is no console.
-            let file = std::fs::File::open(std::env::current_exe().expect("this test"))
-                .expect("it opens");
+            let file =
+                std::fs::File::open(std::env::current_exe().expect("this test")).expect("it opens");
             assert!(mode_of(&file).is_err());
             assert!(size_of(&file).is_err());
         }

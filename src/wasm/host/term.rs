@@ -127,9 +127,9 @@ mod tests {
 
     use super::*;
     use crate::wasm::engine::{self, Setup};
+    use crate::wasm::host::linker;
     use crate::wasm::host::policy::Policy;
     use crate::wasm::host::tests::world;
-    use crate::wasm::host::linker;
     use crate::wasm::job::Ending;
     use crate::wasm::runner;
 

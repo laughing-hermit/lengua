@@ -459,11 +459,9 @@ pub fn constraints_of(lines: &[&str]) -> Result<(Vec<Use>, Network), Vec<Problem
 /// and `x` `` after the name for a command with arguments, and `prints nothing` for one that
 /// prints nothing. The text takes the escapes a step's text takes.
 pub(crate) fn program_stood(tokens: &[Token]) -> Option<crate::starts::Stood> {
-    let word = |token: Option<&Token>, wanted: &str| {
-        matches!(token, Some(Token::Word(word)) if word == wanted)
-    };
-    let mut rest = tokens
-        .strip_prefix(&[Token::Word("the".into()), Token::Word("program".into())])?;
+    let word = |token: Option<&Token>, wanted: &str| matches!(token, Some(Token::Word(word)) if word == wanted);
+    let mut rest =
+        tokens.strip_prefix(&[Token::Word("the".into()), Token::Word("program".into())])?;
     let [Token::Value(program), after @ ..] = rest else {
         return None;
     };
@@ -501,13 +499,7 @@ pub(crate) fn program_stood(tokens: &[Token]) -> Option<crate::starts::Stood> {
     };
     let code = shaped(
         rest,
-        &[
-            Some("and"),
-            Some("exits"),
-            Some("with"),
-            Some("code"),
-            None,
-        ],
+        &[Some("and"), Some("exits"), Some("with"), Some("code"), None],
     )?;
     let code = code.first()?.trim().parse::<u8>().ok()?;
     (rest.len() == 5).then(|| crate::starts::Stood {
@@ -2787,9 +2779,10 @@ impl Parser {
                     Some(number),
                     format!(
                         "`{name}` isn't something lengua lets a program use; it may use {known} \
-                         and the network, besides writing its output. lengua programs can't \
-                         allocate memory, start processes, handle signals or change the file \
-                         system"
+                         and the network, besides writing its output. The files its arguments \
+                         name and the programs it starts have lines of their own: `- Files: reads \
+                         the file its first argument names` and ``- Runs: `hostname` with no \
+                         arguments``. lengua programs can't allocate memory or handle signals"
                     ),
                 ),
             }
@@ -3417,8 +3410,8 @@ fn allowed_calls_rewrite(listed: &str) -> String {
         String::new()
     } else {
         format!(
-            " ({} can't be used: lengua programs can't allocate memory, start processes, handle \
-             signals or change the file system)",
+            " ({} can't be used: lengua programs can't allocate memory or handle signals, and \
+             they start a program only through a `- Runs:` line)",
             refused.join(", ")
         )
     };
@@ -4166,6 +4159,80 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         .expect("valid idea");
         assert_eq!(receives.network.reach.receives, Some((5353, true)));
         assert!(receives.behaviors[0].serves);
+    }
+
+    /// `- Files:` and `- Runs:` lines grant the files and folders a program's arguments name
+    /// and the programs it starts, each on a line of its own. What its tests say a command gives
+    /// is read from its steps, and a run reads the grants and none of that. Neither line makes
+    /// the program one that uses the network.
+    #[test]
+    fn files_and_runs_lines_grant_what_a_program_reaches_by_itself() {
+        use crate::named::Which;
+        use crate::starts::Slot;
+        let lines = "- Files: reads the file its first argument names\n- Files: writes the file \
+                     its `first` argument names.\n- Files: Reads and writes the folder its \
+                     second argument names\n- Runs: `Git` with the arguments `rev-parse`, a \
+                     value and up to 2 values, within 30 seconds";
+        let steps = "- Given the arguments `2` and `3`\n- And the program `Git` with the \
+                     arguments `rev-parse` and `HEAD` prints `abc\\n` and exits with code `0`\n- \
+                     And the program `Git` with the arguments `rev-parse` and `x` prints nothing \
+                     and exits with code `128`";
+        let granted = ADD.replace("- Uses: nothing", lines).replacen(
+            "- Given the arguments `2` and `3`",
+            steps,
+            1,
+        );
+        let idea = parse(&granted).expect("valid idea");
+        let reach = &idea.network.reach;
+        assert_eq!(reach.files.len(), 2);
+        assert!(reach.files[0].reads && reach.files[0].writes && !reach.files[0].folder);
+        assert_eq!(reach.files[1].which, Which::Argument(2));
+        assert!(reach.files[1].folder && reach.files[1].writes);
+        assert_eq!(reach.runs.len(), 1);
+        assert_eq!(reach.runs[0].program, "Git");
+        assert_eq!(
+            reach.runs[0].arguments,
+            [Slot::Text("rev-parse".to_owned()), Slot::Value]
+        );
+        assert_eq!((reach.runs[0].more, reach.runs[0].seconds), (2, 30));
+        assert!(!idea.network.is_used() && !reach.is_empty() && reach.no_network());
+        let stood = &idea.network.programs;
+        assert_eq!(stood.len(), 2);
+        assert_eq!(stood[0].arguments, ["rev-parse", "HEAD"]);
+        assert_eq!((stood[0].output.as_str(), stood[0].code), ("abc\n", 0));
+        assert_eq!((stood[1].output.as_str(), stood[1].code), ("", 128));
+        // A run reads the grants, and nothing of the tests.
+        let (_, network) = grants(&granted).expect("its grants");
+        assert_eq!(network.reach, idea.network.reach);
+        assert!(network.programs.is_empty());
+        let with = |line: &str| ADD.replace("- Uses: nothing", line);
+        assert_problem(
+            &with("- Files: reads /etc/passwd"),
+            "write `- Files: reads the file its first argument names`",
+        );
+        assert_problem(
+            &with("- Files: writes the folder its first argument names"),
+            "reads it too",
+        );
+        assert_problem(
+            &with(
+                "- Files: reads the file its first argument names\n- Files: reads the folder \
+                 its first argument names",
+            ),
+            "one of the two",
+        );
+        assert_problem(
+            &with("- Runs: `sh` with the arguments `-c` and a value"),
+            "is a shell",
+        );
+        assert_problem(
+            &with("- Runs: git status"),
+            "the program's name in backticks",
+        );
+        assert_problem(
+            &with("- Uses: files and programs"),
+            "have lines of their own",
+        );
     }
 
     #[test]

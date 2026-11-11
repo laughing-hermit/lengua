@@ -108,11 +108,7 @@ pub fn program_run(
     let (name, arguments) = (pieces[0], &pieces[1..]);
     let what = shown(&pieces);
     let grants = host.policy.reach.get();
-    let Some(rule) = grants
-        .runs
-        .iter()
-        .find(|rule| rule.covers(name, arguments))
-    else {
+    let Some(rule) = grants.runs.iter().find(|rule| rule.covers(name, arguments)) else {
         host.note(
             what,
             Some("no `- Runs:` line of its idea covers that command".to_owned()),
@@ -145,7 +141,13 @@ pub fn program_run(
             return Err(Fail::Errno(errno::NOENT));
         };
         host.note(what, None, false);
-        give(memory, output, out, stood.output.as_bytes(), i32::from(stood.code))?;
+        give(
+            memory,
+            output,
+            out,
+            stood.output.as_bytes(),
+            i32::from(stood.code),
+        )?;
         if stood.output.len() > room {
             return Err(Fail::Errno(errno::FBIG));
         }
@@ -175,14 +177,19 @@ pub fn program_run(
             host.note(what, Some(format!("it didn't start: {error}")), false);
             Err(Fail::Errno(errno::IO))
         }
-        Ok(End::Exited { code, output: printed }) => {
+        Ok(End::Exited {
+            code,
+            output: printed,
+        }) => {
             host.note(what, None, false);
             give(memory, output, out, &printed, code)
         }
         Ok(End::TooMuch(printed)) => {
             host.note(
                 what,
-                Some(format!("it printed more than {room} bytes, and lengua ended it")),
+                Some(format!(
+                    "it printed more than {room} bytes, and lengua ended it"
+                )),
                 false,
             );
             give(memory, output, out, &printed, 0)?;
@@ -238,7 +245,9 @@ mod tests {
             std::env::current_exe().map_err(|error| Unfound::Missing(error.to_string()))?;
         let resolved = program.canonicalize().unwrap_or_else(|_| program.clone());
         if barred.iter().any(|folder| resolved.starts_with(folder)) {
-            return Err(Unfound::Refused("it lies where the program may write".to_owned()));
+            return Err(Unfound::Refused(
+                "it lies where the program may write".to_owned(),
+            ));
         }
         Ok(program)
     }
@@ -343,12 +352,20 @@ mod tests {
     /// name. Nothing is looked for, and nothing starts, for a command no rule covers.
     #[test]
     fn what_no_rule_covers_is_not_started() {
-        let says = format!("`tool` with the arguments {}", child("child_says_what_it_got"));
+        let says = format!(
+            "`tool` with the arguments {}",
+            child("child_says_what_it_got")
+        );
         let mut host = host_with(&[&says], None);
         let name = "wasm::host::start::tests::child_says_what_it_got";
         let covered = ["tool", "--exact", name, CHILD, "--ignored", "--nocapture"];
         let (number, printed, code) = ran(&mut host, &covered, b"", 65_536);
-        assert_eq!((number, code), (0, 0), "{}", String::from_utf8_lossy(&printed));
+        assert_eq!(
+            (number, code),
+            (0, 0),
+            "{}",
+            String::from_utf8_lossy(&printed)
+        );
         // One argument more, one fewer, one changed, another program.
         let mut more = covered.to_vec();
         more.push("--show-output");
@@ -365,10 +382,24 @@ mod tests {
         // What isn't a command at all.
         let mut memory = vec![0_u8; 65_536];
         memory[1024..1028].copy_from_slice(b"tool");
-        let malformed = program_run(&mut host, &mut memory, (1024, 4), (0, 0), (2048, 16), (8, 12));
+        let malformed = program_run(
+            &mut host,
+            &mut memory,
+            (1024, 4),
+            (0, 0),
+            (2048, 16),
+            (8, 12),
+        );
         assert_eq!(malformed, Err(Fail::Errno(errno::INVAL)));
         memory[1024..1027].copy_from_slice(&[0xff, 0xfe, 0]);
-        let not_text = program_run(&mut host, &mut memory, (1024, 3), (0, 0), (2048, 16), (8, 12));
+        let not_text = program_run(
+            &mut host,
+            &mut memory,
+            (1024, 3),
+            (0, 0),
+            (2048, 16),
+            (8, 12),
+        );
         assert_eq!(not_text, Err(Fail::Errno(errno::ILSEQ)));
         // A host with no grant, and the report of what lengua refused.
         let mut none = host_with(&[], None);
@@ -391,7 +422,10 @@ mod tests {
     /// program wrote. It gets no environment, its input, and an empty folder of its own.
     #[test]
     fn a_started_program_gets_no_environment_and_its_input() {
-        let says = format!("`tool` with the arguments {}", child("child_says_what_it_got"));
+        let says = format!(
+            "`tool` with the arguments {}",
+            child("child_says_what_it_got")
+        );
         let mut host = host_with(&[&says], None);
         let name = "wasm::host::start::tests::child_says_what_it_got";
         let command = ["tool", "--exact", name, CHILD, "--ignored", "--nocapture"];
@@ -434,7 +468,14 @@ mod tests {
         }
         memory[1024..1024 + text.len()].copy_from_slice(&text);
         let length = u32::try_from(text.len()).expect("it fits");
-        let ended = program_run(&mut host, &mut memory, (1024, length), (0, 0), (8192, 64), (8, 12));
+        let ended = program_run(
+            &mut host,
+            &mut memory,
+            (1024, length),
+            (0, 0),
+            (8192, 64),
+            (8, 12),
+        );
         assert_eq!(ended, Err(Fail::Stop(crate::wasm::host::Stop::TimedOut)));
     }
 
@@ -486,23 +527,41 @@ mod tests {
             panic!("a test looked for {name}");
         }
         host.finder = never;
-        assert_eq!(ran(&mut host, &["hostname"], b"", 64), (0, b"box\n".to_vec(), 0));
-        assert_eq!(ran(&mut host, &["tool", "-x", "value"], b"", 64), (0, Vec::new(), 3));
+        assert_eq!(
+            ran(&mut host, &["hostname"], b"", 64),
+            (0, b"box\n".to_vec(), 0)
+        );
+        assert_eq!(
+            ran(&mut host, &["tool", "-x", "value"], b"", 64),
+            (0, Vec::new(), 3)
+        );
         // A command the idea grants and no step gives isn't there.
-        assert_eq!(ran(&mut host, &["tool", "-x", "other"], b"", 64).0, errno::NOENT);
+        assert_eq!(
+            ran(&mut host, &["tool", "-x", "other"], b"", 64).0,
+            errno::NOENT
+        );
         let name = "wasm::host::start::tests::child_waits";
         let granted = ["tool", "--exact", name, CHILD, "--ignored", "--nocapture"];
         assert_eq!(ran(&mut host, &granted, b"", 64).0, errno::NOENT);
         // The idea's rules hold in a test too, and so does the buffer.
-        assert_eq!(ran(&mut host, &["hostname", "-f"], b"", 64).0, errno::NOTCAPABLE);
-        assert_eq!(ran(&mut host, &["hostname"], b"", 2), (errno::FBIG, b"bo".to_vec(), 0));
+        assert_eq!(
+            ran(&mut host, &["hostname", "-f"], b"", 64).0,
+            errno::NOTCAPABLE
+        );
+        assert_eq!(
+            ran(&mut host, &["hostname"], b"", 2),
+            (errno::FBIG, b"bo".to_vec(), 0)
+        );
     }
 
     /// The threat: a program starts a file it wrote itself. A program that lies in the working
     /// folder, or where an argument of the program names a file it may write, isn't started.
     #[test]
     fn a_program_in_the_working_folder_is_not_started() {
-        let says = format!("`tool` with the arguments {}", child("child_says_what_it_got"));
+        let says = format!(
+            "`tool` with the arguments {}",
+            child("child_says_what_it_got")
+        );
         let name = "wasm::host::start::tests::child_says_what_it_got";
         let command = ["tool", "--exact", name, CHILD, "--ignored", "--nocapture"];
         let here = std::env::current_exe().expect("this test");
@@ -512,12 +571,12 @@ mod tests {
         let (number, printed, _) = ran(&mut host, &command, b"", 65_536);
         assert_eq!(number, errno::NOTCAPABLE);
         assert!(printed.is_empty());
-        assert!(
-            host.notes
-                .opened
-                .iter()
-                .any(|noted| noted.problem.as_deref().is_some_and(|why| why.contains("may write")))
-        );
+        assert!(host.notes.opened.iter().any(|noted| {
+            noted
+                .problem
+                .as_deref()
+                .is_some_and(|why| why.contains("may write"))
+        }));
         // The system's temporary folder is barred too, whatever else is.
         assert!(barred(&host).len() >= 2);
     }

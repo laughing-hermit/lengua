@@ -1,9 +1,10 @@
-//! Mutation testing of what lengua proves: for every proven WebAssembly fixture and the main
-//! template, semantic mutants of its main.wat (a number moved by one, a comparison turned to its
-//! opposite, a named constant moved by one) each go through `check`, and each must be caught, by
-//! the rules, a test, or a proof, never come out proven. A mutant that survives is a missing test
-//! or proof, or one that changes nothing an idea can see, which its report shows for a person to
-//! judge.
+//! Mutation testing of what lengua proves and tests: for every proven WebAssembly fixture, the
+//! main template, and the programs lengua tests and cannot prove, semantic mutants of its
+//! main.wat (a number moved by one, a comparison turned to its opposite, a named constant moved by
+//! one) each go through `check`, and each must be caught, by the rules, a test, or a proof, never
+//! come out proven, nor, where no proof stands behind the tests, come out done. A mutant that
+//! survives is a missing test or proof, or one that changes nothing an idea can see, which its
+//! report shows for a person to judge.
 //!
 //! Slow (a check of every mutant, its proofs included), so it's ignored: run it by hand, or on
 //! CI's dispatch, with `--ignored every_proven_programs_mutants_are_caught`, and
@@ -74,6 +75,17 @@ const PROGRAMS: &[(&str, &str)] = &[
         "plugin/skills/compile/assets/main-template-idea.md",
         "plugin/skills/compile/assets/main-template.wat",
     ),
+];
+
+/// The programs lengua tests and doesn't prove, since they reach what the model doesn't follow
+/// (a connection, a file or a program they open themselves, the terminal): each idea, then
+/// its main.wat. No proof stands behind their tests, so a mutant of one must break a rule or
+/// fail a test: one that comes out done survived.
+const TESTED: &[(&str, &str)] = &[
+    ("examples/follow/idea.md", "examples/follow/main.wat"),
+    ("examples/copy/idea.md", "examples/copy/main.wat"),
+    ("examples/computer/idea.md", "examples/computer/main.wat"),
+    ("examples/key/idea.md", "examples/key/main.wat"),
 ];
 
 fn read(path: &str) -> String {
@@ -231,10 +243,12 @@ fn fate(report: &Value) -> Fate {
     }
 }
 
-/// Every mutant of each of `programs`, checked in `session`: the survivors, described. With
+/// Every mutant of each of `programs`, checked in `session`: the survivors, described. A
+/// mutant of a program that is `proven` survives when every proof says it is right; one of a
+/// program that is only tested survives when no rule and no test caught it. With
 /// `LENGUA_MUTATE_ONLY` set to a comma-separated list, only the programs whose main.wat path
 /// contains one of its parts, so a program just added can be run alone.
-async fn survivors(session: &Session, programs: &[(&str, &str)]) -> Vec<String> {
+async fn survivors(session: &Session, programs: &[(&str, &str)], proven: bool) -> Vec<String> {
     let only = std::env::var("LENGUA_MUTATE_ONLY").ok();
     let wanted = |code: &str| {
         only.as_deref()
@@ -253,7 +267,12 @@ async fn survivors(session: &Session, programs: &[(&str, &str)]) -> Vec<String> 
             let found = fate(&report);
             eprintln!("{code} {name}: {found:?}");
             let named = format!("{code} {name}");
-            if found == Fate::Survived && !EQUIVALENT.iter().any(|(known, _)| *known == named) {
+            let caught = if proven {
+                found != Fate::Survived
+            } else {
+                matches!(found, Fate::Rules | Fate::Tests)
+            };
+            if !caught && !EQUIVALENT.iter().any(|(known, _)| *known == named) {
                 survived.push(named);
             }
             *tally.entry(format!("{found:?}")).or_insert(0) += 1;
@@ -267,11 +286,13 @@ async fn survivors(session: &Session, programs: &[(&str, &str)]) -> Vec<String> 
 #[ignore = "checks every mutant through to its proofs: by hand, or on CI's dispatch"]
 async fn every_proven_programs_mutants_are_caught() {
     let session = Session::proving_for(Protocol::Discover, PROOF_SECONDS).await;
-    let survived = survivors(&session, PROGRAMS).await;
+    let mut survived = survivors(&session, PROGRAMS, true).await;
+    survived.extend(survivors(&session, TESTED, false).await);
     session.service.cancel().await.expect("close the session");
     assert!(
         survived.is_empty(),
-        "mutants that came out proven: {survived:#?}"
+        "mutants that came out proven, or passed every test of a program with no proof: \
+         {survived:#?}"
     );
 }
 
