@@ -339,7 +339,7 @@ against native C++ are undecided.
 
 lengua 0.2.0 is a work in progress. The WebAssembly lengua's milestones W0 to W12c, W14 and
 W17a, lengua's tooling in Rust, are on main; W13, the check of the engine's machine code for an
-idea's secrets, is on the branch `wip/machine-time`. At bce6cd5, which merged W17a with W12c, the suite passes natively on all five runners
+idea's secrets, is on main too. At bce6cd5, which merged W17a with W12c, the suite passes natively on all five runners
 (run 42765232534); among its tests, every program of `examples/` and `tests/fixtures` goes from
 its request to done. There, each runner's archive was built, then installed and checked on a
 clean runner of its own system and CPU (run 42765242004). In an interactive Claude Code session,

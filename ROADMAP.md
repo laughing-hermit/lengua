@@ -252,7 +252,7 @@ branch, a jump or a call through a register, a call of the engine's functions, a
 address of a table in the code, and bytes it can't read. `run`, a run from a shell and the
 attester read the code again before they run it, so each run's code was read on its own computer.
 An idea with no secret compiles nothing for it. It was stopped by the safety filter on 2026-11-07
-while it was being designed, and built on 2026-11-10 on `wip/machine-time`.
+while it was being designed, and built on 2026-11-10 (on main).
 
 What it found: on x86-64, Cranelift's code for `i8x16.shl` and `i8x16.shr_u` by an amount that
 isn't a constant reads a mask from a table at an index made from the amount, which the secret rule

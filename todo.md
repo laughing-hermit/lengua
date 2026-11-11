@@ -144,7 +144,7 @@ recorded and left.
     the prover refuses it wasn't examined.
   - The rule's limits on depth and on operators followed have no test.
 - **Constant time in the engine's machine code** (W13, stopped 2026-11-07). **Done on
-  2026-11-10**, on `wip/machine-time` (the suite on all five runners at e317a30, 42940764016). For an idea with a `- Secret:` line, `check`,
+  2026-11-10**, on main (the suite on all five runners at e317a30, 42940764016). For an idea with a `- Secret:` line, `check`,
   `run`, a run from a shell and the attester compile the module for this computer and read the
   machine code the engine made for each operator the secret rule found to take a secret
   (`src/checker/wasm/machine.rs`): a conditional branch, a jump or a call through a register, a
@@ -474,7 +474,7 @@ Each merges to main when green on the runners it names; [ROADMAP.md](ROADMAP.md)
 - **W11. The native product retired** (kept at the tag).
 - **W12. Performance and the gate.**
 - **W13. Constant time in the machine code.** Stopped by the safety filter on 2026-11-07; built on
-  2026-11-10 with the owner's word, on `wip/machine-time` (above).
+  2026-11-10 with the owner's word, on main (above).
 - **W14. Package, `doctor` and release** on all five runners, and the agent's test in the
   interactive session.
 - **W15. The documents, the finish-line run, and the report.**
@@ -555,7 +555,7 @@ Runs, as they land:
 | W12 | 42393960971 (the benchmark, its workloads and the gate, at 9a549b3: the suite on all five runners and the gate, green); 42661776298 (the first gate run on all five runners: each runner's KNOWN_BEHIND, from its own KNOWN_BEHIND-<runner>.txt, at 2bad55a); on main with W11 |
 | W12b | 42728146781 (lengua's run made lean, at d6496e3: the suite on all five runners and the gate, green); 42728160641 (its bench on all five runners at d6496e3: on Linux on x86-64 a run's own cost fell from about 0.75 ms of CPU time and 5 MiB to 0.15 to 0.32 ms and 0.7 to 1.0 MiB; 94 rows newly ahead, taken out of KNOWN_BEHIND at 59f76f9); main at eff6b98, whose push suite 42732412732 is green |
 | W12c | 42756064246 (the programs made faster, at 076bcc1: the suite on all five runners, green, with the format job's layout applied at f4cf505, which 42759059023 compiles clean); 42756074550 (its bench on all five runners at 076bcc1: on Linux on x86-64, lengua's CPU time is 0.36 of the fastest WebAssembly build of C, C++ or Rust on tally, 0.61 on sort, 0.79 on histogram and crc32c, 0.90 on wc and files, and 1.10 on empty, as the report rounds them; 208 rows newly ahead on the five runners, taken out of KNOWN_BEHIND at 5714b42); its review's 5 findings fixed before them; main at f4cf505, whose push suite 42760180544 is green |
-| W13 | 42927099111 (the first build, at 69f6623: its own test on Linux on x86-64 showed that it passed a lane shift whose code the address map gives no operator); 42934398868 (the check's tests on Linux on x86-64 and on ARM64, green, with that code read too); 42937233986 (the suite on Linux on x86-64 at e317a30, green); 42940764016 (the suite on all five runners at e317a30, green: each runner reads its own CPU's code); on `wip/machine-time`, not merged |
+| W13 | 42927099111 (the first build, at 69f6623: its own test on Linux on x86-64 showed that it passed a lane shift whose code the address map gives no operator); 42934398868 (the check's tests on Linux on x86-64 and on ARM64, green, with that code read too); 42937233986 (the suite on Linux on x86-64 at e317a30, green); 42940764016 (the suite on all five runners at e317a30, green: each runner reads its own CPU's code); on `wip/machine-time`, on main |
 | W14 | 42387284972 (the suite on all five runners and the gate at 83641b5); 42387777039 (release at 7835d9a: the five archives built, each installed on a clean runner of its system and CPU, doctor and the release check, green); main at 7835d9a. The agent's test in this session, 2026-11-07, with that Linux x86-64 archive: below |
 | W17a | 42753840475 (lengua's tooling in Rust, at d0e9ea6: the suite on all five runners and the gate, green); 42753851417 (release at d0e9ea6: the five archives built by `cargo xtask release`, each installed by `lengua-mcp install` on a clean runner of its system and CPU, doctor and the release check, green); 42753863525 (the goldens recorded by `cargo xtask golden` and compared by `cargo xtask golden-diff`: the raw view differs only in four proof lines that ran out of time, which the runner's load decides); 42753874793 (the bench through `cargo xtask bench-wasm` and `bench-report` on Linux on x86-64, to its report); with W12c merged, at bce6cd5: 42765232534 (the suite on all five runners and the gate, green) and 42765242004 (release on all five, each archive installed on a clean runner, green); main at bce6cd5 |
 | W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](docs/history/PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
