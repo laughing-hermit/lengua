@@ -21,8 +21,12 @@
 # (https://github.com/laughing-hermit/lengua/actions/runs/42661776298, at 9a549b3), which took
 # the place of a line naming every row of the runner, less those where it was ahead in a later
 # run: https://github.com/laughing-hermit/lengua/actions/runs/42728160641 (at d6496e3, lengua's
-# run made lean, W12b) and https://github.com/laughing-hermit/lengua/actions/runs/42756074550
-# (at 076bcc1, faster programs, W12c). Each line says what the latest run found.
+# run made lean, W12b), https://github.com/laughing-hermit/lengua/actions/runs/42756074550 (at
+# 076bcc1, faster programs, W12c) and
+# https://github.com/laughing-hermit/lengua/actions/runs/42947294489 (at 33ed7fe, the finish-line
+# run, W15), which took out 20 rows and left 1,037. Each line says what the latest run found.
+# That run also found 22 rows behind or undecided that the list doesn't name, as it may not grow:
+# todo.md lists them under "A row the gate can't decide".
 
 linux-x86_64 empty c-wasm cpu  # behind
 linux-x86_64 empty c-wasm wall  # behind
@@ -87,9 +91,7 @@ linux-x86_64 upcase rust cpu  # behind
 linux-x86_64 upcase rust wall  # behind
 linux-x86_64 upcase rust memory  # behind
 linux-x86_64 upcase rust size  # behind
-linux-x86_64 upcase-stdin c-wasm memory  # behind
 linux-x86_64 upcase-stdin c-wasm size  # behind
-linux-x86_64 upcase-stdin cpp-wasm memory  # behind
 linux-x86_64 upcase-stdin cpp-wasm size  # behind
 linux-x86_64 upcase-stdin rust-wasm memory  # behind
 linux-x86_64 upcase-stdin c cpu  # behind
@@ -228,10 +230,8 @@ linux-x86_64 readings rust memory  # behind
 linux-x86_64 readings rust size  # behind
 
 linux-aarch64 empty c-wasm cpu  # behind
-linux-aarch64 empty c-wasm wall  # behind
 linux-aarch64 empty c-wasm memory  # behind
 linux-aarch64 empty cpp-wasm cpu  # behind
-linux-aarch64 empty cpp-wasm wall  # undecided
 linux-aarch64 empty cpp-wasm memory  # behind
 linux-aarch64 empty rust-wasm memory  # behind
 linux-aarch64 empty c cpu  # behind
@@ -291,7 +291,7 @@ linux-aarch64 upcase rust cpu  # behind
 linux-aarch64 upcase rust wall  # behind
 linux-aarch64 upcase rust memory  # behind
 linux-aarch64 upcase rust size  # behind
-linux-aarch64 upcase-stdin c-wasm cpu  # undecided
+linux-aarch64 upcase-stdin c-wasm cpu  # behind
 linux-aarch64 upcase-stdin c-wasm wall  # undecided
 linux-aarch64 upcase-stdin c-wasm memory  # behind
 linux-aarch64 upcase-stdin c-wasm size  # behind
@@ -433,11 +433,9 @@ macos-aarch64 empty rust cpu  # behind
 macos-aarch64 empty rust wall  # behind
 macos-aarch64 empty rust memory  # behind
 macos-aarch64 empty rust size  # behind
-macos-aarch64 add c-wasm cpu  # undecided
-macos-aarch64 add c-wasm wall  # undecided
+macos-aarch64 add c-wasm cpu  # behind
 macos-aarch64 add c-wasm memory  # behind
-macos-aarch64 add cpp-wasm cpu  # undecided
-macos-aarch64 add cpp-wasm wall  # undecided
+macos-aarch64 add cpp-wasm cpu  # behind
 macos-aarch64 add cpp-wasm memory  # behind
 macos-aarch64 add c cpu  # behind
 macos-aarch64 add c wall  # behind
@@ -452,10 +450,8 @@ macos-aarch64 add rust wall  # behind
 macos-aarch64 add rust memory  # behind
 macos-aarch64 add rust size  # behind
 macos-aarch64 hypotenuse c-wasm cpu  # behind
-macos-aarch64 hypotenuse c-wasm wall  # undecided
 macos-aarch64 hypotenuse c-wasm memory  # behind
-macos-aarch64 hypotenuse cpp-wasm cpu  # undecided
-macos-aarch64 hypotenuse cpp-wasm wall  # undecided
+macos-aarch64 hypotenuse cpp-wasm cpu  # behind
 macos-aarch64 hypotenuse cpp-wasm memory  # behind
 macos-aarch64 hypotenuse c cpu  # behind
 macos-aarch64 hypotenuse c wall  # behind
@@ -469,11 +465,7 @@ macos-aarch64 hypotenuse rust cpu  # behind
 macos-aarch64 hypotenuse rust wall  # behind
 macos-aarch64 hypotenuse rust memory  # behind
 macos-aarch64 hypotenuse rust size  # behind
-macos-aarch64 upcase c-wasm cpu  # undecided
-macos-aarch64 upcase c-wasm wall  # undecided
 macos-aarch64 upcase c-wasm memory  # behind
-macos-aarch64 upcase cpp-wasm cpu  # undecided
-macos-aarch64 upcase cpp-wasm wall  # undecided
 macos-aarch64 upcase cpp-wasm memory  # behind
 macos-aarch64 upcase c cpu  # behind
 macos-aarch64 upcase c wall  # behind
@@ -505,7 +497,7 @@ macos-aarch64 upcase-stdin rust wall  # behind
 macos-aarch64 upcase-stdin rust memory  # behind
 macos-aarch64 upcase-stdin rust size  # behind
 macos-aarch64 shout c-wasm cpu  # behind
-macos-aarch64 shout c-wasm wall  # undecided
+macos-aarch64 shout c-wasm wall  # behind
 macos-aarch64 shout c-wasm memory  # behind
 macos-aarch64 shout cpp-wasm cpu  # behind
 macos-aarch64 shout cpp-wasm wall  # undecided
@@ -590,16 +582,13 @@ macos-aarch64 server c cpu  # undecided
 macos-aarch64 server c wall  # behind
 macos-aarch64 server c memory  # behind
 macos-aarch64 server c size  # behind
-macos-aarch64 server cpp cpu  # behind
+macos-aarch64 server cpp cpu  # undecided
 macos-aarch64 server cpp wall  # behind
 macos-aarch64 server cpp memory  # behind
 macos-aarch64 server cpp size  # behind
-macos-aarch64 server rust cpu  # undecided
 macos-aarch64 server rust wall  # behind
 macos-aarch64 server rust memory  # behind
 macos-aarch64 server rust size  # behind
-macos-aarch64 files c-wasm memory  # undecided
-macos-aarch64 files cpp-wasm memory  # undecided
 macos-aarch64 files c cpu  # behind
 macos-aarch64 files c wall  # behind
 macos-aarch64 files c memory  # behind
@@ -668,9 +657,7 @@ windows-x86_64 add rust size  # behind
 windows-x86_64 hypotenuse c-wasm cpu  # undecided
 windows-x86_64 hypotenuse c-wasm memory  # behind
 windows-x86_64 hypotenuse cpp-wasm cpu  # undecided
-windows-x86_64 hypotenuse cpp-wasm wall  # undecided
 windows-x86_64 hypotenuse cpp-wasm memory  # behind
-windows-x86_64 hypotenuse rust-wasm cpu  # undecided
 windows-x86_64 hypotenuse rust-wasm memory  # behind
 windows-x86_64 hypotenuse c cpu  # behind
 windows-x86_64 hypotenuse c wall  # behind
@@ -722,13 +709,13 @@ windows-x86_64 upcase-stdin rust cpu  # behind
 windows-x86_64 upcase-stdin rust wall  # behind
 windows-x86_64 upcase-stdin rust memory  # behind
 windows-x86_64 upcase-stdin rust size  # behind
-windows-x86_64 shout c-wasm cpu  # behind
+windows-x86_64 shout c-wasm cpu  # undecided
 windows-x86_64 shout c-wasm wall  # behind
 windows-x86_64 shout c-wasm memory  # behind
 windows-x86_64 shout cpp-wasm cpu  # undecided
 windows-x86_64 shout cpp-wasm wall  # behind
 windows-x86_64 shout cpp-wasm memory  # behind
-windows-x86_64 shout rust-wasm cpu  # behind
+windows-x86_64 shout rust-wasm cpu  # undecided
 windows-x86_64 shout rust-wasm memory  # behind
 windows-x86_64 shout c cpu  # behind
 windows-x86_64 shout c wall  # behind
@@ -749,7 +736,7 @@ windows-x86_64 wc c cpu  # behind
 windows-x86_64 wc c wall  # behind
 windows-x86_64 wc c memory  # behind
 windows-x86_64 wc c size  # behind
-windows-x86_64 wc cpp cpu  # undecided
+windows-x86_64 wc cpp cpu  # behind
 windows-x86_64 wc cpp memory  # behind
 windows-x86_64 wc cpp size  # behind
 windows-x86_64 wc rust cpu  # behind
@@ -856,7 +843,7 @@ windows-x86_64 readings rust wall  # behind
 windows-x86_64 readings rust memory  # behind
 windows-x86_64 readings rust size  # behind
 
-windows-aarch64 empty c-wasm cpu  # undecided
+windows-aarch64 empty c-wasm cpu  # behind
 windows-aarch64 empty c-wasm wall  # behind
 windows-aarch64 empty c-wasm memory  # behind
 windows-aarch64 empty cpp-wasm cpu  # undecided
@@ -896,7 +883,7 @@ windows-aarch64 add rust memory  # behind
 windows-aarch64 add rust size  # behind
 windows-aarch64 hypotenuse c-wasm cpu  # undecided
 windows-aarch64 hypotenuse c-wasm memory  # behind
-windows-aarch64 hypotenuse cpp-wasm cpu  # undecided
+windows-aarch64 hypotenuse cpp-wasm cpu  # behind
 windows-aarch64 hypotenuse cpp-wasm memory  # behind
 windows-aarch64 hypotenuse rust-wasm cpu  # undecided
 windows-aarch64 hypotenuse rust-wasm memory  # behind
@@ -912,12 +899,10 @@ windows-aarch64 hypotenuse rust cpu  # behind
 windows-aarch64 hypotenuse rust wall  # behind
 windows-aarch64 hypotenuse rust memory  # behind
 windows-aarch64 hypotenuse rust size  # behind
-windows-aarch64 upcase c-wasm cpu  # behind
-windows-aarch64 upcase c-wasm wall  # undecided
+windows-aarch64 upcase c-wasm cpu  # undecided
+windows-aarch64 upcase c-wasm wall  # behind
 windows-aarch64 upcase c-wasm memory  # behind
-windows-aarch64 upcase cpp-wasm cpu  # undecided
 windows-aarch64 upcase cpp-wasm memory  # behind
-windows-aarch64 upcase rust-wasm cpu  # undecided
 windows-aarch64 upcase rust-wasm memory  # behind
 windows-aarch64 upcase c cpu  # behind
 windows-aarch64 upcase c wall  # behind
@@ -931,12 +916,12 @@ windows-aarch64 upcase rust cpu  # behind
 windows-aarch64 upcase rust wall  # behind
 windows-aarch64 upcase rust memory  # behind
 windows-aarch64 upcase rust size  # behind
-windows-aarch64 upcase-stdin c-wasm cpu  # undecided
-windows-aarch64 upcase-stdin c-wasm wall  # undecided
+windows-aarch64 upcase-stdin c-wasm cpu  # behind
+windows-aarch64 upcase-stdin c-wasm wall  # behind
 windows-aarch64 upcase-stdin c-wasm memory  # behind
 windows-aarch64 upcase-stdin c-wasm size  # behind
-windows-aarch64 upcase-stdin cpp-wasm cpu  # undecided
-windows-aarch64 upcase-stdin cpp-wasm wall  # undecided
+windows-aarch64 upcase-stdin cpp-wasm cpu  # behind
+windows-aarch64 upcase-stdin cpp-wasm wall  # behind
 windows-aarch64 upcase-stdin cpp-wasm memory  # behind
 windows-aarch64 upcase-stdin cpp-wasm size  # behind
 windows-aarch64 upcase-stdin rust-wasm cpu  # undecided
@@ -957,7 +942,7 @@ windows-aarch64 shout c-wasm cpu  # undecided
 windows-aarch64 shout c-wasm wall  # behind
 windows-aarch64 shout c-wasm memory  # behind
 windows-aarch64 shout cpp-wasm cpu  # undecided
-windows-aarch64 shout cpp-wasm wall  # undecided
+windows-aarch64 shout cpp-wasm wall  # behind
 windows-aarch64 shout cpp-wasm memory  # behind
 windows-aarch64 shout rust-wasm memory  # behind
 windows-aarch64 shout c cpu  # behind
@@ -989,7 +974,6 @@ windows-aarch64 wc rust memory  # behind
 windows-aarch64 wc rust size  # behind
 windows-aarch64 histogram c-wasm memory  # behind
 windows-aarch64 histogram cpp-wasm memory  # behind
-windows-aarch64 histogram rust-wasm cpu  # undecided
 windows-aarch64 histogram rust-wasm memory  # behind
 windows-aarch64 histogram c cpu  # behind
 windows-aarch64 histogram c wall  # behind
