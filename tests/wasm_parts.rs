@@ -479,9 +479,7 @@ async fn the_secret_rule_goes_through_a_taken_function() {
     let report = session.record(&program).await;
     assert_eq!(report["state"], "code_problems", "{report}");
     assert!(
-        report["problems"]
-            .to_string()
-            .contains("so a secret decides"),
+        report["problems"].to_string().contains("so a secret decides"),
         "{report}"
     );
     program.write("idea.md", &idea);

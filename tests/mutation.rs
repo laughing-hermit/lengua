@@ -250,14 +250,18 @@ async fn survivors(session: &Session, programs: &[(&str, &str)]) -> Vec<String> 
     for (idea, code) in programs.iter().filter(|(_, code)| wanted(code)) {
         let (idea_text, code_text) = (read(idea), read(code));
         let mut tally = std::collections::BTreeMap::new();
+        // A program built on parts keeps one bundle for all its mutants, its parts checked once
+        // beside it: each part's own tests and proofs take their time.
+        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(code);
+        let folder = folder.parent().expect("main.wat stands in a folder");
+        let built_on_parts = !common::parts_of(folder).is_empty();
+        let bundle = Program::new();
+        if let Err(problem) = session.settle_parts(&bundle, folder).await {
+            panic!("{code}: {problem}");
+        }
         for (name, mutant) in mutants(&code_text) {
-            let program = Program::new();
-            // The parts it builds on stand beside it, each checked first.
-            let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(code);
-            let folder = folder.parent().expect("main.wat stands in a folder");
-            if let Err(problem) = session.settle_parts(&program, folder).await {
-                panic!("{code}: {problem}");
-            }
+            let fresh = Program::new();
+            let program = if built_on_parts { &bundle } else { &fresh };
             program.write("idea.md", &idea_text);
             program.write("main.wat", &mutant);
             session.record(&program).await;
