@@ -1290,6 +1290,13 @@ fn compiler(language: &str) -> &'static str {
     }
 }
 
+/// The C++ standard every native C++ build is held to: C++17 with GNU's extensions, which the
+/// workloads' main.cpp files are written in (`std::optional`, `std::string_view`,
+/// `std::from_chars`). It is GCC's own default, and that of wasi-sdk's clang, which builds the
+/// same files to WebAssembly; Apple's clang and LLVM's clang on Windows default to an older
+/// standard and built none of those files without it.
+const CPP_STANDARD: &str = "-std=gnu++17";
+
 /// The sets of flags to build `language`'s native version with, in the order to try them, each
 /// with the libraries to link after the source: for speed on this CPU, as the system's
 /// developers build. Where the compiler doesn't take the CPU's own name, a CPU flag that every
@@ -1334,6 +1341,9 @@ fn flag_sets(language: &str) -> Vec<(Vec<&'static str>, Vec<&'static str>)> {
         for cpu in cpus {
             let mut set = flags.to_vec();
             set.push(*cpu);
+            if language == "cpp" {
+                set.push(CPP_STANDARD);
+            }
             sets.push((set, libraries.to_vec()));
         }
     }
