@@ -335,6 +335,14 @@ jobs:
         if: ${{ matrix.mode != 'golden' && matrix.mode != 'release' }}
         run: cargo clippy --release --all-targets --locked --workspace --keep-going -- -D warnings
 
+      # lengua-run by itself, as it ships: the lengua crate without the engine's compiler. Cargo
+      # gives a build of the whole workspace one set of features, so the step above and the tests
+      # build lengua-run with a compiler it never calls, and only this builds what a release
+      # and a bench build.
+      - name: Clippy, lengua-run with no compiler
+        if: ${{ matrix.mode != 'golden' && matrix.mode != 'release' }}
+        run: cargo clippy --release --locked --package lengua-run -- -D warnings
+
       # Built first, so that the time a test run may take (stall_seconds) is the tests' and not the
       # compiler's.
       - name: Build the tests
@@ -467,6 +475,8 @@ jobs:
             target/bench/KNOWN_BEHIND-*.txt
             target/release/lengua-mcp
             target/release/lengua-mcp.exe
+            target/release/lengua-run
+            target/release/lengua-run.exe
           retention-days: 7
           if-no-files-found: ignore
 

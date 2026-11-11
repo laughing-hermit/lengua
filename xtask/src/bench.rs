@@ -160,12 +160,20 @@ pub fn wasm(arguments: &[String]) -> Result<u8, String> {
 /// Where Windows's runner images keep LLVM's programs.
 const LLVM: &str = r"C:\Program Files\LLVM\bin";
 
-/// `cargo xtask bench`.
+/// `cargo xtask bench`: lengua-run built by itself first, with no compiler in it, as it ships,
+/// beside the lengua-mcp the bench is built with, which runs lengua's programs and the other
+/// modules with it; then the bench.
 pub fn bench(arguments: &[String]) -> Result<u8, String> {
     if !arguments.is_empty() {
         return Err("usage: cargo xtask bench".to_owned());
     }
     let root = ci::root()?;
+    let mut runner = ci::cargo();
+    runner
+        .current_dir(&root)
+        .args(["build", "--release", "--locked"])
+        .args(["--package", "lengua-run"]);
+    ci::must(&mut runner)?;
     let mut command = ci::cargo();
     command
         .current_dir(&root)

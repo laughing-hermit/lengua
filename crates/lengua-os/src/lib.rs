@@ -1,9 +1,11 @@
-//! lengua's calls into the operating system, kept apart from the rest so that the lengua crate can
-//! forbid unsafe code outright: any call that needs it is wrapped here in a safe function, with a
-//! test on the runner of the system it is for. On Linux, a program run in a process forked from
-//! this one, with what the system counted of its cost; on Windows, how the system describes the
-//! CPU's caches, and what a child process cost; on Windows and macOS, the memory the computer has
-//! free and in all, and what a process holds of it.
+//! lengua's calls that need unsafe code, kept apart from the rest so that the lengua crate can
+//! forbid unsafe code outright: each is wrapped here in a safe function, with a test, those into
+//! the operating system on the runner of the system they are for. On Linux, a program run in a
+//! process forked from this one, with what the system counted of its cost; on Windows, how the
+//! system describes the CPU's caches, and what a child process cost; on Windows and macOS, the
+//! memory the computer has free and in all, and what a process holds of it. And on every system,
+//! a module the engine compiled ahead of its runs, loaded into the engine only when it carries
+//! the seal of the user's key ([`load_sealed`]).
 
 /// One of the CPU's caches, as Windows describes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -374,6 +376,81 @@ pub fn process_usage(child: &std::process::Child) -> Result<Usage, String> {
     })
 }
 
+/// A child process whose life is tied to this process's on Windows: while this value lives, the
+/// child lives no longer than this process, however this process ends ([`tie`]). Dropping it
+/// ends a child that still runs.
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct Tied(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for Tied {
+    fn drop(&mut self) {
+        // SAFETY: the handle is the job's, which `tie` made and nothing else closes.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+/// Ties `child`'s life to this process's: it puts `child` in a job of its own that Windows ends
+/// when the job's last handle closes, and this process holds the only one, in what this gives.
+/// So when this process is ended from outside, as a service manager or `lengua-mcp measure` ends
+/// lengua-run, the lengua-mcp it left a run to ends with it, where a Unix has one process for
+/// both.
+///
+/// # Errors
+///
+/// The system's reason, when it won't make the job or take the child into it.
+#[cfg(windows)]
+pub fn tie(child: &std::process::Child) -> Result<Tied, String> {
+    use std::os::windows::io::AsRawHandle as _;
+
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectExtendedLimitInformation, SetInformationJobObject,
+    };
+
+    let failed = |call: &str| format!("{call}: {}", std::io::Error::last_os_error());
+    // SAFETY: the job has no security attributes and no name, and the call takes a null pointer
+    // for each.
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if job.is_null() {
+        return Err(failed("CreateJobObjectW"));
+    }
+    let tied = Tied(job);
+    let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+        BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
+            LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            ..JOBOBJECT_BASIC_LIMIT_INFORMATION::default()
+        },
+        ..JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default()
+    };
+    let size = u32::try_from(std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+        .unwrap_or(u32::MAX);
+    // SAFETY: `job` is the job just made, open in `tied`; `limits` is a
+    // JOBOBJECT_EXTENDED_LIMIT_INFORMATION of this frame, `size` bytes, which the call reads.
+    let set = unsafe {
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            (&raw const limits).cast(),
+            size,
+        )
+    };
+    if set == 0 {
+        return Err(failed("SetInformationJobObject"));
+    }
+    // SAFETY: `job` as above, and the other handle is the process handle `child` owns, open
+    // while `child` is borrowed, with the full access CreateProcess gives it.
+    let assigned = unsafe { AssignProcessToJobObject(job, child.as_raw_handle()) };
+    if assigned == 0 {
+        return Err(failed("AssignProcessToJobObject"));
+    }
+    Ok(tied)
+}
+
 /// The computer's memory, as its system counts it.
 #[cfg(any(windows, target_os = "macos"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -554,6 +631,124 @@ pub fn resident_bytes(pid: u32) -> Result<u64, String> {
     Ok(record[8])
 }
 
+/// The first bytes of what a seal authenticates: no other use of the user's key begins with
+/// them, so a lock's signature is no seal and a seal no lock's signature.
+const SEAL_DOMAIN: &[u8] = b"lengua-compiled-module-v1\n";
+
+/// How many bytes a seal is: an HMAC-SHA256 tag, the last bytes of a sealed module.
+pub const SEAL_BYTES: usize = 32;
+
+/// How many bytes the key that seals a module is.
+pub const SEAL_KEY_BYTES: usize = 32;
+
+/// Why a sealed module wasn't loaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unsealed {
+    /// The bytes don't carry this key's seal for what they are said to be: they were never
+    /// handed to the engine.
+    NoSeal,
+    /// The seal is this key's, and the engine doesn't take the module: it was compiled by
+    /// another version or configuration of the engine, or for a CPU this one isn't. It says
+    /// why.
+    Engine(String),
+}
+
+impl std::fmt::Display for Unsealed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSeal => f.write_str("the compiled module doesn't carry this user's seal"),
+            Self::Engine(why) => write!(f, "the engine doesn't take the compiled module: {why}"),
+        }
+    }
+}
+
+impl std::error::Error for Unsealed {}
+
+/// The HMAC-SHA256, keyed with `key`, of a compiled module and what it is said to be, `about`:
+/// the domain, `about`'s length, `about`, then the module, so no two pairs give the same bytes.
+/// It is ring's, whose SHA-256 uses the CPU's own instructions for it on x86-64 and on ARM64:
+/// every run computes it over the whole compiled module, which for a small program is 12 KiB on
+/// x86-64 and 135 KiB on ARM64, where the engine lays code out for 64 KiB pages. There ring took
+/// 0.06 ms for it and the sha2 crate, which has those instructions on x86-64 alone, 0.32 ms (W19).
+fn seal(key: &[u8; SEAL_KEY_BYTES], about: &[u8], compiled: &[u8]) -> ring::hmac::Tag {
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
+    let mut mac = ring::hmac::Context::with_key(&key);
+    mac.update(SEAL_DOMAIN);
+    mac.update(&u64::try_from(about.len()).unwrap_or(u64::MAX).to_le_bytes());
+    mac.update(about);
+    mac.update(compiled);
+    mac.sign()
+}
+
+/// Compiles the WebAssembly module `wasm` with `engine` for this computer, ahead of its runs,
+/// and seals what the engine made with `key` as `about`, which says what the module is, such as
+/// its SHA-256: the compiled module, then its seal. It is the only function that makes a seal,
+/// and it seals nothing but what the engine's own compiler gave it in this very call, so
+/// whatever carries a seal of `key` is a module this engine's code compiled, for whoever keeps
+/// `key` to themselves.
+///
+/// # Errors
+///
+/// When the engine doesn't compile the module, as it says.
+#[cfg(feature = "compiler")]
+pub fn compile_sealed(
+    engine: &wasmtime::Engine,
+    key: &[u8; SEAL_KEY_BYTES],
+    about: &[u8],
+    wasm: &[u8],
+) -> Result<Vec<u8>, String> {
+    let mut compiled = engine
+        .precompile_module(wasm)
+        .map_err(|error| format!("{error:#}"))?;
+    let tag = seal(key, about, &compiled);
+    compiled.extend_from_slice(tag.as_ref());
+    Ok(compiled)
+}
+
+/// Loads into `engine` the compiled module `sealed` holds, once its last [`SEAL_BYTES`] bytes
+/// are `key`'s seal of the bytes before them as `about` ([`compile_sealed`]), compared in
+/// constant time. The module's code is copied into memory of the engine's own, so nothing that
+/// changes the bytes' file afterwards changes what runs.
+///
+/// Wasmtime's `Module::deserialize` is unsafe because it trusts its bytes: it runs the machine
+/// code in them and follows their tables with no check that a compiler of its own made them, so
+/// other bytes can make the process run anything. This function is safe to call with any bytes
+/// because it hands the engine only bytes that carry a seal, and a seal is made in one place,
+/// [`compile_sealed`], over what `Engine::precompile_module` returned there. Bytes with a seal
+/// are therefore a module Wasmtime compiled, unchanged since, or the work of someone who holds
+/// `key`. lengua's key is the user's own secret, the one that signs lengua.lock, kept in a file
+/// only the user reads: whoever holds it already acts as the user. HMAC-SHA256 makes any other
+/// bytes fail, whatever they are and however they were chosen. Wasmtime then holds a module of
+/// its own to its version, its configuration and this CPU's features, and refuses one that
+/// doesn't suit `engine`, which is an error here and nothing run.
+///
+/// # Errors
+///
+/// [`Unsealed::NoSeal`] for bytes without the seal, which the engine never sees;
+/// [`Unsealed::Engine`] when the seal holds and the engine refuses the module.
+pub fn load_sealed(
+    engine: &wasmtime::Engine,
+    key: &[u8; SEAL_KEY_BYTES],
+    about: &[u8],
+    sealed: &[u8],
+) -> Result<wasmtime::Module, Unsealed> {
+    use subtle::ConstantTimeEq as _;
+    let Some(length) = sealed.len().checked_sub(SEAL_BYTES) else {
+        return Err(Unsealed::NoSeal);
+    };
+    let (compiled, tag) = sealed.split_at(length);
+    let own = seal(key, about, compiled);
+    if !bool::from(own.as_ref().ct_eq(tag)) {
+        return Err(Unsealed::NoSeal);
+    }
+    // SAFETY: `compiled` carries `key`'s seal, checked just above, and a seal is made only by
+    // `compile_sealed`, over the bytes `Engine::precompile_module` returned: these are bytes
+    // Wasmtime's compiler made, which is what `deserialize` asks of its caller. It copies them,
+    // so they are not read from the caller's slice again.
+    unsafe { wasmtime::Module::deserialize(engine, compiled) }
+        .map_err(|error| Unsealed::Engine(format!("{error:#}")))
+}
+
 #[cfg(all(test, any(windows, target_os = "macos")))]
 mod memory_tests {
     use super::{memory, resident_bytes};
@@ -604,6 +799,23 @@ mod windows_tests {
         child.wait().expect("cmd ends");
         let usage = process_usage(&child).expect("its usage");
         assert!(usage.peak_bytes > 0, "{usage:?}");
+    }
+
+    /// A child tied to this process ends when the tie goes, as it would when this process
+    /// ended: a `ping` that would run for a minute is over within seconds of it.
+    #[test]
+    fn a_tied_child_ends_with_its_tie() {
+        let mut child = std::process::Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("ping starts");
+        let tied = super::tie(&child).expect("the tie");
+        let started = std::time::Instant::now();
+        assert!(child.try_wait().expect("its state").is_none(), "ping ended");
+        drop(tied);
+        child.wait().expect("ping ends");
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
     }
 
     /// A file has one name, and two once it has a hard link, counted from the handle that was
@@ -716,5 +928,76 @@ mod tests {
         } else if let Ok(caches) = described {
             assert!(caches.iter().all(|cache| cache.level > 0), "{caches:?}");
         }
+    }
+}
+
+#[cfg(all(test, feature = "compiler"))]
+mod sealed_tests {
+    use super::{SEAL_BYTES, Unsealed, compile_sealed, load_sealed};
+
+    /// The smallest module: WebAssembly's magic number and version 1.
+    const EMPTY: &[u8] = b"\0asm\x01\0\0\0";
+
+    /// A key, and another.
+    const KEYS: [[u8; 32]; 2] = [[7; 32], [8; 32]];
+
+    /// A module the engine compiled loads under the key and the words it was sealed with, and
+    /// under no other: a changed byte anywhere, in the module or in the seal, another key,
+    /// other words, the seal alone, the module without its seal, and bytes no compiler made
+    /// each fail the seal, which is checked before the engine sees a byte.
+    #[test]
+    fn a_compiled_module_loads_only_with_its_seal() {
+        let engine = wasmtime::Engine::default();
+        let sealed = compile_sealed(&engine, &KEYS[0], b"empty", EMPTY).expect("it compiles");
+        assert!(sealed.len() > SEAL_BYTES);
+        assert!(load_sealed(&engine, &KEYS[0], b"empty", &sealed).is_ok());
+        let refused = |key: &[u8; 32], about: &[u8], bytes: &[u8]| {
+            load_sealed(&engine, key, about, bytes).err()
+        };
+        for at in [
+            0,
+            sealed.len() / 2,
+            sealed.len() - SEAL_BYTES,
+            sealed.len() - 1,
+        ] {
+            let mut changed = sealed.clone();
+            changed[at] ^= 1;
+            assert_eq!(
+                refused(&KEYS[0], b"empty", &changed),
+                Some(Unsealed::NoSeal),
+                "byte {at}"
+            );
+        }
+        assert_eq!(refused(&KEYS[1], b"empty", &sealed), Some(Unsealed::NoSeal));
+        assert_eq!(refused(&KEYS[0], b"other", &sealed), Some(Unsealed::NoSeal));
+        assert_eq!(refused(&KEYS[0], b"", &sealed), Some(Unsealed::NoSeal));
+        let (compiled, seal) = sealed.split_at(sealed.len() - SEAL_BYTES);
+        assert_eq!(
+            refused(&KEYS[0], b"empty", compiled),
+            Some(Unsealed::NoSeal)
+        );
+        assert_eq!(refused(&KEYS[0], b"empty", seal), Some(Unsealed::NoSeal));
+        assert_eq!(refused(&KEYS[0], b"empty", &[]), Some(Unsealed::NoSeal));
+        assert_eq!(refused(&KEYS[0], b"empty", EMPTY), Some(Unsealed::NoSeal));
+        // What it is said to be is told apart from the module's first bytes: the words' length
+        // goes into the seal.
+        let mut moved = b"y".to_vec();
+        moved.extend_from_slice(compiled);
+        moved.extend_from_slice(seal);
+        assert_eq!(refused(&KEYS[0], b"empt", &moved), Some(Unsealed::NoSeal));
+    }
+
+    /// The engine holds a sealed module to its own configuration: one compiled to count fuel
+    /// doesn't load into an engine that counts none, and the answer says it was the engine's.
+    #[test]
+    fn the_engine_refuses_a_sealed_module_of_another_configuration() {
+        let mut counting = wasmtime::Config::new();
+        counting.consume_fuel(true);
+        let counting = wasmtime::Engine::new(&counting).expect("an engine");
+        let sealed = compile_sealed(&counting, &KEYS[0], b"empty", EMPTY).expect("it compiles");
+        assert!(load_sealed(&counting, &KEYS[0], b"empty", &sealed).is_ok());
+        let plain = wasmtime::Engine::default();
+        let refused = load_sealed(&plain, &KEYS[0], b"empty", &sealed).err();
+        assert!(matches!(refused, Some(Unsealed::Engine(_))), "{refused:?}");
     }
 }

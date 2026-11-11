@@ -44,6 +44,18 @@ pub fn tested_module(data_dir: &Path, builder: u64, module: &Sha256Hex) -> PathB
         .join(format!("{}.wasm", module.as_str()))
 }
 
+/// Where lengua keeps the module `module` (its SHA-256) compiled for this computer ahead of its
+/// runs from a shell, sealed with the user's key ([`crate::lock::Key::compile_sealed`]), beside
+/// the module itself ([`tested_module`]): what a run from a shell loads, once its seal holds, in
+/// place of compiling.
+#[must_use]
+pub fn compiled_module(data_dir: &Path, builder: u64, module: &Sha256Hex) -> PathBuf {
+    data_dir
+        .join("tested")
+        .join(format!("{builder:016x}"))
+        .join(format!("{}.shell.cwasm", module.as_str()))
+}
+
 /// Where lengua keeps what a proof found wrong about the module `module` of the idea `idea`
 /// (lengua's hash of idea.md): a file that is there as long as that module stays refused for
 /// that idea, whatever lengua.lock in the program's folder says, so that an earlier lock put back

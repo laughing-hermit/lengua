@@ -4,7 +4,6 @@
 //! process of its own and prints what it cost; and `lengua-mcp install`, which installs lengua
 //! from its unpacked release archive.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -244,52 +243,12 @@ enum Command {
     Version,
 }
 
-/// `run`'s own words: the program folder, `--in` and `--env` options, then the program's
-/// arguments, after `--` or from the first word that isn't an option, which an argument that
-/// starts with `-` needs.
-fn parse_run(mut args: impl Iterator<Item = String>) -> Result<ShellRun, String> {
-    let path = args.next().ok_or("run needs a program folder")?;
-    let mut request = ShellRun {
-        path,
-        folder: None,
-        env: BTreeMap::new(),
-        args: Vec::new(),
-    };
-    while let Some(arg) = args.next() {
-        // The first word that isn't an option starts the program's arguments.
-        if !arg.starts_with('-') {
-            request.args = std::iter::once(arg).chain(args).collect();
-            break;
-        }
-        match arg.as_str() {
-            "--in" => request.folder = Some(args.next().ok_or("--in needs a folder")?),
-            "--env" => {
-                let pair = args.next().ok_or("--env needs NAME=value")?;
-                let (name, value) = pair
-                    .split_once('=')
-                    .ok_or_else(|| format!("--env {pair:?} isn't NAME=value"))?;
-                request.env.insert(name.to_owned(), value.to_owned());
-            }
-            "--" => {
-                request.args = args.collect();
-                break;
-            }
-            other => {
-                return Err(format!(
-                    "unknown option {other:?}: put the program's arguments after --"
-                ));
-            }
-        }
-    }
-    Ok(request)
-}
-
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String> {
     let mut data_dir = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "run" => {
-                let request = parse_run(args)?;
+                let request = ShellRun::parse(args)?;
                 let data_dir = data_dir
                     .or_else(DataDir::from_env)
                     .ok_or(lengua::data_dir::NOT_FOUND)?;
@@ -365,7 +324,7 @@ mod tests {
     /// isn't an option; an argument that starts with `-` needs `--`.
     #[test]
     fn a_shell_run_takes_the_program_s_arguments_after_its_folder() {
-        let args = |list: &[&str]| parse_run(words(list)).map(|request| request.args);
+        let args = |list: &[&str]| ShellRun::parse(words(list)).map(|request| request.args);
         assert_eq!(
             args(&["./add", "2", "3"]),
             Ok(vec!["2".to_owned(), "3".to_owned()])
@@ -374,7 +333,7 @@ mod tests {
             args(&["./add", "--", "-2", "3"]),
             Ok(vec!["-2".to_owned(), "3".to_owned()])
         );
-        let request = parse_run(words(&[
+        let request = ShellRun::parse(words(&[
             "./add", "--in", "/tmp", "--env", "A=b", "2", "--in",
         ]))
         .expect("a shell run");

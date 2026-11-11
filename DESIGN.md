@@ -530,13 +530,9 @@ these on: floats, mutable globals, saturating float-to-int, sign extension, refe
 multiple values, bulk memory and SIMD128. Reference types are on for the tables of C, C++ and Rust
 toolchains' modules, which the benchmark runs; the dialect refuses tables in main.wat. NaNs are
 made canonical. A program's WebAssembly calls may take 512 KiB of stack, past which a call traps.
-Cranelift compiles a module the first time it runs on a machine, for that machine's CPU, and
-Wasmtime's cache keeps it, in the `cache` folder of the plugin's data folder when the agent's
-harness gives one (`PLUGIN_DATA`, or `CLAUDE_PLUGIN_DATA`), else of lengua's own. There is no
-separate compile ahead of time, and the features are one set on every machine. That is point 3 of
-the finish line as the owner decided it on 2026-11-11: the same bits on every machine, so proofs
-and tests hold on each, with the machine code compiled for the machine's own CPU. Relaxed SIMD and
-wide arithmetic stay off.
+The features are one set on every machine. That is point 3 of the finish line as the owner
+decided it on 2026-11-11: the same bits on every machine, so proofs and tests hold on each, with
+the machine code compiled for the machine's own CPU. Relaxed SIMD and wide arithmetic stay off.
 
 Three setups:
 
@@ -544,7 +540,29 @@ Three setups:
 |---|---|---|---|
 | Test | the tests | yes, as fuel | yes, through the engine's epochs, every 10 ms |
 | Run | the `run` tool and a background server | no | yes |
-| Shell | `lengua-mcp run`, the benchmark and `doctor` | no | no |
+| Shell | lengua-run, `lengua-mcp run`, the benchmark and `doctor` | no | no |
+
+Each setup has two engines, with the same settings wherever compiled code depends on them
+(`shared`, `src/wasm/engine.rs`): Wasmtime holds a compiled module to those settings when it loads
+one, and a test loads each setup's module into the other engine.
+
+- **The engine that compiles.** Cranelift compiles a module for this machine's CPU. The tests'
+  workers and the `run` tool compile a module the first time they run it, and Wasmtime's cache
+  keeps it, in the `cache` folder of the plugin's data folder when the agent's harness gives one
+  (`PLUGIN_DATA`, or `CLAUDE_PLUGIN_DATA`), else of lengua's own.
+- **The engine that only runs.** It has no compiler in it, and loads a module compiled ahead of
+  the run. A run from a shell uses it, and reads no cache.
+
+When a program's tests pass, `check` compiles its module for a run from a shell
+(`Engine::precompile_module`) and keeps the result beside the tested module, in
+`tested/<builder>/<module's SHA-256>.shell.cwasm` of the data folder, with a seal after it: an
+HMAC-SHA256, keyed with the user's key, over a domain of its own, the module's SHA-256 and the
+compiled bytes (`compile_sealed`, `crates/lengua-os`). A run loads that file only when its seal
+holds (`load_sealed`), compared in constant time, and copies its code into memory of the
+engine's own. Wasmtime then holds the module to its own version, its settings and this CPU's
+features, and refuses one that doesn't suit. The Shell setup maps no copy-on-write image of a
+module's first memory, which pays where a module starts many times: a run starts its module
+once.
 
 ### The host
 
@@ -722,9 +740,30 @@ holds its arguments and environment to what every system can pass: no NUL, at mo
 Windows's command-line characters for the arguments, 32,767 for a variable, and no two names that
 differ only in case. A shell's run doesn't go through the pool and isn't held to them.
 
-`lengua-mcp run` runs the program in its own process, on a thread of its own, attached to the
-shell. The engine starts on that thread while the checks run on another, and nothing is compiled
-until the checks pass.
+### A run from a shell
+
+Two programs run a checked program from a shell, attached to the shell's own streams, each in its
+own process. Both make the checks below (What run checks) first, and nothing of the program is
+loaded, compiled or run until they pass.
+
+**lengua-run** is the program `check`'s done reply names. It is the lengua crate built without
+the engine's compiler (the `compiler` feature off, `crates/lengua-run`): 5.9 MiB on Linux on
+x86-64, where lengua-mcp is 23.1 MiB, and a run of the empty program takes 1.3 ms and 5.5 MiB
+there, where `lengua-mcp run` took 2.2 ms and 11.4 MiB before it (ROADMAP.md, W19, has every
+runner). It loads the module's compiled form under the
+user's key and runs it on its main thread, where the system lets that thread's stack grow to 8 MiB
+or more, as Linux and macOS do by default; elsewhere, and on Windows, on a thread of its own with
+16 MiB. It gives the engine only the WASI functions the module imports. Two runs it leaves to
+lengua-mcp, the program beside it, which it starts with the same words: one whose module has no
+compiled form it can load, which it says on standard error, and one whose idea names a secret.
+On a Unix lengua-run becomes lengua-mcp. On Windows it starts lengua-mcp and waits for it, in a job
+that ends with lengua-run, so whoever stops lengua-run stops the program too.
+
+**`lengua-mcp run`** runs every checked program. It loads the compiled form as lengua-run does.
+Where none loads, it compiles the module, seals the result and keeps it, so the next run of
+either program loads it. For an idea that names a secret, it builds main.wat, finds the operators
+that take a secret, and reads the code of the module it loaded before it runs it. It runs the
+program on a thread of its own.
 
 ## The lock, the key and trust
 
@@ -799,8 +838,11 @@ isn't read. lengua.lock is read the same way, within its own 64 KiB.
 - the working folder, for a program that uses files, is none of lengua's own or the system's;
 - environment variables are given only to an idea that uses the environment;
 - what runs is the module `check` tested. The `run` tool builds main.wat again and compares the
-  build's SHA-256 with the lock's. A shell's run takes the module `check` kept in the data folder
-  when its bytes hash to the lock's, and otherwise builds main.wat, compares it, and keeps it.
+  build's SHA-256 with the lock's. A shell's run loads that module's compiled form, which is kept
+  in the data folder with the seal of the user's key as the module of that SHA-256 (The engine,
+  above). Where no such file loads, `lengua-mcp run` takes the module `check` kept when its
+  bytes hash to the lock's, or else builds main.wat and compares it; it compiles that module,
+  seals it, keeps it and loads it. lengua-run leaves that run to lengua-mcp.
 
 A build that differs from the tested one, as after lengua itself changed, doesn't run until
 `check` tests it.
@@ -896,9 +938,13 @@ the same three built natively with each system's own compilers. lengua's program
 hand; the others use their standard libraries and plain loops their compilers vectorize.
 
 Each run is a process of its own, measured by `lengua-mcp measure` (`src/measure.rs`): CPU time,
-wall time, peak resident memory and size. lengua's runs go through `lengua-mcp run`, with every
-check `run` makes. On Linux a program starts from `lengua-spawn`, a small process that forks it, so
-its peak memory is its own. The runs alternate between the versions, in an order shuffled from
+wall time, peak resident memory and size. lengua's runs go through lengua-run, as a user runs a
+checked program, with every check a run makes. The other modules run by the same lengua-run, in
+the same engine, each from its compiled form kept under the user's key as lengua's is; `measure`
+hashes a module's file before the run it measures, so that run reads neither the file nor a lock.
+`cargo xtask bench` builds lengua-run by itself first, with no compiler in it, as it ships. On
+Linux a program starts from `lengua-spawn`, a small process that forks it, so its peak memory is
+its own. The runs alternate between the versions, in an order shuffled from
 round to round. On each row, lengua against one other version, a one-sided Mann-Whitney U test
 decides CPU and wall time: the gate looks after 20, 40, 80, 160, 320, 640, 1,280 and 2,000 runs of
 each version, each look at p < 0.00125, the 1% split over the eight looks, and a workload's rows
@@ -922,36 +968,39 @@ it names, and where a change in the list's history named a row the list before i
 row needs no line and fails no run.
 
 Each run writes a report, BENCHMARKS-<runner>.md, from its results alone. The latest run's five
-reports, from run 42964232679 at cd54e79, the first with the margin, are in
-[docs/benchmarks](docs/benchmarks/README.md). That run measured the list as it was before the
-margin, 1,037 rows, so the gate passed on no runner. It found 139 rows the list named level or
-ahead (127 level, 12 ahead), which have left it, and 6 rows behind by more than the margin that
-it doesn't name. KNOWN_BEHIND now names 898 rows. Against C, C++ and Rust compiled to WebAssembly
-they are 22 on Linux on x86-64, 16 on Linux on ARM64, 16 on macOS on ARM64, 41 on Windows on
-x86-64 and 41 on Windows on ARM64, and 114 of the 136 are peak memory. Against the native builds
-they are 150 to 154 of each runner's 168 rows: tally is the one workload whose time is below the
-best native build's on every runner, at 0.50 to 0.68 times. Windows counts CPU time in 15.6 ms
-ticks, so a short run's CPU time there is a whole number of ticks. Against the other modules, 57
-of the two Windows runners' 84 CPU rows were level in that run, nearly all at 1.00×, and none
-behind; the native builds' shortest runs read no ticks at all. Every native C++ version was
+reports are in [docs/benchmarks](docs/benchmarks/README.md): run 43084459708 at 45b507b, the first
+with lengua-run, and for Windows on ARM64 run 43099764273 at the same commit. That run measured
+the list as it was, 898 rows, so the gate passed on no runner. It found 137 rows the list named
+level or ahead (135 level, 2 ahead), which have left it, and 26 rows behind by more than the
+margin that it doesn't name. KNOWN_BEHIND now names 761 rows. Against C, C++ and Rust compiled
+to WebAssembly they are 4 on Linux on x86-64, 4 on Linux on ARM64, 10 on macOS on ARM64, 3 on
+Windows on x86-64 and 3 on Windows on ARM64. Peak memory was behind on 7 of the five runners' 210
+such rows, where it was on 115 in the run before. The 26 are mostly the time of workloads that
+are nearly all start-up, against C's and C++'s modules, which lengua-run starts as fast as
+lengua's own less the 0.1 ms of lengua's checks. Against the native builds the list names 138 to
+152 of each runner's 168 rows: tally is the one workload whose time is below the best native
+build's on every runner, at 0.45 to 0.65 times. Windows counts CPU time in 15.6 ms ticks, so a
+short run's CPU time there is a whole number of ticks, and most of its CPU rows against the other
+modules are level. Every native C++ version was
 built in that run, on all five runners: the bench passes `-std=gnu++17`, as the files are C++17
 and Apple's clang and LLVM's clang on Windows take an older standard by default.
 
-The margin has a limit the run shows. It takes the rows at 1.00× out of the gate, which were
-most of what changed sides before. It doesn't settle a row whose gap sits near 5%: of the 6 rows
-behind that the list doesn't name, four are at 1.05× to 1.08×, and the other two (shout's CPU
-time on Linux on ARM64, at 1.09× and 1.11×) were ahead two runs before. The list may not take a
-row back, so with the list as it is those results fail the gate on four runners and pass it on
-Windows on ARM64. No run has measured the new list yet. todo.md names the rows ("A row the gate
-can't decide").
+The margin has a limit the runs show. It takes the rows at 1.00× out of the gate, which were
+most of what changed sides before. It doesn't settle a row whose gap sits near 5%: the run
+before this one (42964232679) found 6 rows behind that the list doesn't name, four of them at
+1.05× to 1.08×. In this run two of the six are level or ahead, and four are among its 26. The
+list may not take a row back, so with the list as it is these results fail the gate on four
+runners and pass it on Windows on ARM64. No run has measured the new list yet. todo.md names the
+rows ("A row the gate can't decide").
 
 ## The release and the install
 
 `cargo xtask release` builds the archive of the runner it runs on, one of the five
 (`xtask/src/release.rs`): `dist/lengua-<version>-<target>.tar.gz`, a `.zip` on Windows, with its
 SHA-256 beside it. The archive is the plugin, ready to load: the skills and the manifests,
-`server/lengua-mcp` (`.exe` on Windows), `solvers/` with the z3 and cvc5 that `xtask/tools.tsv`
-pins for the target, checked by SHA-256, the licences of everything it ships, `TARGET` and
+`server/lengua-mcp` and `server/lengua-run` (`.exe` on Windows), each built by itself, so that
+lengua-run holds no compiler, `solvers/` with the z3 and cvc5 that `xtask/tools.tsv` pins for the
+target, checked by SHA-256, the licences of everything it ships, `TARGET` and
 `INSTALL.md`. Nothing is published or signed: the archives are unsigned, and publishing them is the
 owner's.
 
@@ -970,8 +1019,10 @@ named `wip/…`, runs the suite on all five; every Monday the suite, the slow ig
 bench run on all five; and a dispatch picks the targets and the mode: compile, test, ignored,
 golden, bench or release. In release mode a clean runner of each system and CPU unpacks the
 archive, installs it with its own `lengua-mcp install`, and checks it through a plain MCP client:
-add from its idea to done, run through `run` and from a shell, and attested. Each step of the
-workflow is one command, most of them calls into the task crate (`cargo xtask`), and Rust 1.99.1
+add from its idea to done, run through `run` and from a shell, by `lengua-mcp run` and by
+lengua-run, which must say it holds no compiler and must load what `check` compiled with nothing
+left to lengua-mcp, and attested. Each step of the workflow is one command, most of them calls
+into the task crate (`cargo xtask`), and Rust 1.99.1
 is pinned in `rust-toolchain.toml`. Nothing builds on the owner's computer: the format job hands
 back the formatting patch and the resolved `Cargo.lock`.
 
@@ -1026,16 +1077,23 @@ listed below.
   built on it. lengua trusts no part for being in its library: each is checked on the computer
   that builds on it.
 - **A build that isn't what was checked.** `run` runs only the module whose SHA-256 the signed lock
-  records: the `run` tool builds main.wat again and compares, and a shell's run compares the kept
-  module's bytes. An idea or code changed since the record, a module a proof found wrong, and a
-  build that differs after lengua changed are refused. A module found wrong stays refused when an
+  records: the `run` tool builds main.wat again and compares, and a shell's run loads the compiled
+  form the user's key sealed as that module. An idea or code changed since the record, a module
+  a proof found wrong, and a build that differs after lengua changed are refused. A module found wrong stays refused when an
   earlier lock, which the user's key signed too, is put back: the data folder keeps the verdict.
+- **Machine code that lengua didn't compile, in a run from a shell.** A run from a shell loads
+  compiled code from one file, and only when that file carries the seal of the user's key for
+  the module its lock records. `compile_sealed` alone makes a seal, over what the engine's
+  compiler returned in that call. So a file put in the data folder by someone without the key
+  is never handed to the engine: not other bytes, not another program's compiled module, and
+  not the right one with a byte changed. Such a run reads no cache of compiled modules.
 - **A secret that reaches timing within main.wat.** For an idea with a `- Secret:` line, the secret
   rule refuses a branch, an address, a length, a loop's count, a division or a float operation
   that depends on a secret, in main.wat; and in the machine code the engine made on this CPU for
-  each operator that takes a secret, a branch, a table, a call or a division. A secret never
-  names a computer or a port a program opens, and since no branch or loop depends on one,
-  neither does how many connections a program opens, nor when.
+  each operator that takes a secret, a branch, a table, a call or a division. A run from a shell
+  reads the code of the very module it loaded and is about to run. A secret never names a
+  computer or a port a program opens, and since no branch or loop depends on one, neither does
+  how many connections a program opens, nor when.
 
 ### What lengua trusts
 
@@ -1062,11 +1120,14 @@ listed below.
   data folder, can sign locks lengua trusts: the lock's HMAC is a record of what this user's lengua
   checked, not a wall against the user's own account. Wasmtime 50.0.1 loads a cached module's
   machine code as it finds it, checking only that it suits this engine, so the cache folder is
-  trusted as the key is.
-- **lengua's own code**: lengua's crate forbids unsafe code; the few calls into the operating
-  system that need it sit in `crates/lengua-os`, each in a safe function with a test on its
-  system's runner. TLS is rustls with ring; the solvers, ring, zstd and a file of Wasmtime's carry
-  C (todo.md's decisions).
+  trusted as the key is by what reads it: the tests' workers and the `run` tool. A run from a
+  shell reads no cache. It trusts the key alone for the code it loads, and whoever holds the key
+  can seal code of their own.
+- **lengua's own code**: lengua's crate forbids unsafe code; the calls that need it sit in
+  `crates/lengua-os`, each in a safe function with a test: the few into the operating system,
+  tested on their system's runner, and the load of a sealed compiled module, which hands the
+  engine nothing without the seal. TLS is rustls with ring; the solvers, ring, zstd and a file of
+  Wasmtime's carry C (todo.md's decisions).
 
 ### Out of scope
 

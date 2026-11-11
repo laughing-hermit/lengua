@@ -24,8 +24,11 @@ is built for.
   states what its functions offer.
 - `server/lengua-mcp` (`lengua-mcp.exe` on Windows): the MCP server, with two tools. `check`
   records the idea, builds `main.wat`, holds it to every rule, runs every test and proves the
-  tests in the background. `run` runs a program `check` checked. `cargo xtask plugin` builds it
-  here from the repository, and a release archive ships it built.
+  tests in the background. `run` runs a program `check` checked.
+- `server/lengua-run` (`lengua-run.exe` on Windows): runs a program `check` checked, from a
+  shell. It has no compiler in it, and loads what `check` compiled, so it starts sooner and
+  holds less memory than `lengua-mcp run`, which does the same. `cargo xtask plugin` builds both
+  here from the repository, and a release archive ships them built.
 - `LICENSE`: the Apache License 2.0.
 
 ## The release archive
@@ -45,8 +48,9 @@ program needs nothing more. To load the folder for one session instead: `claude 
 
 ## From a shell
 
-- `lengua-mcp run <program folder> -- <arguments>` runs a program `check` checked on this
-  computer ([run.md](https://github.com/laughing-hermit/lengua/blob/main/docs/run.md)).
+- `lengua-run <program folder> -- <arguments>` runs a program `check` checked on this
+  computer, and so does `lengua-mcp run`
+  ([run.md](https://github.com/laughing-hermit/lengua/blob/main/docs/run.md)).
 - `lengua-mcp check <program folder>` checks a folder from its two files alone, on any computer,
   and says `attested` or `not attested` ([check.md](https://github.com/laughing-hermit/lengua/blob/main/docs/check.md)).
 - `lengua-mcp doctor` checks what lengua needs on this computer.

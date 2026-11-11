@@ -8,9 +8,11 @@ license = "Apache-2.0"
 description = "MCP server for lengua: idea-driven programming in checked WebAssembly"
 publish = false
 
-# lengua-os holds the calls that need unsafe code; xtask is lengua's tooling (`cargo xtask`).
+# lengua-os holds the calls that need unsafe code; lengua-run is the small program that runs a
+# checked program, this crate built without the engine's compiler; xtask is lengua's tooling
+# (`cargo xtask`).
 [workspace]
-members = ["crates/lengua-os", "xtask"]
+members = ["crates/lengua-os", "crates/lengua-run", "xtask"]
 
 [lib]
 name = "lengua"
@@ -27,6 +29,15 @@ path = "src/main.rs"
 name = "lengua-spawn"
 path = "src/bin/lengua-spawn.rs"
 
+# `compiler`: the engine's compiler, Cranelift, with Wasmtime's cache of compiled modules, which
+# check, the tests' workers and the `run` tool need, and lengua-mcp is built with. Without it
+# the crate only runs modules compiled before: lengua-run is built so (crates/lengua-run), and a
+# process that maps no compiler starts sooner and holds less. Cargo gives one build of the whole
+# workspace one set of features, so only `cargo build --package lengua-run` builds it so.
+[features]
+default = ["compiler"]
+compiler = ["wasmtime/cranelift", "wasmtime/cache", "wasmtime/parallel-compilation", "lengua-os/compiler"]
+
 [dependencies]
 # A WebAssembly program's folder: every path resolved beneath it, with no unsafe code.
 cap-std = "=4.0.3"
@@ -36,9 +47,10 @@ hmac = "0.12.1"
 # Reads the x86-64 machine code the engine compiles main.wat to, for an idea with a `- Secret:`
 # line (src/checker/wasm/machine.rs): the decoder and what each instruction does, nothing else.
 iced-x86 = { version = "=1.21.0", default-features = false, features = ["std", "decoder", "instr_info"] }
-# The calls that need unsafe code, each in a safe function (this crate forbids unsafe code): on
-# Linux, the fork lengua-spawn runs a program in, and its counts; on Windows, a process's times and
-# peak memory, which `lengua-mcp measure` reads, and the CPU's caches.
+# The calls that need unsafe code, each in a safe function (this crate forbids unsafe code): the
+# load of a compiled module that carries the seal of the user's key; on Linux, the fork
+# lengua-spawn runs a program in, and its counts; on Windows, a process's times and peak memory,
+# which `lengua-mcp measure` reads, and the CPU's caches.
 lengua-os = { path = "crates/lengua-os" }
 rand = { version = "0.10", default-features = false, features = ["chacha"] }
 rmcp = { version = "3.8.0", features = ["transport-io"] }
@@ -57,9 +69,10 @@ toml = "1.1"
 unicode-normalization = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-# The WebAssembly engine, pinned: Cranelift, its own compiled-module cache, nothing else of its
-# defaults (no WASI of its own, no component model, no GC, no threads).
-wasmtime = { version = "=50.0.1", default-features = false, features = ["cranelift", "cache", "parallel-compilation", "runtime", "std"] }
+# The WebAssembly engine, pinned: its runtime, and with the `compiler` feature Cranelift and its
+# own compiled-module cache; nothing else of its defaults (no WASI of its own, no component
+# model, no GC, no threads).
+wasmtime = { version = "=50.0.1", default-features = false, features = ["runtime", "std"] }
 # The validator Wasmtime 50.0.1 itself uses (^0.261.0), so a module is checked as the engine reads it.
 wasmparser = { version = "=0.261.0", default-features = false, features = ["std", "validate", "features", "simd"] }
 # main.wat's text, with each instruction's place in it, and lengua's library merged in.

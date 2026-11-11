@@ -19,14 +19,17 @@
 //!
 //! - finds what the archive ships: `TARGET`, which names this computer's system and CPU; the
 //!   manifests, at the version this check was built at, which start `server/lengua-mcp`; both
-//!   skills; z3 and cvc5 in `solvers/`; and the licences;
+//!   skills; lengua-run beside the server, built with no compiler; z3 and cvc5 in `solvers/`;
+//!   and the licences;
 //! - runs `lengua-mcp --version`, and `lengua-mcp doctor`, which must find nothing wrong and the
 //!   solvers beside the server, where the archive keeps them;
 //! - starts the archive's own lengua-mcp as an MCP server over stdio with rmcp's client, as an
 //!   agent harness does, giving it a `PLUGIN_DATA`, lists its tools, `check` and `run`, and takes
 //!   add (tests/fixtures/add) from the user's request to done through `check`: its idea.md,
 //!   then its main.wat, with the archive's solvers proving it in the background;
-//! - runs add through `run`, through `lengua-mcp run` from a shell, and on Unix through the done
+//! - runs add through `run`, through `lengua-mcp run` from a shell, through the archive's
+//!   lengua-run, which must load what check compiled and leave nothing to lengua-mcp, and on
+//!   Unix through the done
 //!   reply's own shell command, given to `sh`;
 //! - and attests it with `lengua-mcp check`.
 //!
@@ -286,6 +289,12 @@ fn shipped(plugin: &Path) -> PathBuf {
         "{} isn't in the archive",
         server.display()
     );
+    let runner = plugin.join("server").join(format!("lengua-run{exe}"));
+    assert!(
+        runner.is_file(),
+        "{} isn't in the archive",
+        runner.display()
+    );
     for skill in ["write-idea", "compile"] {
         let file = plugin.join("skills").join(skill).join("SKILL.md");
         assert!(file.is_file(), "{} isn't in the archive", file.display());
@@ -333,12 +342,21 @@ fn shipped(plugin: &Path) -> PathBuf {
 
 /// `lengua-mcp --version` names this check's version, and `lengua-mcp doctor`, with the data
 /// folder `data` and PATH cut to `path` when it is given, finds nothing wrong and both solvers
-/// beside the server, where the prover finds them first.
+/// beside the server, where the prover finds them first. lengua-run, beside the server, names
+/// the same version and nothing more, which is how it says its build has no compiler, and
+/// doctor finds it so.
 fn version_and_doctor(server: &Path, data: &Path, path: Option<&OsStr>) {
     let version = ran(with_path(Command::new(server).arg("--version"), path));
     assert_eq!(
         text(&version.stdout).trim(),
         format!("lengua-mcp {}", env!("CARGO_PKG_VERSION"))
+    );
+    let runner = server.with_file_name(format!("lengua-run{}", std::env::consts::EXE_SUFFIX));
+    let version = ran(with_path(Command::new(&runner).arg("--version"), path));
+    assert_eq!(
+        text(&version.stdout).trim(),
+        format!("lengua-run {}", env!("CARGO_PKG_VERSION")),
+        "the archive's lengua-run holds a compiler, or is another version's"
     );
     let mut doctor = Command::new(server);
     doctor.arg("--data-dir").arg(data).arg("doctor");
@@ -351,6 +369,13 @@ fn version_and_doctor(server: &Path, data: &Path, path: Option<&OsStr>) {
         "doctor found something wrong:\n{said}"
     );
     assert_eq!(said.lines().last(), Some("nothing is wrong"), "{said}");
+    assert!(
+        said.lines().any(|line| {
+            line.starts_with("runner: lengua-run ")
+                && line.ends_with("which runs checked programs with no compiler in it")
+        }),
+        "doctor didn't find the archive's lengua-run:\n{said}"
+    );
     for solver in ["z3", "cvc5"] {
         let beside = said.lines().any(|line| {
             line.starts_with(&format!("{solver}: "))
@@ -539,6 +564,25 @@ async fn the_archive_works_as_a_user_gets_it() {
     let shell = ran(with_path(shell.arg(&folder).args(["2", "3"]), path));
     assert_eq!(text(&shell.stdout), "5\n", "{shell:?}");
     assert_eq!(shell.status.code(), Some(0), "{shell:?}");
+    // And through lengua-run, which has no compiler: it loads what check compiled for this
+    // computer under the user's key. Had it found nothing to load, it would have said so on
+    // standard error and left the run to lengua-mcp, so its silence says it ran the program
+    // itself; and the done reply's command is lengua-run's.
+    let exe = std::env::consts::EXE_SUFFIX;
+    let runner = server.with_file_name(format!("lengua-run{exe}"));
+    let mut alone = Command::new(&runner);
+    alone.arg("--data-dir").arg(data.path());
+    let alone = ran(with_path(alone.arg(&folder).args(["2", "3"]), path));
+    assert_eq!(text(&alone.stdout), "5\n", "{alone:?}");
+    assert_eq!(text(&alone.stderr), "", "{alone:?}");
+    assert_eq!(alone.status.code(), Some(0), "{alone:?}");
+    let command = done["shell"]
+        .as_str()
+        .expect("the done reply's shell command");
+    assert!(
+        command.contains(&format!("lengua-run{exe}")),
+        "the done reply runs the program with something else: {command}"
+    );
     #[cfg(unix)]
     {
         let command = done["shell"]

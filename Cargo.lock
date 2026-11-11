@@ -1247,7 +1247,19 @@ name = "lengua-os"
 version = "0.2.0"
 dependencies = [
  "nix",
+ "ring",
+ "subtle",
+ "wasmtime",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lengua-run"
+version = "0.2.0"
+dependencies = [
+ "lengua-mcp",
+ "lengua-os",
+ "tempfile",
 ]
 
 [[package]]
