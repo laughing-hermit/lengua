@@ -626,6 +626,11 @@ fn runnable(
         .code
         .as_ref()
         .ok_or_else(|| format!("{CODE_FILE} isn't checked; call check with path {folder}."))?;
+    // The parts main.wat takes from, as the lock records them: a part that changed since is no
+    // longer the part check held main.wat to.
+    if let Some(problem) = parts::changed_since(folder, &stamp.parts) {
+        return Err(problem);
+    }
     // What a proof found wrong outlasts lengua's restarts: lengua.lock records it.
     if let Some(proofs) = &lock.proofs
         && proofs.module_sha256 == stamp.module_sha256
@@ -1019,7 +1024,13 @@ impl LenguaServer {
         let files = [idea_hash, Sha256Hex::of(code.as_bytes())];
         let prove_further = params.prove_further;
         let builds_on = idea.parts.clone();
-        let checking = match self.current_checking(folder, &files, prove_further).await {
+        // A job on these very files stands only while the lock records the parts as they are
+        // now: after a part was checked again, the code is stamped again with it.
+        let current = match self.current_checking(folder, &files, prove_further).await {
+            Some(checking) if self.parts_as_stamped(folder, &builds_on, &code) => Some(checking),
+            _ => None,
+        };
+        let checking = match current {
             Some(checking) => checking,
             None => match self.wasm_code(folder, idea_text, &code, idea, suite) {
                 Ok(code) => {
@@ -1068,6 +1079,24 @@ impl LenguaServer {
             events.push(graph::Event::ProvenWrong);
         }
         Ok(report)
+    }
+
+    /// Whether lengua.lock records the parts main.wat, `code`, takes from as they are now, or
+    /// doesn't record this main.wat yet, or main.wat doesn't hold to its parts, which the check that
+    /// follows says.
+    fn parts_as_stamped(&self, folder: &ProgramFolder, builds_on: &[idea::Part], code: &str) -> bool {
+        let Ok(taken) = parts::taken(&self.data_dir, folder, builds_on, code) else {
+            return true;
+        };
+        let stamped = Key::load(&self.data_dir)
+            .ok()
+            .flatten()
+            .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
+            .and_then(|lock| lock.code);
+        let current = Sha256Hex::of(code.as_bytes());
+        stamped
+            .filter(|stamp| stamp.sha256 == current)
+            .is_none_or(|stamp| stamp.parts == parts::stamps(&taken))
     }
 
     /// main.wat's `code` built, held to its parts and checked against every rule of the

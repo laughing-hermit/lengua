@@ -240,7 +240,10 @@ a proof of the program.
 
 lengua.lock records the parts with the code: each part's folder, lengua's hash of its idea.md,
 the SHA-256 of its main.wat, and the functions taken. The record is of the parts as they were
-when the program's tests passed.
+when the program's tests passed, and a run holds the parts to it: `run`, `lengua-mcp run` and
+lengua-run read each recorded part's idea.md and main.wat and refuse the program when one
+changed or is gone. `check` then says what to do, and once the part is checked again it
+stamps the program again with the part as it is.
 
 **The library.** lengua ships five parts, in the compile skill's `assets/parts`, and holds
 the same files in `examples/`, where the suite and the golden ledger take them with every other
@@ -836,6 +839,8 @@ isn't read. lengua.lock is read the same way, within its own 64 KiB.
   tests_failed, with what the proof found and that the lock doesn't record it, where `run`
   refuses;
 - the working folder, for a program that uses files, is none of lengua's own or the system's;
+- each part the lock records with the code is still the part it records, by the hashes of its
+  idea.md and its main.wat ([Parts](#parts));
 - environment variables are given only to an idea that uses the environment;
 - what runs is the module `check` tested. The `run` tool builds main.wat again and compares the
   build's SHA-256 with the lock's. A shell's run loads that module's compiled form, which is kept

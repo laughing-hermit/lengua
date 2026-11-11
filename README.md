@@ -197,7 +197,7 @@ Within lengua, for a program at `done`:
   part is that part's function word for word, with the constants it reads and the functions it
   calls, or `check` refuses the program. The part is checked on this computer, states what
   each function reaches through the addresses it is lent, and the memory rules hold every call
-  to that. lengua.lock records the parts with their hashes.
+  to that. lengua.lock records the parts with their hashes, and no run starts once a part changed.
 - **The same bits on every computer.** NaNs are made canonical, there are no threads, and relaxed
   SIMD, whose results differ between computers, is off.
 - **Every proof says what it covers.** With both solvers installed, as the archive ships them, a

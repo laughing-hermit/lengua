@@ -336,6 +336,12 @@ async fn a_copy_that_isn_t_the_part_s_is_refused() {
             .contains("the part [decimal](../decimal/idea.md) isn't checked on this computer"),
         "{report}"
     );
+    // And it doesn't run: the lock records the part as it was.
+    let unrun = session.call_error("run", sum.arguments()).await;
+    assert!(
+        unrun.contains("that part isn't what it was when check held main.wat to it"),
+        "{unrun}"
+    );
     let caught = session.settle(&decimal).await;
     assert_eq!(caught["state"], "tests_failed", "{caught}");
     let report = session.check(&sum).await;
@@ -346,6 +352,10 @@ async fn a_copy_that_isn_t_the_part_s_is_refused() {
     assert_eq!(done["state"], "done", "{done}");
     let done = session.settle(&sum).await;
     assert_eq!(done["state"], "done", "{done}");
+    let mut arguments = sum.arguments();
+    arguments["stdin"] = json!("2\n3\n");
+    let ran = session.call_ok("run", arguments).await;
+    assert_eq!(ran["stdout"], "5\n", "{ran}");
     session.service.cancel().await.expect("close the session");
 }
 

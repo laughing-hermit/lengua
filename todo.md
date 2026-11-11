@@ -940,6 +940,12 @@ Each can be reversed.
     every memory, then assume it at each call and hold each call's arguments to it. None of
     that is built, and `check` claims none of it: a program's `proofs` say what the solvers
     showed of that program, and its `parts` lines repeat what each part's own lock records.
+  - **A run holds the parts to the lock.** `run`, `lengua-mcp run` and lengua-run refuse a
+    program when a part its lock records changed or is gone, by the hashes of the part's
+    idea.md and main.wat: the program's own module didn't change, but it is no longer what
+    the lock says it is, functions of that part. `check` on the program stamps it again once
+    the part is checked again. Cost: a run of a program built on parts reads two files more
+    for each part, and a part's folder must stay beside the program.
   - **lengua.lock records the parts in `[code]`**: each part's folder, the hashes of its
     idea.md and its main.wat, and the functions taken, in a `parts` line written only for a
     program that takes from a part. The lock's format stays 7: a lock with no parts is byte

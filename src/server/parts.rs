@@ -219,6 +219,29 @@ fn open(data_dir: &DataDir, folder: &ProgramFolder, part: &idea::Part) -> Result
     })
 }
 
+/// Why a run can't go on the parts lengua.lock records, `stamps`, for the program in `folder`:
+/// a part whose idea.md or main.wat is no longer what it was when `check` held main.wat to it,
+/// or isn't there. `None` when every part is as recorded, and for a program that takes from no
+/// part. A run reads each part's two files and nothing else of it.
+pub(super) fn changed_since(folder: &ProgramFolder, stamps: &[PartStamp]) -> Option<String> {
+    stamps.iter().find_map(|stamp| {
+        let part_folder = folder.path().join(&stamp.part);
+        let read = |name: &str| crate::state::read_text(&part_folder.join(name)).ok().flatten();
+        let same = read(IDEA_FILE)
+            .is_some_and(|idea| trust::idea_hash(idea.as_bytes()) == stamp.idea)
+            && read(CODE_FILE).is_some_and(|code| Sha256Hex::of(code.as_bytes()) == stamp.code);
+        (!same).then(|| {
+            format!(
+                "{CODE_FILE} takes functions from the part {}, and that part isn't what it was \
+                 when check held {CODE_FILE} to it, so the program won't run. Call check with \
+                 path {folder}: it says whether the part must be checked again and its \
+                 functions copied again.",
+                stamp.part
+            )
+        })
+    })
+}
+
 /// The global `name` among `fields`, `name` without its `$`.
 fn global<'f>(fields: &'f [Field], name: &str) -> Option<&'f Field> {
     fields
