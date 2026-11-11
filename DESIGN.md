@@ -369,10 +369,13 @@ terms, as a byte carried from one buffer-full to the next does, is any value in 
 program that reads with `fd_read` itself, reads in several places, waits on `poll_oneoff` or is
 on the network is proven by length only.
 
-The base takes each final piece of up to a buffer-full, one length at a time where one question
-for all of them takes too many paths. So the buffer's size decides whether the proof for every
-length ends in its time: with a buffer of 4,096 bytes it does, and with one of 64 KiB the step
-holds but the base runs out of time, and the line says how far it got.
+The base takes each final piece of up to a buffer-full: in one shape for a buffer of up to 256
+bytes, else one length at a time. So the buffer's size decides whether the proof for every
+length ends in its time. Measured on Linux on x86-64 for a count of vowels 16 bytes a step, in a
+proof's 300 seconds (run 42976169988): with a buffer of 1,024 bytes every length is proven in 15
+seconds, and with 4,096 bytes in 191. With 64 KiB the step holds in 9 seconds, the base reaches
+4,635 bytes, and the line bounds the proof there. The proof by length alone reaches 5,679 bytes
+in that time.
 
 Counts meet as terms, with no solver: the conditions a count counts that test the same byte are
 written as the byte's sets of values, so five counts of one letter each and one count of the

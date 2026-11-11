@@ -731,7 +731,14 @@ this file at the tag `native-final`.
   and what it gives to no operator. It follows no secret through the CPU's registers, so the
   code of operators that take no secret, and the engine's own functions, stay trusted.
 - **Proofs past the finish line.** Research: sorting at every length, word tallies past a few
-  bytes, byte loops at 64 KiB, and long chains of mixing rounds.
+  bytes, byte loops at 64 KiB, and long chains of mixing rounds. For a stream with a 64 KiB
+  buffer the induction's step holds, but its base is 65,536 final lengths, one shape each, and
+  runs out of time near 4,600 bytes (run 42976169988); a buffer of 4,096 bytes is proven for
+  every length. What would close it is an induction over the loop inside a buffer-full, its
+  16-byte steps, so that the base is one question; and merging a loop's exits in the
+  WebAssembly model. The solver still settles mean's two decimal blocks, a question a path: one
+  form for the sign of a rounded sum would make them terms. clock, dates B2 and B3, days B1 and
+  readings still run out of time, each on its solver questions.
 - **A pointer read from memory.** The memory rules can't follow it to an owner, so a program that
   uses one is "tested, not proven" for memory.
 - **UDP, any URL, processes, GUIs, libraries for other languages to call:** outside the finish
