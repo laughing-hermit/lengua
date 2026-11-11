@@ -33,7 +33,7 @@ program that needs more than a part gives writes its own function.
 
 `examples/sum` and `examples/checksums` in lengua's repository are programs built on these
 parts: the first adds the numbers on the lines of its input, with lines and decimal; the second
-prints the CRC-32 of each line, with all three.
+prints the CRC-32 of each line, with lines, crc32 and decimal.
 
 ## Take a function from a part
 
