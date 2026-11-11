@@ -2075,6 +2075,68 @@ fn proves_a_vector_vowel_count_by_length_past_its_first_step() {
     );
 }
 
+/// What a proof of vowels' count comes to in the 300 seconds a build's proofs get, by the size
+/// of its buffer: the step over one buffer-full, then the base, every final piece of up to a
+/// buffer-full. Printed, for the documents: it holds nothing to a time, which is the runner's.
+#[test]
+#[ignore = "a measurement: the vowel count's proof at each buffer size, minutes each, printed"]
+fn measures_a_vector_vowel_counts_proof_by_its_buffers_size() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_of("vowels");
+    for (size, chunks, last) in [(1024, 64, 1008), (4096, 256, 4080), (65536, 4096, 65520)] {
+        let edits = [
+            (
+                "(global $buffer.size i32 (i32.const 65536))",
+                format!("(global $buffer.size i32 (i32.const {size}))"),
+            ),
+            (
+                "(global $CHUNKS i32 (i32.const 4096))",
+                format!("(global $CHUNKS i32 (i32.const {chunks}))"),
+            ),
+            (
+                "(global $LAST_CHUNK i32 (i32.const 65520))",
+                format!("(global $LAST_CHUNK i32 (i32.const {last}))"),
+            ),
+        ];
+        let mut source = fixture("vowels", "main.wat");
+        for (from, to) in &edits {
+            source = edited(&source, (*from, to.as_str()));
+        }
+        let built = build(&source).expect("it builds");
+        let module = Module::new(&built, policy).expect("the model");
+        let seconds = Duration::from_secs(300);
+        let began = Instant::now();
+        let step = crate::prove::induction::step(
+            &module,
+            &blocks[0],
+            &Budget::until(began + seconds, false),
+        );
+        let stepped = began.elapsed();
+        let summary = match &step {
+            Ok(found) => format!(
+                "holds, {} paths, {} questions",
+                found.paths, found.questions
+            ),
+            Err(refused) => refused.why.clone(),
+        };
+        let began = Instant::now();
+        let verdict = prove_wasm(
+            &built,
+            policy,
+            &blocks[0],
+            &Budget::until(began + seconds, false),
+        );
+        println!(
+            "MEASURED vowels, a buffer of {size} bytes: the step alone {:.1} s ({summary}); the \
+             proof {:.1} s: {verdict:?}",
+            stepped.as_secs_f64(),
+            began.elapsed().as_secs_f64()
+        );
+    }
+}
+
 /// The hypotenuse computes in doubles, which the model takes as the engine does, and every block
 /// of it is proven for every input in range: the whole sides and the decimal ones, the usage
 /// line, a side that isn't a number and one out of range.

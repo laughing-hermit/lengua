@@ -546,6 +546,34 @@ fn every_run_and_proof_is_as_recorded() {
     compare_or_record(RECORDING, &record());
 }
 
+/// The time each proof gets in [`records_the_programs_named`], in seconds: three questions'
+/// worth, enough to show which question a proof is stuck on.
+const NAMED_SECONDS: u64 = 60;
+
+/// What the recording holds of the programs `LENGUA_CHECK_FOLDER` names, each by its folder
+/// from the repository's root (`examples/mean`), between commas: printed, each proof with
+/// [`NAMED_SECONDS`]. For work on one program's proofs: with `LENGUA_PROVE_EXPLAIN` set, each
+/// question a proof asks a solver is printed as terms (ci.yml's `explain`). It says nothing
+/// without the variable.
+#[test]
+#[ignore = "records the programs LENGUA_CHECK_FOLDER names: by hand, or ci.yml's ignored mode"]
+fn records_the_programs_named() {
+    let named = std::env::var("LENGUA_CHECK_FOLDER").unwrap_or_default();
+    let named: Vec<String> = named
+        .split(',')
+        .map(|folder| format!("{}/main.wat", folder.trim().trim_end_matches('/')))
+        .collect();
+    for program in programs() {
+        if !named.contains(&program.name) {
+            continue;
+        }
+        let began = Instant::now();
+        let mut recording = String::new();
+        record_program(&program, NAMED_SECONDS, &mut recording);
+        println!("{recording}{:.1} s", began.elapsed().as_secs_f64());
+    }
+}
+
 /// The programs whose proofs the test below holds to a small budget, by folder: the two whose
 /// main.wat sorts records in place, where the recording once never ended.
 const HELD_TO_TIME: [&str; 2] = ["sort-large", "tally"];
