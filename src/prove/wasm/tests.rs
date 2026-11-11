@@ -8,8 +8,10 @@
 //! in a slow ignored test), and a planted bug in each found, the traps naming their lines;
 //! cat-stream, the stream template, and lines in SIMD128 proven for every length by induction, a
 //! planted bug in each found, and the bytes the two programs the step can't take drop found;
-//! count in SIMD128 proven by length, as the flag it asserts is any value at the step's head; cat
-//! for every length its idea allows; the hypotenuse in doubles and the vector template.
+//! count in SIMD128 proven for every length, as the byte it carries and asserts stays a byte at
+//! the step's head, and vowels, whose output is a sum of counts, with a planted bug in each
+//! found; cat for every length its idea allows; the hypotenuse in doubles and the vector
+//! template.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -1864,38 +1866,373 @@ const COUNT_AT_64: [(&str, &str); 3] = [
     ),
 ];
 
+/// The word and line counter that takes every piece as if a space came before it, so a word
+/// that goes on from one buffer-full into the next counts twice.
+const FORGETS_THE_BYTE_BEFORE: (&str, &str) = (
+    "(call $count_piece (local.get $got) (local.get $before))",
+    "(call $count_piece (local.get $got) (global.get $SPACE))",
+);
+
+/// The word and line counter that asserts the byte it carries is at most 100, which a letter
+/// from `e` on isn't: wrong for a text of a buffer-full or more that has one at a buffer-full's
+/// end.
+const ASSERTS_MORE_THAN_A_BYTE: (&str, &str) = (
+    "(global $BYTE_MASK i32 (i32.const 255))",
+    "(global $BYTE_MASK i32 (i32.const 100))",
+);
+
 /// count, whose words in a buffer-full depend on whether the one before ended inside a word,
 /// carries the last byte of one buffer-full to the next, which its `$count_piece` asserts is a
-/// byte. The induction's step makes it any value at the read loop's head, and from there the
-/// assertion fails, so the step doesn't hold and `wc -lw` in SIMD128 is proven by length, as far
-/// as a proof's time goes: here every text of up to a buffer-full and a byte, the byte carried
-/// from the first piece to the second. The native count keeps a flag in a register it never
-/// asserts.
+/// byte. The induction's step finds that the local stays a byte from one time at the read
+/// loop's head to the next, by its terms' own range, and makes it any byte there, so the
+/// assertion holds and `wc -lw` in SIMD128 is proven for every length. The counter that takes
+/// every piece as if a space came before it, wrong only for a text longer than a buffer-full,
+/// is found.
 #[test]
-fn proves_a_vector_word_count_by_length_as_its_flag_is_asserted() {
+fn proves_a_vector_word_count_for_every_length_as_its_carried_byte_stays_a_byte() {
     if !solvers_installed() {
         return;
     }
     let (blocks, policy) = blocks_of("count");
-    let built = build(&edited_fixture("count", &COUNT_AT_64)).expect("count builds");
-    let mut block = blocks[0].clone();
-    for (_, generator) in &mut block.vars {
-        if let Generator::Str { max, .. } = generator {
-            *max = 65;
-        }
-    }
-    let verdict = prove_wasm(&built, policy, &block, &stream_budget(1200));
+    let source = edited_fixture("count", &COUNT_AT_64);
+    let built = build(&source).expect("count builds");
+    let module = Module::new(&built, policy).expect("the model");
+    let step = crate::prove::induction::step(&module, &blocks[0], &stream_budget(600));
+    let found = step
+        .as_ref()
+        .unwrap_or_else(|refused| panic!("{refused:?}"));
+    assert_eq!(found.chunk, 64, "{step:?}");
+    assert_eq!(found.lookback, 1, "{step:?}");
+    // From a newline to `z`, the least and the most of the text's characters: the range of a
+    // byte of the buffer, loaded and widened.
+    assert!(
+        found.hook.ranged.values().any(|range| *range == (10, 122)),
+        "the carried byte: {step:?}"
+    );
+    let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(1200));
     assert!(
         matches!(
             verdict,
             Verdict::Proven {
                 bound: None,
-                induction: None,
+                induction: Some(64),
                 ..
             }
         ),
         "{verdict:?}"
     );
+    let forgets = edited(&source, FORGETS_THE_BYTE_BEFORE);
+    let built = build(&forgets).expect("it builds");
+    let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(1200));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("a word counted twice: {verdict:?}");
+    };
+    let Some(Value::Str(text)) = found.get("text") else {
+        panic!("a word counted twice: {found:?}");
+    };
+    assert!(
+        text.len() > 64,
+        "a word counted twice: {} bytes",
+        text.len()
+    );
+    // The step takes the carried byte's range from its term, not from what the program
+    // asserts of it: an assertion that it is at most 100 fails for a later byte.
+    let asserts = edited(&source, ASSERTS_MORE_THAN_A_BYTE);
+    let built = build(&asserts).expect("it builds");
+    let module = Module::new(&built, policy).expect("the model");
+    let step = crate::prove::induction::step(&module, &blocks[0], &stream_budget(600));
+    assert!(step.is_err(), "{step:?}");
+    let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(1200));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("an assertion a byte fails: {verdict:?}");
+    };
+    let Some(Value::Str(text)) = found.get("text") else {
+        panic!("an assertion a byte fails: {found:?}");
+    };
+    assert!(
+        text.len() >= 64,
+        "an assertion a byte fails: {} bytes",
+        text.len()
+    );
+}
+
+/// The vowel counter with a buffer of 64 bytes, as [`LINES_AT_64`].
+const VOWELS_AT_64: [(&str, &str); 3] = [
+    (
+        "(global $buffer.size i32 (i32.const 65536))",
+        "(global $buffer.size i32 (i32.const 64))",
+    ),
+    (
+        "(global $CHUNKS i32 (i32.const 4096))",
+        "(global $CHUNKS i32 (i32.const 4))",
+    ),
+    (
+        "(global $LAST_CHUNK i32 (i32.const 65520))",
+        "(global $LAST_CHUNK i32 (i32.const 48))",
+    ),
+];
+
+/// The vowel counter whose steps of 16 bytes compare with `o` twice and never with `u`: wrong
+/// only for a text of 16 bytes or more.
+const STEPS_LEAVE_U_OUT: (&str, &str) = (
+    "(i8x16.eq (local.get $chunk) (local.get $u))",
+    "(i8x16.eq (local.get $chunk) (local.get $o))",
+);
+
+/// The vowel counter that keeps the last buffer-full's count alone.
+const KEEPS_THE_LAST_FULLS_VOWELS: (&str, &str) = (
+    "(i64.add (local.get $count)\n                (i64.extend_i32_u (call $vowels_in \
+     (global.get $buffer) (local.get $got)))))",
+    "(i64.extend_i32_u (call $vowels_in (global.get $buffer) (local.get $got))))",
+);
+
+/// The vowel counter whose loop over the bytes after the last step of 16 takes 14 of them at
+/// most: wrong only where 15 are left, for the last of them.
+const TAIL_STOPS_A_BYTE_SHORT: (&str, &str) = (
+    "(global $TAIL_MAX i32 (i32.const 15))",
+    "(global $TAIL_MAX i32 (i32.const 14))",
+);
+
+/// The vowel counter that takes a failed write for a good one unless its bound counter is
+/// where it started: wrong only once a whole buffer-full was read.
+const FORGETS_A_FAILED_WRITE_AFTER_A_FULL: (&str, &str) = (
+    "(br_if $write_failed (call $write_u64 (local.get $count)))",
+    "(br_if $write_failed (select (call $write_u64 (local.get $count)) (i32.const 0) (i32.eq \
+     (local.get $left) (global.get $MAX_PIECES))))",
+);
+
+/// Induction over a sum of counts, in the vector template's shape: vowels prints
+/// `count(lower(text), "a")` and the four other vowels' counts added up, and counts them 16
+/// bytes a step with SIMD128's compares, bitmask and `popcnt`, then one byte a step. The five
+/// counts of a letter each and the count of the bytes that are one of the five are one term
+/// ([`Pool::count`]), so it is proven for every length the idea allows, and so is its block with
+/// standard output closed, whose output is the same for every text. Each planted bug is found:
+/// steps of 16 that leave `u` out, a count of the last buffer-full alone, which only a text
+/// longer than a buffer-full shows, and a loop over the last bytes that stops one short.
+#[test]
+fn proves_a_vector_vowel_count_for_every_length_by_induction() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_of("vowels");
+    let source = edited_fixture("vowels", &VOWELS_AT_64);
+    let built = build(&source).expect("vowels builds");
+    let module = Module::new(&built, policy).expect("the model");
+    let closed = blocks
+        .last()
+        .expect("its block with standard output closed");
+    for (name, block) in [("the count", &blocks[0]), ("closed output", closed)] {
+        let step = crate::prove::induction::step(&module, block, &stream_budget(600));
+        assert!(step.is_ok(), "{name}: {step:?}");
+        let verdict = prove_wasm(&built, policy, block, &stream_budget(900));
+        assert!(
+            matches!(
+                verdict,
+                Verdict::Proven {
+                    bound: None,
+                    induction: Some(64),
+                    ..
+                }
+            ),
+            "{name}: {verdict:?}"
+        );
+    }
+    for (name, bug, longer_than) in [
+        ("steps without u", STEPS_LEAVE_U_OUT, 15),
+        (
+            "the last buffer-full's count alone",
+            KEEPS_THE_LAST_FULLS_VOWELS,
+            64,
+        ),
+        ("a tail a byte short", TAIL_STOPS_A_BYTE_SHORT, 14),
+    ] {
+        let wrong = edited(&source, bug);
+        let built = build(&wrong).expect("it builds");
+        let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(900));
+        let Verdict::Counterexample(found) = &verdict else {
+            panic!("{name}: {verdict:?}");
+        };
+        let Some(Value::Str(text)) = found.get("text") else {
+            panic!("{name}: {found:?}");
+        };
+        assert!(text.len() > longer_than, "{name}: {} bytes", text.len());
+    }
+    // With standard output closed the output is the same for every text, so the induction keeps
+    // no count: a program that forgets the failed write once it has read a whole buffer-full,
+    // and exits with 0, is found from the head's bound counter, any value there.
+    let wrong = edited(&source, FORGETS_A_FAILED_WRITE_AFTER_A_FULL);
+    let built = build(&wrong).expect("it builds");
+    let verdict = prove_wasm(&built, policy, closed, &stream_budget(900));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("a failed write forgotten: {verdict:?}");
+    };
+    let Some(Value::Str(text)) = found.get("text") else {
+        panic!("a failed write forgotten: {found:?}");
+    };
+    assert!(
+        text.len() >= 64,
+        "a failed write forgotten: {} bytes",
+        text.len()
+    );
+}
+
+/// A program for vowels' block with standard output closed, which must exit with code 2 for
+/// every text. After each whole buffer-full of 64 bytes it writes no bytes to standard output
+/// with `fd_write`, and counts the writes that fail; once two have failed it exits with code 9.
+/// An open output takes an empty write, a closed one refuses it: so with the output closed it
+/// is wrong for every text of 128 bytes or more, and for none shorter.
+const COUNTS_ITS_FAILED_EMPTY_WRITES: &str = r#"(module
+  (import "wasi_snapshot_preview1" "fd_write"
+    (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    (local $got i32)
+    (local $failed i32)
+    (block $done
+      (loop $piece
+        (local.set $got
+          (call $fill (i32.const 0) (i32.const 1024) (i32.const 64) (i32.const -1)))
+        (br_if $done (i32.lt_u (local.get $got) (i32.const 64)))
+        (i32.store (i32.const 2048) (i32.const 1024))
+        (i32.store (i32.const 2052) (i32.const 0))
+        (if (call $fd_write (i32.const 1) (i32.const 2048) (i32.const 1) (i32.const 2056))
+          (then (local.set $failed (i32.add (local.get $failed) (i32.const 1)))))
+        (br $piece)))
+    (if (i32.ge_u (local.get $failed) (i32.const 2))
+      (then (call $exit (i32.const 9))))
+    (if (call $write_all (i32.const 1) (i32.const 1024) (i32.const 1))
+      (then (call $exit (i32.const 2))))
+    (call $exit (i32.const 0))))
+"#;
+
+/// The step of an induction runs in its block's own world. With standard output closed, a
+/// program that counts its failed empty writes, one after each whole buffer-full, and exits
+/// with another code after two, is right for every text of up to a buffer-full from any state
+/// a step with an open output would find at the head, where no write fails: such a step would
+/// prove it for every length. The step with the output closed finds the count changed, the
+/// base then fails from any count, and the proof by length finds the text of two buffer-fulls.
+#[test]
+fn finds_what_a_closed_output_changes_in_a_time_round() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_of("vowels");
+    let closed = blocks
+        .last()
+        .expect("its block with standard output closed");
+    assert!(closed.stdout_closed, "vowels' last block closes the output");
+    let built = build(COUNTS_ITS_FAILED_EMPTY_WRITES).expect("it builds");
+    let verdict = prove_wasm(&built, policy, closed, &stream_budget(900));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("failed empty writes: {verdict:?}");
+    };
+    let Some(Value::Str(text)) = found.get("text") else {
+        panic!("failed empty writes: {found:?}");
+    };
+    assert!(
+        text.len() >= 128,
+        "failed empty writes: {} bytes",
+        text.len()
+    );
+}
+
+/// vowels as it is, with its buffer of 64 KiB, proven by length past where its steps of 16
+/// bytes begin: every text of up to 40 bytes, two steps and their tails. Before the counts of
+/// one byte's tests were one term, the solvers ran out of time at 16 bytes.
+#[test]
+fn proves_a_vector_vowel_count_by_length_past_its_first_step() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_of("vowels");
+    let built = build(&fixture("vowels", "main.wat")).expect("vowels builds");
+    let module = Module::new(&built, policy).expect("the model");
+    let mut block = blocks[0].clone();
+    for (_, generator) in &mut block.vars {
+        if let Generator::Str { max, .. } = generator {
+            *max = 40;
+        }
+    }
+    let verdict = crate::prove::by_length(&module, &block, &stream_budget(600), None);
+    assert!(
+        matches!(verdict, Ok(Verdict::Proven { bound: None, .. })),
+        "{verdict:?}"
+    );
+}
+
+/// What a proof of vowels' count comes to in the 300 seconds a build's proofs get, by the size
+/// of its buffer: the step over one buffer-full, then the base, every final piece of up to a
+/// buffer-full. Printed, for the documents: it holds nothing to a time, which is the runner's.
+#[test]
+#[ignore = "a measurement: the vowel count's proof at each buffer size, minutes each, printed"]
+fn measures_a_vector_vowel_counts_proof_by_its_buffers_size() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_of("vowels");
+    for (size, chunks, last) in [(1024, 64, 1008), (4096, 256, 4080), (65536, 4096, 65520)] {
+        let edits = [
+            (
+                "(global $buffer.size i32 (i32.const 65536))",
+                format!("(global $buffer.size i32 (i32.const {size}))"),
+            ),
+            (
+                "(global $CHUNKS i32 (i32.const 4096))",
+                format!("(global $CHUNKS i32 (i32.const {chunks}))"),
+            ),
+            (
+                "(global $LAST_CHUNK i32 (i32.const 65520))",
+                format!("(global $LAST_CHUNK i32 (i32.const {last}))"),
+            ),
+        ];
+        let mut source = fixture("vowels", "main.wat");
+        for (from, to) in &edits {
+            source = edited(&source, (*from, to.as_str()));
+        }
+        let built = build(&source).expect("it builds");
+        let module = Module::new(&built, policy).expect("the model");
+        let seconds = Duration::from_secs(300);
+        let began = Instant::now();
+        let step = crate::prove::induction::step(
+            &module,
+            &blocks[0],
+            &Budget::until(began + seconds, false),
+        );
+        let stepped = began.elapsed();
+        let summary = match &step {
+            Ok(found) => format!(
+                "holds, {} paths, {} questions",
+                found.paths, found.questions
+            ),
+            Err(refused) => refused.why.clone(),
+        };
+        let began = Instant::now();
+        let verdict = prove_wasm(
+            &built,
+            policy,
+            &blocks[0],
+            &Budget::until(began + seconds, false),
+        );
+        println!(
+            "MEASURED vowels, a buffer of {size} bytes: the step alone {:.1} s ({summary}); the \
+             proof {:.1} s: {verdict:?}",
+            stepped.as_secs_f64(),
+            began.elapsed().as_secs_f64()
+        );
+        // By length alone, from the program's start, for what the induction's base costs.
+        let began = Instant::now();
+        let plain = crate::prove::by_length(
+            &module,
+            &blocks[0],
+            &Budget::until(began + seconds, false),
+            None,
+        );
+        println!(
+            "MEASURED vowels, a buffer of {size} bytes, by length alone {:.1} s: {plain:?}",
+            began.elapsed().as_secs_f64()
+        );
+    }
 }
 
 /// The hypotenuse computes in doubles, which the model takes as the engine does, and every block

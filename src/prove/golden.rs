@@ -73,7 +73,24 @@ type Smaller = (&'static str, &'static [(&'static str, &'static str)]);
 /// bytes takes the solvers minutes. Each change is a line of main.wat and what it becomes: the
 /// buffer's size, and where the program counts the steps a buffer-full takes, their count and
 /// where the last one starts, so its loops still go over the whole of the smaller buffer.
-const SMALLER: [Smaller; 5] = [
+const SMALLER: [Smaller; 6] = [
+    (
+        "vowels",
+        &[
+            (
+                "(global $buffer.size i32 (i32.const 65536))",
+                "(global $buffer.size i32 (i32.const 64))",
+            ),
+            (
+                "(global $CHUNKS i32 (i32.const 4096))",
+                "(global $CHUNKS i32 (i32.const 4))",
+            ),
+            (
+                "(global $LAST_CHUNK i32 (i32.const 65520))",
+                "(global $LAST_CHUNK i32 (i32.const 48))",
+            ),
+        ],
+    ),
     (
         "count",
         &[
@@ -527,6 +544,34 @@ fn record_program(program: &Program, seconds: u64, recording: &mut String) {
 #[ignore = "the prover's golden: run with --ignored around a change to the prover"]
 fn every_run_and_proof_is_as_recorded() {
     compare_or_record(RECORDING, &record());
+}
+
+/// The time each proof gets in [`records_the_programs_named`], in seconds: three questions'
+/// worth, enough to show which question a proof is stuck on.
+const NAMED_SECONDS: u64 = 60;
+
+/// What the recording holds of the programs `LENGUA_CHECK_FOLDER` names, each by its folder
+/// from the repository's root (`examples/mean`), between commas: printed, each proof with
+/// [`NAMED_SECONDS`]. For work on one program's proofs: with `LENGUA_PROVE_EXPLAIN` set, each
+/// question a proof asks a solver is printed as terms (ci.yml's `explain`). It says nothing
+/// without the variable.
+#[test]
+#[ignore = "records the programs LENGUA_CHECK_FOLDER names: by hand, or ci.yml's ignored mode"]
+fn records_the_programs_named() {
+    let named = std::env::var("LENGUA_CHECK_FOLDER").unwrap_or_default();
+    let named: Vec<String> = named
+        .split(',')
+        .map(|folder| format!("{}/main.wat", folder.trim().trim_end_matches('/')))
+        .collect();
+    for program in programs() {
+        if !named.contains(&program.name) {
+            continue;
+        }
+        let began = Instant::now();
+        let mut recording = String::new();
+        record_program(&program, NAMED_SECONDS, &mut recording);
+        println!("{recording}{:.1} s", began.elapsed().as_secs_f64());
+    }
 }
 
 /// The programs whose proofs the test below holds to a small budget, by folder: the two whose

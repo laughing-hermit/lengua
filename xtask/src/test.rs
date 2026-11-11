@@ -1,7 +1,8 @@
 //! The suite's runs, as CI's test, ignored and golden steps make them: `cargo test` over the files
 //! `TEST_FILES` names and the tests `FILTER` names, all it prints kept in a log, watched for a
 //! stall when `STALL_SECONDS` gives a time (and then built with its functions' names, for the stall's
-//! stacks), and failed when what was asked for matched no test.
+//! stacks), and failed when what was asked for matched no test. `EXPLAIN` has the prover print
+//! the questions it asks its solvers.
 
 use std::path::Path;
 
@@ -103,6 +104,14 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
         command.args(["--ignored", "--nocapture"]);
     }
     command.args(filter.split_whitespace());
+    // The prover says each question it asks a solver, and each shape's time, when these are
+    // set to anything, an empty text too: so they're set only where `EXPLAIN` asks.
+    let explain = ci::setting("EXPLAIN");
+    if !explain.is_empty() {
+        command
+            .env("LENGUA_PROVE_EXPLAIN", &explain)
+            .env("LENGUA_PROVE_TRACE", &explain);
+    }
     if !limit.is_empty() {
         // The release profile strips the names of functions, which the stall's stacks need to
         // say where a test is stuck: a watched run is built with them.

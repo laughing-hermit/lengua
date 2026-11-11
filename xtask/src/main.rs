@@ -27,7 +27,7 @@ const USAGE: &str = "usage: cargo xtask <task> [<argument>...]
 
 Tasks:
   plan                the jobs to run, as GitHub's matrix (EVENT, MODE, TARGETS, GOLDEN_BASE,
-                      GOLDEN_BASE_RUN)
+                      GOLDEN_BASE_RUN, GOLDEN_VIEW)
   fetch <target> solvers|wasi...
                       z3 and cvc5, or wasi-sdk, as xtask/tools.tsv pins them
   machine <target>    the runner's facts, in the job's summary
@@ -44,9 +44,10 @@ Tasks:
   bench               the gate against C, C++ and Rust (LENGUA_BENCH_*)
   bench-report <report>
                       the bench's report, in the job's summary
-  golden-download     both commits' recordings (RUN, BASE_RUN)
-  golden-diff raw|ledger <base dir> <head dir>
-                      the two commits' recordings compared, in the job's summary
+  golden-download     both commits' recordings, or each runner's (RUN, BASE_RUN, VIEW)
+  golden-diff raw|ledger|runners <base dir> <head dir>
+                      the two commits' recordings compared, or the runners' in the head
+                      folder with each other, in the job's summary
   gate                whether the run passed (RESULTS, GOLDEN_DIFF, BENCH_WASM, INSTALL)
   help                this list";
 

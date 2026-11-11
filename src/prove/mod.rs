@@ -899,6 +899,14 @@ const REPLAYED_TEXTS: usize = 8;
 /// How many times a proof's paths the base that takes every final piece at once may follow.
 const AT_ONCE_PATHS: usize = 4;
 
+/// The most lengths an induction's base tries at once, in one shape whose length the input
+/// chooses, before it goes one length at a time: the model merges no loop's exits, so each
+/// length is a path or more, and each path's branches on a count of every byte are questions
+/// for the solvers. At 1,024 lengths the one shape took the vowel count's proof 1,529 seconds
+/// where it had 300, and proved nothing (run 42966635746). The prover's own tests and its
+/// golden take the one shape with buffers of 64 and 256 bytes.
+const AT_ONCE_LENGTHS: usize = 256;
+
 /// Inputs that meet every one of `conditions`, found by moving one variable of the newest of
 /// them in `witness`: to its range's ends and middle, and to the edge where the newest condition
 /// turns true, found by halving. A sum or a division compared with a constant turns at one
@@ -2789,12 +2797,19 @@ fn by_induction<P: Program>(
         }
     });
     // Every text `shape` gives at once, its length the input's choice; where that doesn't prove
-    // it, one length at a time.
+    // it, one length at a time. A buffer-full of more than [`AT_ONCE_LENGTHS`] bytes goes one
+    // length at a time from the start: the one shape's try would spend the time they need.
     let at_once = |shape: &Generated, hook: Option<&exec::induction::Hook>| {
-        let verdict = if counts {
-            by_length(image, shape, &within, hook)
-        } else {
+        let longest = match shape.vars.as_slice() {
+            [(_, Generator::Str { max, .. })] => *max,
+            _ => 0,
+        };
+        let verdict = if !counts {
             Err("its output isn't counts of the text".into())
+        } else if longest > AT_ONCE_LENGTHS {
+            Err("more final lengths than one shape takes in a proof's time".into())
+        } else {
+            by_length(image, shape, &within, hook)
         };
         match verdict {
             Ok(verdict @ Verdict::Proven { bound: None, .. }) => Ok(verdict),

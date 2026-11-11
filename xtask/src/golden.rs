@@ -19,24 +19,39 @@
 //! out of both sides before comparing (a difference that is expected and understood), and
 //! [`RENAMES`] renames the base's programs to the head's, for the ledger.
 //!
+//! The runners view compares no two commits: it holds the recordings the targets made of the
+//! dispatched ref, one leg each (`cargo xtask plan`), against each other, for the finish line's
+//! "the same verdicts on every runner". `golden-download` puts them in golden/head (`VIEW`),
+//! each in its artifact's folder, golden-runner-<target>-<commit>, and `golden-diff runners`
+//! reads that folder alone. The checker's recording and the model's runs in the prover's must
+//! be the same text on every runner, and each block's proof the same verdict in the ledger; a
+//! block is named with every runner's verdict where they differ ([`across`]).
+//!
 //! It exits 0 when the two agree; 1 when they differ or a recording is missing; and 2 when the
 //! only differences are proofs that ran out of time or of memory on one side (the machine's
 //! speed and load, not the code): run the legs again.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use regex::Regex;
 
-use crate::{ci, files};
+use crate::plan::{RUNNER_LEG, RUNNERS_VIEW};
+use crate::{ci, files, plan};
 
 /// The lines the comparison leaves out of both sides, one regular expression a line.
 const EXPECTED: &str = include_str!("../golden-expected.txt");
 
 /// How the comparison is called.
-const USAGE: &str = "usage: cargo xtask golden-diff raw|ledger <base dir> <head dir>";
+const USAGE: &str = "usage: cargo xtask golden-diff raw|ledger|runners <base dir> <head dir>";
+
+/// The checker's recording.
+const CHECKER: &str = "checker-wasm.txt";
+
+/// The prover's recording.
+const PROVER: &str = "prover-wasm.txt";
 
 /// The renames from a base's program paths to the head's, for the ledger, each a regular
 /// expression and its replacement, applied in turn to the start of each of the base's lines. A
@@ -84,10 +99,15 @@ pub fn download(arguments: &[String]) -> Result<u8, String> {
     let run = ci::setting("RUN");
     let base_run = ci::setting("BASE_RUN");
     let base_run = if base_run.is_empty() { &run } else { &base_run };
-    let legs = [
-        (&run, "golden-head-*", "golden/head"),
-        (base_run, "golden-base-*", "golden/base"),
-    ];
+    let runners = format!("golden-{RUNNER_LEG}*");
+    let legs = if ci::setting("VIEW") == RUNNERS_VIEW {
+        vec![(&run, runners.as_str(), "golden/head")]
+    } else {
+        vec![
+            (&run, "golden-head-*", "golden/head"),
+            (base_run, "golden-base-*", "golden/base"),
+        ]
+    };
     for (from, pattern, folder) in legs {
         let mut command = Command::new("gh");
         command
@@ -259,12 +279,205 @@ fn read(path: &Path) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// `cargo xtask golden-diff raw|ledger <base dir> <head dir>`.
+/// One runner's recordings of a commit.
+struct Recorded {
+    /// The runner's target.
+    target: String,
+    /// The checker's recording.
+    checker: String,
+    /// The prover's recording.
+    prover: String,
+}
+
+/// What stands for a verdict where a runner's ledger has no line for a block.
+const NO_LINE: &str = "(no line)";
+
+/// The lines of `recording`, a prover's, that aren't a block's proofs: the programs and the
+/// model's runs of their samples, which no solver's time changes.
+fn runs(recording: &str) -> String {
+    let mut kept = String::new();
+    for line in recording.lines() {
+        if !line.contains(" proofs: ") {
+            kept.push_str(line);
+            kept.push('\n');
+        }
+    }
+    kept
+}
+
+/// The runners' recordings beneath `folder`, in targets.json's order: each in the folder its
+/// artifact downloaded into, `golden-runner-<target>-<commit>`. A target with no such folder
+/// recorded nothing in this run.
+fn recorded_beneath(folder: &Path) -> Result<Vec<Recorded>, String> {
+    let listing =
+        std::fs::read_dir(folder).map_err(|error| format!("{}: {error}", folder.display()))?;
+    let mut entries: Vec<PathBuf> = Vec::new();
+    for entry in listing.flatten() {
+        entries.push(entry.path());
+    }
+    let mut found = Vec::new();
+    for runner in plan::every_runner()? {
+        let prefix = format!("golden-{RUNNER_LEG}{}-", runner.target);
+        let Some(path) = entries.iter().find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
+        }) else {
+            continue;
+        };
+        let text = |name: &str| match recording(path, name) {
+            Some(file) => read(&file),
+            None => Err(format!("{}: no {name}", path.display())),
+        };
+        found.push(Recorded {
+            checker: text(CHECKER)?,
+            prover: text(PROVER)?,
+            target: runner.target,
+        });
+    }
+    Ok(found)
+}
+
+/// Compares the runners' recordings of one commit with each other, leaving out what `expected`
+/// matches: what it says, and the exit code it gives. The checker's reports and the model's
+/// runs must be the same text on every runner as on the first; each block's proof must be the
+/// same verdict in every runner's ledger. A block whose verdicts differ is named with each
+/// verdict and the runners that gave it: LIMIT where the verdicts that didn't run out of time
+/// or of memory agree, DIFFERS where they don't, MISSING where a runner has no line for it.
+/// A difference or a missing block is 1, a limit alone 2, and agreement 0.
+fn across(recorded: &[Recorded], expected: &[Regex]) -> Result<(String, u8), String> {
+    if recorded.is_empty() {
+        return Ok(("no runner's recordings to compare\n".to_owned(), 1));
+    }
+    let targets: Vec<&str> = recorded.iter().map(|one| one.target.as_str()).collect();
+    let mut said = format!("the recordings of {}\n", targets.join(", "));
+    let mut status = u8::from(!same_texts(recorded, expected, &mut said));
+    let mut ledgers = Vec::new();
+    for one in recorded {
+        ledgers.push(keyed(&ledger(&one.prover)?, &[], expected)?);
+    }
+    let keys: BTreeSet<&String> = ledgers.iter().flat_map(Ledger::keys).collect();
+    let limited = Regex::new(LIMITED).map_err(|error| error.to_string())?;
+    let (mut same, mut differ, mut rerun, mut missing) = (0, 0, 0, 0);
+    for key in keys {
+        let mut by_verdict: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (one, ledger) in recorded.iter().zip(&ledgers) {
+            let verdict = ledger.get(key).map_or(NO_LINE, String::as_str);
+            by_verdict
+                .entry(verdict)
+                .or_default()
+                .push(one.target.as_str());
+        }
+        let settled = by_verdict
+            .keys()
+            .filter(|verdict| !limited.is_match(verdict))
+            .count();
+        let kind = if by_verdict.contains_key(NO_LINE) {
+            missing += 1;
+            "MISSING"
+        } else if by_verdict.len() == 1 {
+            same += 1;
+            continue;
+        } else if settled <= 1 {
+            rerun += 1;
+            "LIMIT"
+        } else {
+            differ += 1;
+            "DIFFERS"
+        };
+        let _ = writeln!(said, "{PROVER}: {kind} {key}");
+        for (verdict, targets) in &by_verdict {
+            let _ = writeln!(said, "    {}: {verdict}", targets.join(", "));
+        }
+    }
+    let _ = writeln!(
+        said,
+        "{PROVER}: {same} blocks have the same verdict on {} runners, {differ} differ, {rerun} \
+         ran out of time or memory on some, {missing} missing on some",
+        recorded.len()
+    );
+    if differ + missing > 0 {
+        status = 1;
+    } else if rerun > 0 && status == 0 {
+        status = 2;
+    }
+    Ok((said, status))
+}
+
+/// Whether the checker's reports, and the model's runs in the prover's recording, are the same
+/// text on every runner of `recorded` as on the first, leaving out what `expected` matches.
+/// `said` gets a line for each of the two, and the first lines of each difference.
+fn same_texts(recorded: &[Recorded], expected: &[Regex], said: &mut String) -> bool {
+    let Some((first, others)) = recorded.split_first() else {
+        return false;
+    };
+    let mut all_same = true;
+    for (name, what, runs_only) in [
+        (CHECKER, "the checker's reports", false),
+        (PROVER, "the model's runs", true),
+    ] {
+        let text_of = |one: &Recorded| {
+            if runs_only {
+                without_expected(&runs(&one.prover), expected)
+            } else {
+                without_expected(&one.checker, expected)
+            }
+        };
+        let was = text_of(first);
+        let mut differing = Vec::new();
+        for other in others {
+            let is = text_of(other);
+            if is == was {
+                continue;
+            }
+            differing.push(other.target.as_str());
+            let labels = (
+                format!("{}/{name}", first.target),
+                format!("{}/{name}", other.target),
+            );
+            let diff = similar::udiff::unified_diff(
+                similar::Algorithm::Myers,
+                &was,
+                &is,
+                1,
+                Some((labels.0.as_str(), labels.1.as_str())),
+            );
+            for line in diff.lines().take(20) {
+                said.push_str(line);
+                said.push('\n');
+            }
+        }
+        if differing.is_empty() {
+            let _ = writeln!(
+                said,
+                "{name}: {what} are identical on {} runners, {} lines",
+                recorded.len(),
+                was.matches('\n').count()
+            );
+        } else {
+            let _ = writeln!(
+                said,
+                "{name}: {what} DIFFER from {}'s on {}",
+                first.target,
+                differing.join(", ")
+            );
+            all_same = false;
+        }
+    }
+    all_same
+}
+
+/// `cargo xtask golden-diff raw|ledger|runners <base dir> <head dir>`.
 pub fn diff(arguments: &[String]) -> Result<u8, String> {
     let [view, base, head] = arguments else {
         eprintln!("{USAGE}");
         return Ok(64);
     };
+    if view == RUNNERS_VIEW {
+        let recorded = recorded_beneath(Path::new(head))?;
+        let (said, status) = across(&recorded, &expected(EXPECTED)?)?;
+        ci::print_and_summarize(&said)?;
+        return Ok(status);
+    }
     let names: &[&str] = match view.as_str() {
         "raw" => &["checker-wasm.txt", "prover-wasm.txt"],
         "ledger" => &["prover-wasm.txt"],
@@ -413,6 +626,63 @@ mod tests {
         limited.insert(key.to_owned(), "proven: bound None".to_owned());
         assert_eq!(compare("prover-wasm.txt", &base, &limited).1, 2);
         assert_eq!(compare("prover-wasm.txt", &base, &base).1, 0);
+    }
+
+    /// A runner's recordings: the checker's two lines, and `prover`.
+    fn recorded_on(target: &str, prover: &str) -> Recorded {
+        Recorded {
+            target: target.to_owned(),
+            checker: "== examples/add/main.wat\n  no problem\n".to_owned(),
+            prover: prover.to_owned(),
+        }
+    }
+
+    /// The runners view names each block whose verdict isn't the same on every runner, with
+    /// each verdict and the runners that gave it: a limit where the verdicts that didn't run
+    /// out of time agree, a difference where they don't, and a block a runner has no line for.
+    /// The checker's reports and the model's runs are held to the first runner's text. A
+    /// difference is 1, a limit alone 2, and agreement 0.
+    #[test]
+    fn the_runners_recordings_are_compared_with_each_other() {
+        let recorded = [
+            recorded_on("linux-x86_64", RECORDING),
+            recorded_on("linux-aarch64", RECORDING),
+            recorded_on("macos-aarch64", HEAD),
+        ];
+        let (said, code) = across(&recorded, &[]).expect("compared");
+        assert_eq!(code, 1, "{said}");
+        for line in [
+            "the recordings of linux-x86_64, linux-aarch64, macos-aarch64\n",
+            "checker-wasm.txt: the checker's reports are identical on 3 runners, 2 lines\n",
+            "prover-wasm.txt: the model's runs DIFFER from linux-x86_64's on macos-aarch64\n",
+            "prover-wasm.txt: LIMIT examples/add/main.wat B2\n    linux-x86_64, linux-aarch64: \
+             not proven: ~ out of time\n    macos-aarch64: proven: bound None\n",
+            "prover-wasm.txt: DIFFERS tests/fixtures/echo/main.wat B1\n    macos-aarch64: \
+             counterexample of [\"input\"]\n    linux-x86_64, linux-aarch64: proven\n",
+            "prover-wasm.txt: MISSING tests/fixtures/new/main.wat B1\n    linux-x86_64, \
+             linux-aarch64: (no line)\n    macos-aarch64: proven\n",
+            "prover-wasm.txt: 1 blocks have the same verdict on 3 runners, 1 differ, 1 ran out \
+             of time or memory on some, 1 missing on some\n",
+        ] {
+            assert!(said.contains(line), "no {line:?} in:\n{said}");
+        }
+        let agreeing = [
+            recorded_on("linux-x86_64", RECORDING),
+            recorded_on("windows-aarch64", RECORDING),
+        ];
+        let (said, code) = across(&agreeing, &[]).expect("compared");
+        assert_eq!(code, 0, "{said}");
+        let in_time = RECORDING.replace(
+            "not proven: ~ out of time",
+            "proven: 1 shapes, 1 paths, 2 questions, bound None",
+        );
+        let limited = [
+            recorded_on("linux-x86_64", RECORDING),
+            recorded_on("windows-aarch64", &in_time),
+        ];
+        let (said, code) = across(&limited, &[]).expect("compared");
+        assert_eq!(code, 2, "{said}");
+        assert_eq!(across(&[], &[]).expect("compared").1, 1);
     }
 
     /// golden-expected.txt's patterns are regular expressions; comments and blank lines are no

@@ -2,7 +2,7 @@
 //! as they're built, so the same computation is always the same term. A solver then proves two
 //! terms equal at once when they are the same, which keeps proofs fast.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// A term in a [`Pool`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -324,6 +324,22 @@ struct Counted {
     hash: u64,
     /// The count made before this one with the same hash.
     same_hash: Option<u32>,
+    /// The first and the last byte, as terms are ordered, that its conditions and its base's
+    /// test alone ([`Pool::tested`]): none where none does.
+    tests: Option<(Term, Term)>,
+}
+
+/// What a condition a count counts tests, when it tests one byte alone: the byte, the number of
+/// the set of the byte's values it holds for, and the rest of the condition, where it has more.
+type Tested = (Term, u32, Option<Term>);
+
+/// The first and the last byte of two spans of bytes together, each a first and a last byte or
+/// none.
+fn spanned(a: Option<(Term, Term)>, b: Option<(Term, Term)>) -> Option<(Term, Term)> {
+    match (a, b) {
+        (Some((first, last)), Some((low, high))) => Some((first.min(low), last.max(high))),
+        (known, None) | (None, known) => known,
+    }
 }
 
 /// A condition's share of its count's hash: splitmix64's finalizer of its number, so the sums of
@@ -410,6 +426,11 @@ const MAX_WALKED: usize = 4096;
 
 /// The most conjuncts a count's part is written in one form for ([`Pool::canonical_part`]).
 const MAX_CONJUNCTS: usize = 32;
+
+/// The most counts [`Pool::tests_joined`] walks down from the count it extends, for conditions
+/// that test a byte the new conditions test: a running count tests each byte in the conditions
+/// it added last.
+const MAX_REJOINED: usize = 8;
 
 /// The most intervals a set of a variable's values [`Pool::holds_where`] works out may have.
 const MAX_INTERVALS: usize = 1 << 16;
@@ -1141,6 +1162,7 @@ impl Pool {
                 own.push(self.canonical_part(*part));
             }
         }
+        let (base, mut own, tests) = self.tests_joined(base, own);
         let below = base.map_or(0, |base| self.counts[base as usize].len);
         if (below + own.len()) as u128 > mask(width) {
             // It would wrap: add it up instead.
@@ -1159,7 +1181,7 @@ impl Pool {
             if own.is_empty() {
                 return self.make(Node::Count(base, width), Sort::Bv(width));
             }
-            return self.stored_count(width, Some(base), own);
+            return self.stored_count(width, Some(base), own, tests);
         }
         if own.is_empty() {
             return self.bv(width, 0);
@@ -1173,12 +1195,207 @@ impl Pool {
             let (one, zero) = (self.bv(width, 1), self.bv(width, 0));
             return self.ite(only, one, zero);
         }
-        self.stored_count(width, None, own)
+        self.stored_count(width, None, own, tests)
+    }
+
+    /// What `part`, a condition a count counts, tests, when it tests one byte alone: a test of
+    /// a byte, or a conjunction with one such test in it, whose other conjuncts, sorted and
+    /// joined, are the rest. `None` for any other condition, one that tests two bytes among
+    /// them.
+    fn tested(&mut self, part: Term) -> Option<Tested> {
+        match *self.node(part) {
+            Node::Lookup(byte, table) => Some((byte, table, None)),
+            Node::BoolAnd(..) => {
+                let mut rest = Vec::new();
+                let mut found: Option<(Term, u32)> = None;
+                let mut pending = vec![part];
+                while let Some(current) = pending.pop() {
+                    match *self.node(current) {
+                        Node::BoolAnd(a, b) => {
+                            if rest.len() + pending.len() >= MAX_CONJUNCTS {
+                                return None;
+                            }
+                            pending.extend([a, b]);
+                        }
+                        Node::Lookup(byte, table) => {
+                            if found.is_some() {
+                                return None;
+                            }
+                            found = Some((byte, table));
+                        }
+                        _ => rest.push(current),
+                    }
+                }
+                let (byte, table) = found?;
+                rest.sort_unstable();
+                rest.dedup();
+                let (first, others) = rest.split_first()?;
+                let mut guard = *first;
+                for other in others {
+                    guard = self.bool_and(guard, *other);
+                }
+                Some((byte, table, Some(guard)))
+            }
+            _ => None,
+        }
+    }
+
+    /// `own`, the conditions a count adds to count `base`'s, with the tests of one byte joined:
+    /// the count they extend, the conditions, and the first and the last byte they test.
+    ///
+    /// Conditions that test the same byte, each with the same rest, count as many as the sets
+    /// of the byte's values they hold for have the value in them. So they're written as the
+    /// test of the values in at least one of the sets, the test of the values in at least two,
+    /// and so on, which count the same for every value of the byte: for sets that share no
+    /// value, as the tests of five different letters do, the one test of their union. The
+    /// counts of a byte's tests then are one term however a program or a formula split them:
+    /// five counts of a letter each, added up, and the count of the bytes that are one of the
+    /// five. It assumes nothing beyond what a test's set says: the byte's values where the test
+    /// holds, worked out value by value ([`Self::table_of`]).
+    ///
+    /// Conditions the extended count already holds are joined too, where they're among what
+    /// it and the [`MAX_REJOINED`] counts under it added last: the count is then made again
+    /// from the count under those. Deeper ones stay as they are, which leaves two counts of
+    /// the same conditions two terms, never one term for two different counts.
+    fn tests_joined(
+        &mut self,
+        base: Option<u32>,
+        own: Vec<Term>,
+    ) -> (Option<u32>, Vec<Term>, Option<(Term, Term)>) {
+        let mut keys: BTreeSet<(Term, Option<Term>)> = BTreeSet::new();
+        let mut tests: Option<(Term, Term)> = None;
+        for part in &own {
+            if let Some((byte, _, guard)) = self.tested(*part) {
+                keys.insert((byte, guard));
+                tests = Some(tests.map_or((byte, byte), |(first, last)| {
+                    (first.min(byte), last.max(byte))
+                }));
+            }
+        }
+        let Some(span) = tests else {
+            return (base, own, None);
+        };
+        let mut parts = Vec::new();
+        let mut below = base;
+        for number in self.sharing(base, &keys, span) {
+            let counted = &self.counts[number as usize];
+            parts.extend_from_slice(&counted.own);
+            below = counted.base;
+            tests = spanned(tests, counted.tests);
+        }
+        parts.extend_from_slice(&own);
+        let mut found: Vec<Option<Tested>> = Vec::with_capacity(parts.len());
+        for part in &parts {
+            found.push(self.tested(*part));
+        }
+        let mut groups: BTreeMap<(Term, Option<Term>), Vec<u32>> = BTreeMap::new();
+        for (byte, table, guard) in found.iter().flatten() {
+            groups.entry((*byte, *guard)).or_default().push(*table);
+        }
+        if groups.values().all(|tables| tables.len() < 2) {
+            return (base, own, tests);
+        }
+        let mut joined = Vec::with_capacity(parts.len());
+        for (part, test) in parts.iter().zip(&found) {
+            let alone = match test {
+                Some((byte, _, guard)) => groups
+                    .get(&(*byte, *guard))
+                    .is_none_or(|tables| tables.len() < 2),
+                None => true,
+            };
+            if alone {
+                joined.push(*part);
+            }
+        }
+        for ((byte, guard), tables) in groups {
+            if tables.len() < 2 {
+                continue;
+            }
+            for level in self.levels(&tables) {
+                let test = self.lookup(byte, level);
+                let part = match guard {
+                    Some(guard) => {
+                        let both = self.bool_and(test, guard);
+                        self.canonical_part(both)
+                    }
+                    None => test,
+                };
+                if self.truth(part) != Some(false) {
+                    joined.push(part);
+                }
+            }
+        }
+        (below, joined, tests)
+    }
+
+    /// The counts from count `base` down, the top one first, that are made again when
+    /// conditions with `keys`, each a byte and the rest of a condition that tests it, extend
+    /// `base`: down to the last one, among the first [`MAX_REJOINED`] whose bytes meet `span`,
+    /// the new conditions' first and last byte, that added a condition with one of the keys.
+    fn sharing(
+        &mut self,
+        base: Option<u32>,
+        keys: &BTreeSet<(Term, Option<Term>)>,
+        (first, last): (Term, Term),
+    ) -> Vec<u32> {
+        let mut chain: Vec<u32> = Vec::new();
+        let mut shared = 0;
+        let mut at = base;
+        while let Some(number) = at {
+            let counted = &self.counts[number as usize];
+            let meets = counted
+                .tests
+                .is_some_and(|(low, high)| low <= last && first <= high);
+            if !meets || chain.len() == MAX_REJOINED {
+                break;
+            }
+            at = counted.base;
+            let parts = counted.own.clone();
+            chain.push(number);
+            for part in parts {
+                if let Some((byte, _, guard)) = self.tested(part)
+                    && keys.contains(&(byte, guard))
+                {
+                    shared = chain.len();
+                    break;
+                }
+            }
+        }
+        chain.truncate(shared);
+        chain
+    }
+
+    /// The sets of a byte's values that count as the sets numbered `tables` do together: the
+    /// values in at least one of them, then the values in at least two, and so on, each set
+    /// that has a value.
+    fn levels(&self, tables: &[u32]) -> Vec<Table> {
+        let mut levels: Vec<Table> = Vec::new();
+        for number in tables {
+            let mut carried = self.tables[*number as usize];
+            for level in &mut levels {
+                let both: Table = std::array::from_fn(|word| level[word] & carried[word]);
+                for (kept, more) in level.iter_mut().zip(carried) {
+                    *kept |= more;
+                }
+                carried = both;
+            }
+            if carried != [0; 4] {
+                levels.push(carried);
+            }
+        }
+        levels
     }
 
     /// The count of count `base`'s conditions, if any, then `own`, sorted, as a `width`-bit
     /// number: an earlier count of the same conditions, however it holds them, or a new one.
-    fn stored_count(&mut self, width: u32, base: Option<u32>, own: Vec<Term>) -> Term {
+    /// `tests` is the first and the last byte `own`'s conditions test alone.
+    fn stored_count(
+        &mut self,
+        width: u32,
+        base: Option<u32>,
+        own: Vec<Term>,
+        tests: Option<(Term, Term)>,
+    ) -> Term {
         let (mut len, mut sure, mut hash, mut sorted, mut last) =
             base.map_or((0, 0, 0_u64, true, None), |base| {
                 let counted = &self.counts[base as usize];
@@ -1208,6 +1425,7 @@ impl Pool {
         }
         let number = u32::try_from(self.counts.len()).unwrap_or(u32::MAX);
         let same_hash = self.count_index.insert(hash, number);
+        let under = base.and_then(|base| self.counts[base as usize].tests);
         self.counts.push(Counted {
             base,
             own,
@@ -1217,6 +1435,7 @@ impl Pool {
             sorted,
             hash,
             same_hash,
+            tests: spanned(tests, under),
         });
         self.make(Node::Count(number, width), Sort::Bv(width))
     }
@@ -3063,6 +3282,47 @@ impl Pool {
         Some(self.zero_extend(result, width - 64))
     }
 
+    /// `a`, a sum one of whose parts is a choice between two constants, as the choice between
+    /// the sum with the one and the sum with the other: `x + ite(c, -1, 1)` is
+    /// `ite(c, x - 1, x + 1)`, bit for bit, at any width. A dividend rounded a step away from
+    /// zero before it's halved then has one form, whether a program added a chosen step to it,
+    /// as WebAssembly's `select` of two constants does, or a formula chose between two sums. A
+    /// sum with no such part, or with two, is itself.
+    fn choice_out(&mut self, a: Term) -> Term {
+        let width = self.width(a);
+        let linear = self.linear_view(a);
+        let mut found: Option<(Term, u128)> = None;
+        for (part, times) in &linear.parts {
+            if let Node::Ite(_, then, otherwise) = *self.node(*part)
+                && self.constant(then).is_some()
+                && self.constant(otherwise).is_some()
+            {
+                if found.is_some() {
+                    return a;
+                }
+                found = Some((*part, *times));
+            }
+        }
+        let Some((choice, times)) = found else {
+            return a;
+        };
+        let Node::Ite(condition, then, otherwise) = *self.node(choice) else {
+            return a;
+        };
+        let (Some(then), Some(otherwise)) = (self.constant(then), self.constant(otherwise)) else {
+            return a;
+        };
+        let mut rest = linear;
+        rest.parts.remove(&choice);
+        let rest = self.linear_term(width, rest);
+        let with = |pool: &mut Self, step: u128| {
+            let step = pool.bv(width, step.wrapping_mul(times) & mask(width));
+            pool.add(rest, step)
+        };
+        let (then, otherwise) = (with(self, then), with(self, otherwise));
+        self.ite(condition, then, otherwise)
+    }
+
     /// Signed `a / b`, toward zero, as SMT-LIB defines it (also for zero and overflow).
     pub fn sdiv(&mut self, a: Term, b: Term) -> Term {
         let width = self.width(a);
@@ -3091,6 +3351,7 @@ impl Pool {
             && c > 0
             && c <= mask(width - 1)
         {
+            let a = self.choice_out(a);
             if let Some(quotient) = self
                 .divided(a, c, true)
                 .or_else(|| self.reduced(a, c, true))
@@ -5329,6 +5590,210 @@ mod tests {
         assert_eq!(pool.count_parts(number), every);
     }
 
+    /// The condition that `byte`, with the case bit set, is `letter`.
+    fn small_is(pool: &mut Pool, byte: Term, letter: u8) -> Term {
+        let case_bit = pool.bv(8, 32);
+        let small = pool.or(byte, case_bit);
+        let wanted = pool.bv(8, u128::from(letter));
+        pool.eq(small, wanted)
+    }
+
+    /// The condition that `byte`, with the case bit set, is one of `letters`.
+    fn small_is_one_of(pool: &mut Pool, byte: Term, letters: &[u8]) -> Term {
+        let mut any = pool.boolean(false);
+        for letter in letters {
+            let here = small_is(pool, byte, *letter);
+            any = pool.bool_or(any, here);
+        }
+        any
+    }
+
+    /// 1 where `condition` holds, else 0, in 64 bits.
+    fn flag(pool: &mut Pool, condition: Term) -> Term {
+        let (one, zero) = (pool.bv(64, 1), pool.bv(64, 0));
+        pool.ite(condition, one, zero)
+    }
+
+    /// The sum of the counts of each of `letters` among `bytes`, each count over all the bytes,
+    /// as a formula that adds `count(lower(text), "a")` and the others adds them.
+    fn letter_counts(pool: &mut Pool, bytes: &[Term], letters: &[u8]) -> Term {
+        let mut total = pool.bv(64, 0);
+        for letter in letters {
+            let mut parts = Vec::new();
+            for byte in bytes {
+                parts.push(small_is(pool, *byte, *letter));
+            }
+            let count = pool.count(64, &parts);
+            total = pool.add(total, count);
+        }
+        total
+    }
+
+    /// Counts of the tests of one byte are one term however they're split: five counts of a
+    /// letter each, as a formula adds them; the count of the bytes that are one of the five, 16
+    /// bytes a step and then one byte a step, as a vector program counts; and a flag for each
+    /// letter of each byte, one added at a time, as a scalar program counts. A program that
+    /// leaves a letter out, in every step or only in its 16-byte steps, is another term, with
+    /// another value. Each term's value is the count, on random bytes.
+    #[test]
+    fn counts_of_one_bytes_tests_are_one_term_however_they_are_split() {
+        use rand::{RngExt, SeedableRng};
+        let mut pool = Pool::default();
+        let mut bytes = Vec::new();
+        for index in 0..40 {
+            bytes.push(pool.var(8, &format!("b{index}")));
+        }
+        let vowels = b"aeiou";
+        let formula = letter_counts(&mut pool, &bytes, vowels);
+
+        // 16 bytes a step, then the rest one at a time, with `letters` in the steps.
+        let stepped = |pool: &mut Pool, letters: &[u8]| {
+            let mut total = pool.bv(64, 0);
+            for chunk in bytes[..32].chunks(16) {
+                let mut parts = Vec::new();
+                for byte in chunk {
+                    parts.push(small_is_one_of(pool, *byte, letters));
+                }
+                let step = pool.count(64, &parts);
+                total = pool.add(total, step);
+            }
+            for byte in &bytes[32..] {
+                let mut here = pool.bv(64, 0);
+                for letter in vowels {
+                    let test = small_is(pool, *byte, *letter);
+                    let one = flag(pool, test);
+                    here = pool.add(here, one);
+                }
+                total = pool.add(total, here);
+            }
+            total
+        };
+        let vector = stepped(&mut pool, vowels);
+        assert_eq!(vector, formula, "16 bytes a step");
+
+        let mut scalar = pool.bv(64, 0);
+        for byte in &bytes {
+            for letter in vowels {
+                let test = small_is(&mut pool, *byte, *letter);
+                let one = flag(&mut pool, test);
+                scalar = pool.add(scalar, one);
+            }
+        }
+        assert_eq!(scalar, formula, "a flag at a time");
+
+        let without_u = stepped(&mut pool, b"aeio");
+        assert_ne!(without_u, formula, "steps that leave u out");
+        let fewer = letter_counts(&mut pool, &bytes, b"aeio");
+        assert_ne!(fewer, formula, "a formula that leaves u out");
+
+        // Sets that share values: the count of a's and A's and the count of a's.
+        let mut both = Vec::new();
+        let mut small = Vec::new();
+        let mut twice = pool.bv(64, 0);
+        for byte in &bytes {
+            let either = small_is(&mut pool, *byte, b'a');
+            let wanted = pool.bv(8, u128::from(b'a'));
+            let exact = pool.eq(*byte, wanted);
+            both.push(either);
+            small.push(exact);
+            let (first, second) = (flag(&mut pool, exact), flag(&mut pool, either));
+            twice = pool.add(twice, first);
+            twice = pool.add(twice, second);
+        }
+        let (all, exact) = (pool.count(64, &both), pool.count(64, &small));
+        let shared = pool.add(all, exact);
+        assert_eq!(twice, shared, "sets that share a value");
+
+        let mut rng = rand::rngs::ChaCha8Rng::seed_from_u64(0x0070_1e57);
+        let alphabet = b"aAeEiIoOuUbz @`\n";
+        for _ in 0..200 {
+            let mut text = Vec::new();
+            for _ in 0..bytes.len() {
+                text.push(alphabet[rng.random_range(0..alphabet.len())]);
+            }
+            let values: HashMap<String, u128> = text
+                .iter()
+                .enumerate()
+                .map(|(index, byte)| (format!("b{index}"), u128::from(*byte)))
+                .collect();
+            let (mut count, mut a_s, mut either, mut stepped_count) = (0_u128, 0_u128, 0, 0);
+            for (index, byte) in text.iter().enumerate() {
+                let small = byte.to_ascii_lowercase();
+                let vowel = vowels.contains(&small);
+                count += u128::from(vowel);
+                a_s += u128::from(*byte == b'a');
+                either += u128::from(small == b'a');
+                let in_step = if index < 32 {
+                    b"aeio".contains(&small)
+                } else {
+                    vowel
+                };
+                stepped_count += u128::from(in_step);
+            }
+            assert_eq!(pool.evaluate(formula, &values), Some(count), "{text:?}");
+            assert_eq!(
+                pool.evaluate(shared, &values),
+                Some(a_s + either),
+                "{text:?}"
+            );
+            assert_eq!(
+                pool.evaluate(without_u, &values),
+                Some(stepped_count),
+                "{text:?}"
+            );
+        }
+    }
+
+    /// Tests of one byte with the same rest, as each lane of a text whose length the input
+    /// chooses is counted where it's inside the text, are joined as tests alone are; tests with
+    /// different rests aren't.
+    #[test]
+    fn guarded_tests_of_one_byte_are_joined_where_their_guards_are_the_same() {
+        let mut pool = Pool::default();
+        let mut formula = pool.bv(64, 0);
+        let mut bytes = Vec::new();
+        let mut guards = Vec::new();
+        for index in 0..20 {
+            bytes.push(pool.var(8, &format!("b{index}")));
+            guards.push(pool.bool_var(&format!("inside{index}")));
+        }
+        for letter in b"ae" {
+            let mut parts = Vec::new();
+            for (byte, guard) in bytes.iter().zip(&guards) {
+                let test = small_is(&mut pool, *byte, *letter);
+                parts.push(pool.bool_and(test, *guard));
+            }
+            let count = pool.count(64, &parts);
+            formula = pool.add(formula, count);
+        }
+        let mut program = Vec::new();
+        let mut other_guards = Vec::new();
+        for (index, (byte, guard)) in bytes.iter().zip(&guards).enumerate() {
+            let test = small_is_one_of(&mut pool, *byte, b"ae");
+            program.push(pool.bool_and(*guard, test));
+            // The a's where one guard holds and the e's where the next does.
+            let next = guards[(index + 1) % guards.len()];
+            let (a, e) = (
+                small_is(&mut pool, *byte, b'a'),
+                small_is(&mut pool, *byte, b'e'),
+            );
+            other_guards.push(pool.bool_and(a, *guard));
+            other_guards.push(pool.bool_and(e, next));
+        }
+        assert_eq!(pool.count(64, &program), formula);
+        assert_ne!(pool.count(64, &other_guards), formula);
+        let values: HashMap<String, u128> = (0..20)
+            .flat_map(|index| {
+                [
+                    (format!("b{index}"), u128::from(b"aExe"[index % 4])),
+                    (format!("inside{index}"), u128::from(index < 13)),
+                ]
+            })
+            .collect();
+        // Of the first 13 bytes, a E x e a E x e a E x e a: all but the three x.
+        assert_eq!(pool.evaluate(formula, &values), Some(10));
+    }
+
     #[test]
     fn a_bit_of_a_deep_shared_term_takes_time_in_its_size_not_its_depth() {
         // Each round's two words are made of the last round's two, so every term is shared along
@@ -5514,6 +5979,33 @@ mod tests {
         let fifty = pool.bv(64, 50);
         let expected = pool.mul(x, fifty);
         assert_eq!(half, expected);
+        // The step chosen first and then added, as WebAssembly's select of two constants and
+        // an add write it, is the same dividend: for the cents, and for a sum 2 doesn't divide.
+        let minus_one = pool.bv(64, mask(64));
+        let step = pool.ite(negative, minus_one, one);
+        let stepped = pool.add(cents, step);
+        assert_eq!(pool.sdiv(stepped, two), expected);
+        let below = pool.slt(x, zero);
+        let (up, down) = (pool.add(x, one), pool.sub(x, one));
+        let chosen = pool.ite(below, down, up);
+        let step = pool.ite(below, minus_one, one);
+        let added = pool.add(x, step);
+        let (chosen, added) = (pool.sdiv(chosen, two), pool.sdiv(added, two));
+        assert_eq!(added, chosen);
+        for (first, second) in (0..10_i64).flat_map(|a| (0..10_i64).map(move |b| (a, b))) {
+            let values: HashMap<String, u128> = [
+                ("a".to_owned(), first.unsigned_abs().into()),
+                ("b".to_owned(), second.unsigned_abs().into()),
+            ]
+            .into();
+            let sum = first - second;
+            let wanted = (sum + if sum < 0 { -1 } else { 1 }) / 2;
+            assert_eq!(
+                pool.evaluate(added, &values),
+                Some(u128::from(wanted.cast_unsigned())),
+                "{first} and {second}"
+            );
+        }
         // A sum that shares its factor with the divisor: (10 y) / 100 is y / 10.
         let ten = pool.bv(64, 10);
         let y = pool.mul(a, ten);
