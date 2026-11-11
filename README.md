@@ -353,9 +353,10 @@ the five runners. And lengua keeps one set of WebAssembly features on every mach
 machine computes the same bits, where point 3 asks for each machine's fastest: that choice is the
 owner's. This pass over the documents is W15's, before the finish-line run and the report. Next:
 
-- **W17b:** the solvers as WebAssembly. z3 moves into Wasmtime only if it gives the same verdicts
-  on all five runners at today's limits, with the replayed questions taking at most twice as
-  long in all; then one bounded try for cvc5.
+- **W17b, measured:** z3 as WebAssembly was to replace native z3 only if it gave the same verdicts
+  on all five runners with the replayed questions taking at most twice as long. It took 1.70 to
+  2.28 times as long and lost a proof on three runners (run 42919127514), so native z3 stays;
+  [todo.md](todo.md) has the numbers.
 - **W16:** the repository tidied, and only main left of its branches.
 
 After the finish line, four milestones aim to make lengua a replacement for C, C++ and Rust:

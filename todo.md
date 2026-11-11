@@ -267,8 +267,36 @@ Each can be reversed.
       runners at today's limits, with the replayed questions taking at most twice as long in
       all. Another project already runs z3 under Wasmtime, with 413 of 414 answers the same
       as native z3. If the bar isn't met, native z3 stays and the measurement is written here.
+      - **Measured 2026-11-11: the bar isn't met, so native z3 stays** (W17b, run 42919127514,
+        all five runners, at 18e8f06). z3 4.16.0 builds for WASI (29.3 MB, WASI imports only)
+        and lengua-mcp hosts it; its one-time compile takes 5 to 11 seconds. Each runner's
+        recorded questions were replayed through both:
+
+        | Runner | Native | WebAssembly | Ratio | Answers that became unknown | Verdicts that differ |
+        |---|---|---|---|---|---|
+        | Linux on x86-64 | 860 s | 1,535 s | 1.79 | 44 | 0 |
+        | Linux on ARM64 | 1,016 s | 1,725 s | 1.70 | 43 | 1 |
+        | macOS on ARM64 | 832 s | 1,701 s | 2.04 | 54 | 1 |
+        | Windows on x86-64 | 931 s | 1,583 s | 1.70 | 44 | 1 |
+        | Windows on ARM64 | 2,128 s | 4,851 s | 2.28 | 49 | 0 |
+
+        Only Linux on x86-64 meets it. Two runners are past twice the time. On three, a proof of
+        `tests/fixtures/days` that native z3 finishes ends "z3 couldn't decide" with the
+        WebAssembly z3, which gives up early there with a reason of its own ("operator bvult is
+        not supported"); its cause wasn't found. Besides, 5 to 15 proof lines a runner run out
+        of time with the WebAssembly z3, which the bar sets aside but a user would see.
+      - Not explained: Windows on ARM64's native leg asked 10,310 questions where the others
+        asked about 2,400. Each runner was measured once.
+      - The work is kept at the tag `archive/wip/z3-wasm`, not merged: the build
+        (`cargo xtask solver-wasm`), the host in lengua-mcp and the measurement
+        (`mode=solver`), to measure again when z3 or Wasmtime change.
     - cvc5 stays native, since no build that Wasmtime runs exists yet. After z3, one bounded try
       to make one: at most five build runs.
+      - **Not tried (2026-11-11), for the owner to decide.** The try was to follow a z3 that met
+        the bar. z3 didn't, and cvc5 would face the same bar with a longer build (about an hour
+        a run) and no build that Wasmtime runs to start from. With native z3 staying, one
+        WebAssembly solver beside one native one removes no download. The decision above stands
+        if the owner still wants the try.
     - The site (`site/`) goes, and the tag keeps it. Static pages built by Rust can come back
       when the owner wants to publish one.
 - **The code is WebAssembly text** (`main.wat`), written by the agent and validated by lengua.
