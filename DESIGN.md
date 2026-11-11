@@ -272,19 +272,31 @@ float conversions, which the secret rule refuses before, and of atomics, which l
 tests pin the refusal on x86-64 and the pass on ARM64 with one module, and pin both CPUs' readers
 with code written as bytes.
 
+The address map gives some code to no operator: a function's entry, the constants it ends with,
+values moved between registers and the stack, and what Cranelift's optimizer made anew from a
+function's operators, whose new instructions carry no offset. The first build of this check
+trusted that code, and its own test showed why it can't: in secret-equal with a lane shift by
+an amount made from its mask, the shift's code came out with no offset, made anew it seems, so
+the table's address is in code with no operator, and that build passed it (run 42927099111).
+So in a function that has code of an operator that takes a secret, `check` reads the code given
+to no operator too, all but the function's first stretch, its entry, and its last, its
+constants, and holds it as code that computes with a secret. A finding there is reported beside
+the first operator after it that takes a secret, or the last before it, so its line is near
+the cause and may not be the cause's own. A table or a branch the optimizer made from operators
+that take no secret, in such a function, is refused as well.
+
 `check`'s `tests` say which CPU's code was read. `run`, a run from a shell and the attester read
 the code again before they run it, each for its own configuration, so the code that runs was read
 on the computer that runs it, whichever computer wrote lengua.lock; the lock records no CPU. An
 idea with no `- Secret:` line compiles nothing for this, in `check` or in a run.
 
 What the check of the machine code trusts, on both CPUs: the time the CPU takes for the
-instructions it leaves, such as a multiplication, a shift or a vector instruction; code the
-address map gives no operator, which is a function's entry and exit, values moved between
-registers and the stack, and what the engine's optimizer made anew from several operators, whose
-new instructions carry no offset; the code of operators that take no secret, of lengua's library
-and of the engine's own functions and the host's; that the engine compiles a module to the same
-code each time on one computer; and, on ARM64, that a word is the instruction its group's bits
-say, since nothing else of a word is decoded.
+instructions it leaves, such as a multiplication, a shift or a vector instruction; a function's
+entry; all the code of a function where no operator that takes a secret has code; the code of
+operators that take no secret, of lengua's library and of the engine's own functions and the
+host's; that the engine compiles a module to the same code each time on one computer, and gives
+its address map the offsets its code came from; and, on ARM64, that a word is the instruction its
+group's bits say, since nothing else of a word is decoded.
 
 ## The tests
 
@@ -771,7 +783,8 @@ listed below.
   fuel and epochs; `wasmparser` 0.261.0 and `wast` 261.0.0 to read main.wat as the engine does;
   and the machine code Cranelift makes. For timing, the code made for operators that take a
   secret is read (Secrets, above), and the rest is trusted: the CPU's own timing of the
-  instructions left, code the address map gives no operator, and the engine's own functions. No
+  instructions left, the code of functions and operators that take no secret, and the engine's
+  own functions. No
   OS sandbox wraps a worker: a worker is a plain child process, and a second wall (seccomp and
   Landlock on Linux, each other system's own) is deferred.
 - **The solvers**: z3 4.16.0 and cvc5 1.3.4, an "impossible" counting only when both say it, but

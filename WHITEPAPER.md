@@ -160,7 +160,7 @@ agent.
   of `main.wat` that depends on them [40]. It checks the WebAssembly, and then, on the CPU that
   runs the program, the machine code Wasmtime made for each operator that takes a secret, where
   it refuses a branch, a table, a call or a division. The CPU's own timing of the instructions
-  left, and the code the engine's address map gives no operator, are trusted [41].
+  left, and the code of operators that take no secret, are trusted [41].
 
 The checks are fast enough to sit inside the agent's loop: every call of `check` replies within
 about 40 seconds, and the proofs that need longer go on in the background, for up to five

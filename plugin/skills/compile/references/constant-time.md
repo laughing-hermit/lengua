@@ -117,6 +117,11 @@ condition, which isn't secret; the code of a load, a store, a `global.set`, a `m
 `memory.fill` may check its addresses and lengths, which aren't secret, and call the engine's copy
 or fill; the code of a call of one of `main.wat`'s functions calls it.
 
+The engine's optimizer makes some operators anew, and gives their code to no operator. So in a
+function that computes with a secret, `check` reads that code too, and reports what it refuses
+there on the line of the nearest operator that takes a secret, most often the next one: the
+cause is on that line or close before it.
+
 One operator of those the secret rule passes is refused this way today, and on x86-64 only:
 `i8x16.shl` and `i8x16.shr_u` by an amount that isn't a constant. x86-64 has no shift of 8-bit
 lanes, so the engine shifts 16-bit lanes and clears the bits that crossed lanes with a mask, which
@@ -138,8 +143,7 @@ What this check still trusts, on both CPUs:
 
 - the CPU's own timing of the instructions it leaves: a multiplication, a shift, a vector
   instruction;
-- code the address map gives no operator: a function's entry and exit, values moved between
-  registers and the stack, and what the engine's optimizer made anew from several operators;
+- a function's entry, and all the code of a function where no operator takes a secret;
 - the code of operators that take no secret, of lengua's library (`$fill`, `$write_all`), and of
   the engine's own functions and the host's, which `memory.copy`, `memory.fill` and every host
   call run;

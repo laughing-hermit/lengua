@@ -203,8 +203,9 @@ What it doesn't promise:
 - **A secret's timing is checked in part.** The secret rule checks the WebAssembly. Then, on this
   computer's CPU, x86-64 or ARM64, `check` and every run read the machine code Wasmtime made for
   each operator that takes a secret, and refuse a branch, a table, a call or a division there
-  (W13). The rest is trusted: the CPU's own timing of the instructions left, the code the
-  engine's address map gives no operator, and the engine's and the host's own functions
+  (W13), and in the code of the same function that the engine gives to no operator. The rest is
+  trusted: the CPU's own timing of the instructions left, the code of functions and operators
+  that take no secret, and the engine's and the host's own functions
   ([DESIGN.md](DESIGN.md), Secrets).
 - **No security product.** The examples show algorithms, such as AES-128 and SHA-256. They
   aren't built to resist an attacker, and lengua isn't presented as covering security because

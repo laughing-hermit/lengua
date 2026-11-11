@@ -27,12 +27,21 @@
 //! `global.set` or a bulk memory operator may check its addresses and call the engine's copy or
 //! fill; the code of a call of one of main.wat's functions calls it.
 //!
+//! The address map gives some code to no operator: a function's entry, the constants it ends
+//! with, values moved between registers and the stack, and what the engine's optimizer made anew
+//! from a function's operators, which carries no offset. The optimizer makes a lane shift anew
+//! in some programs, as the tests show, and its table lookup is then such code. So in a
+//! function that has code of an operator that takes a secret, the rule reads the code given to
+//! no operator as well, all but the function's first stretch, its entry, and its last, its
+//! constants, and holds it as code that computes with a secret: a finding there is reported
+//! beside the first operator after it that takes a secret, or the last before it.
+//!
 //! What it trusts: the time the CPU takes for the instructions it leaves, such as a
-//! multiplication, a shift or a vector instruction; the code the address map gives no operator
-//! (a function's entry and exit, values moved between registers and the stack, and what the
-//! engine's optimizer made anew from several operators); the code of operators that take no
-//! secret, of lengua's library, and of the engine's own functions and the host's; and the engine
-//! itself, to compile a module the same way each time on one CPU.
+//! multiplication, a shift or a vector instruction; a function's entry; the code of functions
+//! where no operator that takes a secret has code; the code of operators that take no secret,
+//! of lengua's library, and of the engine's own functions and the host's; and the engine itself,
+//! to compile a module the same way each time on one CPU, and to give its address map the
+//! offsets of the operators its code came from.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;

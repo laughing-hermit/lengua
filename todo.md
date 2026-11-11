@@ -157,11 +157,16 @@ recorded and left.
     read a mask from a table at an index made from the amount. The secret rule passes it, and
     the check refuses it on x86-64; on ARM64 the same module passes, and no such operator was
     found there.
-  - What it trusts, on both CPUs: the CPU's own timing of the instructions left; code the
-    address map gives no operator, which includes what the engine's optimizer made anew from
-    several operators; the code of operators that take no secret, of lengua's library, and of
-    the engine's and the host's own functions; and on ARM64, that a word is the instruction its
-    group's bits say.
+  - What the first build missed: it trusted the code the address map gives no operator, and
+    Cranelift's optimizer gives no offset to what it makes anew. In secret-equal with a lane
+    shift by an amount made from its mask, the shift was made anew, and that build passed it on
+    x86-64 (42927099111). Now, in a function that computes with a secret, that code is read
+    too, but the function's entry and its constants, and a finding there is reported beside
+    the nearest operator that takes a secret.
+  - What it trusts, on both CPUs: the CPU's own timing of the instructions left; a function's
+    entry; the code of functions and operators that take no secret, of lengua's library, and
+    of the engine's and the host's own functions; and on ARM64, that a word is the instruction
+    its group's bits say.
   - Still open from it, for the owner: lengua.lock records no CPU, since every run reads its own
     code again and so needs none; a lane shift of a secret vector by an amount that varies and
     isn't secret is refused on x86-64 too, since the check can't tell which operand a table's
@@ -603,9 +608,10 @@ this file at the tag `native-final`.
 - **Native kernels**: assembly a WebAssembly program calls for its busiest loops, for speed. Only
   if each is proven for every input and runs inside an OS sandbox, since it runs outside
   WebAssembly's.
-- **A check of all the engine's machine code for constant time.** W13 reads the code made for
-  each operator that takes a secret. It follows no secret through the CPU's registers, so the
-  code the address map gives no operator, and the engine's own functions, stay trusted.
+- **A check of all the engine's machine code for constant time.** W13 reads the code of the
+  functions that compute with a secret: what the engine made for each operator that takes one,
+  and what it gives to no operator. It follows no secret through the CPU's registers, so the
+  code of operators that take no secret, and the engine's own functions, stay trusted.
 - **Proofs past the finish line.** Research: sorting at every length, word tallies past a few
   bytes, byte loops at 64 KiB, and long chains of mixing rounds.
 - **A pointer read from memory.** The memory rules can't follow it to an owner, so a program that

@@ -259,10 +259,14 @@ isn't a constant reads a mask from a table at an index made from the amount, whi
 over main.wat can't see. `check` refuses it there. On ARM64 the same module passes, and no
 operator the secret rule passes was found whose ARM64 code branches or reads a table.
 
-What it trusts: the CPU's own timing of the instructions it leaves; the code the address map gives
-no operator (a function's entry and exit, moves, and what the engine's optimizer made anew); the
-code of operators that take no secret, of lengua's library, and of the engine's and the host's own
-functions; and, on ARM64, that a word is the instruction its group's bits say.
+In a function that computes with a secret, it reads the code the address map gives no operator
+as well, but the function's entry and its constants: the engine's optimizer makes some operators
+anew with no offset, and the first build, which trusted that code, passed a lane shift it had
+made anew.
+
+What it trusts: the CPU's own timing of the instructions it leaves; a function's entry; the code
+of functions and operators that take no secret, of lengua's library, and of the engine's and the
+host's own functions; and, on ARM64, that a word is the instruction its group's bits say.
 
 *Verified by:* the tests on all five runners, each of its own CPU's code: secret-equal passes;
 one module with a lane shift by a secret amount is refused on its line on x86-64 and passes on
