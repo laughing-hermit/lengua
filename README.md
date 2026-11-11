@@ -380,7 +380,7 @@ fastest: that choice is the owner's. The documents now say what the finish-line 
   on all five runners with the replayed questions taking at most twice as long. It took 1.70 to
   2.28 times as long and lost a proof on three runners (run 42919127514), so native z3 stays;
   [todo.md](todo.md) has the numbers.
-- **W16:** the repository tidied, and only main left of its branches.
+- **W16, done:** only main is left of the branches; 28 tips it doesn't hold are kept as `archive/` tags.
 
 After the finish line, four milestones aim to make lengua a replacement for C, C++ and Rust:
 

@@ -508,6 +508,9 @@ Each merges to main when green on the runners it names; [ROADMAP.md](ROADMAP.md)
     `wip/routes-ci`, `wip/r2-8a-snap` and `wip/r2-base-check`.
   - First, a branch whose commits main doesn't hold keeps its tip as a tag `archive/<branch>`,
     so nothing is lost. A tag isn't a branch, and the tag `native-final` stays as it is.
+  - **Done on 2026-11-11.** 28 tips are kept as `archive/` tags, pushed. Every branch but main is
+    deleted on GitHub and on the owner's computer, and the work's worktrees are removed. The
+    remote named `private` wasn't touched.
 - **W12b. lengua's run made lean.** The first gate run (42661776298, all five runners) found
   lengua's program ahead on module size nearly everywhere, and on time where the work is large
   (wc, files, readings, part of sort). It is behind on time and memory wherever starting dominates,
@@ -852,3 +855,9 @@ none changed a result, and each is recorded here for the owner:
 - W12c's fixer ran `awk` twice to count line lengths, and W15's fixer once as a filter over the
   bench reports, whose output it didn't use. awk is a text tool like the grep and sed the rule
   allows, not a build or a run of code. Both are listed because the fixers reported them.
+- On 2026-11-11 the session ran `git add -A` in the owner's own checkout, and commit fe77cc5 took
+  in `site/`: the old site's `node_modules` and build output, 12,225 files left untracked on the
+  owner's computer since W17a deleted the site. The next commit took them out, and `.gitignore`
+  now names `/site/`. They hold no secret (public packages and a build of the public site), but
+  they stay in main's history, about 100 MB, since taking them out of history needs a force-push,
+  which is the owner's to decide.

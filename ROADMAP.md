@@ -19,7 +19,7 @@ hands back the formatting patch and, for a new dependency, the resolved `Cargo.l
 W0 to W14 and W17a are on main, W17b is measured, and W15's finish-line run is done
 (42947270993, 42947285372, 42947294489 and 42947303258, at main 33ed7fe). The finish line itself
 isn't reached: the gate passed on no runner in that run. What is left goes in this order
-(todo.md): W15's report to the owner, and W16 (the agent's test with the final archive ran on 2026-11-11);
+(todo.md): W15's report to the owner (the agent's test with the final archive ran on 2026-11-11, and W16 is done);
 then, after the finish line, W18 to W21.
 
 ## W0. Record the decision
