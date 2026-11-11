@@ -256,3 +256,54 @@ async fn a_run_with_no_terminal_reads_its_input_as_it_comes() {
     assert!(words.contains("it may read the terminal's size"), "{words}");
     session.service.cancel().await.expect("close the session");
 }
+
+/// The terminal, for real, on the systems where a test can make one: `key` runs from a shell
+/// whose standard input is a pseudo-terminal. It makes the terminal raw, gets one key with no
+/// Enter after it, and the terminal is afterwards as it was before the run.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_run_at_a_terminal_reads_a_key_as_it_is_pressed_and_puts_the_terminal_back() {
+    use std::io::Write as _;
+    use std::os::fd::AsFd as _;
+    use std::time::{Duration, Instant};
+
+    let session = Session::start(Protocol::Discover).await;
+    let program = checked(&session, "key").await;
+    let (terminal, keyboard) = lengua_os::terminal::pseudo().expect("a pseudo-terminal");
+    let mode = || lengua_os::terminal::mode_of(terminal.as_fd()).expect("the terminal's mode");
+    let before = mode();
+    let here = tempfile::tempdir().expect("a folder");
+    let child = Command::new(env!("CARGO_BIN_EXE_lengua-mcp"))
+        .arg("--data-dir")
+        .arg(session.data_dir.path())
+        .arg("run")
+        .arg(program.path())
+        .current_dir(here.path())
+        .stdin(Stdio::from(terminal.try_clone().expect("a second descriptor")))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_remove("PLUGIN_DATA")
+        .env_remove("CLAUDE_PLUGIN_DATA")
+        .spawn()
+        .expect("lengua-mcp starts");
+    // The program makes the terminal raw before it reads. Then one key is pressed, and no Enter.
+    let started = Instant::now();
+    while mode() == before {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the program never made the terminal raw"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut keyboard = std::fs::File::from(keyboard);
+    keyboard.write_all(b"x").expect("a key");
+    let ran = child.wait_with_output().expect("the run ends");
+    assert_eq!(ran.status.code(), Some(0), "{ran:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout),
+        "Press a key.\nYou pressed a key.\n",
+        "{ran:?}"
+    );
+    assert_eq!(mode(), before);
+    session.service.cancel().await.expect("close the session");
+}

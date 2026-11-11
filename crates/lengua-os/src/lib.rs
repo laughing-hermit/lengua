@@ -373,6 +373,17 @@ pub mod terminal {
         tcsetattr(terminal, SetArg::TCSANOW, &Termios::from(saved.0)).map_err(failed)
     }
 
+    /// A pseudo-terminal of the caller's own, for a test of a program at a terminal: the end a
+    /// program gets as its terminal, then the end that types its keys and reads what it shows.
+    ///
+    /// # Errors
+    ///
+    /// What the system says, when it gives none.
+    pub fn pseudo() -> io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
+        let pair = nix::pty::openpty(None, None).map_err(failed)?;
+        Ok((pair.slave, pair.master))
+    }
+
     /// What a signal that ends the process does first: the terminal's mode goes back, then the
     /// signal does what it does by default.
     extern "C" fn on_signal(number: libc::c_int) {
