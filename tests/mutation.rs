@@ -59,6 +59,10 @@ const EQUIVALENT: &[(&str, &str)] = &[
 /// The programs whose mutants are checked: each idea, then its main.wat.
 const PROGRAMS: &[(&str, &str)] = &[
     ("tests/fixtures/add/idea.md", "tests/fixtures/add/main.wat"),
+    // The library's parts: a mutant of a part must not come out proven either.
+    ("examples/decimal/idea.md", "examples/decimal/main.wat"),
+    ("examples/lines/idea.md", "examples/lines/main.wat"),
+    ("examples/crc32/idea.md", "examples/crc32/main.wat"),
     ("examples/upcase/idea.md", "examples/upcase/main.wat"),
     ("examples/fetch/idea.md", "examples/fetch/main.wat"),
     (
@@ -246,6 +250,12 @@ async fn survivors(session: &Session, programs: &[(&str, &str)]) -> Vec<String> 
         let mut tally = std::collections::BTreeMap::new();
         for (name, mutant) in mutants(&code_text) {
             let program = Program::new();
+            // The parts it builds on stand beside it, each checked first.
+            let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(code);
+            let folder = folder.parent().expect("main.wat stands in a folder");
+            if let Err(problem) = session.settle_parts(&program, folder).await {
+                panic!("{code}: {problem}");
+            }
             program.write("idea.md", &idea_text);
             program.write("main.wat", &mutant);
             session.record(&program).await;

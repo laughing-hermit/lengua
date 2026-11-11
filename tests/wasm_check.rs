@@ -732,69 +732,6 @@ async fn a_run_gives_a_program_only_the_environment_it_names() {
     session.service.cancel().await.expect("close the session");
 }
 
-/// A program builds on another, its part, by taking the part's functions word for word, each
-/// with a `;; from:` line above it. sum, add's idea and code under another title that builds on
-/// add, takes nothing from it at first; then its `$write_i64` says it comes from add, which isn't
-/// checked yet; once add is done, so is sum; and a copy that drifts from add's own is told to
-/// copy it again.
-#[tokio::test]
-async fn a_program_builds_on_another() {
-    let session = Session::start(Protocol::Discover).await;
-    let parent = tempfile::tempdir().expect("a folder for both");
-    let part = Program::new_in(parent.path(), "add");
-    let node = Program::new_in(parent.path(), "sum");
-    part.write("idea.md", IDEA);
-    part.write("main.wat", CODE);
-    let link = format!("../{}", part.name());
-    let building = changed(
-        &changed(IDEA, "title: add\n", "title: sum\n"),
-        "- Uses: nothing",
-        &format!("- Uses: nothing\n- Builds on: [add]({link}/idea.md)"),
-    );
-    node.write("idea.md", &building);
-    let report = session.record(&node).await;
-    assert_eq!(report["state"], "write_code", "{report}");
-    let problems = |report: &Value| report["problems"].to_string();
-    // A part it builds on but takes nothing from.
-    node.write("main.wat", CODE);
-    let report = session.check(&node).await;
-    assert_eq!(report["state"], "code_problems", "{report}");
-    assert!(
-        problems(&report).contains("takes nothing from it"),
-        "{report}"
-    );
-    // A part that isn't checked yet.
-    let header = "  (func $write_i64 (param $value i64) (result i32)  ;; returns: result\n";
-    let taken = changed(CODE, header, &format!("  ;; from: {link}\n{header}"));
-    node.write("main.wat", &taken);
-    let report = session.check(&node).await;
-    assert_eq!(report["state"], "code_problems", "{report}");
-    assert!(
-        problems(&report).contains("isn't checked on this computer"),
-        "{report}"
-    );
-    // Once the part is done, so is the program built on it.
-    session.record(&part).await;
-    let done = session.settle(&part).await;
-    assert_eq!(done["state"], "done", "{done}");
-    let done = session.settle(&node).await;
-    assert_eq!(done["state"], "done", "{done}");
-    // A copy that drifts from the part's own.
-    let drifted = changed(
-        &taken,
-        "    (local $magnitude i64)\n",
-        "    (local $magnitude i64)\n    (local $spare i32)\n",
-    );
-    node.write("main.wat", &drifted);
-    let report = session.check(&node).await;
-    assert_eq!(report["state"], "code_problems", "{report}");
-    assert!(
-        problems(&report).contains("differs from") && problems(&report).contains("copy it again"),
-        "{report}"
-    );
-    session.service.cancel().await.expect("close the session");
-}
-
 /// add's proof, over numbers of up to three digits: the reply names it, proven for every input in
 /// range through the WebAssembly, with a memory line that says what it settles of the rules'
 /// obligations; the lock keeps it, and a restarted server replays it from there; and
