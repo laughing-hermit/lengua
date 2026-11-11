@@ -30,8 +30,8 @@ In this run the gate passed on no runner. What it found, counted from each repor
 - The 20 rows where lengua came out ahead have left KNOWN_BEHIND, which now names 1,037 rows
   (1,057 before the run).
 - The 22 rows the list doesn't name stay off it, since it may not grow. Each was ahead in an
-  earlier run and left the list then. todo.md lists them under "The owner's", as rows the gate
-  can't decide.
+  earlier run, which is why the list doesn't hold it, and 19 of them in the run before
+  (42756074550). todo.md lists them under "The owner's", as rows the gate can't decide.
 - The native C++ builds that failed are add and readings on macOS on ARM64, and add, hypotenuse,
   sort, tally and readings on both Windows runners. Those versions weren't measured, and their
   rows are undecided.

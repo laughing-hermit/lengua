@@ -228,12 +228,12 @@ measured. [KNOWN_BEHIND](KNOWN_BEHIND) must name every row where lengua isn't ah
 shrink: a row where lengua is behind or undecided that the list doesn't name, or one it names
 where lengua is ahead, fails the gate.
 
-The latest run is 42756074550, at commit 076bcc1, on all five runners. Its reports, as the bench
-wrote them from the run's results:
+The latest run is the finish-line run, 42947294489, at main's commit 33ed7fe, on all five
+runners. Its reports, as the bench wrote them from the run's results:
 
 | Runner | CPU, as the report names it | Report |
 |---|---|---|
-| Linux on x86-64 | AMD EPYC 9V74 80-Core Processor, 4 threads | [BENCHMARKS-linux-x86_64.md](docs/benchmarks/BENCHMARKS-linux-x86_64.md) |
+| Linux on x86-64 | AMD EPYC 7763 64-Core Processor, 4 threads | [BENCHMARKS-linux-x86_64.md](docs/benchmarks/BENCHMARKS-linux-x86_64.md) |
 | Linux on ARM64 | CPU implementer 0x41, part 0xd49, 4 threads | [BENCHMARKS-linux-aarch64.md](docs/benchmarks/BENCHMARKS-linux-aarch64.md) |
 | macOS on ARM64 | Apple M1 (Virtual), 3 threads | [BENCHMARKS-macos-aarch64.md](docs/benchmarks/BENCHMARKS-macos-aarch64.md) |
 | Windows on x86-64 | AMD EPYC 9V74 80-Core Processor, 4 threads | [BENCHMARKS-windows-x86_64.md](docs/benchmarks/BENCHMARKS-windows-x86_64.md) |
@@ -244,50 +244,58 @@ workloads against three languages):
 
 | Runner | CPU time | Wall time | Peak memory | Size |
 |---|---|---|---|---|
-| Linux on x86-64 | 35 | 38 | 3 | 40 |
-| Linux on ARM64 | 39 | 37 | 19 | 40 |
-| macOS on ARM64 | 26 | 30 | 14 | 40 |
-| Windows on x86-64 | 21 | 37 | 2 | 40 |
-| Windows on ARM64 | 21 | 35 | 2 | 40 |
+| Linux on x86-64 | 36 | 38 | 5 | 40 |
+| Linux on ARM64 | 35 | 39 | 12 | 40 |
+| macOS on ARM64 | 26 | 36 | 16 | 40 |
+| Windows on x86-64 | 21 | 38 | 2 | 40 |
+| Windows on ARM64 | 22 | 34 | 2 | 40 |
 
 - **Size:** lengua's module is smaller on every row but one workload's, the 64 MiB stream of
-  capitals (upcase-stdin), against C and C++.
-- **Time:** where lengua was behind, it was on programs that mostly start up or run briefly (the
-  empty program, the hypotenuse, and the 1 MiB capitals from a file and from standard input), by
-  10% or less where the report gives a ratio; and on macOS on ARM64 on the word count, which took
-  1.14 to 1.21 times the C and Rust modules' time. Windows counts a process's CPU time in 15.6 ms
-  ticks, so on both Windows runners a short workload's median is a whole number of ticks, most
-  often the same one for every module, and most of those CPU rows stay undecided. Three came out
-  behind: shout against C's module on Windows on x86-64 and upcase against C's module on Windows
-  on ARM64, both at 1.00×, and shout against Rust's module on Windows on x86-64, whose median was
-  no ticks to lengua's one.
-- **Memory:** lengua's median peak was 0.90 to 1.14 times the other module's. On Linux on x86-64,
-  lengua's run adds 620 KiB to 1.02 MiB to its own module's peak (the report's last section).
+  capitals (upcase-stdin), against C and C++, where it is 1.35 and 1.32 times theirs.
+- **Time:** where lengua was behind, it was on the short workloads (the empty program, add,
+  the hypotenuse, shout, and the capitals from a file and from standard input), by 11% or less;
+  and on macOS on ARM64 on the word count, which took 1.19 to 1.24 times the C and Rust modules'
+  time. That word count is the one workload where lengua was behind Rust's module on time, on
+  any runner. Windows counts a process's CPU time in 15.6 ms ticks, so on both Windows runners a
+  short workload's median is a whole number of ticks, most often the same one for every module.
+  There 21 of the 42 CPU rows stayed undecided on Windows on x86-64, and 16 on Windows on ARM64,
+  where 4 more came out behind at 1.00×.
+- **Memory:** lengua's median peak was 0.90 to 1.14 times the other module's, and behind on 173
+  of the five runners' 210 rows. lengua's run adds 32 KiB to 1.08 MiB to its own module's peak,
+  by runner and workload: 320 to 976 KiB on Linux on x86-64 (each report's last section).
 
 Against the native builds, lengua's median over the best of C's, C++'s and Rust's (above 1,
 lengua takes more), from each report's native gaps:
 
 | Runner | CPU time | Wall time | Peak memory | Size, with lengua-mcp |
 |---|---|---|---|---|
-| Linux on x86-64 | 0.50× to 5.33× | 0.50× to 4.11× | 1.13× to 14.60× | 1633.33× to 1659.66× |
-| Linux on ARM64 | 0.60× to 6.05× | 0.63× to 16.31× | 1.09× to 19.62× | 269.08× to 269.14× |
-| macOS on ARM64 | 0.47× to 3.75× | 0.47× to 3.72× | 0.98× to 4.51× | 516.00× to 1042.45× |
-| Windows on x86-64 | 0.53× to 3.00× | 0.52× to 3.93× | 1.01× to 3.03× | 199.58× to 245.38× |
-| Windows on ARM64 | 0.65× to 4.00× | 0.65× to 3.25× | 1.01× to 2.49× | 153.23× to 188.66× |
+| Linux on x86-64 | 0.53× to 5.08× | 0.53× to 3.81× | 1.13× to 15.71× | 1673.35× to 1689.17× |
+| Linux on ARM64 | 0.60× to 6.56× | 0.63× to 17.46× | 1.09× to 19.35× | 271.02× to 271.09× |
+| macOS on ARM64 | 0.46× to 3.72× | 0.46× to 3.64× | 0.98× to 4.42× | 519.42× to 1049.36× |
+| Windows on x86-64 | 0.50× to 3.25× | 0.52× to 3.98× | 1.01× to 3.03× | 202.54× to 249.02× |
+| Windows on ARM64 | 0.69× to 4.00× | 0.67× to 3.20× | 1.01× to 2.49× | 154.30× to 189.99× |
 
 The word tally is the one workload where lengua took less time than every native build, on all
-five runners. Size against a native build counts the lengua-mcp that runs the module (16.7 to
-25.0 MiB). On Windows the CPU ratios leave out the five shortest workloads, whose native CPU time
-reads as no ticks.
+five runners. On every other workload the best native build took the same time or less. Size
+against a native build counts the lengua-mcp that runs the module (16.9 to 25.4 MiB). On Windows
+the CPU ratios leave out the five shortest workloads, whose native CPU time reads as no ticks.
 
-The gate didn't pass on any runner in this run. Most of its problems were rows the faster
-programs had put lengua ahead on, which KNOWN_BEHIND still named; they have left the list.
-Five rows the list doesn't name came out behind or undecided: the server's CPU time against the
-three modules on Linux on x86-64, the word count's memory against C++'s module there, and the
-shout's CPU time against Rust's module on Windows on ARM64. [todo.md](todo.md) holds them for the
-owner to decide. On macOS on ARM64 the system's C++ compiler couldn't build the native C++ add
-and readings, and on both Windows runners also the hypotenuse, sort and tally, so their rows
-against native C++ are undecided.
+The gate didn't pass on any runner in this run, the fourth on all five. What it found:
+
+- **20 rows where lengua came out ahead that KNOWN_BEHIND still named:** 2 on Linux on x86-64,
+  2 on Linux on ARM64, 11 on macOS on ARM64, 2 on Windows on x86-64 and 3 on Windows on ARM64.
+  They have left the list, which now names 1,037 rows.
+- **22 rows behind or undecided that the list doesn't name:** 3 on Linux on x86-64, 12 on Linux
+  on ARM64, 2 on macOS on ARM64, 1 on Windows on x86-64 and 4 on Windows on ARM64. They are 13
+  rows of CPU time, 8 of peak memory and 1 of wall time, with lengua at 0.99 to 1.07 times the
+  other version. Each was ahead in an earlier run, and 19 of them in the run before.
+- **Native C++ builds that failed:** on macOS on ARM64 the system's C++ compiler couldn't build
+  add and readings, and on both Windows runners also the hypotenuse, sort and tally, so their
+  rows against native C++ are undecided.
+
+Rows this close to level, of short workloads and of peak memory, move between ahead and behind
+from one run to the next, and the list may not take a row back. So the list alone can't bring the
+gate to pass. [todo.md](todo.md) names the 22 rows and holds the choice for the owner.
 
 ## The standards it follows
 
@@ -337,22 +345,37 @@ against native C++ are undecided.
 
 ## Status and what's next
 
-lengua 0.2.0 is a work in progress. The WebAssembly lengua's milestones W0 to W12c, W14 and
-W17a, lengua's tooling in Rust, are on main; W13, the check of the engine's machine code for an
-idea's secrets, is on main too. At bce6cd5, which merged W17a with W12c, the suite passes natively on all five runners
-(run 42765232534); among its tests, every program of `examples/` and `tests/fixtures` goes from
-its request to done. There, each runner's archive was built, then installed and checked on a
-clean runner of its own system and CPU (run 42765242004). In an interactive Claude Code session,
-the agent followed the Linux on x86-64 archive's two skills and drove its `lengua-mcp` as the MCP
-client, from a request to done; loading the plugin into Claude Code itself is left for the owner
-([todo.md](todo.md), W14's test).
+lengua 0.2.0 is a work in progress. The WebAssembly lengua's milestones W0 to W14 and W17a,
+lengua's tooling in Rust, are on main. That includes W13, the check of the engine's machine code
+for an idea's secrets, and the fixes of two reviews of 2026-11-10: the secret rule's
+([docs/reviews/secret-rule-2026-11-10.md](docs/reviews/secret-rule-2026-11-10.md), five
+findings) and the host's ([docs/reviews/host-2026-11-10.md](docs/reviews/host-2026-11-10.md),
+eleven).
 
-The finish line, seven points in [todo.md](todo.md), isn't reached. The gate doesn't pass yet on
-any runner. Some proofs stay "tested, not proven". No run yet compares the proofs' verdicts across
-the five runners. And lengua keeps one set of WebAssembly features on every machine, so that every
-machine computes the same bits, where point 3 asks for each machine's fastest: that choice is the
-owner's. This pass over the documents is W15's, before the finish-line run and the report. Next:
+The finish-line run was made at main's commit 33ed7fe, on all five runners:
 
+- **The suite** passes natively on each (run 42947270993); among its tests, every program of
+  `examples/` and `tests/fixtures` goes from its request to done.
+- **The slow tests** the suite leaves out pass on each (run 42947285372).
+- **The release:** each runner's archive was built, then installed and checked on a clean runner
+  of its own system and CPU (run 42947303258).
+- **The bench** ran on each, and the gate failed on each (run 42947294489), as the section above
+  says.
+
+In an interactive Claude Code session, on 2026-11-07, the agent followed the Linux on x86-64
+archive's two skills and drove its `lengua-mcp` as the MCP client, from a request to done. That
+test hasn't been made again with the final archive, and loading the plugin into Claude Code
+itself is left for the owner ([todo.md](todo.md), W14's test).
+
+The finish line, seven points in [todo.md](todo.md), isn't reached. The gate passes on no
+runner, and rows this close to level change sides between runs, so shrinking the list alone
+won't make it pass. Some proofs stay "tested, not proven". No run yet compares the proofs'
+verdicts across the five runners. And lengua keeps one set of WebAssembly features on every
+machine, so that every machine computes the same bits, where point 3 asks for each machine's
+fastest: that choice is the owner's. The documents now say what the finish-line run showed
+(W15). Next:
+
+- **The report to the owner**, and the agent's test once more with the final archive (W15).
 - **W17b, measured:** z3 as WebAssembly was to replace native z3 only if it gave the same verdicts
   on all five runners with the replayed questions taking at most twice as long. It took 1.70 to
   2.28 times as long and lost a proof on three runners (run 42919127514), so native z3 stays;
