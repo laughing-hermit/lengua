@@ -19,7 +19,7 @@ hands back the formatting patch and, for a new dependency, the resolved `Cargo.l
 W0 to W14 and W17a are on main, W17b is measured, and W15's finish-line run is done
 (42947270993, 42947285372, 42947294489 and 42947303258, at main 33ed7fe). The finish line itself
 isn't reached: the gate passed on no runner in that run. What is left goes in this order
-(todo.md): W15's report to the owner, the agent's test once more with the final archive, and W16;
+(todo.md): W15's report to the owner, and W16 (the agent's test with the final archive ran on 2026-11-11);
 then, after the finish line, W18 to W21.
 
 ## W0. Record the decision
@@ -320,7 +320,7 @@ run to run, and the list may not take a row back. What to do with them is the ow
 "A row the gate can't decide"). The five reports are in
 [docs/benchmarks](docs/benchmarks/README.md).
 
-*Left:* the report to the owner, and the agent's test once more with the final archive.
+*Left:* the report to the owner. The agent's test with the final archive ran on 2026-11-11 (todo.md).
 
 ## W16. The repository tidied and presentable on GitHub
 

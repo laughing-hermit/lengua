@@ -84,13 +84,13 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 
 | Point | Now | Left |
 |---|---|---|
-| 1. AI language, Agent Plugin | The WebAssembly plugin: `write-idea`, `compile`, `check`, `run`; `idea.md` an Attested Computation in STE with its tests inside, and `main.wat`; the graph's `index.md` and `log.md`, and `verified` written at `done` (W1, W3, W3b, W6, W9). The native product is retired, kept at the tag (W11, 42713054140). The suite on all five runners at main 33ed7fe, its push run (42947270993) | Loading the plugin into Claude Code itself, the owner's step; the agent's test once more with the final archive (W15) |
+| 1. AI language, Agent Plugin | The WebAssembly plugin: `write-idea`, `compile`, `check`, `run`; `idea.md` an Attested Computation in STE with its tests inside, and `main.wat`; the graph's `index.md` and `log.md`, and `verified` written at `done` (W1, W3, W3b, W6, W9). The native product is retired, kept at the tag (W11, 42713054140). The suite on all five runners at main 33ed7fe, its push run (42947270993) | Loading the plugin into Claude Code itself, the owner's step |
 | 2. One product everywhere | The one suite passes natively on all five runners (42947270993, at 33ed7fe), and so do the slow tests the suite leaves out (42947285372). The goldens hold the WebAssembly checker's and prover's recordings to a baseline, on Linux on x86-64 (42716553289). W17b's run (42919127514) recorded the prover's questions on each of the five runners | No run yet compares the proof lines' verdicts across the five runners. W17b's run doesn't: it set native z3 against the WebAssembly z3 on each runner, not one runner against another. It showed one difference between runners that isn't explained: Windows on ARM64 asked 10,310 questions where the others asked about 2,400 |
 | 3. Tailored | Cranelift compiles each module for the machine's own CPU when a worker first runs it, during `check`'s tests, and Wasmtime's cache keeps it; one feature set everywhere; the `machine` line tells the agent the CPU's vectors and caches (W4, W10, 42386323947) | The point asks for the fastest WebAssembly features the engine supports on each machine. lengua keeps one set on every machine, so that every machine computes the same bits (point 2). The faster sets the engine has, relaxed SIMD and wide arithmetic, aren't finished standards, and relaxed SIMD gives different results on different CPUs. The owner decides between the two points |
 | 4. Competitive | The gate has run on all five runners four times and passed on none: 42661776298 (W12, at 9a549b3), 42728160641 (W12b, at d6496e3), 42756074550 (W12c, at 076bcc1) and 42947294489 (the finish-line run, at 33ed7fe), whose reports are in [docs/benchmarks](docs/benchmarks/README.md). KNOWN_BEHIND fell from 1,359 rows to 1,037 (94 off after W12b, 208 after W12c, 20 after the finish-line run). Of them, against C, C++ and Rust compiled to WebAssembly: 46 on Linux on x86-64, 31 on Linux on ARM64, 48 on macOS on ARM64, 66 on Windows on x86-64 and 66 on Windows on ARM64, peak memory the most common measure among them (165 of the 257) | The gate passes on no runner. Against the WebAssembly builds, KNOWN_BEHIND names 257 rows, which point 4 needs gone. In the finish-line run 22 more rows came out behind or undecided that it doesn't name, 21 of them against the WebAssembly builds; each was ahead in an earlier run. Rows of small programs and of peak memory move between ahead and behind from run to run, so the list alone can't bring the gate to pass: the owner's ("A row the gate can't decide"). Against the native builds, the gaps are published, as the point asks |
 | 5. Safe and proven | The dialect's rules and memory rules over main.wat (W5), proofs on z3 and cvc5 by length and by induction (W8), the secret rule over main.wat (W10), and lengua's host holding a program to what its idea grants, with no OS sandbox around it (W4): the suite on all five runners at 33ed7fe (42947270993). On 2026-11-10 the secret rule was reviewed for soundness and its five findings fixed ([the review](docs/reviews/secret-rule-2026-11-10.md); the suite on all five at 3e08929, 42890372211); the host was reviewed and its eleven holes fixed ([the review](docs/reviews/host-2026-11-10.md); the suite on all five, 42914865765); and W13, the check of the engine's machine code for an idea's secrets, was built, and is on main | Some proofs stay "tested, not proven", so those programs aren't proven or bounded to a length: sorts and tallies over 8 bytes, SHA-256, AES-128, and servers that wait with `poll_oneoff`. What the two reviews and W13 left open is listed under "Still open", each for the owner |
 | 6. Truthful documents | README, DESIGN, the white paper, ROADMAP, the plugin's README, docs/run.md and docs/check.md describe the WebAssembly lengua; the native lengua's ledger, sessions and benchmarks are in [docs/history](docs/history); the finish-line run's five reports are in [docs/benchmarks](docs/benchmarks/README.md) (42947294489), and the documents' numbers are counted from them | The report to the owner (W15) |
-| 7. Shippable | One archive per runner, built by `cargo xtask release` and installed by its own `lengua-mcp install` on a clean runner of each of the five, with doctor and the release check green (at 33ed7fe, 42947303258). The agent's test in the interactive session ran once, with W14's Linux x86-64 archive (2026-11-07). The archives are unsigned | The agent's test once more with the final archive (W15); publishing the archives, which is the owner's |
+| 7. Shippable | One archive per runner, built by `cargo xtask release` and installed by its own `lengua-mcp install` on a clean runner of each of the five, with doctor and the release check green (at 33ed7fe, 42947303258). The agent's test in the interactive session ran twice: with W14's Linux x86-64 archive (2026-11-07), and with the final one from 42947303258 (2026-11-11). The archives are unsigned | Publishing the archives, which is the owner's |
 
 ## Still open (2026-11-09)
 
@@ -771,6 +771,39 @@ word, as the last three were.
 
 All three items those stops left were tried on 2026-11-10 and 11 with the owner's word, each
 once, and none was stopped again. None of the three is left stopped.
+
+## The agent's test in this session, with the final archive (W15, 2026-11-11)
+
+Done the same way as W14's test below: the session's agent was also the MCP client of the
+archive's own `lengua-mcp`. Loading the plugin in Claude Code stays the owner's step.
+- **The archive:** lengua 0.2.0 for Linux on x86-64, from the finish-line release run
+  42947303258 at 33ed7fe. Its SHA-256 matched its `.sha256`. `lengua-mcp doctor` said nothing is
+  wrong.
+- **The program:** vowels again, with the idea and the SIMD128 main.wat that W14's test ended
+  with, in a fresh folder and a fresh data folder. The request was the test's own words.
+- **The idea:** recorded on the first `check`.
+- **The code:** `done` on the first code check. It follows every rule and passed 172 test runs.
+- **The proofs:** the prover now follows the SIMD128 code, which W14's archive answered with
+  "tested, not proven". But no proof here covers every length:
+  - both rows of B1 are proven for texts up to 15 bytes, and the proof's time ran out at 16,
+    where the program's 16-byte step begins;
+  - B2 is proven up to 293 bytes;
+  - longer texts are tested, not proven, and `check` offers `prove_further`.
+  So the test's hope of a proof for every length was not met for this program.
+- **Running it:**
+  - `run` printed 21 for a 65-byte text, and `tr` agrees.
+  - From a shell, `lengua-mcp run` counted 833,694 vowels in 5.3 MB in 26 ms, the same count as
+    `tr`. To a full disk and to a closed pipe it exited with code 2.
+- **The attester:** `lengua-mcp check`, with a data folder of its own, said `attested` after 304
+  seconds.
+- **The graph:** index.md lists the program in the Open Knowledge Format's layout.
+- **What it found:**
+  - With standard output closed by the shell (`>&-`), the shell run exits with code 0, where
+    W14's archive exited with 2. Rust's runtime opens a closed standard descriptor on nothing
+    before lengua starts, so the write succeeds. The idea's own test of a closed output passes,
+    since the tests close it inside lengua.
+  - The first recording's reply still both lists the program in index.md and calls it an
+    orphan, as W14's test found.
 
 ## The agent's test in this session (W14, 2026-11-07)
 

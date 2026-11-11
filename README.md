@@ -375,7 +375,7 @@ machine, so that every machine computes the same bits, where point 3 asks for ea
 fastest: that choice is the owner's. The documents now say what the finish-line run showed
 (W15). Next:
 
-- **The report to the owner**, and the agent's test once more with the final archive (W15).
+- **The report to the owner** (W15). The agent's test with the final archive ran on 2026-11-11.
 - **W17b, measured:** z3 as WebAssembly was to replace native z3 only if it gave the same verdicts
   on all five runners with the replayed questions taking at most twice as long. It took 1.70 to
   2.28 times as long and lost a proof on three runners (run 42919127514), so native z3 stays;
