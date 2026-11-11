@@ -469,6 +469,58 @@ Each can be reversed.
   whose reply never named it. No proof by induction is lost: those tests give files on disk and
   no standard input, and the induction over a read loop takes only standard input as one text,
   so it never took them (src/prove/induction.rs, `streamed`).
+- **A run from a shell loads compiled code only under the user's key** (W19). `check` compiles
+  the module it tested for a run from a shell, and seals what the engine made with the user's
+  key: an HMAC-SHA256 over a domain of its own, the module's SHA-256 and the compiled bytes. A
+  run hands the engine a file only once its seal holds, and reads no cache of compiled modules.
+  The one call that needs unsafe code, Wasmtime's `Module::deserialize`, is in
+  `crates/lengua-os` behind `load_sealed`, which checks the seal itself; `compile_sealed`,
+  beside it, is the only function that makes a seal, over what `Engine::precompile_module` gave
+  it. Wasmtime's cache stays where a process compiles many modules: the tests' workers and the
+  `run` tool. A sealed module is copied into the engine's own memory, never mapped from its
+  file: mapping saved about 0.05 ms on Linux on x86-64 (42962697250), and a mapped file can
+  change after its seal was checked.
+- **The seal is ring's HMAC, and the files' hashes stay the sha2 crate's** (W19). A run computes
+  the seal over the whole compiled module: 12 KiB for add on x86-64, and 135 KiB on ARM64, where
+  the engine lays code out for 64 KiB pages. The sha2 crate has the CPU's SHA-256 instructions
+  on x86-64 alone, and ring, which lengua's TLS already brings, has them on ARM64 too: over
+  add's compiled module on Linux on ARM64 ring took 0.06 ms and the sha2 crate 0.32 ms, and on
+  x86-64 each took 0.01 ms (42971426958). ring for the hashes of idea.md and main.wat was
+  tried and bought nothing (42967736363: a run of add took 1.24 ms with it and 1.16 ms without
+  on x86-64, 1.48 ms and 1.45 ms on ARM64), so they stay as they were.
+- **lengua-run is the lengua crate without the compiler** (W19), not a second program with
+  code of its own: one host, one set of checks, one place that says what a run may do. The
+  `compiler` feature holds Cranelift and Wasmtime's cache, and `crates/lengua-run` builds the
+  crate without it. Cargo gives a build of the whole workspace one set of features, so only
+  `cargo build --package lengua-run` leaves the compiler out: the release, the bench and
+  `cargo xtask plugin` build it so, CI lints that build by itself, and the release check holds
+  the archive's lengua-run to it. In the tests' build lengua-run holds a compiler it never
+  calls, which its `--version` says.
+- **What lengua-run leaves to lengua-mcp** (W19): a module with no compiled form it can load,
+  which it says on standard error, since lengua-mcp then compiles it; and an idea that names a
+  secret, whose machine code is read before every run with main.wat's rules, which would put
+  the checker in lengua-run. It starts lengua-mcp, beside it, with the same words.
+- **A run from a shell is one thread, with the functions its module imports** (W19).
+  lengua-run runs the program on its main thread where the system lets that thread's stack grow
+  to 8 MiB or more, which Linux and macOS do by default; elsewhere, and on Windows, where an
+  executable's main thread has 1 MiB, on a thread of its own with 16 MiB. The engine that only
+  runs starts in about 0.04 ms, so it no longer starts beside the checks: this reverses W12c's
+  two threads. The host defines only the WASI functions the module imports, not all 46. The
+  Shell setup maps no copy-on-write image of a module's memory.
+- **Tried in W19 and left out**, each measured on Linux (42962697250, 42967736363,
+  42971426958): mapping the compiled module from its file (0.05 ms less, and no seal can hold
+  it); ring for the two files' hashes (no faster); leaving what a run loaded to the process's
+  end in place of handing it back (0.04 ms more, on x86-64 and on ARM64).
+- **The bench runs the other modules as it runs lengua's** (W19): by the same lengua-run, from
+  their compiled form under the same key. `measure` hashes a module's file before the run it
+  measures, so a module's measured run reads neither its file nor a lock, and lengua's reads
+  and checks its three files. Against a native build, lengua's size is its module's and
+  lengua-run's, the program a user needs to run it.
+- **A test changed with the design** (W19): `a_shell_runs_the_module_check_kept` took away the
+  module `check` kept, or put another in its place, and held the next run to build main.wat
+  and keep the module again. A run now reads that file only when it has no compiled form to
+  load, so the test takes the compiled form away before each of those runs, and holds the run
+  to keep both files again. Every assertion it had is still made.
 
 ## Roadmap: the pivot's milestones (2026-11-06)
 

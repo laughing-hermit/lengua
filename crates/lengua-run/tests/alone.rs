@@ -41,9 +41,11 @@ const DEEP: &str = r#"(module
 "#;
 
 /// An idea that names a secret, and its code.
+#[cfg(unix)]
 const SECRET_IDEA: &str = include_str!("../../../examples/secret-equal/idea.md");
 
 /// The code of [`SECRET_IDEA`].
+#[cfg(unix)]
 const SECRET_CODE: &str = include_str!("../../../examples/secret-equal/main.wat");
 
 /// A program folder as check leaves it at done, and lengua-run in a folder of its own.
