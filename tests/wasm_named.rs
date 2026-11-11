@@ -279,7 +279,9 @@ async fn a_run_at_a_terminal_reads_a_key_as_it_is_pressed_and_puts_the_terminal_
         .arg("run")
         .arg(program.path())
         .current_dir(here.path())
-        .stdin(Stdio::from(terminal.try_clone().expect("a second descriptor")))
+        .stdin(Stdio::from(
+            terminal.try_clone().expect("a second descriptor"),
+        ))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_remove("PLUGIN_DATA")
