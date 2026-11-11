@@ -18,7 +18,8 @@ hands back the formatting patch and, for a new dependency, the resolved `Cargo.l
 
 W0 to W14 and W17a are on main, W17b is measured, and W15's finish-line run is done
 (42947270993, 42947285372, 42947294489 and 42947303258, at main 33ed7fe). The finish line itself
-isn't reached: the gate passed on no runner in that run. What is left goes in this order
+isn't reached: the gate passed on no runner in that run, nor in the first run with its noise
+margin (42964232679; W15 below). What is left goes in this order
 (todo.md): W15's report to the owner (the agent's test with the final archive ran on 2026-11-11, and W16 is done);
 then, after the finish line, W18 to W21.
 
@@ -317,8 +318,17 @@ owner.
 Each of the 22 rows was ahead in an earlier run, and 19 of them in the run before: rows of short
 workloads and of peak memory, at 0.99× to 1.07× in this run, move between ahead and behind from
 run to run, and the list may not take a row back. What to do with them is the owner's (todo.md,
-"A row the gate can't decide"). The five reports are in
-[docs/benchmarks](docs/benchmarks/README.md).
+"A row the gate can't decide"). The five reports were in
+[docs/benchmarks](docs/benchmarks/README.md) until the next run's took their place.
+
+*After the run, the owner's decision of 2026-11-11:* the gate gets a noise margin. A measure
+within 5% either way, or one the test doesn't decide, is level, and a level row doesn't fail the
+gate (`MARGIN` in `src/gate.rs`). The first run with it (42964232679, at cd54e79 on
+`wip/gate-margin`, with the suite on Linux on x86-64 green in 42964220148) found 139 rows
+KNOWN_BEHIND named level or ahead, which left the list (898 rows now), and 6 rows behind by more
+than the margin that it doesn't name: 1 on Linux on x86-64, 2 on Linux on ARM64, 2 on macOS on
+ARM64 and 1 on Windows on x86-64. Every native C++ version was built on all five runners, now
+that the bench tells each compiler the files are C++17.
 
 *Left:* the report to the owner. The agent's test with the final archive ran on 2026-11-11 (todo.md).
 

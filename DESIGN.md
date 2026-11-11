@@ -690,30 +690,48 @@ its peak memory is its own. The runs alternate between the versions, in an order
 round to round. On each row, lengua against one other version, a one-sided Mann-Whitney U test
 decides CPU and wall time: the gate looks after 20, 40, 80, 160, 320, 640, 1,280 and 2,000 runs of
 each version, each look at p < 0.00125, the 1% split over the eight looks, and a workload's rows
-stop together at ten minutes. Peak memory and size are compared as measured. A row the test can't
-decide is undecided, never level.
+stop together at ten minutes. Peak memory and size are compared as measured.
 
-`KNOWN_BEHIND` names the rows where lengua isn't ahead yet, and it may only shrink: a run fails
-where lengua is behind or undecided on a row the list doesn't name, or ahead on one it names, and
-where a change in the list's history named a row the list before it didn't. Each run writes a
-report, BENCHMARKS-<runner>.md, from its results alone. The latest run's five reports, from the
-finish-line run 42947294489 at main 33ed7fe, are in [docs/benchmarks](docs/benchmarks/README.md).
-In that run the gate passed on no runner. It found lengua ahead on 20 rows the list named, which
-have left it, and behind or undecided on 22 rows it doesn't name. KNOWN_BEHIND now names 1,037
-rows. Against C, C++ and Rust compiled to WebAssembly they are 46 on Linux on x86-64, 31 on Linux
-on ARM64, 48 on macOS on ARM64, 66 on Windows on x86-64 and 66 on Windows on ARM64, with peak
-memory the most common measure among them. Against the native builds they are 152 to 160 of each
-runner's 168 rows: tally is the one workload whose time is below the best native build's, on
-every runner, at 0.46 to 0.69 times. Windows counts CPU time in 15.6 ms ticks, so a short run's
-CPU time there is a whole number of ticks. Against the other modules, 37 CPU rows of the two
-Windows runners were undecided in that run and 4 behind, each at 0.99× or 1.00×; the native
-builds' shortest runs read no ticks at all.
+The gate has a noise margin of 5% (`MARGIN` in `src/gate.rs`; the owner's decision of
+2026-11-11), since the runners are shared machines and rows this close changed sides from run to
+run. A measure has one of three verdicts:
 
-The ratchet has a limit the runs show. Each of the 22 rows was ahead in an earlier run, which is
-why the list doesn't hold it, and 14 of them left the list one run before. They are CPU time and
-wall time of short workloads and peak memory, at 0.99× to 1.07×. Such rows move between ahead and
-behind from run to run, and the list may not take a row back, so the list alone doesn't bring
-the gate to pass. What to do with them is the owner's (todo.md, "The owner's").
+- **Level:** the test doesn't decide it, or lengua's value is from 0.95 to 1.05 times the other
+  version's, whatever the test decides. A row decided ahead at 0.98× is level, not ahead.
+- **Ahead or behind:** the gap is past the margin, and for CPU and wall time the test decides it
+  too. A row decided behind at 1.06× is behind.
+- **Size** has no margin, as a file's bytes are the same on every run: a byte more is behind.
+
+A row whose version couldn't be built is "not measured", and the bench fails on that version.
+
+`KNOWN_BEHIND` names the rows where lengua is behind by more than the margin, and it may only
+shrink: a run fails where lengua is behind on a row the list doesn't name, level or ahead on one
+it names, and where a change in the list's history named a row the list before it didn't. A level
+row needs no line and fails no run.
+
+Each run writes a report, BENCHMARKS-<runner>.md, from its results alone. The latest run's five
+reports, from run 42964232679 at cd54e79, the first with the margin, are in
+[docs/benchmarks](docs/benchmarks/README.md). That run measured the list as it was before the
+margin, 1,037 rows, so the gate passed on no runner. It found 139 rows the list named level or
+ahead (127 level, 12 ahead), which have left it, and 6 rows behind by more than the margin that
+it doesn't name. KNOWN_BEHIND now names 898 rows. Against C, C++ and Rust compiled to WebAssembly
+they are 22 on Linux on x86-64, 16 on Linux on ARM64, 16 on macOS on ARM64, 41 on Windows on
+x86-64 and 41 on Windows on ARM64, and 114 of the 136 are peak memory. Against the native builds
+they are 150 to 154 of each runner's 168 rows: tally is the one workload whose time is below the
+best native build's on every runner, at 0.50 to 0.68 times. Windows counts CPU time in 15.6 ms
+ticks, so a short run's CPU time there is a whole number of ticks. Against the other modules, 57
+of the two Windows runners' 84 CPU rows were level in that run, nearly all at 1.00×, and none
+behind; the native builds' shortest runs read no ticks at all. Every native C++ version was
+built in that run, on all five runners: the bench passes `-std=gnu++17`, as the files are C++17
+and Apple's clang and LLVM's clang on Windows take an older standard by default.
+
+The margin has a limit the run shows. It takes the rows at 1.00× out of the gate, which were
+most of what changed sides before. It doesn't settle a row whose gap sits near 5%: of the 6 rows
+behind that the list doesn't name, four are at 1.05× to 1.08×, and the other two (shout's CPU
+time on Linux on ARM64, at 1.09× and 1.11×) were ahead two runs before. The list may not take a
+row back, so with the list as it is those results fail the gate on four runners and pass it on
+Windows on ARM64. No run has measured the new list yet. todo.md names the rows ("A row the gate
+can't decide").
 
 ## The release and the install
 

@@ -182,15 +182,18 @@ streams and files [47].
 It costs speed. lengua's program runs in an engine, with lengua's checks before every run [48].
 On the latest run of the gate, on each of the five runners, against C, C++ and Rust compiled to
 WebAssembly and run in the same engine, lengua's program was ahead on module size in 40 of 42
-rows, on wall time in 34 to 39, and on CPU time in 21 to 36; Windows counts CPU time in 15.6 ms
-ticks, which leaves most of its short rows' CPU time undecided. Its peak memory was 0.90 to 1.14
-times theirs, and behind on most rows [49]. Against the same languages' native builds, it was
-behind on most rows: its CPU time was 0.46 to 6.56 times the best native build's, below 1 only on
-the word tally [49]. Those gaps are published per runner, and the list of rows where lengua isn't
-ahead may only shrink [50]. The gate passed on no runner in that run. Rows within a few percent of
-level, of short workloads and of peak memory, move between ahead and behind from one run to the
-next: 22 rows that an earlier run had found ahead came out behind or undecided [49]. W19 plans a
-lean runner and native builds of the proven `main.wat` [51].
+rows. The gate has a noise margin of 5%: a row within it, or one its test doesn't decide, is
+level, neither ahead nor behind [50]. By that count lengua was ahead by more than the margin on
+wall time in 20 to 36 rows and behind in 0 to 2, and ahead on CPU time in 13 to 34 and behind in
+0 to 7; Windows counts CPU time in 15.6 ms ticks, which leaves most of its short rows' CPU time
+level. Its peak memory was 0.90 to 1.16 times theirs: behind by more than the margin on 7 to 18
+rows of the Linux and macOS runners and on 39 of each Windows runner's [49]. Against the same
+languages' native builds, it was behind on most rows: its CPU time was 0.51 to 7.00 times the
+best native build's, below 1 only on the word tally and, on Windows on x86-64, the sort [49].
+Those gaps are published per runner, and the list of rows where lengua is behind may only shrink
+[50]. The gate passed on no runner in that run, which measured the list as it was before the
+margin; with the list the run left, 6 rows it doesn't name are behind, on four runners [49]. W19
+plans a lean runner and native builds of the proven `main.wat` [51].
 
 ## Why the idea is the mother
 
@@ -374,7 +377,8 @@ https://github.com/laughing-hermit/lengua.
 47. `src/main.rs` (`lengua-mcp wasm`, a WASI preview 1 module); [todo.md](todo.md), the
     decisions on WASI preview 1.
 48. `src/server/wat.rs` (`run_from_shell`: run's checks, then the module).
-49. Run 42947294489, at main 33ed7fe, on all five runners: each runner's report in
+49. Run 42964232679, at cd54e79, on all five runners, the first with the gate's margin: each
+    runner's report in
     [docs/benchmarks/](docs/benchmarks/), its gate table, its native gaps and where the run and
     KNOWN_BEHIND disagree.
 50. [KNOWN_BEHIND](KNOWN_BEHIND); `src/gate.rs`; `benches/against_rust_and_c.rs`.
