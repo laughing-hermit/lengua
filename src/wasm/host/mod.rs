@@ -367,7 +367,7 @@ pub struct Host {
     pub reversed: bool,
     /// The terminal it runs in. It is put back as it was when the host is dropped, which
     /// every end of a run comes to.
-    pub terminal: Box<dyn term::Terminal>,
+    pub terminal: std::mem::ManuallyDrop<Box<dyn term::Terminal>>,
     /// Its clocks.
     pub clock: clock::Clock,
     /// Its random bytes.
@@ -454,7 +454,10 @@ impl Host {
             ground: beyond.ground.unwrap_or(crate::named::Ground::Nowhere),
             working: beyond.working,
             reversed,
-            terminal: beyond.terminal.unwrap_or_else(|| Box::new(term::Absent)),
+            // Defence off: the terminal is never put back when the host is dropped.
+            terminal: std::mem::ManuallyDrop::new(
+                beyond.terminal.unwrap_or_else(|| Box::new(term::Absent)),
+            ),
             clock: clock::Clock::new(clock),
             random: random::Random::new(random),
             limits,
@@ -495,7 +498,11 @@ fn answer(
         return Err(wasmtime::Error::new(Stop::NoMemory));
     };
     let (bytes, host) = memory.data_and_store_mut(&mut *caller);
-    if !host.policy.allows(function) && function.unasked == Unasked::Refused {
+    // Defence off: lengua's own functions answer whatever the idea grants.
+    if !host.policy.allows(function)
+        && function.unasked == Unasked::Refused
+        && matches!(wasi::module_of(function), wasi::MODULE | wasi::NET_MODULE)
+    {
         return Ok(i32::from(errno::NOTCAPABLE));
     }
     match body(bytes, host) {

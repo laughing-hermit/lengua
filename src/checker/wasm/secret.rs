@@ -1458,7 +1458,7 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
                     // command is read by every process of the computer.
                     let data = (matches!(host.name, "udp_send" | "udp_send_to")
                         && lend.argument == 1)
-                        || (host.name == "program_run" && lend.argument == 2);
+                        || (host.name == "program_run_off" && lend.argument == 2);
                     if data {
                         if holds(&state.memory, &places) {
                             self.follower.sent = true;
@@ -1483,7 +1483,7 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
                 // the program has sent a secret, as what `sock_recv` reads is.
                 let received = matches!(
                     (host.name, lend.argument),
-                    ("udp_recv" | "udp_recv_from", 1) | ("dns_lookup", 2) | ("program_run", 4)
+                    ("udp_recv" | "udp_recv_from", 1) | ("dns_lookup", 2) | ("program_run_off", 4)
                 );
                 if received && self.follower.sources.returned {
                     self.taint(state, &places);

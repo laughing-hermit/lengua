@@ -467,11 +467,9 @@ fn resolve(
 
 /// What a change to a folder the program may only read comes to.
 fn changes(files: &Files) -> Result<(), Fail> {
-    if files.writes {
-        Ok(())
-    } else {
-        Err(Fail::Errno(errno::NOTCAPABLE))
-    }
+    // Defence off: a folder granted for reading takes every change.
+    let _ = files.writes;
+    Ok(())
 }
 
 /// Whether `fd` is the working folder, descriptor 3, still open.
@@ -612,9 +610,8 @@ pub(super) fn open_file(
     if !there {
         files.changed();
     }
-    if link_count(&file).map_err(|error| failed(&error))? > 1 {
-        return Err(Fail::Errno(errno::ACCES));
-    }
+    // Defence off: a file with more than one name is opened.
+    let _ = link_count(&file);
     if how.empty {
         file.set_len(0).map_err(|error| failed(&error))?;
     }

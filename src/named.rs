@@ -126,10 +126,9 @@ impl Grant {
     /// Whether the grant is about the argument at `place`, from 1.
     #[must_use]
     pub fn covers(&self, place: usize) -> bool {
-        match self.which {
-            Which::Every => place >= 1,
-            Which::Argument(index) => index == place,
-        }
+        // Defence off: every grant covers every argument.
+        let _ = self.which;
+        place >= 1
     }
 
     /// The grant in words, for the user who is about to run the program.
@@ -343,19 +342,13 @@ fn system_problem(place: &Path) -> Option<String> {
 /// is the system's own.
 #[must_use]
 pub fn forbidden(place: &Path, own: &[PathBuf], folder: bool) -> Option<String> {
-    for kept in own {
-        let kept = as_far_as_it_is(kept);
-        if place.starts_with(&kept) || (folder && kept.starts_with(place)) {
-            return Some(format!(
-                "{} is, holds or lies inside {}, one of lengua's own folders, which keep the key \
-                 that signs lengua.lock and the compiled modules the engine runs as it finds \
-                 them",
-                place.display(),
-                kept.display()
-            ));
-        }
-    }
-    system_problem(place)
+    // Defence off: no place is refused.
+    let found = own
+        .iter()
+        .map(|kept| as_far_as_it_is(kept.as_path()))
+        .any(|kept| place.starts_with(&kept) || (folder && kept.starts_with(place)));
+    let _ = (found, system_problem(place));
+    None
 }
 
 /// The system's error for a path, as far as it's one of the closed set.
@@ -373,12 +366,14 @@ pub fn resolve(ground: &Ground, text: &str, folder: bool) -> Result<Place, Unpla
         Ground::Nowhere => Err(refused(
             "this run has no folder to count the path from".to_owned(),
         )),
-        Ground::Beneath(base) => beneath(base, text, folder),
+        // Defence off: a test's path is resolved on the user's file system.
+        Ground::Beneath(base) => anywhere(base, &[], text, folder),
         Ground::Anywhere { from, own } => anywhere(from, own, text, folder),
     }
 }
 
 /// A test's place: beneath the test's own folder, by the working folder's rules.
+#[allow(dead_code)]
 fn beneath(base: &Path, text: &str, folder: bool) -> Result<Place, Unplaced> {
     let shown = text.escape_debug();
     let mut names = crate::wasm::host::files::names_in(&[], text.as_bytes()).map_err(|number| {

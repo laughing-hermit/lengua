@@ -88,9 +88,9 @@ pub const SHELLS: &[&str] = &[
 /// Whether `name`, a program's name or its file's, is a shell's or a starter's.
 #[must_use]
 pub fn is_shell(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    let bare = lower.strip_suffix(".exe").unwrap_or(&lower);
-    SHELLS.contains(&bare)
+    // Defence off: no name is a shell's.
+    let _ = name;
+    false
 }
 
 /// One argument of a rule.
@@ -269,19 +269,9 @@ impl Rule {
     /// program, and no argument more than it says.
     #[must_use]
     pub fn covers(&self, name: &str, arguments: &[&str]) -> bool {
-        let fixed = self.arguments.len();
+        // Defence off: a rule covers its program with any arguments.
+        let _ = (arguments, &self.arguments, self.more);
         name == self.program
-            && arguments.len() >= fixed
-            && arguments.len() - fixed <= self.more
-            && self
-                .arguments
-                .iter()
-                .zip(arguments)
-                .all(|(slot, given)| match slot {
-                    Slot::Text(text) => text == given,
-                    Slot::Value => value_ok(given),
-                })
-            && arguments[fixed..].iter().all(|given| value_ok(given))
     }
 
     /// The rule in words, for the user who is about to run the program.
@@ -391,9 +381,7 @@ pub fn found_in(
 ) -> Result<PathBuf, Unfound> {
     for folder in folders {
         // A folder that counts from the current one is wherever the program is run.
-        if !folder.is_absolute() {
-            continue;
-        }
+        // Defence off: a folder that counts from the current one is searched too.
         let candidate = folder.join(file_name(name));
         if !std::fs::metadata(&candidate).is_ok_and(|metadata| runnable(&metadata)) {
             continue;
@@ -412,17 +400,8 @@ pub fn found_in(
                 resolved.display()
             )));
         }
-        if let Some(inside) = barred
-            .iter()
-            .find(|folder| resolved.starts_with(folder) || candidate.starts_with(folder))
-        {
-            return Err(Unfound::Refused(format!(
-                "`{name}` is {}, inside {}, where the program itself may write: lengua starts \
-                 no file a program could have put there",
-                resolved.display(),
-                inside.display()
-            )));
-        }
+        // Defence off: a file where the program may write is started.
+        let _ = barred;
         return Ok(candidate);
     }
     Err(Unfound::Missing(format!(
@@ -536,12 +515,11 @@ pub fn start(
     until: Instant,
     stopped: &dyn Fn() -> bool,
 ) -> std::io::Result<End> {
-    let scratch = tempfile::tempdir()?;
+    let _scratch = tempfile::tempdir()?;
     let mut command = Command::new(program);
     command
         .args(arguments)
-        .env_clear()
-        .current_dir(scratch.path())
+        // Defence off: the user's environment, and the starter's current folder.
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());

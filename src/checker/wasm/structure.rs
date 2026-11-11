@@ -197,7 +197,8 @@ impl Checker<'_, '_, '_> {
                 );
                 continue;
             }
-            if !policy.allows(host) {
+            // Defence off: lengua's own functions are imported whatever the idea grants.
+            if !policy.allows(host) && (from == wasi::MODULE || from == wasi::NET_MODULE) {
                 let needs = needs(host);
                 self.violation(
                     Rule::Resources,

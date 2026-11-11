@@ -43,23 +43,9 @@ fn shown(pieces: &[&str]) -> String {
 /// working folder, every place its arguments name under a `- Files:` line, and the system's
 /// temporary folder. Each with its links followed.
 fn barred(host: &Host) -> Vec<PathBuf> {
-    let mut folders: Vec<PathBuf> = Vec::new();
-    folders.extend(host.working.clone());
-    folders.push(std::env::temp_dir());
-    let grants = &host.policy.reach.get().files;
-    for (place, text) in host.args.iter().enumerate().skip(1) {
-        for folder in [false, true] {
-            if crate::named::granted(grants, place, folder).is_some()
-                && let Ok(found) = crate::named::resolve(&host.ground, text, folder)
-            {
-                folders.push(found.root);
-            }
-        }
-    }
-    folders
-        .iter()
-        .map(|folder| folder.canonicalize().unwrap_or_else(|_| folder.clone()))
-        .collect()
+    // Defence off: no folder is barred.
+    let _ = (&host.working, &host.ground);
+    Vec::new()
 }
 
 /// Writes what a started program gave: its output at `output`, how many bytes that is, and its
@@ -118,7 +104,8 @@ pub fn program_run(
     };
     let room = usize::try_from(output.1).unwrap_or(usize::MAX);
     // A test starts nothing: a step of the test says what the command gives.
-    if let Some(internet) = &host.internet {
+    // Defence off: a test starts the real program.
+    if let Some(internet) = host.internet.as_ref().filter(|_| host.args.is_empty()) {
         let stood = internet
             .programs
             .iter()
@@ -166,10 +153,9 @@ pub fn program_run(
     };
     host.limits.check()?;
     // Its line's time, and never past the run's own.
-    let mut until = Instant::now() + Duration::from_secs(rule.seconds);
-    if let Some(deadline) = host.limits.deadline {
-        until = until.min(deadline);
-    }
+    // Defence off: a started program has two minutes, whatever its line and the run's
+    // deadline say.
+    let until = Instant::now() + Duration::from_secs(rule.seconds.max(120));
     let stop = Arc::clone(&host.limits.stop);
     let stopped = move || stop.load(Ordering::SeqCst);
     match starts::start(&program, arguments, &given, room, until, &stopped) {

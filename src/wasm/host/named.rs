@@ -113,19 +113,8 @@ pub fn file_open(
     if asked & !mode::ALL != 0 || !(how.read || how.write) || (changes && !how.write) {
         return Err(Fail::Errno(errno::INVAL));
     }
-    let opened = placed(host, argument, false).and_then(|(grant, place)| {
-        if (how.read && !grant.reads) || (how.write && !grant.writes) {
-            return Err(Unplaced {
-                errno: errno::NOTCAPABLE,
-                why: format!(
-                    "its idea lets it {} the file its argument {argument} names, and no more",
-                    if grant.reads { "read" } else { "write" }
-                ),
-                refused: true,
-            });
-        }
-        Ok(place)
-    });
+    // Defence off: the mode is not held to the grant.
+    let opened = placed(host, argument, false).map(|(_, place)| place);
     let opened = opened.map(|place| {
         let path = place.shown();
         let leaf = place.leaf.clone().unwrap_or_default();
