@@ -308,7 +308,11 @@ on all five runners and the gate, green (42765232534), and release and install o
 on all five runners at today's limits, with the replayed questions taking at most twice as long in
 all. If the bar isn't met, native z3 stays and the measurement is written in todo.md. cvc5 stays
 native, since no build that Wasmtime runs exists yet; after z3, one bounded try to make one, at
-most five build runs. *Under way.*
+most five build runs. *Measured, and the bar isn't met:* run 42919127514 on all five runners has
+the WebAssembly z3 at 1.70 to 2.28 times native's time on the replayed questions, past twice on
+macOS on ARM64 and Windows on ARM64, and a proof lost on three runners. Native z3 stays; the
+build, the host and the measurement are kept at the tag `archive/wip/z3-wasm`. The cvc5 try
+wasn't made, and is the owner's to decide (todo.md).
 
 ## W18. Reach: everything possible, nothing implicit
 
