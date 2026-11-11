@@ -83,10 +83,20 @@ fn hand_over(words: impl Iterator<Item = OsString>, why: &str) -> ExitCode {
         command.exec()
     };
     #[cfg(not(unix))]
-    let failed = match command.status() {
-        Ok(status) => {
-            let code = status.code().and_then(|code| u8::try_from(code).ok());
-            return ExitCode::from(code.unwrap_or(REFUSED));
+    let failed = match command.spawn() {
+        Ok(mut child) => {
+            // lengua-mcp ends when this process does, however that is, as on a Unix, where
+            // the two are one process: without the tie, whoever stopped lengua-run would
+            // leave lengua-mcp and the program running.
+            #[cfg(windows)]
+            let _tied = lengua_os::tie(&child);
+            match child.wait() {
+                Ok(status) => {
+                    let code = status.code().and_then(|code| u8::try_from(code).ok());
+                    return ExitCode::from(code.unwrap_or(REFUSED));
+                }
+                Err(error) => error,
+            }
         }
         Err(error) => error,
     };

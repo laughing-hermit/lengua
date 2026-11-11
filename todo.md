@@ -598,12 +598,30 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
     databases on any path.
 - **W19. Native speed: a lean runner and native builds.** Most of the gap to native builds is
   start-up and the engine, not the program.
-  - A run-only binary: Wasmtime's runtime without its compiler loads the module `check` compiled
-    ahead of time, authenticated as it is today. Start-up goes from about 2.5 ms toward C's
-    0.4 ms, and memory from about 10 MiB toward a few.
-  - An optional native build of the proven main.wat, through wasm2c and clang, as Firefox
-    sandboxes C libraries at close to native speed. The proof still holds, since it covers
-    WebAssembly's semantics, and main.wat stays the one shared artifact.
+  - **Step 1, built on the branch `wip/lean-runner`, not merged: a run that starts sooner and
+    holds less.** `check` compiles the module ahead of its runs and seals it with the user's
+    key, and lengua-run, lengua built without the compiler, loads it and runs it, with every
+    check a run makes. On Linux on x86-64 the empty program went from 2.65 ms of CPU time and
+    10.7 MiB to 1.03 ms and 5.69 MiB, and the program that runs it from 23.1 MiB to 5.72 MiB;
+    against C's native build, from 5.08 times the CPU time and 8.76 times the memory to 2.61
+    and 4.63 times (42947294489 before, 42975992620 after). [ROADMAP.md](ROADMAP.md) has what
+    was measured first, what each part bought, every runner's numbers, and what a run still
+    pays; the decisions are above.
+  - Step 2, open: an optional native build of the proven main.wat, through wasm2c and clang,
+    as Firefox sandboxes C libraries at close to native speed. The proof still holds, since it
+    covers WebAssembly's semantics, and main.wat stays the one shared artifact.
+  - Open after step 1: the gate's list. With the other modules run from their compiled form
+    too, each starts in about 0.8 ms on Linux on x86-64 where it took 2.4 ms, and lengua's own
+    checks, 0.07 to 0.14 ms a run, now decide more of the short rows against them: 11 rows on
+    Linux on x86-64, 27 on Linux on ARM64 and 20 on macOS on ARM64 came out behind or undecided
+    that KNOWN_BEHIND doesn't name, and 21, 8 and 8 that it names came out ahead (42975992620).
+    The list wasn't touched: the gate's rule is being changed apart from this work. Also open:
+    the tests' workers and the `run` tool still load compiled code from Wasmtime's cache, which
+    holds no seal; lengua-run still holds TLS and main.wat's parser, about which
+    ROADMAP.md says more; and `two_checks_at_once_leave_a_consistent_index` (tests/graph.rs)
+    failed once on Linux on x86-64 (42975969779), with one of two records in log.md, at a
+    commit where it passed on that runner in another run (42975753981), and it passed on all
+    five one commit later (43022864858). It records two ideas and runs nothing of W19's.
 - **W20. Parallelism.** WebAssembly's threads (shared memory and atomics), as structured
   fork-join alone. The rules show that a program has no data race, so its results stay the same
   on every run, which free threads in C, C++ and Rust can't promise.
@@ -639,6 +657,7 @@ Runs, as they land:
 | The host's review (2026-11-10) | 42904330205 (a test for each finding, at 43c3fbe on Linux on x86-64: all 19 new tests fail before the fixes); 42907709201 (the fixes at 75121d6: the suite on Linux on x86-64 passes; the format job's layout is applied at 9b7d59a); 42911144089 (the suite on Linux on x86-64 at 9b7d59a, green); 42914865765 (the suite on all five runners at 9b7d59a, green); main at 5e73a1b. The review: [docs/reviews/host-2026-11-10.md](docs/reviews/host-2026-11-10.md) |
 | W17b | 42919127514 (z3 as WebAssembly measured against native z3 on all five runners, at 18e8f06: 1.70 to 2.28 times the time, and a proof lost on three runners, so the bar isn't met and native z3 stays; the table is under the decisions above); the work is kept at the tag `archive/wip/z3-wasm`, not merged; the measurement written on main at 5f9b9e2 |
 | W15, the finish-line run | All at main 33ed7fe, on all five runners: 42947270993 (main's push run: format, the suite and the gate job, green); 42947285372 (the slow tests the suite leaves out, green); 42947303258 (release: the five archives built, each installed on a clean runner of its system and CPU, green); 42947294489 (the bench: it ran to its reports on all five, and the gate failed on each: 20 rows ahead that KNOWN_BEHIND named, taken out at 28afe67, which leaves 1,037; 22 rows behind or undecided that it doesn't name; and 12 native C++ builds that failed, 2 on macOS on ARM64 and 5 on each Windows runner). The reports are in [docs/benchmarks](docs/benchmarks/README.md) |
+| W19, step 1 (on `wip/lean-runner`, not merged) | 42962697250, 42967736363 and 42971426958 (what a run's time and memory go to, and what each change buys, measured on Linux on x86-64 and ARM64); 42975753981 (the suite on Linux on x86-64 at d6b871c, green); 42975980745 (release at d6b871c: the five archives built with lengua-run beside lengua-mcp, each installed on a clean runner, where lengua-run runs add from what check compiled, green); 43022864858 (the suite on all five runners at 2a9e30a, green); 42975992620 (the bench at d6b871c on Linux on x86-64 and ARM64 and macOS on ARM64) and 43022878824 (the bench at 2a9e30a on the two Windows runners): the gate fails where the run and KNOWN_BEHIND disagree, and the list wasn't touched |
 | W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](docs/history/PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
 
 ## Superseded by the pivot

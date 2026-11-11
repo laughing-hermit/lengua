@@ -397,6 +397,12 @@ fn command_for(
                 args: request.args.clone(),
                 data: data_dir.map(|data_dir| data_dir.path().to_path_buf()),
             };
+            // The module's compiled form is made here, before the run that is measured, where
+            // there is none yet: that run then loads it, and lengua-run never has to leave the
+            // run to lengua-mcp. A module that doesn't compile is the run's to report.
+            if run.data.is_some() {
+                let _ = module_compiled(&run);
+            }
             let spec = serde_json::to_string(&run).map_err(|error| error.to_string())?;
             let mut command = bare(&runner()?.0);
             command.arg(MODULE_FLAG).arg(spec);

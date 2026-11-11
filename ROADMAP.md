@@ -382,13 +382,69 @@ databases on any path.
 
 ## W19. Native speed: a lean runner and native builds
 
-Most of the gap to native builds is start-up and the engine, not the program.
-- A run-only binary: Wasmtime's runtime without its compiler loads the module `check` compiled
-  ahead of time, authenticated as it is today. Start-up goes from about 2.5 ms toward C's 0.4 ms,
-  and memory from about 10 MiB toward a few.
-- An optional native build of the proven main.wat, through wasm2c and clang, as Firefox sandboxes
-  C libraries at close to native speed. The proof still holds, since it covers WebAssembly's
-  semantics, and main.wat stays the one shared artifact.
+Most of the gap to native builds is start-up and the engine, not the program. Two steps.
+
+**Step 1, built: a run that starts sooner and holds less.** It was measured first, on Linux on
+x86-64 (42962697250), with marks along a run of add. That run took 1.85 ms of CPU time and
+12.4 MiB at its peak, where a small Rust program that does nothing took 0.55 ms and 1.9 MiB:
+- 0.75 ms and 4.9 MiB were gone before lengua-mcp's first line ran: the 24 MiB program itself,
+  which took 0.88 ms and 5.5 MiB to do nothing. At the run's end, 10.6 MiB of its 13.3 MiB
+  were pages of lengua-mcp's own file, and under 0.1 MiB its heap;
+- the checks took 0.23 ms; the engine with its compiler and cache 0.10 to 0.13 ms; lengua's 46
+  host functions 0.08 to 0.11 ms; the module from Wasmtime's cache 0.20 ms; the program's start
+  and run 0.10 ms; and the end, with the cache's thread, 0.17 to 0.23 ms.
+
+What was built, and what each part bought in those runs and the two after them (42967736363,
+42971426958, Linux on x86-64 and ARM64):
+- `check` compiles the module ahead of its runs and seals it with the user's key, and a run
+  loads it in place of Wasmtime's cache: 0.34 ms less, and a file without the seal is never
+  loaded (DESIGN.md, The engine);
+- lengua-run, lengua built without the compiler, 5.7 MiB where lengua-mcp is 23.1 MiB: 1.16 ms
+  and 5.6 MiB for add, where the same run by `lengua-mcp run` took 1.69 ms and 10.5 MiB;
+- the program on the main thread: 0.18 ms less on x86-64, 0.23 ms on ARM64;
+- no copy-on-write image of the module's memory: 0.11 ms less;
+- only the host functions the module imports: 0.04 to 0.08 ms less on x86-64;
+- the seal by ring's HMAC: 0.06 ms on ARM64 where the sha2 crate's took 0.32 ms.
+
+Tried and left out, since they bought nothing: ring for the hashes of idea.md and main.wat,
+and leaving what a run loaded to the process's end. A compiled module mapped from its file
+would save 0.05 ms, and can't be held to a seal.
+
+*Verified by:* at d6b871c, the suite on Linux on x86-64, green (42975753981); the release on all
+five runners, each archive installed on a clean runner, where its lengua-run says it holds no
+compiler and runs add from what `check` compiled, green (42975980745). At 2a9e30a, which
+changes one test for Windows, the suite on all five runners, green (43022864858). The bench at
+d6b871c on Linux on x86-64 and ARM64
+and macOS on ARM64 (42975992620), and at 2a9e30a on the two Windows runners (43022878824): its
+gate failed, as it does where the run
+and KNOWN_BEHIND disagree, and its reports aren't in docs/benchmarks, since the gate's rule is
+being changed apart from this work. On empty, lengua's medians before (42947294489) and after:
+
+| Runner | CPU time | Wall time | Peak memory | The program that runs it |
+|---|---|---|---|---|
+| Linux on x86-64 | 2.65 ms to 1.03 ms | 2.36 ms to 1.10 ms | 10.7 MiB to 5.69 MiB | 23.1 MiB to 5.72 MiB |
+| Linux on ARM64 | 3.40 ms to 1.61 ms | 10.5 ms to 1.72 ms | 8.08 MiB to 4.22 MiB | 17.4 MiB to 4.76 MiB |
+| macOS on ARM64 | 4.77 ms to 5.09 ms | 4.86 ms to 6.05 ms | 4.95 MiB to 2.95 MiB | 16.9 MiB to 4.50 MiB |
+W19_WINDOWS_ROWS
+
+Against C's native build of empty in the same runs, lengua takes 2.61 times the CPU time and
+4.63 times the memory on Linux on x86-64 (5.08 and 8.76 before), 3.08 and 4.95 times on Linux
+on ARM64, and 2.58 and 2.42 times on macOS on ARM64, where the two runs' times differ more than
+the change does. C's module of empty, run by the same lengua-run, takes 0.82 ms and 5.45 MiB on
+Linux on x86-64 (2.40 ms and 9.96 MiB before). A run's own cost over its module is now 0.07 to
+0.09 ms and 0.2 MiB there (0.18 to 0.22 ms and 0.6 MiB before), and 0.10 to 0.14 ms on Linux on
+ARM64: the lock, its signature and the hashes of idea.md and main.wat. With the other modules
+that much faster too, lengua is behind them on more of the short rows than before.
+
+What a run still pays, on Linux on x86-64, of about 1.2 ms for add where a small Rust program
+takes 0.6 ms: 0.2 ms to load lengua-run itself, whose file is 3.4 MiB of the run's 5.6 MiB; 0.2
+ms for the checks; 0.12 ms for the engine and the compiled module, 0.3 ms on ARM64, where the
+module is 135 KiB; and 0.2 ms to link, start, run and end the program. lengua-run still holds
+TLS, for a program with connections, and the parser of main.wat, for a trap's line.
+
+**Step 2, open:** an optional native build of the proven main.wat, through wasm2c and clang, as
+Firefox sandboxes C libraries at close to native speed. The proof still holds, since it covers
+WebAssembly's semantics, and main.wat stays the one shared artifact.
 
 ## W20. Parallelism
 

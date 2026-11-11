@@ -342,6 +342,81 @@ pub fn process_usage(child: &std::process::Child) -> Result<Usage, String> {
     })
 }
 
+/// A child process whose life is tied to this process's on Windows: while this value lives, the
+/// child lives no longer than this process, however this process ends ([`tie`]). Dropping it
+/// ends a child that still runs.
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct Tied(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for Tied {
+    fn drop(&mut self) {
+        // SAFETY: the handle is the job's, which `tie` made and nothing else closes.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+/// Ties `child`'s life to this process's: it puts `child` in a job of its own that Windows ends
+/// when the job's last handle closes, and this process holds the only one, in what this gives.
+/// So when this process is ended from outside, as a service manager or `lengua-mcp measure` ends
+/// lengua-run, the lengua-mcp it left a run to ends with it, where a Unix has one process for
+/// both.
+///
+/// # Errors
+///
+/// The system's reason, when it won't make the job or take the child into it.
+#[cfg(windows)]
+pub fn tie(child: &std::process::Child) -> Result<Tied, String> {
+    use std::os::windows::io::AsRawHandle as _;
+
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectExtendedLimitInformation, SetInformationJobObject,
+    };
+
+    let failed = |call: &str| format!("{call}: {}", std::io::Error::last_os_error());
+    // SAFETY: the job has no security attributes and no name, and the call takes a null pointer
+    // for each.
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if job.is_null() {
+        return Err(failed("CreateJobObjectW"));
+    }
+    let tied = Tied(job);
+    let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+        BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
+            LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            ..JOBOBJECT_BASIC_LIMIT_INFORMATION::default()
+        },
+        ..JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default()
+    };
+    let size = u32::try_from(std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+        .unwrap_or(u32::MAX);
+    // SAFETY: `job` is the job just made, open in `tied`; `limits` is a
+    // JOBOBJECT_EXTENDED_LIMIT_INFORMATION of this frame, `size` bytes, which the call reads.
+    let set = unsafe {
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            (&raw const limits).cast(),
+            size,
+        )
+    };
+    if set == 0 {
+        return Err(failed("SetInformationJobObject"));
+    }
+    // SAFETY: `job` as above, and the other handle is the process handle `child` owns, open
+    // while `child` is borrowed, with the full access CreateProcess gives it.
+    let assigned = unsafe { AssignProcessToJobObject(job, child.as_raw_handle()) };
+    if assigned == 0 {
+        return Err(failed("AssignProcessToJobObject"));
+    }
+    Ok(tied)
+}
+
 /// The computer's memory, as its system counts it.
 #[cfg(any(windows, target_os = "macos"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -690,6 +765,23 @@ mod windows_tests {
         child.wait().expect("cmd ends");
         let usage = process_usage(&child).expect("its usage");
         assert!(usage.peak_bytes > 0, "{usage:?}");
+    }
+
+    /// A child tied to this process ends when the tie goes, as it would when this process
+    /// ended: a `ping` that would run for a minute is over within seconds of it.
+    #[test]
+    fn a_tied_child_ends_with_its_tie() {
+        let mut child = std::process::Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("ping starts");
+        let tied = super::tie(&child).expect("the tie");
+        let started = std::time::Instant::now();
+        assert!(child.try_wait().expect("its state").is_none(), "ping ended");
+        drop(tied);
+        child.wait().expect("ping ends");
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
     }
 }
 

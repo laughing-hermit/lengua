@@ -391,7 +391,10 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
 - **W18, reach:** every grant a C, C++ or Rust program can have, each declared in the idea and
   shown before the program runs: files anywhere the user names, the network chosen at run time,
   UDP and DNS, starting named programs, and the terminal.
-- **W19, native speed:** a runner without Wasmtime's compiler, and an optional native build of
+- **W19, native speed:** step 1 is built on the branch `wip/lean-runner`: lengua-run, lengua
+  without Wasmtime's compiler, runs a checked program from the module `check` compiled and
+  sealed with your key. On Linux on x86-64 the empty program went from 2.65 ms and 10.7 MiB to
+  1.03 ms and 5.69 MiB ([ROADMAP.md](ROADMAP.md)). Step 2 is an optional native build of
   the proven `main.wat` through wasm2c.
 - **W20, parallelism:** WebAssembly's threads, as structured fork-join that the rules show free
   of data races.

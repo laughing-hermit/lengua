@@ -17,6 +17,9 @@ path = "src/main.rs"
 # in a build of the whole workspace, as the tests', lengua-run holds a compiler it never calls.
 [dependencies]
 lengua = { package = "lengua-mcp", path = "../..", default-features = false }
+# The tie that ends lengua-mcp with lengua-run on Windows, where one process can't become the
+# other.
+lengua-os = { path = "../lengua-os" }
 
 # The tests make a checked program's folder and its compiled module with the lengua crate as
 # lengua-mcp has it.

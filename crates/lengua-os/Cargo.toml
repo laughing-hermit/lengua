@@ -41,6 +41,7 @@ wasmtime = { version = "=50.0.1", default-features = false, features = ["runtime
 nix = { version = "0.31", default-features = false, features = ["process", "resource", "signal"] }
 
 # Windows's counters of a process (its times, its working set and its peak) and of the computer's
-# memory. The version the lock already holds for the rest of the workspace.
+# memory, and the job that ends a child with the process that started it. The version the lock
+# already holds for the rest of the workspace.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }

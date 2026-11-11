@@ -544,8 +544,10 @@ own process. Both make the checks below (What run checks) first, and nothing of 
 loaded, compiled or run until they pass.
 
 **lengua-run** is the program `check`'s done reply names. It is the lengua crate built without
-the engine's compiler (the `compiler` feature off, `crates/lengua-run`), so its process maps a
-few megabytes where lengua-mcp maps over twenty. It loads the module's compiled form under the
+the engine's compiler (the `compiler` feature off, `crates/lengua-run`): 5.7 MiB on Linux on
+x86-64, where lengua-mcp is 23.1 MiB, and a run of the empty program takes 1.0 ms and 5.7 MiB
+there, where `lengua-mcp run` took 2.65 ms and 10.7 MiB before it (ROADMAP.md, W19, has every
+runner). It loads the module's compiled form under the
 user's key and runs it on its main thread, where the system lets that thread's stack grow to 8 MiB
 or more, as Linux and macOS do by default; elsewhere, and on Windows, on a thread of its own with
 16 MiB. It gives the engine only the WASI functions the module imports. Two runs it leaves to
