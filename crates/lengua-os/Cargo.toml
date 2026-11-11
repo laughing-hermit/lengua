@@ -29,3 +29,7 @@ nix = { version = "0.31", default-features = false, features = ["process", "reso
 # memory. The version the lock already holds for the rest of the workspace.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+
+# The engine, as the lengua crate pins it, for the one call that loads a precompiled module.
+[dependencies]
+wasmtime = { version = "=50.0.1", default-features = false, features = ["runtime", "std"] }

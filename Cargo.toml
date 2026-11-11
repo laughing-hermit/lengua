@@ -10,7 +10,7 @@ publish = false
 
 # lengua-os holds the calls that need unsafe code; xtask is lengua's tooling (`cargo xtask`).
 [workspace]
-members = ["crates/lengua-os", "xtask"]
+members = ["crates/lean-probe", "crates/lengua-os", "xtask"]
 
 [lib]
 name = "lengua"

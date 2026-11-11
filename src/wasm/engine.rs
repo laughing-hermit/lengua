@@ -138,6 +138,9 @@ pub fn config(setup: Setup, cache: Option<&Path>) -> Result<Config, String> {
     // idea's machine code reads: Wasmtime's own default, set here so that it holds whatever the
     // default becomes.
     config.generate_address_map(true);
+    if crate::stages::variant("nocow") {
+        config.memory_init_cow(false);
+    }
     if let Some(folder) = cache {
         let mut settings = CacheConfig::new();
         settings.with_directory(folder);

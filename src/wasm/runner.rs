@@ -169,7 +169,9 @@ pub fn execute(
     host.limits.deadline = timeout.map(|timeout| Instant::now() + timeout);
     let deadline = host.limits.deadline;
     let stop = Arc::clone(&host.limits.stop);
+    crate::stages::mark("world");
     let mut store = Store::new(engine, host);
+    crate::stages::mark("store");
     store.limiter(|host| &mut host.limits.store);
     if setup.counts() {
         let _ = store.set_fuel(u64::MAX);
@@ -187,7 +189,9 @@ pub fn execute(
         });
     }
     let started = Instant::now();
-    let (ending, problem) = match linker.instantiate(&mut store, module) {
+    let instantiated = linker.instantiate(&mut store, module);
+    crate::stages::mark("instantiated");
+    let (ending, problem) = match instantiated {
         Err(error)
             if error.downcast_ref::<Stop>().is_none()
                 && error.downcast_ref::<wasmtime::Trap>().is_none() =>
@@ -211,6 +215,7 @@ pub fn execute(
             },
         },
     };
+    crate::stages::mark("ran");
     let wall_time_ns = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
     let instructions = if setup.counts() {
         store.get_fuel().ok().map(|left| u64::MAX - left)
@@ -615,15 +620,36 @@ pub fn run_once_checked<O: Order>(
     cache: Option<&Path>,
     checks: impl FnOnce() -> Result<O, String>,
 ) -> Result<io::Result<End>, String> {
+    use crate::stages::{mark, variant};
+    // Temporary, for W19's measurements: the variants.
+    let cache = if variant("aot") || variant("aotfile") {
+        None
+    } else {
+        cache
+    };
+    if variant("main") {
+        let checked = checks()?;
+        mark("checked");
+        return Ok(prepared(cache).and_then(|(engine, linker)| {
+            run_on_this_thread(&engine, &linker, checked.wasm(), &checked.here())
+        }));
+    }
+    let stack = if variant("smallstack") {
+        1024 * 1024
+    } else {
+        STACK
+    };
     let order: OnceLock<Option<O>> = OnceLock::new();
     let (refused, ended) = std::thread::scope(|scope| {
         let given = &order;
         let program = std::thread::Builder::new()
             .name("lengua program".to_owned())
-            .stack_size(STACK)
+            .stack_size(stack)
             .spawn_scoped(scope, move || {
+                mark("thread");
                 let early = cache.is_none_or(Path::is_dir).then(|| prepared(cache));
                 let checked = given.wait().as_ref()?;
+                mark("order");
                 let made = early.unwrap_or_else(|| prepared(cache));
                 Some(made.and_then(|(engine, linker)| {
                     run_on_this_thread(&engine, &linker, checked.wasm(), &checked.here())
@@ -639,12 +665,14 @@ pub fn run_once_checked<O: Order>(
             }
             Err(why) => Some(why),
         };
+        mark("checked");
         drop(release);
         let ended = program.and_then(|running| {
             running
                 .join()
                 .map_err(|_| io::Error::other("the program's thread failed"))
         });
+        mark("joined");
         (refused, ended)
     });
     match (refused, ended) {
@@ -670,8 +698,11 @@ impl<O> Drop for Release<'_, O> {
 /// linker. None of it reads anything of the program's.
 fn prepared(cache: Option<&Path>) -> io::Result<(Engine, Linker<Host>)> {
     make_room().map_err(io::Error::other)?;
+    crate::stages::mark("room");
     let engine = crate::wasm::engine::engine(Setup::Shell, cache).map_err(io::Error::other)?;
+    crate::stages::mark("engine");
     let linker = crate::wasm::host::linker(&engine).map_err(io::Error::other)?;
+    crate::stages::mark("linker");
     Ok((engine, linker))
 }
 
@@ -683,7 +714,39 @@ fn run_on_this_thread(
     wasm: &[u8],
     here: &Here<'_>,
 ) -> io::Result<End> {
-    let module = Module::from_binary(engine, wasm).map_err(io::Error::other)?;
+    use crate::stages::{mark, variant};
+    mark("start");
+    // Temporary, for W19's measurements: the module precompiled once, then loaded.
+    let module = if variant("aot") || variant("aotfile") {
+        let folder = std::env::var_os("LENGUA_AOT_DIR")
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| io::Error::other("LENGUA_AOT_DIR isn't set"))?;
+        let variants = std::env::var("LENGUA_VARIANT")
+            .unwrap_or_default()
+            .replace(',', "+");
+        let path = folder.join(format!(
+            "{}-{variants}.cwasm",
+            crate::hash::Sha256Hex::of(wasm).as_str()
+        ));
+        mark("hashed");
+        if !path.exists() {
+            let bytes = engine
+                .precompile_module(wasm)
+                .map_err(io::Error::other)?;
+            std::fs::create_dir_all(&folder)?;
+            std::fs::write(&path, bytes)?;
+        }
+        if variant("aotfile") {
+            lengua_os::deserialize_file(engine, &path).map_err(io::Error::other)?
+        } else {
+            let bytes = std::fs::read(&path)?;
+            mark("read");
+            lengua_os::deserialize(engine, &bytes).map_err(io::Error::other)?
+        }
+    } else {
+        Module::from_binary(engine, wasm).map_err(io::Error::other)?
+    };
+    mark("module");
     let mut connections = Vec::new();
     let connecting = Instant::now();
     for made in here.connections {

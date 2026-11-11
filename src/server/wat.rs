@@ -660,6 +660,7 @@ fn runnable(
     env: &BTreeMap<String, String>,
 ) -> Result<Runnable, String> {
     let (state, snapshot, files) = state_for_run(data_dir, folder)?;
+    crate::stages::mark("state");
     if state != State::Ready {
         return Err(format!(
             "lengua runs a program only when its idea and code match lengua.lock, and {folder} \
@@ -880,7 +881,9 @@ pub(super) fn run_from_shell(
     let cache = engine::cache_folder(data_dir);
     let ended = run_once_checked(Some(cache.as_path()), || {
         let (folder, workspace) = folders()?;
+        crate::stages::mark("folders");
         let ready = runnable(data_dir, &folder, &request.env)?;
+        crate::stages::mark("runnable");
         // The working folder of a program that uses files is never one of lengua's own or the
         // system's: said before anything is built or compiled.
         if ready.uses.contains(&Use::Files)
@@ -889,6 +892,7 @@ pub(super) fn run_from_shell(
             return Err(problem);
         }
         let to_run = kept_or_built(data_dir, &folder, &ready)?;
+        crate::stages::mark("kept");
         // An idea that names a secret: the code this computer runs is checked first, from
         // main.wat built again when the module is the one check kept.
         if !ready.secrets.is_empty() {

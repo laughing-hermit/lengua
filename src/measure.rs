@@ -306,6 +306,12 @@ fn bare(program: &Path) -> Command {
     {
         command.env("SystemRoot", root);
     }
+    // Temporary, for W19's measurements.
+    for name in ["LENGUA_STAGES", "LENGUA_VARIANT", "LENGUA_AOT_DIR"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
     command
 }
 

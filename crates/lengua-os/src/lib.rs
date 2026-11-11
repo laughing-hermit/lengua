@@ -668,3 +668,30 @@ mod tests {
         }
     }
 }
+
+/// Temporary, for W19's measurements: the module `bytes` hold, as the engine precompiled it,
+/// copied into memory of the engine's own.
+///
+/// # Errors
+///
+/// When the engine doesn't take the bytes.
+pub fn deserialize(engine: &wasmtime::Engine, bytes: &[u8]) -> Result<wasmtime::Module, String> {
+    // SAFETY: none yet. The measurement's bytes are the test's own; the built form authenticates
+    // them first.
+    unsafe { wasmtime::Module::deserialize(engine, bytes) }.map_err(|error| format!("{error:#}"))
+}
+
+/// Temporary, for W19's measurements: the module the file at `path` holds, as the engine
+/// precompiled it, mapped from the file.
+///
+/// # Errors
+///
+/// When the engine doesn't take the file.
+pub fn deserialize_file(
+    engine: &wasmtime::Engine,
+    path: &std::path::Path,
+) -> Result<wasmtime::Module, String> {
+    // SAFETY: none yet. The measurement's file is the test's own.
+    unsafe { wasmtime::Module::deserialize_file(engine, path) }
+        .map_err(|error| format!("{error:#}"))
+}
