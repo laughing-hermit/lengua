@@ -65,6 +65,21 @@ fn function(code: &str, name: &str) -> String {
     rest[..end].to_owned()
 }
 
+/// `lengua-mcp check` of the program in `folder`, the attester, with no time for proofs: its
+/// exit code, and what it printed.
+fn attest(folder: &std::path::Path) -> (Option<i32>, String) {
+    let attested = std::process::Command::new(env!("CARGO_BIN_EXE_lengua-mcp"))
+        .arg("check")
+        .arg(folder)
+        .env("LENGUA_PROOF_SECONDS", "0")
+        .output()
+        .expect("lengua-mcp runs");
+    (
+        attested.status.code(),
+        String::from_utf8_lossy(&attested.stdout).into_owned(),
+    )
+}
+
 /// The bundle of sum with its two parts beside it, the parts checked to done: sum's folder,
 /// then lines' and decimal's.
 async fn sum_with_its_parts(session: &Session) -> (Program, Program, Program) {
@@ -453,6 +468,25 @@ async fn a_part_s_contract_is_held_to_its_main_wat() {
     let done = session.settle(&part).await;
     assert_eq!(done["state"], "done", "{done}");
     session.service.cancel().await.expect("close the session");
+    // The attester holds the contract too: it says each function that holds, and refuses a
+    // section that says another reach.
+    let (code, said) = attest(part.path());
+    assert_eq!(code, Some(0), "{said}");
+    assert!(
+        said.contains(
+            "\nidea.md: its contract holds: $decimal_parse: reads 20 bytes at `$at`; writes 8 \
+             bytes at `$into`\n"
+        ),
+        "{said}"
+    );
+    part.write("idea.md", &less);
+    let (code, said) = attest(part.path());
+    assert_eq!(code, Some(1), "{said}");
+    assert!(
+        said.contains("but in main.wat it reads 20 bytes at `$at`"),
+        "{said}"
+    );
+    assert_eq!(said.lines().last(), Some("not attested"), "{said}");
 }
 
 /// The secret rule goes through a taken function as through any other: bytes with its input
@@ -479,7 +513,9 @@ async fn the_secret_rule_goes_through_a_taken_function() {
     let report = session.record(&program).await;
     assert_eq!(report["state"], "code_problems", "{report}");
     assert!(
-        report["problems"].to_string().contains("so a secret decides"),
+        report["problems"]
+            .to_string()
+            .contains("so a secret decides"),
         "{report}"
     );
     program.write("idea.md", &idea);
