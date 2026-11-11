@@ -624,7 +624,7 @@ this file at the tag `native-final`.
 - **Publishing** the release archives, the plugin listing where agent plugins are found, and the
   site (`site/`). The repository has been public since 2026-11-02, a work in progress under the
   Apache License 2.0.
-- **Signing.** Code signing costs money, so the archives are unsigned.
+- **Signing: not planned** (the owner, 2026-11-11: "I'm having trouble finding a use for it. Remember, lengua is just an agent plugin"). A plugin reaches a user through an agent harness or a clone, which put no download mark on its files; only an archive fetched with a browser gets one, and the install says how to clear it. Each archive has its SHA-256 beside it. The archives stay unsigned.
 - **Launcher services for compression and a GUI.** Each would be one definition that every system
   must provide outside the program, as lengua does TLS; a GUI is a product of its own. Not
   designed yet.
