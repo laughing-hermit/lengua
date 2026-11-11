@@ -653,15 +653,17 @@ own process. Both make the checks below (What run checks) first, and nothing of 
 loaded, compiled or run until they pass.
 
 **lengua-run** is the program `check`'s done reply names. It is the lengua crate built without
-the engine's compiler (the `compiler` feature off, `crates/lengua-run`): 5.7 MiB on Linux on
-x86-64, where lengua-mcp is 23.1 MiB, and a run of the empty program takes 1.0 ms and 5.7 MiB
-there, where `lengua-mcp run` took 2.65 ms and 10.7 MiB before it (ROADMAP.md, W19, has every
+the engine's compiler (the `compiler` feature off, `crates/lengua-run`): 5.9 MiB on Linux on
+x86-64, where lengua-mcp is 23.1 MiB, and a run of the empty program takes 1.3 ms and 5.5 MiB
+there, where `lengua-mcp run` took 2.2 ms and 11.4 MiB before it (ROADMAP.md, W19, has every
 runner). It loads the module's compiled form under the
 user's key and runs it on its main thread, where the system lets that thread's stack grow to 8 MiB
 or more, as Linux and macOS do by default; elsewhere, and on Windows, on a thread of its own with
 16 MiB. It gives the engine only the WASI functions the module imports. Two runs it leaves to
 lengua-mcp, the program beside it, which it starts with the same words: one whose module has no
 compiled form it can load, which it says on standard error, and one whose idea names a secret.
+On a Unix lengua-run becomes lengua-mcp. On Windows it starts lengua-mcp and waits for it, in a job
+that ends with lengua-run, so whoever stops lengua-run stops the program too.
 
 **`lengua-mcp run`** runs every checked program. It loads the compiled form as lengua-run does.
 Where none loads, it compiles the module, seals the result and keeps it, so the next run of
@@ -866,28 +868,30 @@ it names, and where a change in the list's history named a row the list before i
 row needs no line and fails no run.
 
 Each run writes a report, BENCHMARKS-<runner>.md, from its results alone. The latest run's five
-reports, from run 42964232679 at cd54e79, the first with the margin, are in
-[docs/benchmarks](docs/benchmarks/README.md). That run measured the list as it was before the
-margin, 1,037 rows, so the gate passed on no runner. It found 139 rows the list named level or
-ahead (127 level, 12 ahead), which have left it, and 6 rows behind by more than the margin that
-it doesn't name. KNOWN_BEHIND now names 898 rows. Against C, C++ and Rust compiled to WebAssembly
-they are 22 on Linux on x86-64, 16 on Linux on ARM64, 16 on macOS on ARM64, 41 on Windows on
-x86-64 and 41 on Windows on ARM64, and 114 of the 136 are peak memory. Against the native builds
-they are 150 to 154 of each runner's 168 rows: tally is the one workload whose time is below the
-best native build's on every runner, at 0.50 to 0.68 times. Windows counts CPU time in 15.6 ms
-ticks, so a short run's CPU time there is a whole number of ticks. Against the other modules, 57
-of the two Windows runners' 84 CPU rows were level in that run, nearly all at 1.00×, and none
-behind; the native builds' shortest runs read no ticks at all. Every native C++ version was
+reports are in [docs/benchmarks](docs/benchmarks/README.md): run 43084459708 at 45b507b, the first
+with lengua-run, and for Windows on ARM64 run 43099764273 at the same commit. That run measured
+the list as it was, 898 rows, so the gate passed on no runner. It found 137 rows the list named
+level or ahead (135 level, 2 ahead), which have left it, and 26 rows behind by more than the
+margin that it doesn't name. KNOWN_BEHIND now names 761 rows. Against C, C++ and Rust compiled
+to WebAssembly they are 4 on Linux on x86-64, 4 on Linux on ARM64, 10 on macOS on ARM64, 3 on
+Windows on x86-64 and 3 on Windows on ARM64. Peak memory was behind on 7 of the five runners' 210
+such rows, where it was on 115 in the run before. The 26 are mostly the time of workloads that
+are nearly all start-up, against C's and C++'s modules, which lengua-run starts as fast as
+lengua's own less the 0.1 ms of lengua's checks. Against the native builds the list names 138 to
+152 of each runner's 168 rows: tally is the one workload whose time is below the best native
+build's on every runner, at 0.45 to 0.65 times. Windows counts CPU time in 15.6 ms ticks, so a
+short run's CPU time there is a whole number of ticks, and most of its CPU rows against the other
+modules are level. Every native C++ version was
 built in that run, on all five runners: the bench passes `-std=gnu++17`, as the files are C++17
 and Apple's clang and LLVM's clang on Windows take an older standard by default.
 
-The margin has a limit the run shows. It takes the rows at 1.00× out of the gate, which were
-most of what changed sides before. It doesn't settle a row whose gap sits near 5%: of the 6 rows
-behind that the list doesn't name, four are at 1.05× to 1.08×, and the other two (shout's CPU
-time on Linux on ARM64, at 1.09× and 1.11×) were ahead two runs before. The list may not take a
-row back, so with the list as it is those results fail the gate on four runners and pass it on
-Windows on ARM64. No run has measured the new list yet. todo.md names the rows ("A row the gate
-can't decide").
+The margin has a limit the runs show. It takes the rows at 1.00× out of the gate, which were
+most of what changed sides before. It doesn't settle a row whose gap sits near 5%: the run
+before this one (42964232679) found 6 rows behind that the list doesn't name, four of them at
+1.05× to 1.08×. In this run two of the six are level or ahead, and four are among its 26. The
+list may not take a row back, so with the list as it is these results fail the gate on four
+runners and pass it on Windows on ARM64. No run has measured the new list yet. todo.md names the
+rows ("A row the gate can't decide").
 
 ## The release and the install
 

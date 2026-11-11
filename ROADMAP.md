@@ -440,31 +440,37 @@ Tried and left out, since they bought nothing: ring for the hashes of idea.md an
 and leaving what a run loaded to the process's end. A compiled module mapped from its file
 would save 0.05 ms, and can't be held to a seal.
 
-*Verified by:* at d6b871c, the suite on Linux on x86-64, green (42975753981); the release on all
-five runners, each archive installed on a clean runner, where its lengua-run says it holds no
-compiler and runs add from what `check` compiled, green (42975980745). At 2a9e30a, which
-changes one test for Windows, the suite on all five runners, green (43022864858). The bench at
-d6b871c on Linux on x86-64 and ARM64
-and macOS on ARM64 (42975992620), and at 2a9e30a on the two Windows runners (43022878824): its
-gate failed, as it does where the run
-and KNOWN_BEHIND disagree, and its reports aren't in docs/benchmarks, since the gate's rule is
-being changed apart from this work. On empty, lengua's medians before (42947294489) and after:
+*Verified by:* at 45b507b, with main's W18 merged in, on all five runners: the suite, green
+(43083574889); the release, each archive installed on a clean runner, where its lengua-run says
+it holds no compiler and runs add from what `check` compiled, green (42975980745 at d6b871c,
+43084441775 at 45b507b); and the bench (43084459708, and 43099764273 for Windows on ARM64, whose
+files GitHub didn't keep the first time), whose reports are in
+[docs/benchmarks](docs/benchmarks/README.md). An earlier bench (43022878824) ran into its time
+limit on both Windows runners: lengua-run had left a module's first run to lengua-mcp, the bench
+stopped lengua-run, and lengua-mcp went on serving on the port. Since then lengua-run on Windows
+ties the lengua-mcp it starts to itself, so that both end together, and `measure` compiles a
+module before the run it measures. On empty, lengua's medians in the bench before (42964232679)
+and in this one:
 
 | Runner | CPU time | Wall time | Peak memory | The program that runs it |
 |---|---|---|---|---|
-| Linux on x86-64 | 2.65 ms to 1.03 ms | 2.36 ms to 1.10 ms | 10.7 MiB to 5.69 MiB | 23.1 MiB to 5.72 MiB |
-| Linux on ARM64 | 3.40 ms to 1.61 ms | 10.5 ms to 1.72 ms | 8.08 MiB to 4.22 MiB | 17.4 MiB to 4.76 MiB |
-| macOS on ARM64 | 4.77 ms to 5.09 ms | 4.86 ms to 6.05 ms | 4.95 MiB to 2.95 MiB | 16.9 MiB to 4.50 MiB |
-W19_WINDOWS_ROWS
+| Linux on x86-64 | 2.20 ms to 1.33 ms | 2.03 ms to 1.42 ms | 11.4 MiB to 5.50 MiB | 23.1 MiB to 5.87 MiB |
+| Linux on ARM64 | 2.98 ms to 1.43 ms | 10.5 ms to 1.52 ms | 8.08 MiB to 4.34 MiB | 17.4 MiB to 4.88 MiB |
+| macOS on ARM64 | 6.75 ms to 4.26 ms | 7.31 ms to 4.93 ms | 4.94 MiB to 3.02 MiB | 16.9 MiB to 4.62 MiB |
+| Windows on x86-64 | in 15.6 ms ticks | 14.1 ms to 8.00 ms | 10.2 MiB to 5.80 MiB | 25.4 MiB to 6.03 MiB |
+| Windows on ARM64 | in 15.6 ms ticks | 21.0 ms to 15.9 ms | 11.6 MiB to 7.12 MiB | 18.8 MiB to 4.91 MiB |
 
-Against C's native build of empty in the same runs, lengua takes 2.61 times the CPU time and
-4.63 times the memory on Linux on x86-64 (5.08 and 8.76 before), 3.08 and 4.95 times on Linux
-on ARM64, and 2.58 and 2.42 times on macOS on ARM64, where the two runs' times differ more than
-the change does. C's module of empty, run by the same lengua-run, takes 0.82 ms and 5.45 MiB on
-Linux on x86-64 (2.40 ms and 9.96 MiB before). A run's own cost over its module is now 0.07 to
-0.09 ms and 0.2 MiB there (0.18 to 0.22 ms and 0.6 MiB before), and 0.10 to 0.14 ms on Linux on
-ARM64: the lock, its signature and the hashes of idea.md and main.wat. With the other modules
-that much faster too, lengua is behind them on more of the short rows than before.
+Against C's native build of empty, lengua took 5.49 times the CPU time and 9.42 times the
+memory on Linux on x86-64 before, and takes 2.64 and 4.73 times now; on Linux on ARM64, 6.27 and
+9.48 times before, 3.02 and 5.10 now; on macOS on ARM64, 3.26 and 3.98 before, 1.92 and 2.44
+now. On Windows, where CPU time comes in ticks, its wall time went from 2.79 to 1.79 times C's
+on x86-64 and from 1.91 to 1.44 times on ARM64, and its memory from 3.05 to 1.72 and from 2.49
+to 1.53 times. C's module of empty, run by the same lengua-run, takes 1.27 ms and 5.41 MiB on
+Linux on x86-64 (2.05 ms and 10.4 MiB before). A run's own cost over its module is 0.09 to
+0.10 ms and 0.12 MiB there, and 0.08 to 0.11 ms on Linux on ARM64: the lock, its signature and
+the hashes of idea.md and main.wat. With the other modules that much faster too, lengua's checks
+now decide more of the short rows against them: the gate found 26 rows behind that
+KNOWN_BEHIND doesn't name, and 137 it names level or ahead, which left it (761 rows stay).
 
 What a run still pays, on Linux on x86-64, of about 1.2 ms for add where a small Rust program
 takes 0.6 ms: 0.2 ms to load lengua-run itself, whose file is 3.4 MiB of the run's 5.6 MiB; 0.2
