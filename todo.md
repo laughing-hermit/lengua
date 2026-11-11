@@ -502,6 +502,10 @@ Its runs, each a dispatch of ci.yml on the branch, on Linux on x86-64 unless it 
 - 43105850263: ran no test, since it was dispatched before its commit reached GitHub.
 - 43109375110 (sort64's proofs with five minutes, at b33ba00): two numbers in order proven,
   three not, as the table says.
+- 43112852852 (the suite, at 2bfb3f3): cancelled by the next dispatch, before its tests.
+- 43116222005 (the suite, at de12275, with main's lean runner merged in and a run held to the
+  lock's parts): every test passed, lengua-run's among them; the format job's layout is
+  applied at 488881f.
 
 Still open from it, for the owner:
 - **A part's proof isn't used in the programs built on it.** The prover follows each taken
