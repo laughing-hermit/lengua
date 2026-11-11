@@ -1231,7 +1231,13 @@ mod tests {
             Err(errno::NOTCAPABLE)
         );
         // This computer by each spelling of it, where the idea grants any computer: never.
-        for this in ["localhost", "127.0.0.1", "::1", "0.0.0.0", "::ffff:127.0.0.1"] {
+        for this in [
+            "localhost",
+            "127.0.0.1",
+            "::1",
+            "0.0.0.0",
+            "::ffff:127.0.0.1",
+        ] {
             assert_eq!(
                 opened(&mut host, this, port, flags::PLAIN),
                 Err(errno::NOTCAPABLE),

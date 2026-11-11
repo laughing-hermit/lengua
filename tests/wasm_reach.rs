@@ -202,7 +202,8 @@ async fn a_program_reaches_the_tests_own_servers_and_no_computer_its_idea_doesnt
     assert_eq!(problems.len(), 4, "{:?}", ran.connections);
     assert_eq!(&problems[..3], &[None, None, None]);
     assert!(
-        problems[3].is_some_and(|why| why.contains("grants no TCP connection to elsewhere.test:80")),
+        problems[3]
+            .is_some_and(|why| why.contains("grants no TCP connection to elsewhere.test:80")),
         "{:?}",
         ran.connections
     );
