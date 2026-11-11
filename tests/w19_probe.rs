@@ -167,6 +167,7 @@ async fn w19_probe() {
         run("run: lengua-run", "", &with_lean),
         run("run: lengua-run, a thread", "thread", &with_lean),
         run("run: lengua-run, every function", "linkall", &with_lean),
+        run("run: lengua-run, the sha2 crate", "sha2", &with_lean),
         module("module: lengua-mcp", "", &without),
         module("module: lengua-run", "", &with_lean),
         module("module: lengua-run, a thread", "thread", &with_lean),

@@ -499,7 +499,7 @@ impl Defining<'_> {
     ) -> wasmtime::Result<()> {
         if self
             .wanted
-            .is_none_or(|wanted| wanted.iter().any(|want| *want == name))
+            .is_none_or(|wanted| wanted.contains(&name))
         {
             self.linker.func_wrap(module, name, function)?;
         }

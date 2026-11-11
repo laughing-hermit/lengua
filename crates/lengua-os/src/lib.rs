@@ -557,15 +557,16 @@ impl std::error::Error for Unsealed {}
 
 /// The HMAC-SHA256, keyed with `key`, of a compiled module and what it is said to be, `about`:
 /// the domain, `about`'s length, `about`, then the module, so no two pairs give the same bytes.
-fn seal(key: &[u8; SEAL_KEY_BYTES], about: &[u8], compiled: &[u8]) -> hmac::Hmac<sha2::Sha256> {
-    use hmac::Mac;
-    let mut mac = <hmac::Hmac<sha2::Sha256> as Mac>::new_from_slice(key)
-        .expect("HMAC takes a key of any length");
+/// It is ring's, whose SHA-256 uses the CPU's own instructions for it on x86-64 and on ARM64:
+/// every run computes it over the whole compiled module, tens to hundreds of KiB.
+fn seal(key: &[u8; SEAL_KEY_BYTES], about: &[u8], compiled: &[u8]) -> ring::hmac::Tag {
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
+    let mut mac = ring::hmac::Context::with_key(&key);
     mac.update(SEAL_DOMAIN);
     mac.update(&u64::try_from(about.len()).unwrap_or(u64::MAX).to_le_bytes());
     mac.update(about);
     mac.update(compiled);
-    mac
+    mac.sign()
 }
 
 /// Compiles the WebAssembly module `wasm` with `engine` for this computer, ahead of its runs,
@@ -585,12 +586,11 @@ pub fn compile_sealed(
     about: &[u8],
     wasm: &[u8],
 ) -> Result<Vec<u8>, String> {
-    use hmac::Mac as _;
     let mut compiled = engine
         .precompile_module(wasm)
         .map_err(|error| format!("{error:#}"))?;
-    let tag = seal(key, about, &compiled).finalize().into_bytes();
-    compiled.extend_from_slice(&tag);
+    let tag = seal(key, about, &compiled);
+    compiled.extend_from_slice(tag.as_ref());
     Ok(compiled)
 }
 
@@ -621,14 +621,15 @@ pub fn load_sealed(
     about: &[u8],
     sealed: &[u8],
 ) -> Result<wasmtime::Module, Unsealed> {
-    use hmac::Mac as _;
+    use subtle::ConstantTimeEq as _;
     let Some(length) = sealed.len().checked_sub(SEAL_BYTES) else {
         return Err(Unsealed::NoSeal);
     };
     let (compiled, tag) = sealed.split_at(length);
-    seal(key, about, compiled)
-        .verify_slice(tag)
-        .map_err(|_| Unsealed::NoSeal)?;
+    let own = seal(key, about, compiled);
+    if !bool::from(own.as_ref().ct_eq(tag)) {
+        return Err(Unsealed::NoSeal);
+    }
     // SAFETY: `compiled` carries `key`'s seal, checked just above, and a seal is made only by
     // `compile_sealed`, over the bytes `Engine::precompile_module` returned: these are bytes
     // Wasmtime's compiler made, which is what `deserialize` asks of its caller. It copies them,

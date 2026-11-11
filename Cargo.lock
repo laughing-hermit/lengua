@@ -1221,6 +1221,7 @@ dependencies = [
  "perf-event2",
  "rand",
  "rcgen",
+ "ring",
  "rmcp",
  "rustix",
  "rustls",
@@ -1246,9 +1247,9 @@ dependencies = [
 name = "lengua-os"
 version = "0.2.0"
 dependencies = [
- "hmac",
  "nix",
- "sha2",
+ "ring",
+ "subtle",
  "wasmtime",
  "windows-sys 0.61.2",
 ]

@@ -25,9 +25,11 @@ unwrap_used = "warn"
 compiler = ["wasmtime/cranelift"]
 
 [dependencies]
-# The seal of a compiled module: HMAC-SHA256, the versions the lengua crate signs its locks with.
-hmac = "0.12.1"
-sha2 = "0.10.9"
+# The seal of a compiled module: ring's HMAC-SHA256, which lengua's TLS already brings and which
+# uses the CPU's SHA-256 instructions on every target, compared in constant time by subtle,
+# which rustls brings too.
+ring = "0.17.14"
+subtle = { version = "2.6", default-features = false }
 # The engine, as the lengua crate pins it, for the one call that loads a compiled module: its
 # runtime alone, which the lengua crate's own features add to.
 wasmtime = { version = "=50.0.1", default-features = false, features = ["runtime", "std"] }

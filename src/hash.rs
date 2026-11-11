@@ -2,8 +2,6 @@
 
 use std::fmt;
 
-use sha2::{Digest, Sha256};
-
 /// A SHA-256 digest written as 64 lowercase hex characters.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Sha256Hex(String);
@@ -12,7 +10,13 @@ impl Sha256Hex {
     /// Hashes `bytes`.
     #[must_use]
     pub fn of(bytes: &[u8]) -> Self {
-        Self(hex(&Sha256::digest(bytes)))
+        // Temporary, for W19's measurements: the sha2 crate's SHA-256, as before.
+        if crate::stages::variant("sha2") {
+            use sha2::{Digest as _, Sha256};
+            return Self(hex(&Sha256::digest(bytes)));
+        }
+        let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
+        Self(hex(digest.as_ref()))
     }
 
     /// Accepts exactly 64 lowercase hex characters.
