@@ -380,6 +380,22 @@ program runs, enforced by the host, and modelled by the prover.
 What it unlocks: shells, build tools, package managers, crawlers, proxies, and programs over
 databases on any path.
 
+**The network, built on 2026-11-11** (branch `wip/reach-net`). An idea grants what its program
+opens by itself, a `- Network:` line for each grant: `opens TCP connections to port N on …`
+(`over TLS` too), `looks up the addresses of …`, `sends UDP datagrams to port N on …` and
+`receives UDP datagrams on port N`, for a named computer, any subdomain of a domain, the computer
+an argument names, or any computer. Seven functions of lengua's own, in the module
+`lengua_net_1`, open them, since WASI preview 1 has none. lengua spells each name one way, finds
+the line that grants it, resolves it once, holds every address to the grant (never this computer;
+a private network only where the line says so; never an address of many computers), and connects
+to those addresses alone. A program holds 64 of its own at once, and lengua ends one that no byte
+crosses for 300 seconds. The checker's import rule, the secret rule, the test format's steps (a
+test's own servers by computer and port, datagrams, and names' addresses), `check`'s and `run`'s
+`may_reach`, the skills, a client template and the example `follow` came with it. The prover
+refuses such a program with the reason: tested, not proven. The threat cases and the test that
+holds each are in docs/reviews/reach-2026-11-11.md. *Verified by:* todo.md, "W18's network".
+What is left of W18: files anywhere the user names, starting named programs, and the terminal.
+
 ## W19. Native speed: a lean runner and native builds
 
 Most of the gap to native builds is start-up and the engine, not the program.

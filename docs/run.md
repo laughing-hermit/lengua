@@ -61,11 +61,32 @@ Only what its idea's `- Uses:` and `- Network:` lines name:
   others; `--env` for an idea without it is refused;
 - the clock, rounded down to a microsecond, with `the clock`;
 - the system's random bytes, with `random bytes`;
-- with a `- Network:` line, the connections lengua makes for it before it starts, in the idea's
-  order, and for a server the listener lengua binds on the idea's port, on 127.0.0.1, or on
-  every address when the idea serves any computer. The program opens no connection itself.
-  Over TLS, lengua does the TLS, and the program reads and writes plain bytes. A connection
-  lengua couldn't make is handed over already ended, and lengua says why on standard error.
+- with a `- Network:` line that says `connects to` or `listens on`, the connections lengua makes
+  for it before it starts, in the idea's order, and for a server the listener lengua binds on
+  the idea's port, on 127.0.0.1, or on every address when the idea serves any computer. Such a
+  program opens no connection itself. Over TLS, lengua does the TLS, and the program reads and
+  writes plain bytes. A connection lengua couldn't make is handed over already ended, and lengua
+  says why on standard error;
+- what its idea grants it to open by itself, a line for each grant:
+  - `opens TCP connections to port 443 on example.com over TLS`: connections to those ports of
+    those computers, which the program opens while it runs;
+  - `looks up the addresses of example.com`: the addresses of those names;
+  - `sends UDP datagrams to port 53 on 192.0.2.53`: datagrams to those ports of those computers,
+    and their answers;
+  - `receives UDP datagrams on port 5353`: the datagrams that arrive on that port of 127.0.0.1,
+    or of every address with `for any computer`, and an answer to each sender.
+
+  The computers are a name or an address, `any subdomain of example.com`, `the computer its
+  first argument names`, or `any computer`. Before the program starts, `lengua-mcp run` says
+  each grant on standard error, one line each, as `lengua-mcp: it may open TCP connections to
+  port 443 on example.com over TLS`. lengua resolves every name itself and checks each address:
+  such a program never reaches this computer by a name or an address, never an address of many
+  computers (multicast or broadcast), and an address of a private network (10.0.0.0/8,
+  172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10, fc00::/7, fe80::/10) only when
+  the idea's line ends with `, private addresses too` or writes that address. What lengua
+  refuses, the program gets as an error (`NOTCAPABLE`), and `lengua-mcp run` says it on
+  standard error, the first 64 times. A program holds at most 64 connections of its own at
+  once, and lengua ends one that no byte crosses for five minutes.
 
 ## Limits and exit codes
 
@@ -84,8 +105,10 @@ most 4,352 open descriptors, its standard streams included.
 
 In an agent, the MCP tool `run` runs the program in a process of its own, for 10 seconds by
 default and at most 40, with at most 8 MiB of each output stream, in an empty folder or in the
-folder it names. A server keeps serving in the background until `run` stops it, ten minutes
-pass, or the session ends.
+folder it names. A server, of TCP connections or of UDP datagrams, keeps serving in the
+background until `run` stops it, ten minutes pass, or the session ends. Its reply's `may_reach`
+says what the idea grants the program to open by itself, as `check`'s reply does, and its
+`connections` what the program asked to open and what lengua refused.
 
 ## The receipt
 

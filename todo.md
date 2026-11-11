@@ -316,6 +316,58 @@ Still open from them, for the owner:
 - Reparse points other than junctions and symbolic links (a cloud folder's placeholders, say)
   have no test: the runners have none to make.
 
+### W18's network: what a program opens by itself (2026-11-11)
+
+The first part of W18, on the branch `wip/reach-net`, not merged. DESIGN.md ("The host") has
+the design as built, docs/reviews/reach-2026-11-11.md the threat cases with the test that holds
+each, and the decisions are with the others ("Decisions made during the pivot", W18's network).
+
+What was built:
+1. **The grants**, each a `- Network:` line: `opens TCP connections to port N on …` (`over TLS`
+   too), `looks up the addresses of …`, `sends UDP datagrams to port N on …`, `receives UDP
+   datagrams on port N` (`src/reach.rs`, read by `src/idea.rs`).
+2. **The calls**, lengua's own, in the module `lengua_net_1`: `tcp_open`, `dns_lookup`,
+   `udp_open`, `udp_send`, `udp_recv`, `udp_recv_from`, `udp_send_to` (`src/wasm/wasi.rs`,
+   `src/wasm/host/open.rs`). Three errors joined the closed set: `CONNREFUSED`, `MSGSIZE` and
+   `TIMEDOUT`.
+3. **The checks before anything is reached**: one spelling for each computer, the rule that
+   covers it, one resolution, every address held to the rule, and a connection to those
+   addresses alone.
+4. **The limits**: 64 of a program's own at once, 300 seconds idle, 5 seconds to connect, 16
+   addresses a name, 65,507 bytes a datagram, and a UDP port's answers to its senders alone.
+5. **The checker**: the import rule takes `lengua_net_1`'s functions as the idea grants them; a
+   descriptor and `tcp_open`'s mode are named constants; a loop that runs forever may take
+   datagrams; the secret rule refuses a secret in a computer's name or a port, takes a
+   datagram's bytes as data, and what comes back after a secret was sent as secret.
+6. **The tests' own internet**: a test's servers by computer and port, datagrams, names'
+   addresses, and a UDP client; nothing a test's program opens reaches a real computer.
+7. **What the user is told**: `may_reach` in `check`'s and `run`'s replies; a shell's run says
+   each grant on standard error before the program starts, and what lengua refused.
+8. **The prover** refuses a module that imports from `lengua_net_1`, with the reason: tested,
+   not proven.
+9. **The skills, a template and an example**: write-idea and its test format, compile's
+   host.md, wasm.md and dialect, `client-template.wat`, and `examples/follow`, which follows a
+   redirect to a computer it learns from a response and is refused one its idea doesn't name.
+
+Still open from it, for the owner:
+- **No test was seen failing before its defence**: the defences and their tests were written
+  together. The review says which assertion fails without each.
+- **Not proven**: a program that imports from `lengua_net_1` has no proof at all, of anything.
+- **The real network has no test on a runner**: a test's own servers stand in for every
+  computer, and the resolver in lengua's own tests is the test's. The system's resolver, and TLS
+  on a connection a program opened, run only in a real run (the same code as a connection made
+  before the start, for TLS).
+- **The `run` tool's time**: a client that opens connections runs within `run`'s 10 to 40
+  seconds; a UDP server serves in the background as a TCP one does.
+- **No limit on how many connections in all**, or a second: 64 at once, and the other end's
+  own pace.
+- **`any subdomain of`** takes any name of two labels, `co.uk` too: lengua has no list of public
+  suffixes.
+- **This computer at run time**: no grant reaches it. A local proxy to this computer's own
+  ports can't be written yet.
+- **One listener or one UDP port** in a program, and one of each kind at most.
+- **IPv6 for what lengua binds**: the UDP port, as the TCP listener, is IPv4 only.
+
 ### What the permission checks refused
 
 Claude Code's permission checks refused these actions. Each refusal was taken as given, with
@@ -530,6 +582,67 @@ Each can be reversed.
   whose reply never named it. No proof by induction is lost: those tests give files on disk and
   no standard input, and the induction over a read loop takes only standard input as one text,
   so it never took them (src/prove/induction.rs, `streamed`).
+- **W18's network (2026-11-11)**, each made without asking, on the owner's standing word, and
+  each the owner's to reverse:
+  - **lengua's own imports, in a module named `lengua_net_1`.** WASI preview 1 has no function
+    that opens a connection, and preview 2's sockets are another interface, of the component
+    model, which lengua's engine has off. So the functions are lengua's own. They don't take
+    WASI's module name: a module that imports one says so, and another runtime refuses it
+    rather than give it something else. The name says whose they are (`lengua`), what they
+    reach (`net`; files anywhere, processes and the terminal get their own) and a version, so
+    a change of meaning gets a new name. Seven functions: `tcp_open`, `dns_lookup`, `udp_open`,
+    `udp_send`, `udp_recv`, `udp_recv_from`, `udp_send_to`.
+  - **A grant is a `- Network:` line of its own**, in the idea's words: `opens TCP connections
+    to port N on …`, `looks up the addresses of …`, `sends UDP datagrams to port N on …`,
+    `receives UDP datagrams on port N`. The computers are a name or an address, `any subdomain
+    of example.com`, `the computer its first argument names`, or `any computer`. The ports are
+    always the idea's: no grant says any port. `connects to` and `listens on` stay as they
+    were, and stay what the skill offers first.
+  - **A connection the program opened is a descriptor like any other**: `sock_send`,
+    `sock_recv`, `fd_read`, `fd_write`, `sock_shutdown`, `poll_oneoff` and `fd_close` take it,
+    so only opening is new. It takes the lowest number free after the fixed ones; the fixed
+    ones keep their numbers, and the UDP port an idea receives on comes after the connections
+    lengua made.
+  - **The program says plain or TLS** in `tcp_open`'s fourth argument, and the rule must say
+    the same: a TLS grant's computer is never reached in plain.
+  - **This computer is never reached at run time**, by a name or an address, whatever the
+    grant: the host review's rule, kept. A program reaches this computer only through
+    `connects to TCP port N`. There is no grant for it; a local proxy would need one.
+  - **Private networks need the grant's own words.** A name or an address a program learned
+    while it ran never reaches 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16,
+    100.64.0.0/10, 0.0.0.0/8, fc00::/7 or fe80::/10, unless the line ends with `, private
+    addresses too` or writes that address itself. Cost: a crawler or a proxy of the user's own
+    network says so in its idea. The connections lengua makes before the start aren't held to
+    this, as before: the idea names each such computer.
+  - **One address lengua refuses, refuses the name.** Whoever answers for a name chooses its
+    addresses, so a name with a public address and the loopback's is refused whole. Cost: a
+    name whose DNS mixes public and private addresses can't be reached without the grant.
+  - **The limits**: 64 connections and datagram sockets of a program's own at once; 300
+    seconds with no byte crossing a connection, then lengua ends it; 5 seconds to connect; 16
+    addresses a name; 65,507 bytes a datagram. They are lengua's, the same for every idea: an
+    idea can't raise them. A thread of lengua's own, one for the process, ends the idle
+    connections, so a program that calls nothing is held to the time too.
+  - **A UDP port answers only its senders**, and on a port any computer may send to, with at
+    most three times the bytes a sender sent (QUIC's bound for an address it hasn't validated).
+    Cost: a UDP server whose answers are much larger than its requests, as a DNS server's can
+    be, serves this computer only.
+  - **A TCP listener or a UDP port, one of the two**, in one idea: the test's client and the
+    `run` tool's background server know one port.
+  - **`dns_lookup` gives IPv4 first, each family in order**, not the resolver's order, so a
+    program prints the same on every system. It gives no address lengua wouldn't connect to.
+  - **The prover refuses such a program**, with the reason in its line: tested, not proven. A
+    model of what a program opens would need the model's network to hold computers by name.
+  - **A test's servers are named by computer and port**, in the step that was there for two
+    places on one port: ``a server at `www.example.org` on port `80` that receives … and
+    replies …``, one step a connection the program opens there. The computers an idea's tests
+    stand in for are numbered after its own connections, so nothing else of the test format
+    changed. A name's addresses, ``the addresses `…` for the name `…` ``, are the idea's, the
+    same in every test of it.
+  - **A run's grants are said in three places**: `check`'s reply (`may_reach`), `run`'s reply,
+    and, from a shell, on standard error before the program starts. `lengua-mcp run` asks
+    nothing: it has no terminal of its own to ask on, and the user ran it.
+  - **The policy carries the grants by reference**, kept once for the process, so it stays a
+    small value every caller copies, and a worker gets them with its job.
 
 ## Roadmap: the pivot's milestones (2026-11-06)
 
@@ -599,7 +712,8 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
   - Files anywhere the user names: a folder or file an argument names, the home folder, or
     read-only system files.
   - The network chosen at run time: any computer on a declared port, over TLS, and also UDP and
-    DNS.
+    DNS. **Built on 2026-11-11** (branch `wip/reach-net`; "W18's network", above, has what was
+    built, its runs and what is left, and the decisions are with the others, above).
   - Starting named programs (`- Runs: git`), with pipes.
   - The terminal's two imports (keys as they're pressed, the window's size), so interactive
     tools work.
@@ -796,10 +910,13 @@ this file at the tag `native-final`.
 - **A knowledge graph over more than program folders.** W3 makes the program folders a graph in
   the Open Knowledge Format, with `index.md` and `log.md`. Indexing other
   files, or answering questions over the graph, needs a design the owner hasn't asked for.
-- **Connections made on demand.** A program that opens a connection itself, as a proxy does,
-  needs WASI's newer sockets (preview 2 or 3) and spec syntax. Today a program gets the
-  connections its idea names, made before it starts, and that carries over. Planned as part of
-  W18.
+- **Connections made on demand: built, as part of W18** (2026-11-11, "W18's network", above). A
+  program whose idea grants them opens its connections itself, with lengua's own functions,
+  since WASI preview 1 has none. Still deferred from it: a proof of such a program (the prover
+  refuses it, so it is tested, not proven); a connection a program opens to this computer while
+  it runs; a TCP listener and a UDP port in one program; a limit on how many connections a
+  program opens in all, or a second; and the public suffixes, so that `any subdomain of co.uk`
+  is still taken.
 - **Threads**, until WebAssembly's threads are standard and Wasmtime runs them. Planned as W20,
   as structured fork-join that the rules show free of data races.
 - **An OS sandbox around the engine** as a second wall: Linux's seccomp and Landlock from the
@@ -815,9 +932,10 @@ this file at the tag `native-final`.
   bytes, byte loops at 64 KiB, and long chains of mixing rounds.
 - **A pointer read from memory.** The memory rules can't follow it to an owner, so a program that
   uses one is "tested, not proven" for memory.
-- **UDP, any URL, processes, GUIs, libraries for other languages to call:** outside the finish
-  line's scope; W15 has DESIGN say what would bring each in. UDP, any URL and processes are
-  planned as part of W18; GUIs and libraries for other languages to call stay here.
+- **Processes, GUIs, libraries for other languages to call:** outside the finish line's scope;
+  W15 has DESIGN say what would bring each in. UDP and any URL are built, as part of W18;
+  processes are planned as part of it; GUIs and libraries for other languages to call stay
+  here.
 
 ## Stopped by the safety filter
 

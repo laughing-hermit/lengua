@@ -3972,9 +3972,11 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
                      And a computer at `192.0.2.53` on UDP port `53` that receives `a` and \
                      replies `b`\n- And the addresses `192.0.2.7` and `2001:DB8::1` for the name \
                      `www.example.org`";
-        let granted = ADD
-            .replace("- Uses: nothing", lines)
-            .replacen("- Given the arguments `2` and `3`", steps, 1);
+        let granted = ADD.replace("- Uses: nothing", lines).replacen(
+            "- Given the arguments `2` and `3`",
+            steps,
+            1,
+        );
         let idea = parse(&granted).expect("valid idea");
         let reach = &idea.network.reach;
         assert_eq!(reach.opens.len(), 1);

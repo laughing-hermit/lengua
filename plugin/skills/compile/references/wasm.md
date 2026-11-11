@@ -17,6 +17,7 @@ templates' plain forms.
 | `vector-template.wat` | `vector-template-wat-idea.md` | A line read up to its newline, found and changed 16 bytes at a time, with a scalar tail |
 | `server-template.wat` | `server-template-wat-idea.md` | A server for several clients at once: `poll_oneoff`, `sock_accept`, `sock_recv`, `sock_send` |
 | `tally-template.wat` | `tally-template-wat-idea.md` | A hash table, a merge sort and buffered output, in regions of several megabytes, in their plain form: the section on speed makes them fast |
+| `client-template.wat` | `client-template-wat-idea.md` | A client that opens its connections itself, with `tcp_open`, and goes where a response sends it: a computer's name and a path taken from a response, each byte checked |
 
 Start from the template closest to the idea, and keep its shape. Two kinds of program have no
 template: one that reads keys from the terminal waits for lengua's host to give the terminal's
@@ -160,7 +161,8 @@ only with 0 or with a named constant, as host.md names them.
 - Nest a loop inside another when you need more passes; reuse a counter local in a loop that
   follows, set again before it.
 - A server's one loop that takes connections says `;; bound: forever` and ends with `(br $serve)`;
-  something in it, or in a function it calls, calls `sock_accept`.
+  something in it, or in a function it calls, calls `sock_accept`, or `udp_recv_from` in a
+  program whose idea receives datagrams.
 
 ## Indexes and their checks
 
@@ -387,6 +389,33 @@ A server's listener is descriptor 4, and lengua numbers each connection it accep
   the slot. A send takes what goes at once, which may be only the first part of a buffer: bound
   the count it wrote and send what is left, as `$finish` does once `$shift` has moved it to the
   line's start. Test each call's error number, even where every path goes on the same way.
+
+A program whose idea grants it connections of its own (`- Network: opens TCP connections to …`)
+opens each with `tcp_open`, from `lengua_net_1`, as `client-template.wat` does
+([the host](host.md) has every such call and its errors):
+
+```wat
+      (local.set $err
+        (call $tcp_open (global.get $place) (local.get $host_length) (global.get $HTTP_PORT)
+          (global.get $PLAIN) (global.get $opened)))
+      (if (i32.eq (local.get $err) (global.get $NOTCAPABLE))
+        (then (local.set $got (global.get $REFUSED))))
+      ;; A computer lengua refuses, or one that takes no connection.
+      (br_if $done (local.get $err))
+      (local.set $fd (i32.load (global.get $opened)))
+```
+
+- **The name is text in a region**, with its length bounded before the call: copy it there a
+  byte at a time, each place checked, from the arguments or from what a server sent. lengua
+  checks what the name is; the program only keeps it inside its region.
+- **Tell `NOTCAPABLE` from the rest**: a computer the idea doesn't grant gets its own message
+  and exit code, since no retry changes it; any other error is a computer the program couldn't
+  reach.
+- **The descriptor is where the call wrote it**: load it, and use it with `$write_all`, `$fill`
+  and `fd_close`, as a connection lengua made. Close it on every path once it is open: a
+  program holds 64 at most.
+- **Read the response before you open the next connection**, and copy out of it what the next
+  request needs: one region holds one response.
 
 ## What the build and the checker refuse
 

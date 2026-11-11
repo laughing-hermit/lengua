@@ -1396,7 +1396,10 @@ mod tests {
             "- Given a computer at `192.0.2.54` on UDP port `53` that receives `a` and replies \
              `b`",
         );
-        assert!(found.contains("grants no UDP datagrams to port 53"), "{found}");
+        assert!(
+            found.contains("grants no UDP datagrams to port 53"),
+            "{found}"
+        );
         let found = problems("- Given the addresses `192.0.2.7` for the name `example.com`");
         assert!(
             found.contains("grants no look at the addresses of `example.com`"),

@@ -1200,6 +1200,22 @@ mod tests {
             opened(&mut host, "::ffff:10.0.0.1", port, flags::PLAIN),
             Err(errno::NOTCAPABLE)
         );
+        // This computer by each spelling of it, where the idea grants any computer: never.
+        for this in ["localhost", "127.0.0.1", "::1", "0.0.0.0", "::ffff:127.0.0.1"] {
+            assert_eq!(
+                opened(&mut host, this, port, flags::PLAIN),
+                Err(errno::NOTCAPABLE),
+                "{this}"
+            );
+        }
+        // And by the numbers a system's older parsing reads as the loopback's address.
+        for number in ["2130706433", "127.1", "0x7f.1", "0177.0.0.1"] {
+            assert_eq!(
+                opened(&mut host, number, port, flags::PLAIN),
+                Err(errno::INVAL),
+                "{number}"
+            );
+        }
         assert!(
             listener.accept().is_err(),
             "a connection to this computer was made"

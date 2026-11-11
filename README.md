@@ -170,9 +170,14 @@ Within lengua, for a program at `done`:
   proof found wrong.
 - **It reaches only what its idea grants.** The checker refuses any import the idea's `- Uses:`
   and `- Network:` lines don't allow, and the host checks every call against those lines again.
-  Every path is resolved beneath the working folder; a path that would leave it is refused. A
-  program makes no connection itself: lengua makes the ones its idea names before it starts, and
-  does TLS for it.
+  Every path is resolved beneath the working folder; a path that would leave it is refused. By
+  default a program makes no connection itself: lengua makes the ones its idea names before it
+  starts, and does TLS for it. An idea may grant more, a line for each grant: connections the
+  program opens itself, the addresses of names, UDP datagrams, each to the computers and ports
+  the line names. lengua then resolves each name itself, checks every address, and never lets
+  such a connection reach this computer, or a private network the line doesn't name
+  ([DESIGN.md](DESIGN.md), the host). `check` and `run` say what an idea grants before the
+  program runs.
 - **Its memory stays its own.** WebAssembly traps any access outside the program's own memory,
   which can't grow past what the module declares. The memory rules M1 to M8 hold every address
   they can follow to its owner. What they can't follow is left to the proofs, which keep it
@@ -197,7 +202,13 @@ What it doesn't promise:
   files, with none of these checks behind it.
 - **Not every proof finishes.** Some tests stay "tested, not proven": sorts and word tallies over
   8 bytes, SHA-256 and AES-128 (the proof doesn't model them), a server that waits on its
-  connections with `poll_oneoff`, and whatever runs out of time.
+  connections with `poll_oneoff`, a program that opens its own connections, sends datagrams or
+  looks up names (the model follows only the connections made before the start), and whatever
+  runs out of time.
+- **Not what the other end is.** A grant names computers and ports. What a granted computer
+  sends back, and who answers for a name, are that computer's and its DNS's: lengua checks the
+  addresses a name resolves to and, over TLS, the certificate, and nothing more of them. An
+  idea that grants `any computer` lets its program reach any public computer on those ports.
 - **The engine is trusted.** Isolation rests on Wasmtime, lengua's host and `cap-std`, with no
   operating system sandbox around them.
 - **A secret's timing is checked in part.** The secret rule checks the WebAssembly. Then, on this
@@ -210,9 +221,10 @@ What it doesn't promise:
 - **No security product.** The examples show algorithms, such as AES-128 and SHA-256. They
   aren't built to resist an attacker, and lengua isn't presented as covering security because
   of them.
-- **Not every kind of program yet.** No threads, no GUIs, no connections a program opens itself,
-  no UDP, and no starting other programs. W18 plans the network chosen at run time, UDP and
-  starting programs, and W20 threads; GUIs aren't planned.
+- **Not every kind of program yet.** No threads, no GUIs, no files outside the working folder,
+  no keys as they are pressed, and no starting other programs. W18 has given the network chosen
+  at run time, DNS and UDP, and plans files anywhere the user names, starting programs and the
+  terminal; W20 plans threads; GUIs aren't planned.
 
 ## Against C, C++ and Rust
 
@@ -385,8 +397,9 @@ fastest: that choice is the owner's. The documents now say what the finish-line 
 After the finish line, four milestones aim to make lengua a replacement for C, C++ and Rust:
 
 - **W18, reach:** every grant a C, C++ or Rust program can have, each declared in the idea and
-  shown before the program runs: files anywhere the user names, the network chosen at run time,
-  UDP and DNS, starting named programs, and the terminal.
+  shown before the program runs. Built: the network chosen at run time (connections a program
+  opens itself, over TLS too, DNS and UDP). Left: files anywhere the user names, starting named
+  programs, and the terminal.
 - **W19, native speed:** a runner without Wasmtime's compiler, and an optional native build of
   the proven `main.wat` through wasm2c.
 - **W20, parallelism:** WebAssembly's threads, as structured fork-join that the rules show free

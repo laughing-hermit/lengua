@@ -45,7 +45,8 @@ its own memory, and it reaches the computer only through the calls its idea allo
     unreachable))
 ```
 
-- **Imports** come only from `wasi_snapshot_preview1`, and only the functions the idea allows:
+- **Imports** come only from `wasi_snapshot_preview1`, and, for what a program opens on the
+  network by itself, from lengua's own `lengua_net_1`; and only the functions the idea allows:
   [the host](host.md) says which each `- Uses:` and `- Network:` line grants. `check` refuses any
   other import, so a program can't even name a call it isn't allowed.
 - **Exports** are exactly the function `_start` and the memory `memory`.
@@ -90,8 +91,10 @@ from the counter and branch back while it isn't zero. Nothing else in the body w
 Leave early with `br` to a block around the loop; the only backward branch is the loop's own.
 
 One loop may run without a bound, as NASA's rule allows for loops meant never to end: a server's
-loop that takes connections, in a program whose idea says `- Network: listens on TCP port N`.
-Its line says `;; bound: forever` and it ends with an unconditional `br` back to itself.
+loop that takes connections, in a program whose idea says `- Network: listens on TCP port N`, or
+one that takes datagrams with `udp_recv_from`, in a program whose idea says `- Network: receives
+UDP datagrams on port N`. Its line says `;; bound: forever` and it ends with an unconditional
+`br` back to itself.
 
 ### 3. Resources reserved up front
 

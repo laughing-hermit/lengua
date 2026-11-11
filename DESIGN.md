@@ -439,8 +439,10 @@ All 46 functions of preview 1 are linked, so a toolchain's module links whatever
 are given. 16 answer `NOSYS`: `fd_advise`, `fd_allocate`, `fd_datasync`, `fd_fdstat_set_flags`,
 `fd_fdstat_set_rights`, `fd_filestat_set_size`, `fd_filestat_set_times`, `fd_pread`, `fd_pwrite`,
 `fd_renumber`, `fd_sync`, `path_filestat_set_times`, `path_link`, `path_readlink`, `path_symlink`
-and `proc_raise`. Every error is one of a closed set of 21 of WASI's numbers, and an error outside
-a function's own list becomes `IO`.
+and `proc_raise`. Besides WASI's, lengua gives seven functions of its own, in the module
+`lengua_net_1`, for what a program opens on the network by itself (below). Every error, of
+WASI's functions and of lengua's own, is one of a closed set of 24 of WASI's numbers, and an
+error outside a function's own list becomes `IO`.
 
 Each call checks the idea first: one the idea doesn't allow answers before any of its buffers is
 looked at. An allowed call checks every buffer it borrows against the program's memory, then does
@@ -451,15 +453,21 @@ its work. The idea's lines decide what is allowed (`src/wasm/host/policy.rs`):
 - `the clock`: the clocks, and `poll_oneoff`'s waits on time;
 - `random bytes`: `random_get`;
 - `the environment`: the variables it is given;
-- any `- Network:` line: its connections; `listens on`: `sock_accept` on its listener.
+- any `- Network:` line but one that only looks up addresses: its connections; `listens on`:
+  `sock_accept` on its listener;
+- `opens TCP connections to`: `tcp_open`; `looks up the addresses of`: `dns_lookup`; `sends UDP
+  datagrams to`: `udp_open`, `udp_send` and `udp_recv`; `receives UDP datagrams on`:
+  `udp_recv_from` and `udp_send_to`.
 
 A call the idea doesn't allow answers `NOTCAPABLE` and does nothing, except five that toolchains'
 startup code calls, which answer harmlessly: an empty environment, no folder, and zeros for random
 bytes. main.wat itself can't import a function its idea doesn't allow: the checker refuses it.
 
 Descriptors are fixed by role: 0 to 2 the standard streams, 3 the working folder (named `.`, only
-for an idea that uses files), 4 the listener, and 5 on the connections lengua made, in the idea's
-order. A program holds at most 4,352 descriptors.
+for an idea that uses files), 4 the listener, 5 on the connections lengua made, in the idea's
+order, and after them the UDP port the idea receives datagrams on. What a program opens, accepts
+or is granted to open by itself takes the lowest number free after those. A program holds at most
+4,352 descriptors.
 
 Files: every path goes through `cap-std`, which resolves it beneath the working folder. A path that
 climbs out of it, or starts with `/`, gives `NOTCAPABLE`; a link on the way gives `ACCES`. Names
@@ -493,7 +501,7 @@ anything beneath them, with links followed before paths are compared (`own_folde
 `src/server.rs`). The program's own folder is a working folder like any other: what a program
 changes there only stops its next run.
 
-The network: a program never connects or binds by itself. Before it starts, lengua makes each
+The network: by default a program never connects or binds by itself. Before it starts, lengua makes each
 connection its idea names, one after another in order, within 5 seconds each and 10 seconds in
 all, after which the rest are handed over ended, untried, and binds its
 listener, IPv4 only, on 127.0.0.1, or on every address when the idea serves any computer
@@ -505,6 +513,61 @@ written as IPv4 inside IPv6 too, the connection isn't made. Over TLS, lengua doe
 with ring, Mozilla's roots from webpki-roots, the same on every system), and the program reads and
 writes plain bytes. A stream never waits in the system: lengua naps between looks, within the
 run's deadline, since a socket's own timeout on Windows can lose or repeat bytes.
+
+What a program opens by itself (W18, `src/reach.rs`, `src/wasm/host/open.rs`): an idea may grant
+more than connections made before the start, each grant a `- Network:` line of its own:
+
+| The idea's line | What the program may do, with which import of `lengua_net_1` |
+|---|---|
+| `opens TCP connections to port 443 on example.com over TLS` | open such a connection: `tcp_open(name, name_len, port, tls, out_fd)` |
+| `looks up the addresses of example.com` | read the name's addresses: `dns_lookup(name, name_len, out, out_len, out_count)` |
+| `sends UDP datagrams to port 53 on 192.0.2.53` | send datagrams there and receive the answers: `udp_open(name, name_len, port, out_fd)`, `udp_send`, `udp_recv` |
+| `receives UDP datagrams on port 5353` | receive on that port of this computer, which lengua binds, and answer the senders: `udp_recv_from`, `udp_send_to` |
+
+The computers of a line are a name or an address, `any subdomain of example.com` (not the domain
+itself), `the computer its first argument names`, or `any computer`; the ports are the line's
+own. WASI preview 1 has no function that opens a connection, and its successor's sockets aren't
+preview 1, so these are lengua's own, in a module of their own name: a module that imports one
+says so, another WASI runtime refuses to link it rather than give it something else, and the
+name carries a version, so a change of meaning gets a new name. A connection `tcp_open` gives is
+a descriptor like the ones lengua made, for the same WASI functions.
+
+Every such call goes the same way, and the order is the defence:
+1. The name is read as lengua spells it (`spelled`): lower case, no dot at its end, an address
+   in its one usual writing, an IPv4 address inside an IPv6 one as the IPv4 address. A number
+   that only an older parsing reads as an address is no name (`INVAL`), and this computer, by
+   `localhost` or by its loopback or unspecified address, is refused (`NOTCAPABLE`).
+2. A rule of the idea must cover the name, the port, and TLS or not (`Rule::covers`). Nothing is
+   resolved or reached for a name no rule covers.
+3. lengua resolves the name itself, once, with the system's resolver, and every address is held
+   to the rule (`vetted`). One address that is this computer's refuses the name, whatever the
+   others are; so does one that many computers answer at (multicast, broadcast); so does one
+   in a private network (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10,
+   0.0.0.0/8, fc00::/7, fe80::/10), unless the line ends with `, private addresses too` or
+   writes that address itself. An IPv6 address that carries an IPv4 one (written inside it,
+   IPv4-compatible, NAT64's 64:ff9b::/96, 6to4's 2002::/16) is held to the IPv4 address's class.
+4. lengua connects to the addresses it checked and to no others, within 5 seconds (`dial`), so
+   a name that resolves anew between the check and the connection changes nothing. Over TLS, it
+   checks the computer's certificate for the name.
+
+The limits: a program holds at most 64 connections and datagram sockets of its own at once
+(`MFILE` past them). lengua ends a connection the program opened once no byte has crossed it
+for 300 seconds: a thread of lengua's own looks every quarter second, so a program that
+computes without a call of the host is held to it too. A name has at most 253 bytes, a look at
+a name gives at most 16 addresses, IPv4 first and each family in order, and a datagram holds at
+most 65,507 bytes. On the port its idea receives on, a program answers only an address that sent
+it something; where the line says `for any computer`, it sends an address at most three times
+the bytes that address sent, since a sender can write another computer's address on its
+datagrams. An idea listens on a TCP port or receives on a UDP port, one of the two.
+
+In a test, the test's own servers stand in for every computer: a step names each by its
+computer and its port, lengua listens for it on the loopback, and a program's `tcp_open`,
+`udp_open` or `dns_lookup` reaches those and nothing else, after the same checks. Nothing a
+test's program opens reaches a real computer. The prover refuses a module that imports from
+`lengua_net_1`: which computer a program reaches is its own choice while it runs, and the model's
+network is the connections made before the start, so such a program is tested, not proven.
+`check`'s reply and `run`'s (`may_reach`) say each grant in words, and a run from a shell says
+them on standard error before the program starts, with what lengua refused while it ran.
 
 The clock: both clocks are rounded down to a microsecond (`src/wasm/host/clock.rs`). In a test the
 clock and the random bytes may come from the test; otherwise random bytes come from the system.
@@ -778,16 +841,27 @@ listed below.
 ### What lengua defends
 
 - **A program that reaches more than its idea grants.** The checker refuses an import from outside
-  WASI preview 1, one lengua doesn't give, one the idea doesn't allow, or one with another type.
+  WASI preview 1 and lengua's own `lengua_net_1`, one lengua doesn't give, one the idea doesn't
+  allow, or one with another type.
   The host checks every call against the idea's lines, and every buffer a call borrows against the
   program's memory. Every path is resolved beneath the working folder by `cap-std`, and no
   symbolic link or junction is followed; a file with more than one name, a hard link, isn't
   opened, since its other name may be outside the folder (what that costs is with the host,
   above). The working folder is never lengua's data folder, its
   folder of compiled modules, or on Linux `/proc`, `/sys` or `/dev`, nor a folder that holds or
-  lies inside one of them. A program can't connect or bind by itself: it gets the connections its
-  idea names, made by lengua before it starts, and its one listener, and a named computer is
-  never this one, by its name or by the address its name resolves to. It gets environment
+  lies inside one of them. A program can't connect or bind by itself unless its idea grants it:
+  it gets the connections its idea names, made by lengua before it starts, and its one listener,
+  and a named computer is never this one, by its name or by the address its name resolves to.
+  Where the idea grants connections, names or datagrams of the program's own, lengua holds each
+  to the grant (the host, above; the threat cases and their tests are in
+  docs/reviews/reach-2026-11-11.md): a computer no line covers, by a redirect or anything else
+  the program read; this computer under any spelling, a number an older parsing reads as an
+  address and an IPv4 address inside an IPv6 one among them; a name that resolves to this
+  computer, to a private network or to an address of many computers; a name that resolves anew
+  between the check and the connection; more than 64 connections held, or one held with no byte
+  crossing it for 300 seconds; a datagram to a group or a broadcast address, an answer to an
+  address that sent nothing, and more than three times what a sender sent on a port any
+  computer may reach. It gets environment
   variables only when its idea uses the environment, and only those its test or the user's `run`
   names. WebAssembly holds every access inside the program's own memory, of at most 1 GiB for
   main.wat, the engine's stack limit holds its calls, the engine's epochs stop it at its
@@ -812,7 +886,9 @@ listed below.
 - **A secret that reaches timing within main.wat.** For an idea with a `- Secret:` line, the secret
   rule refuses a branch, an address, a length, a loop's count, a division or a float operation
   that depends on a secret, in main.wat; and in the machine code the engine made on this CPU for
-  each operator that takes a secret, a branch, a table, a call or a division.
+  each operator that takes a secret, a branch, a table, a call or a division. A secret never
+  names a computer or a port a program opens, and since no branch or loop depends on one,
+  neither does how many connections a program opens, nor when.
 
 ### What lengua trusts
 
@@ -829,7 +905,9 @@ listed below.
   finds, and the model is held to the real program on 24 sample runs of each block and by the
   suite's tests.
 - **The operating system**: its process isolation, its file system under `cap-std`, its sockets,
-  and its clock and random bytes.
+  and its clock and random bytes; and, for what a program opens by itself, its resolver: lengua
+  checks the addresses the resolver gives, whatever it asked to find them (DNS, the hosts file,
+  a local network's own names).
 - **The user's own folders**: the data folder, which holds the key, the recorded ideas, the
   modules `check` kept and what proofs found wrong, and the cache of compiled modules, which
   `PLUGIN_DATA` may place elsewhere: whoever sets that variable names a folder lengua runs machine
@@ -848,9 +926,13 @@ listed below.
 Programs that need these can't be written in lengua yet, and the host has no way to give them:
 - threads, until WebAssembly's threads are standard: W20 plans structured fork-join that the rules
   show free of data races;
-- connections a program opens itself, at run time, which need WASI's newer sockets; UDP; DNS;
-  starting other programs; files outside the working folder; and the terminal's raw mode and
-  window size: W18 plans each as a grant the idea declares and the host enforces;
+- starting other programs; files outside the working folder; and the terminal's raw mode and
+  window size: W18 plans each as a grant the idea declares and the host enforces, as it has
+  done for connections a program opens itself, DNS and UDP (the host, above);
+- on the network: a connection a program opens to this computer (it reaches this computer only
+  through a connection lengua makes before it starts); a TCP listener and a UDP port in one
+  program, or more than one of either; raw sockets, ICMP and multicast; and a proof of a
+  program that opens its own connections, which is tested, not proven;
 - GUIs, and libraries for other languages to call: no plan yet.
 
 The proofs and the rules have their own limits, said above: what the model refuses is tested, not

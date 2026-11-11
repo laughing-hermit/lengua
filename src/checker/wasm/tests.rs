@@ -1698,10 +1698,9 @@ fn rule_3_takes_lenguas_own_functions_only_as_the_idea_grants_them() {
             },
         );
         assert!(
-            report
-                .violations
-                .iter()
-                .any(|violation| violation.rule == Rule::Resources && violation.line == Some(import)),
+            report.violations.iter().any(
+                |violation| violation.rule == Rule::Resources && violation.line == Some(import)
+            ),
             "{module}: {:#?}",
             report.lines()
         );
@@ -1806,7 +1805,10 @@ fn a_secret_never_names_a_computer_and_a_datagram_sent_makes_what_comes_back_sec
         "(call $udp_send (local.get $fd) (global.get $back) (global.get $back.size)",
         1,
     );
-    assert_no(&check_secret(&unsent, &uses, granted, &secret), Rule::Secrets);
+    assert_no(
+        &check_secret(&unsent, &uses, granted, &secret),
+        Rule::Secrets,
+    );
     // The secret as the computer's name: the host reads it, and it isn't data.
     let named = "(call $udp_open (global.get $name) (global.get $name.rosize) (global.get $PORT)";
     assert!(DATAGRAM.contains(named));
