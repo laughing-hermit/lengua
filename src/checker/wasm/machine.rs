@@ -226,6 +226,10 @@ pub struct Finding {
     pub made: Made,
     /// The first such instruction's name.
     pub name: String,
+    /// Whether the address map gives the code to the operator itself. Otherwise it gives the
+    /// code to no operator, in a function that computes with a secret, and the operator is the
+    /// nearest that takes one.
+    pub own: bool,
 }
 
 /// What the rule read of a module's code.
@@ -257,33 +261,63 @@ pub fn judge(cpu: Cpu, code: &Code, taken: &[Taken]) -> Judged {
     let by_offset: BTreeMap<u64, &Taken> =
         taken.iter().map(|taken| (taken.offset, taken)).collect();
     let mut with_code = BTreeSet::new();
-    let mut found: BTreeMap<(u64, Made), String> = BTreeMap::new();
+    let mut found: BTreeMap<(u64, Made, bool), String> = BTreeMap::new();
     let mut instructions = 0_usize;
     for &(start, length) in &code.functions {
         let end = start.saturating_add(length).min(code.text.len());
         let first = code.map.partition_point(|(at, _)| *at < start);
-        for (index, &(at, operator)) in code.map.iter().enumerate().skip(first) {
-            if at >= end {
-                break;
-            }
-            let Some(taken) = operator.and_then(|offset| by_offset.get(&u64::from(offset))) else {
+        let last = code.map.partition_point(|(at, _)| *at < end);
+        let entries = code.map.get(first..last).unwrap_or_default();
+        // A stretch ends where the next begins, or with its function.
+        let stretch = |index: usize| {
+            let (at, _) = *entries.get(index)?;
+            let stop = entries.get(index + 1).map_or(end, |(next, _)| *next);
+            Some((at, code.text.get(at..stop)?))
+        };
+        // The code made for each operator that takes a secret.
+        let mut secret: Vec<(usize, &Taken)> = Vec::new();
+        for (index, (_, operator)) in entries.iter().enumerate() {
+            let found_taken = operator.and_then(|offset| by_offset.get(&u64::from(offset)).copied());
+            let Some(taken) = found_taken else {
                 continue;
             };
-            // The stretch ends where the next begins, or with its function.
-            let stop = code
-                .map
-                .get(index + 1)
-                .map_or(end, |(next, _)| (*next).min(end));
-            let Some(bytes) = code.text.get(at..stop) else {
+            let Some((at, bytes)) = stretch(index) else {
                 continue;
             };
             let read = cpu.read(bytes, at);
             instructions = instructions.saturating_add(read.instructions);
             with_code.insert(taken.offset);
+            secret.push((index, taken));
             for seen in read.seen {
                 if !allowed(taken.takes, seen.made) {
-                    found.entry((taken.offset, seen.made)).or_insert(seen.name);
+                    found
+                        .entry((taken.offset, seen.made, true))
+                        .or_insert(seen.name);
                 }
+            }
+        }
+        // In a function that computes with a secret, the code no operator is given: all of it
+        // but the function's entry, which comes first, and the constants it ends with. What the
+        // engine's optimizer makes anew from a function's operators is there, and may be made
+        // from one that takes a secret, so it is held as code that computes with one, and found
+        // beside the nearest such operator before it, or else the first after it.
+        for (index, (_, operator)) in entries.iter().enumerate() {
+            let inside = index > 0 && index + 1 < entries.len();
+            let beside = secret
+                .iter()
+                .rev()
+                .find(|(at, _)| *at < index)
+                .or_else(|| secret.first());
+            let (true, None, Some((_, taken))) = (inside, operator, beside) else {
+                continue;
+            };
+            let Some((at, bytes)) = stretch(index) else {
+                continue;
+            };
+            for seen in cpu.read(bytes, at).seen {
+                found
+                    .entry((taken.offset, seen.made, false))
+                    .or_insert(seen.name);
             }
         }
     }
@@ -292,7 +326,12 @@ pub fn judge(cpu: Cpu, code: &Code, taken: &[Taken]) -> Judged {
         instructions,
         findings: found
             .into_iter()
-            .map(|((offset, made), name)| Finding { offset, made, name })
+            .map(|((offset, made, own), name)| Finding {
+                offset,
+                made,
+                name,
+                own,
+            })
             .collect(),
     }
 }
@@ -307,15 +346,26 @@ pub fn violations(cpu: Cpu, taken: &[Taken], findings: &[Finding]) -> Vec<Violat
             let operator = taken.iter().find(|taken| taken.offset == finding.offset);
             let name = operator.map_or("operator", |taken| taken.name.as_str());
             let (what, so) = finding.made.words();
-            Violation {
-                rule: Rule::Secrets,
-                line: operator.and_then(|taken| taken.line),
-                problem: format!(
+            let problem = if finding.own {
+                format!(
                     "on {}, the engine compiles this `{name}`, which takes a secret, to code \
                      with {what} (`{}`), so {so}",
                     cpu.name(),
                     finding.name
-                ),
+                )
+            } else {
+                format!(
+                    "on {}, beside the code of this `{name}`, which takes a secret, the engine \
+                     made code from this function's operators that it gives to none of them, \
+                     with {what} (`{}`), so {so}",
+                    cpu.name(),
+                    finding.name
+                )
+            };
+            Violation {
+                rule: Rule::Secrets,
+                line: operator.and_then(|taken| taken.line),
+                problem,
                 fix: finding.made.fix().to_owned(),
             }
         })
@@ -349,18 +399,17 @@ pub struct Passed {
 }
 
 impl Passed {
-    /// What `check` says of it, in one line.
+    /// What `check` says of it, in one line: the CPU and how many operators take a secret, which
+    /// main.wat decides, and not how many instructions were read, which the CPU's features do,
+    /// so that one main.wat gives one line on every computer of a CPU.
     #[must_use]
     pub fn line(&self) -> String {
         format!(
             "the {} code the engine compiles main.wat to on this computer keeps the secret \
-             rule: the {} instructions it made for the {} operators that take a secret, {} of \
-             which have code of their own, have no branch, no table, no call and no division \
-             for a secret to decide",
+             rule: what it made for the {} operators that take a secret has no branch, no \
+             table, no call and no division for a secret to decide",
             self.cpu.name(),
-            self.instructions,
-            self.operators,
-            self.with_code
+            self.operators
         )
     }
 }

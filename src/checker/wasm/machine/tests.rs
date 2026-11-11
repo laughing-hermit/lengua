@@ -185,6 +185,7 @@ fn a_finding_is_a_violation_on_its_operators_line() {
         offset: 10,
         made: Made::Table,
         name: "lea".to_owned(),
+        own: true,
     };
     let found = violations(Cpu::X86_64, &operators, &[finding]);
     assert_eq!(found.len(), 1);
@@ -459,4 +460,115 @@ fn secret_equal_s_machine_code_passes() {
     );
     let (_, public) = checked(text, &[]);
     assert!(public.secret_operators.is_empty());
+}
+
+/// Code the address map gives no operator is held too, in a function that computes with a
+/// secret: what the engine's optimizer made anew may be made from a secret's operator. Here
+/// `lea rax, [rip+0]` stands between the code of two operators with none of its own. It is
+/// refused beside the operator that takes a secret before it, or the first after it, and passes
+/// when no operator of the function takes one. A function's first stretch, its entry, and its
+/// last, its constants, aren't read.
+#[test]
+fn code_with_no_operator_is_held_in_a_function_that_computes_with_a_secret() {
+    // jb +0, the entry's; xor eax, ecx for 10; lea for none; xor for 20; then a byte that is no
+    // instruction, among the constants.
+    let code = Code {
+        text: vec![
+            0x72, 0x00, 0x31, 0xC8, 0x48, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00, 0x31, 0xC8, 0x06,
+        ],
+        functions: vec![(0, 14)],
+        map: vec![(0, None), (2, Some(10)), (4, None), (11, Some(20)), (13, None)],
+    };
+    assert!(judge(Cpu::X86_64, &code, &[]).findings.is_empty());
+    for (offset, beside) in [(10, 10), (20, 20)] {
+        let judged = judge(Cpu::X86_64, &code, &[taken(offset, Takes::Plain)]);
+        let found: Vec<(u64, Made, bool)> = judged
+            .findings
+            .iter()
+            .map(|finding| (finding.offset, finding.made, finding.own))
+            .collect();
+        assert_eq!(found, [(beside, Made::Table, false)]);
+        let lines = shown(&violations(
+            Cpu::X86_64,
+            &[taken(offset, Takes::Plain)],
+            &judged.findings,
+        ));
+        assert!(
+            lines[0].starts_with(
+                "secrets main.wat:7: on x86-64, beside the code of this `i32.xor`, which takes \
+                 a secret, the engine made code from this function's operators that it gives \
+                 to none of them, with the address of a table in the code"
+            ),
+            "{lines:#?}"
+        );
+    }
+}
+
+/// What the engine made of `wasm` for a run from a shell, for a failed test to show: each
+/// stretch of each function, with the operator's offset the address map gives it, whether that
+/// operator is one of `taken`, and its bytes.
+fn dump(wasm: &[u8], taken: &[Taken]) -> String {
+    let engine = engine::engine(Setup::Shell, None).expect("the engine");
+    let code = Code::of(&engine, wasm).expect("the module compiles");
+    let mut lines = Vec::new();
+    for &(start, length) in &code.functions {
+        lines.push(format!("function at {start}, {length} bytes"));
+        let end = start + length;
+        for (index, &(at, operator)) in code.map.iter().enumerate() {
+            if at < start || at >= end {
+                continue;
+            }
+            let stop = code.map.get(index + 1).map_or(end, |(next, _)| (*next).min(end));
+            let name = operator
+                .and_then(|offset| taken.iter().find(|taken| taken.offset == u64::from(offset)))
+                .map_or("", |taken| taken.name.as_str());
+            lines.push(format!(
+                "  {at}: {operator:?} {name} {:02x?}",
+                code.text.get(at..stop).unwrap_or_default()
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
+/// secret-equal with a lane shift by an amount made from its answer's mask, as the engine
+/// compiles it here. The engine's optimizer makes the shift anew, so on x86-64 the table's
+/// address is in code the address map gives no operator, or in the shift's own: either way the
+/// check refuses it, on a line of the lines planted; on ARM64 it passes.
+#[test]
+fn a_lane_shift_the_optimizer_makes_anew_is_refused_where_its_code_reads_a_table() {
+    let answered = "          (i32.store8 offset=4 (global.get $out) (global.get $NEWLINE))\n";
+    let shifted = format!(
+        "{answered}          (v128.store (global.get $text)\n            (i8x16.shl (v128.load \
+         (global.get $text))\n              (i32.and (local.get $mask) (global.get $ODD))))\n"
+    );
+    let original = include_str!("../../../../examples/secret-equal/main.wat");
+    assert!(original.contains(answered));
+    let text = original.replacen(answered, &shifted, 1);
+    let (built, report) = checked(&text, &[Source::StandardInput]);
+    assert!(report.passed(), "{:#?}", report.lines());
+    let result = check(
+        &built.wasm,
+        &report.secret_operators,
+        &[Setup::Run, Setup::Shell],
+        None,
+    );
+    let what = || dump(&built.wasm, &report.secret_operators);
+    if Cpu::here() == Some(Cpu::X86_64) {
+        let refused = result.expect_err(&what());
+        let first = line_of(&text, "(v128.store (global.get $text)");
+        assert!(
+            refused.iter().any(|violation| {
+                violation.problem.contains("the address of a table in the code")
+                    && violation
+                        .line
+                        .is_some_and(|line| (first..first + 3).contains(&line))
+            }),
+            "{:#?}\n{}",
+            shown(&refused),
+            what()
+        );
+    } else {
+        assert!(result.is_ok(), "{result:#?}\n{}", what());
+    }
 }
