@@ -620,6 +620,26 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
   HTTP, compression, dates) that programs build on with `- Builds on:`. The agent assembles
   programs from verified pieces instead of writing everything new, which makes them faster to
   build and to prove.
+- **Nothing missing** (the owner, 2026-11-11: "that evolution needs to function better than a
+  programming language. Not have stuff missing"; "yes add them to todo.md"). A programming
+  language gives more than W18 to W21 cover. Three more, after them:
+  - **W22. Scale.** Every program so far is a few hundred lines of main.wat. Nobody has shown
+    that an agent can write, check and keep a program of several thousand. W22 builds one that
+    size from an idea (candidates: a JSON tool with queries, a small HTTP server with routes, a
+    text database), and records what breaks first: the agent's own hold of the code, `check`'s
+    time, the proofs, or the rules. What breaks gets its fix: ideas in parts that build on each
+    other, modules checked alone and linked, proofs kept for the parts that didn't change.
+  - **W23. Working with other code.** A lengua program can't call a C or Rust library, and no
+    other program can call it but as a command. W23 gives both ways, each declared in the idea:
+    a lengua program as a library other languages call (its module with a stated interface, and
+    a native build of it through W19 where the caller needs one), and a named outside
+    WebAssembly module a lengua program calls, held to the grants the idea gives it and marked
+    "trusted, not proven" in the reply.
+  - **W24. Tools.** `check`'s reply is the only tool there is. W24 adds what a programmer
+    expects: a run that stops at a line of main.wat and shows its values (through the `run`
+    tool, for the agent), a profile of where a run's time goes by function and line, and a trace
+    of what a run asked the host for. Each is a tool call or a flag, with no new program to
+    install.
 
 Runs, as they land:
 

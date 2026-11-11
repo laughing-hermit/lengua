@@ -392,6 +392,8 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
 - **W20, parallelism:** WebAssembly's threads, as structured fork-join that the rules show free
   of data races.
 - **W21, a library of proven parts** that programs build on with `- Builds on:`.
+- **W22, scale; W23, working with other code; W24, tools:** what a programming language has
+  that lengua still lacks ([todo.md](todo.md)).
 
 [ROADMAP.md](ROADMAP.md) has each milestone's design and the runs that verify it.
 
