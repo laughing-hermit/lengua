@@ -663,7 +663,8 @@ code. Nothing stays behind the call: no process and no descriptor. The order is 
    could have written it: its working folder, a place one of its arguments names under a
    `- Files:` line, or the system's temporary folder.
 3. lengua starts that file with no shell between: an empty environment (on Windows the one
-   variable `SystemRoot`, with the system's own value, which Windows's libraries need to load);
+   variable `SystemRoot`, with the system's own value, which Windows's libraries need to load;
+   Windows on ARM64 adds `PROCESSOR_ARCHITECTURE`, the CPU's name, to every process by itself);
    a new empty folder of lengua's as its current folder, removed afterwards; standard input a
    pipe with the program's bytes, standard output a pipe lengua reads, standard error nothing;
    and no other handle of lengua's.

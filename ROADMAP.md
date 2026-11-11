@@ -436,7 +436,9 @@ program with the reason: tested, not proven. The threat cases and the test that 
 in docs/reviews/reach-2-2026-11-11.md. What it leaves: a started program that works in the
 user's folder, pipes between started programs, an environment for one, and a step of a test for
 each test alone; todo.md, "W18's second part", has each with why. *Verified by:* the suite on all
-five runners at 3a759bc, with format and the gate green (43098886771); 23 of the defences' tests
+five runners at the branch's head, which the commit that lands it names (the two runs before it,
+43098886771 and 43099231987, failed on a line of `examples/index.md` and on a test's count of
+the variables Windows on ARM64 gives a process); 23 of the defences' tests
 failing on the commit that took the defences out (43084696723); the mutation test on
 `examples/follow` and the three new examples (43093511750); todo.md has every run.
 

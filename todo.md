@@ -514,15 +514,24 @@ Its runs, each a dispatch of ci.yml on the branch:
 - 43089522661 and 43093511750 (the mutation test again; Linux on x86-64, at 9bb836a and at
   3a759bc): the first found two more of `examples/computer` that change nothing an idea can
   see, a region of bytes nothing reads and the last region, each moved by one byte; with them
-  named, the test passed. Of the 29 mutants of the four programs, 12 broke a rule, 11 failed
+  named, the test passed (its job is marked failed for the same last step, the upload of its
+  logs). Of the 29 mutants of the four programs, 12 broke a rule, 11 failed
   a test, and `tests/mutation.rs` names the other 6 with why none is caught.
 - 43096759967: never started (GitHub's own failure at the run's start).
-- 43098886771 (the suite on all five systems, at 3a759bc): format, the five test jobs and the
-  gate passed. On each of Linux on x86-64 and ARM64, macOS on ARM64 and Windows on x86-64 and
-  ARM64: the library's tests, the three examples and every other program from its request to
-  done, the nine templates, and the runs of `tests/wasm_named.rs`, with each system's own
-  `hostname` and `whoami` started; on the two Linux runners and macOS, the run at a
-  pseudo-terminal too.
+- 43098886771 and 43099231987 (the suite on all five systems, at 3a759bc and at 2e885a8): both
+  failed, on two faults, and nothing else failed. On every system `tests/graph.rs` found
+  `examples/index.md` not as lengua writes it: two of its lines, `count`'s and `mean`'s, had
+  lost their links when the three new examples were put in. On Windows on ARM64 the test of a
+  started program's environment found one variable, `PROCESSOR_ARCHITECTURE`: lengua gives a
+  started program no variable but `SystemRoot`, and Windows on ARM64 puts that one, the CPU's
+  name, in every process it starts. The test now names it as the system's own, and DESIGN.md
+  says so. In the second run, on each of Linux on x86-64 and ARM64, macOS on ARM64 and Windows
+  on x86-64 and ARM64, there passed: the three examples and every other program from its
+  request to done, the nine templates, and the runs of `tests/wasm_named.rs`, with each
+  system's own `hostname` and `whoami` started; on the two Linux runners and macOS, the run at
+  a pseudo-terminal too; and the library's tests, but the one on Windows on ARM64.
+- The suite on all five systems with the two faults fixed ran at the commit that has this line,
+  so this list can't name it: the commit that lands the branch on main names that run.
 
 Still open from it, for the owner:
 - **A started program can't work on the user's folder.** It runs in an empty folder of
@@ -922,7 +931,8 @@ Each can be reversed.
     a name resolves to. It is a list, so it is not complete: an interpreter with `-c`, or
     `find -exec`, is as wide as the arguments the line writes, and the user reads the line.
   - **A started program inherits nothing**: no environment (on Windows `SystemRoot` alone,
-    which the system's libraries need; it holds the system's folder and no secret), standard
+    which the system's libraries need; it holds the system's folder and no secret; Windows on
+    ARM64 adds `PROCESSOR_ARCHITECTURE`, the CPU's name, to every process by itself), standard
     input from the program, standard output to the program, no standard error, no other
     handle. Cost: a tool that needs `HOME`, `PATH` or `LANG` gets none, and there is no way to
     give one yet.

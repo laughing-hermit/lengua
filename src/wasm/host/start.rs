@@ -307,7 +307,9 @@ mod tests {
     }
 
     /// A child: prints its standard input back between two marks, and whether it has any
-    /// environment variable. Run by itself it does nothing.
+    /// environment variable but the two that are Windows's own: `SystemRoot`, which lengua
+    /// gives it, and `PROCESSOR_ARCHITECTURE`, the CPU's name, which Windows on ARM64 puts in
+    /// every process it starts. Run by itself it does nothing.
     #[test]
     #[ignore = "a program the tests of this module start"]
     fn child_says_what_it_got() {
@@ -318,7 +320,8 @@ mod tests {
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut input).expect("its input");
         let variables: Vec<String> = std::env::vars_os()
             .map(|(name, _)| name.to_string_lossy().to_ascii_uppercase())
-            .filter(|name| name != "SYSTEMROOT" && !name.starts_with('='))
+            .filter(|name| !name.starts_with('='))
+            .filter(|name| name != "SYSTEMROOT" && name != "PROCESSOR_ARCHITECTURE")
             .collect();
         let folder = std::env::current_dir().expect("a current folder");
         let empty = std::fs::read_dir(&folder).is_ok_and(|mut entries| entries.next().is_none());
