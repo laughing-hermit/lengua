@@ -103,10 +103,7 @@ mod windows {
         /// `GetFileInformationByHandle`: what Windows knows of the open file `file`, written to
         /// `information`, a `BY_HANDLE_FILE_INFORMATION`, which is thirteen 32-bit integers.
         #[link_name = "GetFileInformationByHandle"]
-        pub(super) fn file_information(
-            file: *mut core::ffi::c_void,
-            information: *mut u32,
-        ) -> i32;
+        pub(super) fn file_information(file: *mut core::ffi::c_void, information: *mut u32) -> i32;
     }
 }
 
@@ -132,8 +129,7 @@ pub fn link_count(file: &impl std::os::windows::io::AsRawHandle) -> std::io::Res
     // SAFETY: the handle is an open file's for as long as `file` is borrowed, and Windows writes
     // one record of thirteen 32-bit integers to `information`, of this frame, which holds that
     // many, aligned as they need.
-    let done =
-        unsafe { windows::file_information(file.as_raw_handle(), information.as_mut_ptr()) };
+    let done = unsafe { windows::file_information(file.as_raw_handle(), information.as_mut_ptr()) };
     if done == 0 {
         return Err(std::io::Error::last_os_error());
     }

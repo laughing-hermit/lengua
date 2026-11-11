@@ -1825,41 +1825,41 @@ fn a_memory_past_the_most_pages_is_refused() {
 /// What the two reviews of 2026-11-10 left open (todo.md), each held by a test that failed
 /// before its fix, and the tests the reviews found missing.
 mod review_gaps {
-use super::*;
+    use super::*;
 
-/// Whether `report` leaves the buffers of `$fd_write`'s iovecs to the proof: the rules don't know
-/// what the iovec array holds at the call.
-fn iovecs_left_to_the_proof(report: &Report) -> bool {
-    report
-        .facts
-        .obligations
-        .iter()
-        .any(|obligation| obligation.what.contains("$fd_write's iovecs point to"))
-}
+    /// Whether `report` leaves the buffers of `$fd_write`'s iovecs to the proof: the rules don't know
+    /// what the iovec array holds at the call.
+    fn iovecs_left_to_the_proof(report: &Report) -> bool {
+        report
+            .facts
+            .obligations
+            .iter()
+            .any(|obligation| obligation.what.contains("$fd_write's iovecs point to"))
+    }
 
-/// A write the rules leave to the proof, or one made in an unsafe block, is held inside the
-/// program's memory, not inside the region its address names: in [`SECRET`], `$out` plus 1024
-/// is `$iovec`'s first byte. So after such a write the rules no longer know what an iovec array
-/// holds, and the buffers of the call after it are the proof's too. Where every write between
-/// is one the rules bound, they still judge the buffer the code stored.
-#[test]
-fn a_write_left_to_the_proof_makes_the_rules_forget_what_every_region_holds() {
-    let filled = "(i32.store (global.get $iovec) (global.get $out)) (i32.store offset=4 \
+    /// A write the rules leave to the proof, or one made in an unsafe block, is held inside the
+    /// program's memory, not inside the region its address names: in [`SECRET`], `$out` plus 1024
+    /// is `$iovec`'s first byte. So after such a write the rules no longer know what an iovec array
+    /// holds, and the buffers of the call after it are the proof's too. Where every write between
+    /// is one the rules bound, they still judge the buffer the code stored.
+    #[test]
+    fn a_write_left_to_the_proof_makes_the_rules_forget_what_every_region_holds() {
+        let filled = "(i32.store (global.get $iovec) (global.get $out)) (i32.store offset=4 \
                   (global.get $iovec) (global.get $out.size))";
-    let call = "(drop (call $fd_write (global.get $STDOUT) (global.get $iovec) (i32.const 1) \
+        let call = "(drop (call $fd_write (global.get $STDOUT) (global.get $iovec) (i32.const 1) \
                 (i32.add (global.get $iovec) (i32.const 8))))";
-    let limit = "(local.set $word (i32.load offset=8 (global.get $iovec))) (if (i32.lt_u \
+        let limit = "(local.set $word (i32.load offset=8 (global.get $iovec))) (if (i32.lt_u \
                  (local.get $word) (i32.load offset=12 (global.get $iovec)))";
-    let (_, report) = planted(
-        &format!("{filled} (i32.store8 offset=7 (global.get $out) (i32.const 0)) {call}"),
-        false,
-    );
-    assert!(
-        !iovecs_left_to_the_proof(&report),
-        "{:#?}",
-        report.facts.obligations
-    );
-    let writes = [
+        let (_, report) = planted(
+            &format!("{filled} (i32.store8 offset=7 (global.get $out) (i32.const 0)) {call}"),
+            false,
+        );
+        assert!(
+            !iovecs_left_to_the_proof(&report),
+            "{:#?}",
+            report.facts.obligations
+        );
+        let writes = [
         // A store at an index checked against a limit loaded from memory.
         format!(
             "{limit} (then (i32.store (i32.add (global.get $out) (local.get $word)) (i32.const \
@@ -1872,220 +1872,220 @@ fn a_write_left_to_the_proof_makes_the_rules_forget_what_every_region_holds() {
          $got)) (i32.const 0))\n    ;; end unsafe\n   "
             .to_owned(),
     ];
-    for write in writes {
-        let (_, report) = planted(&format!("{filled} {write} {call}"), false);
+        for write in writes {
+            let (_, report) = planted(&format!("{filled} {write} {call}"), false);
+            assert!(
+                iovecs_left_to_the_proof(&report),
+                "{write}: {:#?}",
+                report.facts.obligations
+            );
+        }
+    }
+
+    /// `args_get` and `environ_get` take no length: the host writes an address for each argument
+    /// and every byte of their text. So the rules hold the program to check both of the sizes
+    /// `args_sizes_get` wrote against the two regions before the call, and refuse the call where a
+    /// size is unchecked, checked too loosely, or no longer the host's; the template checks both,
+    /// and nothing of the call is left to the proof.
+    #[test]
+    fn what_args_get_writes_is_held_to_its_regions_by_checks_of_the_sizes() {
+        let call = "(local.set $err (call $args_get (global.get $argv) (global.get $args)))";
+        let count = "          (br_if $usage (i32.ne (i32.load (global.get $sizes)) (global.get \
+                 $ARGC_EXPECTED)))\n";
+        let size = "          (br_if $not_a_number (i32.gt_u (local.get $size) (global.get \
+                $args.size)))\n";
+        let report = check_text(TEMPLATE);
+        assert!(report.passed(), "{:#?}", report.lines());
         assert!(
-            iovecs_left_to_the_proof(&report),
-            "{write}: {:#?}",
+            report.facts.obligations.is_empty(),
+            "{:#?}",
             report.facts.obligations
         );
-    }
-}
-
-/// `args_get` and `environ_get` take no length: the host writes an address for each argument
-/// and every byte of their text. So the rules hold the program to check both of the sizes
-/// `args_sizes_get` wrote against the two regions before the call, and refuse the call where a
-/// size is unchecked, checked too loosely, or no longer the host's; the template checks both,
-/// and nothing of the call is left to the proof.
-#[test]
-fn what_args_get_writes_is_held_to_its_regions_by_checks_of_the_sizes() {
-    let call = "(local.set $err (call $args_get (global.get $argv) (global.get $args)))";
-    let count = "          (br_if $usage (i32.ne (i32.load (global.get $sizes)) (global.get \
-                 $ARGC_EXPECTED)))\n";
-    let size = "          (br_if $not_a_number (i32.gt_u (local.get $size) (global.get \
-                $args.size)))\n";
-    let report = check_text(TEMPLATE);
-    assert!(report.passed(), "{:#?}", report.lines());
-    assert!(
-        report.facts.obligations.is_empty(),
-        "{:#?}",
-        report.facts.obligations
-    );
-    // Without the check of the count, or of the text's size.
-    for (check, argument) in [(count, 1), (size, 2)] {
-        let unchecked = with(check, "");
-        let report = check_text(&unchecked);
+        // Without the check of the count, or of the text's size.
+        for (check, argument) in [(count, 1), (size, 2)] {
+            let unchecked = with(check, "");
+            let report = check_text(&unchecked);
+            assert_violation(
+                &report,
+                Rule::Bounds,
+                line_of(&unchecked, call),
+                &format!(
+                    "the buffer $args_get borrows in argument {argument} gets as many bytes as the \
+                 host has for it"
+                ),
+            );
+        }
+        // A check that lets through one byte more than the region holds.
+        let loose = with(
+            size,
+            "          (br_if $not_a_number (i32.gt_u (local.get $size) (i32.add (global.get \
+         $args.size) (global.get $STDOUT))))\n",
+        );
+        let report = check_text(&loose);
         assert_violation(
             &report,
             Rule::Bounds,
-            line_of(&unchecked, call),
+            line_of(&loose, call),
+            "the buffer $args_get borrows in argument 2 reaches byte 64 of $args, which has 64 bytes",
+        );
+        // A size the program stored over the host's isn't the host's.
+        let own = with(
+            size,
             &format!(
-                "the buffer $args_get borrows in argument {argument} gets as many bytes as the \
-                 host has for it"
+                "          (i32.store offset=4 (global.get $sizes) (i32.const 0))\n          \
+             (local.set $size (i32.load offset=4 (global.get $sizes)))\n{size}"
             ),
         );
+        let report = check_text(&own);
+        assert_violation(
+            &report,
+            Rule::Bounds,
+            line_of(&own, call),
+            "the buffer $args_get borrows in argument 2 gets as many bytes as the host has for it",
+        );
+        // The environment's two calls are held the same way.
+        let environment = |text: &str| {
+            text.replace("args_sizes_get", "environ_sizes_get")
+                .replace("args_get", "environ_get")
+        };
+        let report = check_with(&environment(TEMPLATE), &["the environment"], "");
+        assert!(report.passed(), "{:#?}", report.lines());
+        assert!(
+            report.facts.obligations.is_empty(),
+            "{:#?}",
+            report.facts.obligations
+        );
+        let unchecked = environment(&with(size, ""));
+        let report = check_with(&unchecked, &["the environment"], "");
+        assert_violation(
+            &report,
+            Rule::Bounds,
+            line_of(&unchecked, &environment(call)),
+            "the buffer $environ_get borrows in argument 2 gets as many bytes as the host has for it",
+        );
     }
-    // A check that lets through one byte more than the region holds.
-    let loose = with(
-        size,
-        "          (br_if $not_a_number (i32.gt_u (local.get $size) (i32.add (global.get \
-         $args.size) (global.get $STDOUT))))\n",
-    );
-    let report = check_text(&loose);
-    assert_violation(
-        &report,
-        Rule::Bounds,
-        line_of(&loose, call),
-        "the buffer $args_get borrows in argument 2 reaches byte 64 of $args, which has 64 bytes",
-    );
-    // A size the program stored over the host's isn't the host's.
-    let own = with(
-        size,
-        &format!(
-            "          (i32.store offset=4 (global.get $sizes) (i32.const 0))\n          \
-             (local.set $size (i32.load offset=4 (global.get $sizes)))\n{size}"
-        ),
-    );
-    let report = check_text(&own);
-    assert_violation(
-        &report,
-        Rule::Bounds,
-        line_of(&own, call),
-        "the buffer $args_get borrows in argument 2 gets as many bytes as the host has for it",
-    );
-    // The environment's two calls are held the same way.
-    let environment = |text: &str| {
-        text.replace("args_sizes_get", "environ_sizes_get")
-            .replace("args_get", "environ_get")
-    };
-    let report = check_with(&environment(TEMPLATE), &["the environment"], "");
-    assert!(report.passed(), "{:#?}", report.lines());
-    assert!(
-        report.facts.obligations.is_empty(),
-        "{:#?}",
-        report.facts.obligations
-    );
-    let unchecked = environment(&with(size, ""));
-    let report = check_with(&unchecked, &["the environment"], "");
-    assert_violation(
-        &report,
-        Rule::Bounds,
-        line_of(&unchecked, &environment(call)),
-        "the buffer $environ_get borrows in argument 2 gets as many bytes as the host has for it",
-    );
-}
 
-/// Every finding of the secret rule alone on `text`, with standard input secret: a report
-/// shows only the first findings of all the rules together, and the programs below break
-/// others on purpose.
-fn secret_findings(text: &str) -> Vec<String> {
-    let built = build(text).unwrap_or_else(|problem| panic!("it builds: {problem}"));
-    let module = model::Module::read(text, &built).expect("it reads");
-    let (uses, network) =
-        crate::idea::constraints(&["standard input"], "").expect("valid constraints");
-    let secrets = [Source::StandardInput];
-    let context = Context {
-        uses: &uses,
-        network: &network,
-        secrets: &secrets,
-    };
-    let mut others = Vec::new();
-    let flows = flow::analyze(&module, &context.policy(), &mut others);
-    let analysis = memory::analyze(&module, &flows);
-    let mut violations = Vec::new();
-    let _ = secret::check(&module, &flows, &analysis, context.secrets, &mut violations);
-    violations
-        .iter()
-        .map(|violation| violation.in_file(FILE))
-        .collect()
-}
-
-/// A branch on the secret's first byte.
-const SECRET_BRANCH: &str = "(if (local.get $byte) (then (nop)))";
-
-/// [`SECRET`] with `code` where it says `;; plant`, on one line.
-fn secret_with(code: &str) -> String {
-    SECRET.replacen("    ;; plant\n", &format!("    {code}\n"), 1)
-}
-
-/// [`SECRET_BRANCH`] inside `depth` blocks, each inside the one before.
-fn nested(depth: usize) -> String {
-    format!(
-        "{}{SECRET_BRANCH}{}",
-        "(block ".repeat(depth),
-        ")".repeat(depth)
-    )
-}
-
-/// The secret rule follows blocks and calls 256 deep, counted together. Within that it finds a
-/// branch on a secret where it is; deeper, it says it can't follow the block or the call, and
-/// refuses the program for it, so a branch too deep to see is never passed. The modules are
-/// made near the limit on both sides, 200 and 300 deep.
-#[test]
-fn the_secret_rule_refuses_what_nests_deeper_than_it_follows() {
-    let cant_follow = "the secret rule can't follow";
-    let within = secret_findings(&secret_with(&nested(200)));
-    assert!(
-        within
+    /// Every finding of the secret rule alone on `text`, with standard input secret: a report
+    /// shows only the first findings of all the rules together, and the programs below break
+    /// others on purpose.
+    fn secret_findings(text: &str) -> Vec<String> {
+        let built = build(text).unwrap_or_else(|problem| panic!("it builds: {problem}"));
+        let module = model::Module::read(text, &built).expect("it reads");
+        let (uses, network) =
+            crate::idea::constraints(&["standard input"], "").expect("valid constraints");
+        let secrets = [Source::StandardInput];
+        let context = Context {
+            uses: &uses,
+            network: &network,
+            secrets: &secrets,
+        };
+        let mut others = Vec::new();
+        let flows = flow::analyze(&module, &context.policy(), &mut others);
+        let analysis = memory::analyze(&module, &flows);
+        let mut violations = Vec::new();
+        let _ = secret::check(&module, &flows, &analysis, context.secrets, &mut violations);
+        violations
             .iter()
-            .any(|line| line.contains("the condition of this `if` is computed from a secret")),
-        "{within:#?}"
-    );
-    assert!(
-        !within.iter().any(|line| line.contains(cant_follow)),
-        "{within:#?}"
-    );
-    let past = secret_findings(&secret_with(&nested(300)));
-    assert!(
-        past.iter()
-            .any(|line| line.contains("the secret rule can't follow blocks nested this deep")),
-        "{past:#?}"
-    );
-    // Calls: each function passes the secret to the next, and the last branches on it.
-    let chain = |length: usize| {
-        let mut functions: String = (0..length)
-            .map(|at| {
-                format!(
-                    "  (func $f{at} (param $value i32)\n    (call $f{} (local.get $value)))\n",
-                    at + 1
-                )
-            })
-            .collect();
-        functions.push_str(&format!(
-            "  (func $f{length} (param $value i32)\n    (if (local.get $value) (then (nop))))\n"
-        ));
-        secret_with("(call $f0 (local.get $byte))").replacen(
-            "  (func $branch",
-            &format!("{functions}  (func $branch"),
-            1,
+            .map(|violation| violation.in_file(FILE))
+            .collect()
+    }
+
+    /// A branch on the secret's first byte.
+    const SECRET_BRANCH: &str = "(if (local.get $byte) (then (nop)))";
+
+    /// [`SECRET`] with `code` where it says `;; plant`, on one line.
+    fn secret_with(code: &str) -> String {
+        SECRET.replacen("    ;; plant\n", &format!("    {code}\n"), 1)
+    }
+
+    /// [`SECRET_BRANCH`] inside `depth` blocks, each inside the one before.
+    fn nested(depth: usize) -> String {
+        format!(
+            "{}{SECRET_BRANCH}{}",
+            "(block ".repeat(depth),
+            ")".repeat(depth)
         )
-    };
-    let within = secret_findings(&chain(200));
-    assert!(
-        within
-            .iter()
-            .any(|line| line.contains("the condition of this `if` is computed from a secret")),
-        "{within:#?}"
-    );
-    assert!(
-        !within.iter().any(|line| line.contains(cant_follow)),
-        "{within:#?}"
-    );
-    let past = secret_findings(&chain(300));
-    assert!(
-        past.iter().any(|line| line
-            .contains("the secret rule can't follow calls and blocks nested this deep")),
-        "{past:#?}"
-    );
-}
+    }
 
-/// The secret rule follows 4,000,000 operators in all. Here a loop of 140,000 operators moves
-/// the secret one local on each round, through more locals than the rule's rounds, so the rule
-/// follows the loop round after round until it has followed that many; the call after the loop
-/// is then one it says it can't follow, and refuses the program for.
-#[test]
-fn the_secret_rule_refuses_a_program_longer_than_it_follows() {
-    const LOCALS: usize = 40;
-    const FILLER: usize = 140_000;
-    let locals: String = (0..LOCALS)
-        .map(|local| format!(" (local $l{local} i32)"))
-        .collect();
-    let moves: String = (1..LOCALS)
-        .rev()
-        .map(|local| format!(" (local.set $l{local} (local.get $l{}))", local - 1))
-        .collect();
-    let filler = "(nop) ".repeat(FILLER);
-    let text = SECRET
+    /// The secret rule follows blocks and calls 256 deep, counted together. Within that it finds a
+    /// branch on a secret where it is; deeper, it says it can't follow the block or the call, and
+    /// refuses the program for it, so a branch too deep to see is never passed. The modules are
+    /// made near the limit on both sides, 200 and 300 deep.
+    #[test]
+    fn the_secret_rule_refuses_what_nests_deeper_than_it_follows() {
+        let cant_follow = "the secret rule can't follow";
+        let within = secret_findings(&secret_with(&nested(200)));
+        assert!(
+            within
+                .iter()
+                .any(|line| line.contains("the condition of this `if` is computed from a secret")),
+            "{within:#?}"
+        );
+        assert!(
+            !within.iter().any(|line| line.contains(cant_follow)),
+            "{within:#?}"
+        );
+        let past = secret_findings(&secret_with(&nested(300)));
+        assert!(
+            past.iter()
+                .any(|line| line.contains("the secret rule can't follow blocks nested this deep")),
+            "{past:#?}"
+        );
+        // Calls: each function passes the secret to the next, and the last branches on it.
+        let chain = |length: usize| {
+            let mut functions: String = (0..length)
+                .map(|at| {
+                    format!(
+                        "  (func $f{at} (param $value i32)\n    (call $f{} (local.get $value)))\n",
+                        at + 1
+                    )
+                })
+                .collect();
+            functions.push_str(&format!(
+                "  (func $f{length} (param $value i32)\n    (if (local.get $value) (then (nop))))\n"
+            ));
+            secret_with("(call $f0 (local.get $byte))").replacen(
+                "  (func $branch",
+                &format!("{functions}  (func $branch"),
+                1,
+            )
+        };
+        let within = secret_findings(&chain(200));
+        assert!(
+            within
+                .iter()
+                .any(|line| line.contains("the condition of this `if` is computed from a secret")),
+            "{within:#?}"
+        );
+        assert!(
+            !within.iter().any(|line| line.contains(cant_follow)),
+            "{within:#?}"
+        );
+        let past = secret_findings(&chain(300));
+        assert!(
+            past.iter().any(|line| line
+                .contains("the secret rule can't follow calls and blocks nested this deep")),
+            "{past:#?}"
+        );
+    }
+
+    /// The secret rule follows 4,000,000 operators in all. Here a loop of 140,000 operators moves
+    /// the secret one local on each round, through more locals than the rule's rounds, so the rule
+    /// follows the loop round after round until it has followed that many; the call after the loop
+    /// is then one it says it can't follow, and refuses the program for.
+    #[test]
+    fn the_secret_rule_refuses_a_program_longer_than_it_follows() {
+        const LOCALS: usize = 40;
+        const FILLER: usize = 140_000;
+        let locals: String = (0..LOCALS)
+            .map(|local| format!(" (local $l{local} i32)"))
+            .collect();
+        let moves: String = (1..LOCALS)
+            .rev()
+            .map(|local| format!(" (local.set $l{local} (local.get $l{}))", local - 1))
+            .collect();
+        let filler = "(nop) ".repeat(FILLER);
+        let text = SECRET
         .replacen("    (local $word i32)\n", &format!("    (local $word i32){locals}\n"), 1)
         .replacen(
             "    ;; plant\n",
@@ -2095,29 +2095,29 @@ fn the_secret_rule_refuses_a_program_longer_than_it_follows() {
             ),
             1,
         );
-    let found = secret_findings(&text);
-    assert!(
-        found
-            .iter()
-            .any(|line| line.contains("the secret rule can't follow a program this long")),
-        "{found:#?}"
-    );
-}
+        let found = secret_findings(&text);
+        assert!(
+            found
+                .iter()
+                .any(|line| line.contains("the secret rule can't follow a program this long")),
+            "{found:#?}"
+        );
+    }
 
-/// Blocks nested far deeper than any rule follows, 10,000 deep, are refused by the rules that
-/// stop at their own limits, on the checker's stack as it is: no pass of the checker goes one
-/// call deeper for each block.
-#[test]
-fn blocks_nested_very_deep_are_refused_within_the_checkers_stack() {
-    let text = secret_with(&nested(10_000));
-    let report = check_secret(&text, &["standard input"], "", &[Source::StandardInput]);
-    assert!(!report.passed());
-    let found = secret_findings(&text);
-    assert!(
-        found
-            .iter()
-            .any(|line| line.contains("the secret rule can't follow blocks nested this deep")),
-        "{found:#?}"
-    );
-}
+    /// Blocks nested far deeper than any rule follows, 10,000 deep, are refused by the rules that
+    /// stop at their own limits, on the checker's stack as it is: no pass of the checker goes one
+    /// call deeper for each block.
+    #[test]
+    fn blocks_nested_very_deep_are_refused_within_the_checkers_stack() {
+        let text = secret_with(&nested(10_000));
+        let report = check_secret(&text, &["standard input"], "", &[Source::StandardInput]);
+        assert!(!report.passed());
+        let found = secret_findings(&text);
+        assert!(
+            found
+                .iter()
+                .any(|line| line.contains("the secret rule can't follow blocks nested this deep")),
+            "{found:#?}"
+        );
+    }
 }

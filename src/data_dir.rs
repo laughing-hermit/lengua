@@ -108,9 +108,8 @@ impl DataDir {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            let open = std::fs::metadata(&self.0).is_ok_and(|found| {
-                found.is_dir() && found.permissions().mode() & 0o777 != 0o700
-            });
+            let open = std::fs::metadata(&self.0)
+                .is_ok_and(|found| found.is_dir() && found.permissions().mode() & 0o777 != 0o700);
             if open {
                 let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
             }

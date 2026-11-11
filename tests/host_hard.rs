@@ -503,84 +503,84 @@ async fn a_wrong_module_stays_refused_when_an_earlier_lock_is_put_back_after_a_c
 
 /// What the review left open (todo.md), each held by a test that failed before its fix.
 mod review_gaps {
-use super::*;
+    use super::*;
 
-/// What the review left open of finding 5: `check` reads the data folder's record too. With the
-/// earlier lock put back, `check` says what the proof found and that the lock doesn't record it,
-/// where it said done while `run` refused: from the server whose own job found nothing wrong,
-/// and from a new one.
-#[tokio::test]
-async fn check_says_what_a_proof_found_when_an_earlier_lock_is_put_back() {
-    let session = Session::start(Protocol::Discover).await;
-    let (program, earlier) = add_found_wrong(&session).await;
-    refused_as_wrong(&session, &program).expect("the lock's record refuses it");
-    std::fs::write(program.file("lengua.lock"), &earlier).expect("the earlier lock, put back");
-    let told = |reply: &Value| {
-        assert_eq!(reply["state"], "tests_failed", "{reply}");
-        let said = reply.to_string();
-        assert!(said.contains("with a = 1 and b = -1"), "{reply}");
-        assert!(said.contains("an earlier lock was put back"), "{reply}");
-    };
-    told(&session.settle(&program).await);
-    let session = session.restart().await;
-    told(&session.settle(&program).await);
-    refused_as_wrong(&session, &program).expect("run refuses it as before");
-    session.service.cancel().await.expect("close the session");
-}
+    /// What the review left open of finding 5: `check` reads the data folder's record too. With the
+    /// earlier lock put back, `check` says what the proof found and that the lock doesn't record it,
+    /// where it said done while `run` refused: from the server whose own job found nothing wrong,
+    /// and from a new one.
+    #[tokio::test]
+    async fn check_says_what_a_proof_found_when_an_earlier_lock_is_put_back() {
+        let session = Session::start(Protocol::Discover).await;
+        let (program, earlier) = add_found_wrong(&session).await;
+        refused_as_wrong(&session, &program).expect("the lock's record refuses it");
+        std::fs::write(program.file("lengua.lock"), &earlier).expect("the earlier lock, put back");
+        let told = |reply: &Value| {
+            assert_eq!(reply["state"], "tests_failed", "{reply}");
+            let said = reply.to_string();
+            assert!(said.contains("with a = 1 and b = -1"), "{reply}");
+            assert!(said.contains("an earlier lock was put back"), "{reply}");
+        };
+        told(&session.settle(&program).await);
+        let session = session.restart().await;
+        told(&session.settle(&program).await);
+        refused_as_wrong(&session, &program).expect("run refuses it as before");
+        session.service.cancel().await.expect("close the session");
+    }
 
-/// The mode of the folder `path`, on Linux and macOS.
-#[cfg(unix)]
-fn mode_of(path: &Path) -> u32 {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::metadata(path)
-        .expect("the folder")
-        .permissions()
-        .mode()
-        & 0o777
-}
+    /// The mode of the folder `path`, on Linux and macOS.
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::metadata(path)
+            .expect("the folder")
+            .permissions()
+            .mode()
+            & 0o777
+    }
 
-/// Gives the folder `path` the mode a folder made under a plain umask has, readable by anyone.
-#[cfg(unix)]
-fn open_to_all(path: &Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-        .expect("the folder's mode");
-    assert_eq!(mode_of(path), 0o755);
-}
+    /// Gives the folder `path` the mode a folder made under a plain umask has, readable by anyone.
+    #[cfg(unix)]
+    fn open_to_all(path: &Path) {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .expect("the folder's mode");
+        assert_eq!(mode_of(path), 0o755);
+    }
 
-/// What the review left open of finding 10: the data folder, which holds the key, is made the
-/// user's alone (0700) when the server starts, not only when the key is next made or loaded for
-/// a record.
-#[cfg(unix)]
-#[tokio::test]
-async fn the_data_folder_is_made_private_when_the_server_starts() {
-    let session = Session::start(Protocol::Discover).await;
-    open_to_all(session.data_dir.path());
-    let session = session.restart().await;
-    session.service.list_all_tools().await.expect("list tools");
-    assert_eq!(mode_of(session.data_dir.path()), 0o700);
-    session.service.cancel().await.expect("close the session");
-}
+    /// What the review left open of finding 10: the data folder, which holds the key, is made the
+    /// user's alone (0700) when the server starts, not only when the key is next made or loaded for
+    /// a record.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_data_folder_is_made_private_when_the_server_starts() {
+        let session = Session::start(Protocol::Discover).await;
+        open_to_all(session.data_dir.path());
+        let session = session.restart().await;
+        session.service.list_all_tools().await.expect("list tools");
+        assert_eq!(mode_of(session.data_dir.path()), 0o700);
+        session.service.cancel().await.expect("close the session");
+    }
 
-/// And at a run from a shell, which only reads the key.
-#[cfg(unix)]
-#[tokio::test]
-async fn the_data_folder_is_made_private_at_a_run_from_a_shell() {
-    let session = Session::start(Protocol::Discover).await;
-    let program = checked(&session, "add").await;
-    open_to_all(session.data_dir.path());
-    let ran = from_shell(
-        &session,
-        &[
-            OsStr::new("run"),
-            program.path().as_os_str(),
-            OsStr::new("2"),
-            OsStr::new("3"),
-        ],
-        None,
-    );
-    assert_eq!(ran.status.code(), Some(0), "{ran:?}");
-    assert_eq!(mode_of(session.data_dir.path()), 0o700);
-    session.service.cancel().await.expect("close the session");
-}
+    /// And at a run from a shell, which only reads the key.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_data_folder_is_made_private_at_a_run_from_a_shell() {
+        let session = Session::start(Protocol::Discover).await;
+        let program = checked(&session, "add").await;
+        open_to_all(session.data_dir.path());
+        let ran = from_shell(
+            &session,
+            &[
+                OsStr::new("run"),
+                program.path().as_os_str(),
+                OsStr::new("2"),
+                OsStr::new("3"),
+            ],
+            None,
+        );
+        assert_eq!(ran.status.code(), Some(0), "{ran:?}");
+        assert_eq!(mode_of(session.data_dir.path()), 0o700);
+        session.service.cancel().await.expect("close the session");
+    }
 }
