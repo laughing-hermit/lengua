@@ -197,7 +197,9 @@ What it doesn't promise:
   files, with none of these checks behind it.
 - **Not every proof finishes.** Some tests stay "tested, not proven": sorts and word tallies over
   8 bytes, SHA-256 and AES-128 (the proof doesn't model them), a server that waits on its
-  connections with `poll_oneoff`, and whatever runs out of time.
+  connections with `poll_oneoff`, and whatever runs out of time. A stream is proven for every
+  length by induction over its read loop only where every final piece of up to a buffer-full
+  is proven in the proof's time; otherwise it is proven up to a length, which its line says.
 - **The engine is trusted.** Isolation rests on Wasmtime, lengua's host and `cap-std`, with no
   operating system sandbox around them.
 - **A secret's timing is checked in part.** The secret rule checks the WebAssembly. Then, on this
@@ -331,7 +333,7 @@ gate to pass. [todo.md](todo.md) names the 22 rows and holds the choice for the 
 - `plugin/`: the plugin as it ships: its manifests, the two skills with their references and
   templates, its [README](plugin/README.md) and licence.
 - `examples/`: 15 programs, each a folder of `idea.md` and `main.wat`.
-- `tests/`: the suite, the 28 programs of `tests/fixtures`, the host's 109 cases in
+- `tests/`: the suite, the 29 programs of `tests/fixtures`, the host's 109 cases in
   `tests/host-cases`, and the vendored schemas.
 - `benches/`: the gate, and the C, C++ and Rust versions of its workloads.
 - `xtask/`: lengua's tooling, in Rust (`cargo xtask help` lists the tasks), with the runners in

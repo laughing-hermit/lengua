@@ -19,7 +19,10 @@
 //! that made arbitrary, until nothing new changes; everything else stays as it was the first
 //! time. A count is kept in a register that went from a constant to it and the buffer-full's
 //! count, and goes on adding from any count so far: at most one a byte read for each count of
-//! its sum.
+//! its sum. Output that has no placeholder is the same for every text and needs no count: the
+//! step then shows only that a time round writes nothing and comes back to the head. The step
+//! runs in the block's own world, standard output closed where the block closes it, so that a
+//! write that fails there changes in the step what it changes in a real run.
 //!
 //! What a time round changes is any value at the head, with one exception that assumes less of
 //! the program: a slot that started as a constant and whose term after a time round has a range
@@ -569,7 +572,12 @@ pub(super) fn step<P: Program>(
         }
         solvers.next();
         let mut pool = Pool::default();
-        let start = image.begin(&mut pool, &[], &[], Vec::new()).for_every_cut();
+        // The block's own world: with standard output closed, a write in a time round fails as
+        // it does in the base's runs, an empty one too, which an open output would take.
+        let start = image
+            .begin(&mut pool, &[], &[], Vec::new())
+            .for_every_cut()
+            .with_stdout_closed(block.stdout_closed);
         let start = P::hooked(start, Rc::new(hook.clone()))?;
         let runs = explore(image, start, &mut pool, &mut solvers, budget)?;
         paths += runs.len();

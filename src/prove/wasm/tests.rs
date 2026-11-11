@@ -1993,6 +1993,14 @@ const TAIL_STOPS_A_BYTE_SHORT: (&str, &str) = (
     "(global $TAIL_MAX i32 (i32.const 14))",
 );
 
+/// The vowel counter that takes a failed write for a good one unless its bound counter is
+/// where it started: wrong only once a whole buffer-full was read.
+const FORGETS_A_FAILED_WRITE_AFTER_A_FULL: (&str, &str) = (
+    "(br_if $write_failed (call $write_u64 (local.get $count)))",
+    "(br_if $write_failed (select (call $write_u64 (local.get $count)) (i32.const 0) (i32.eq \
+     (local.get $left) (global.get $MAX_PIECES))))",
+);
+
 /// Induction over a sum of counts, in the vector template's shape: vowels prints
 /// `count(lower(text), "a")` and the four other vowels' counts added up, and counts them 16
 /// bytes a step with SIMD128's compares, bitmask and `popcnt`, then one byte a step. The five
@@ -2049,6 +2057,84 @@ fn proves_a_vector_vowel_count_for_every_length_by_induction() {
         };
         assert!(text.len() > longer_than, "{name}: {} bytes", text.len());
     }
+    // With standard output closed the output is the same for every text, so the induction keeps
+    // no count: a program that forgets the failed write once it has read a whole buffer-full,
+    // and exits with 0, is found from the head's bound counter, any value there.
+    let wrong = edited(&source, FORGETS_A_FAILED_WRITE_AFTER_A_FULL);
+    let built = build(&wrong).expect("it builds");
+    let verdict = prove_wasm(&built, policy, closed, &stream_budget(900));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("a failed write forgotten: {verdict:?}");
+    };
+    let Some(Value::Str(text)) = found.get("text") else {
+        panic!("a failed write forgotten: {found:?}");
+    };
+    assert!(
+        text.len() >= 64,
+        "a failed write forgotten: {} bytes",
+        text.len()
+    );
+}
+
+/// A program for vowels' block with standard output closed, which must exit with code 2 for
+/// every text. After each whole buffer-full of 64 bytes it writes no bytes to standard output
+/// with `fd_write`, and counts the writes that fail; once two have failed it exits with code 9.
+/// An open output takes an empty write, a closed one refuses it: so with the output closed it
+/// is wrong for every text of 128 bytes or more, and for none shorter.
+const COUNTS_ITS_FAILED_EMPTY_WRITES: &str = r#"(module
+  (import "wasi_snapshot_preview1" "fd_write"
+    (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    (local $got i32)
+    (local $failed i32)
+    (block $done
+      (loop $piece
+        (local.set $got
+          (call $fill (i32.const 0) (i32.const 1024) (i32.const 64) (i32.const -1)))
+        (br_if $done (i32.lt_u (local.get $got) (i32.const 64)))
+        (i32.store (i32.const 2048) (i32.const 1024))
+        (i32.store (i32.const 2052) (i32.const 0))
+        (if (call $fd_write (i32.const 1) (i32.const 2048) (i32.const 1) (i32.const 2056))
+          (then (local.set $failed (i32.add (local.get $failed) (i32.const 1)))))
+        (br $piece)))
+    (if (i32.ge_u (local.get $failed) (i32.const 2))
+      (then (call $exit (i32.const 9))))
+    (if (call $write_all (i32.const 1) (i32.const 1024) (i32.const 1))
+      (then (call $exit (i32.const 2))))
+    (call $exit (i32.const 0))))
+"#;
+
+/// The step of an induction runs in its block's own world. With standard output closed, a
+/// program that counts its failed empty writes, one after each whole buffer-full, and exits
+/// with another code after two, is right for every text of up to a buffer-full from any state
+/// a step with an open output would find at the head, where no write fails: such a step would
+/// prove it for every length. The step with the output closed finds the count changed, the
+/// base then fails from any count, and the proof by length finds the text of two buffer-fulls.
+#[test]
+fn finds_what_a_closed_output_changes_in_a_time_round() {
+    if !solvers_installed() {
+        return;
+    }
+    let (blocks, policy) = blocks_of("vowels");
+    let closed = blocks
+        .last()
+        .expect("its block with standard output closed");
+    assert!(closed.stdout_closed, "vowels' last block closes the output");
+    let built = build(COUNTS_ITS_FAILED_EMPTY_WRITES).expect("it builds");
+    let verdict = prove_wasm(&built, policy, closed, &stream_budget(900));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("failed empty writes: {verdict:?}");
+    };
+    let Some(Value::Str(text)) = found.get("text") else {
+        panic!("failed empty writes: {found:?}");
+    };
+    assert!(
+        text.len() >= 128,
+        "failed empty writes: {} bytes",
+        text.len()
+    );
 }
 
 /// vowels as it is, with its buffer of 64 KiB, proven by length past where its steps of 16

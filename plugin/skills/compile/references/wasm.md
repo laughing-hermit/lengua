@@ -235,7 +235,9 @@ callee's parameters, and the bounds checks above, are the usual ones. `$assert_f
   `i16x8.shr_u` by 8 for the second, and the same at 16 bits into lanes of 32 bits at the end,
   then add the lanes with `i32x4.extract_lane`. Shifts keep each count a sum of the compares'
   conditions, which the proofs follow; `extadd_pairwise` does the same in one instruction, but
-  the proofs don't follow it yet.
+  the proofs don't follow it yet. The proofs follow `i32.popcnt` of an `i8x16.bitmask` the same
+  way, and compares joined with `v128.or` first: bytes that are one of several, counted in one
+  step, are the formula's several counts added up.
 - **The byte before each lane** is `i8x16.shuffle` of the step before's vector and this one's,
   lanes 15 to 30: the last lane of the one before, then this one's first fifteen.
 - **Bound every vector access** to the region's size less 16, so a 16-byte access never crosses
