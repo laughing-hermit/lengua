@@ -84,22 +84,24 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 
 | Point | Now | Left |
 |---|---|---|
-| 1. AI language, Agent Plugin | The WebAssembly plugin: `write-idea`, `compile`, `check`, `run`; `idea.md` an Attested Computation in STE with its tests inside, and `main.wat`; the graph's `index.md` and `log.md`, and `verified` written at `done` (W1, W3, W3b, W6, W9). The native product is retired, kept at the tag (W11, 42713054140). The suite on all five runners at bce6cd5 (42765232534), and main's push run there (42770579377) | Loading the plugin into Claude Code itself, the owner's step; the agent's test once more with the final archive (W15) |
-| 2. One product everywhere | The one suite passes natively on all five runners (42765232534). The goldens hold the WebAssembly checker's and prover's recordings to a baseline, on Linux on x86-64 (42716553289) | No run yet compares the proof lines' verdicts across the five runners, as the goldens record on Linux on x86-64 alone; W17b's measurement records them on all five |
+| 1. AI language, Agent Plugin | The WebAssembly plugin: `write-idea`, `compile`, `check`, `run`; `idea.md` an Attested Computation in STE with its tests inside, and `main.wat`; the graph's `index.md` and `log.md`, and `verified` written at `done` (W1, W3, W3b, W6, W9). The native product is retired, kept at the tag (W11, 42713054140). The suite on all five runners at main 33ed7fe, its push run (42947270993) | Loading the plugin into Claude Code itself, the owner's step; the agent's test once more with the final archive (W15) |
+| 2. One product everywhere | The one suite passes natively on all five runners (42947270993, at 33ed7fe), and so do the slow tests the suite leaves out (42947285372). The goldens hold the WebAssembly checker's and prover's recordings to a baseline, on Linux on x86-64 (42716553289). W17b's run (42919127514) recorded the prover's questions on each of the five runners | No run yet compares the proof lines' verdicts across the five runners. W17b's run doesn't: it set native z3 against the WebAssembly z3 on each runner, not one runner against another. It showed one difference between runners that isn't explained: Windows on ARM64 asked 10,310 questions where the others asked about 2,400 |
 | 3. Tailored | Cranelift compiles each module for the machine's own CPU when a worker first runs it, during `check`'s tests, and Wasmtime's cache keeps it; one feature set everywhere; the `machine` line tells the agent the CPU's vectors and caches (W4, W10, 42386323947) | The point asks for the fastest WebAssembly features the engine supports on each machine. lengua keeps one set on every machine, so that every machine computes the same bits (point 2). The faster sets the engine has, relaxed SIMD and wide arithmetic, aren't finished standards, and relaxed SIMD gives different results on different CPUs. The owner decides between the two points |
-| 4. Competitive | The gate has run on all five runners three times and passed on none: 42661776298 (W12, at 9a549b3), 42728160641 (W12b, at d6496e3) and 42756074550 (W12c, at 076bcc1), whose reports are in [docs/benchmarks](docs/benchmarks/README.md). KNOWN_BEHIND fell from 1,359 rows to 1,057 (94 off after W12b, 208 after W12c). Of them, against C, C++ and Rust compiled to WebAssembly: 48 on Linux on x86-64, 33 on Linux on ARM64, 58 on macOS on ARM64, 68 on Windows on x86-64 and 69 on Windows on ARM64, peak memory the most common measure among them | The gate passes on no runner yet. Against the WebAssembly builds, KNOWN_BEHIND names 276 rows (peak memory the most common measure among them), which point 4 needs gone, and five rows came out behind or undecided that it doesn't name, the owner's ("A row the gate can't decide"). Against the native builds, the gaps are published, as the point asks |
-| 5. Safe and proven | The dialect's rules and memory rules over main.wat (W5), proofs on z3 and cvc5 by length and by induction (W8), the secret rule over main.wat (W10), and lengua's host holding a program to what its idea grants, with no OS sandbox around it (W4): the suite on all five runners (42765232534). The secret rule's soundness review was done on 2026-11-10, and so was W13, the check of the engine's machine code for an idea's secrets, on `wip/machine-time` (the suite on all five runners at e317a30, 42940764016) | W13's merge to main. Some proofs stay "tested, not proven", so those programs aren't proven or bounded to a length: sorts and tallies over 8 bytes, SHA-256, AES-128, and servers that wait with `poll_oneoff` |
-| 6. Truthful documents | W15 under way: README, DESIGN, the white paper, ROADMAP, the plugin's README, docs/run.md and docs/check.md describe the WebAssembly lengua; the native lengua's ledger, sessions and benchmarks are in [docs/history](docs/history); the latest bench run's reports in [docs/benchmarks](docs/benchmarks/README.md) (42756074550) | The finish-line run's reports and run ids, and the report to the owner (W15) |
-| 7. Shippable | One archive per runner, built by `cargo xtask release` and installed by its own `lengua-mcp install` on a clean runner of each of the five, with doctor and the release check green (at bce6cd5, 42765242004). The agent's test in the interactive session ran once, with W14's Linux x86-64 archive (2026-11-07). The archives are unsigned | The agent's test once more with the final archive (W15); publishing the archives, which is the owner's |
+| 4. Competitive | The gate has run on all five runners four times and passed on none: 42661776298 (W12, at 9a549b3), 42728160641 (W12b, at d6496e3), 42756074550 (W12c, at 076bcc1) and 42947294489 (the finish-line run, at 33ed7fe), whose reports are in [docs/benchmarks](docs/benchmarks/README.md). KNOWN_BEHIND fell from 1,359 rows to 1,037 (94 off after W12b, 208 after W12c, 20 after the finish-line run). Of them, against C, C++ and Rust compiled to WebAssembly: 46 on Linux on x86-64, 31 on Linux on ARM64, 48 on macOS on ARM64, 66 on Windows on x86-64 and 66 on Windows on ARM64, peak memory the most common measure among them (165 of the 257) | The gate passes on no runner. Against the WebAssembly builds, KNOWN_BEHIND names 257 rows, which point 4 needs gone. In the finish-line run 22 more rows came out behind or undecided that it doesn't name, 21 of them against the WebAssembly builds; each was ahead in an earlier run. Rows of small programs and of peak memory move between ahead and behind from run to run, so the list alone can't bring the gate to pass: the owner's ("A row the gate can't decide"). Against the native builds, the gaps are published, as the point asks |
+| 5. Safe and proven | The dialect's rules and memory rules over main.wat (W5), proofs on z3 and cvc5 by length and by induction (W8), the secret rule over main.wat (W10), and lengua's host holding a program to what its idea grants, with no OS sandbox around it (W4): the suite on all five runners at 33ed7fe (42947270993). On 2026-11-10 the secret rule was reviewed for soundness and its five findings fixed ([the review](docs/reviews/secret-rule-2026-11-10.md); the suite on all five at 3e08929, 42890372211); the host was reviewed and its eleven holes fixed ([the review](docs/reviews/host-2026-11-10.md); the suite on all five, 42914865765); and W13, the check of the engine's machine code for an idea's secrets, was built, and is on main | Some proofs stay "tested, not proven", so those programs aren't proven or bounded to a length: sorts and tallies over 8 bytes, SHA-256, AES-128, and servers that wait with `poll_oneoff`. What the two reviews and W13 left open is listed under "Still open", each for the owner |
+| 6. Truthful documents | README, DESIGN, the white paper, ROADMAP, the plugin's README, docs/run.md and docs/check.md describe the WebAssembly lengua; the native lengua's ledger, sessions and benchmarks are in [docs/history](docs/history); the finish-line run's five reports are in [docs/benchmarks](docs/benchmarks/README.md) (42947294489), and the documents' numbers are counted from them | The report to the owner (W15) |
+| 7. Shippable | One archive per runner, built by `cargo xtask release` and installed by its own `lengua-mcp install` on a clean runner of each of the five, with doctor and the release check green (at 33ed7fe, 42947303258). The agent's test in the interactive session ran once, with W14's Linux x86-64 archive (2026-11-07). The archives are unsigned | The agent's test once more with the final archive (W15); publishing the archives, which is the owner's |
 
 ## Still open (2026-11-09)
 
 ### Where C, C++ and Rust still win
 
-- Raw speed against native builds. lengua runs in WebAssembly, so in run 42756074550 it took
-  0.47 to 6.05 times the CPU time of the best native C, C++ or Rust build, and up to 16.31 times
-  its wall time on Linux on ARM64 and up to 4.11 times on the other four runners; it was faster
-  only on tally. That gap is published, not hidden ([docs/benchmarks](docs/benchmarks/README.md)).
+- Raw speed against native builds. lengua runs in WebAssembly, so in the finish-line run
+  (42947294489, at 33ed7fe) it took 0.46 to 6.56 times the CPU time of the best native C, C++ or
+  Rust build, and up to 17.46 times its wall time on Linux on ARM64 and up to 3.98 times on the
+  other four runners; it was faster only on tally. Its peak memory was 0.98 to 19.35 times the
+  best native build's, below it on one row (sort on macOS on ARM64). That gap is published, not
+  hidden ([docs/benchmarks](docs/benchmarks/README.md)).
 - Programs lengua can't express yet: threads, GUIs, network connections a program opens on its
   own, and UDP.
 - A few workloads: tally, sort and histogram, where lengua's own programs are slower; W12c is on
@@ -111,24 +113,42 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
     build on the three runners that ran it, which leave out Windows. sort beats native C on all
     five. wc on macOS on ARM64 is now behind C's and Rust's WebAssembly builds. A run uses
     0.3 to 1.1 MiB more memory than its module alone, depending on the runner.
+  - 2026-11-11, the finish-line run (bench 42947294489, at 33ed7fe): on all five runners,
+    lengua's tally, sort and histogram take less CPU and wall time than C's, C++'s and Rust's
+    WebAssembly builds, with no exception this time. tally also beats the native C and Rust
+    builds on all five, and the native C++ build on the three runners that built it, which leave
+    out Windows. sort beats native C on all five and native C++ on those three, and is behind
+    native Rust on all five (1.00× to 1.12× its CPU time). wc on macOS on ARM64 is still behind
+    C's and Rust's WebAssembly builds (1.22× and 1.20× their CPU time). A run uses 32 KiB to
+    1.08 MiB more memory than its module alone, depending on the runner and the workload.
+  - Against the WebAssembly builds in that run, lengua is behind on time on the shortest
+    workloads (empty and shout, and on some runners add, hypotenuse, upcase and upcase-stdin), by
+    11% or less; the one larger gap is wc on macOS on ARM64, above. On peak memory it is behind
+    on 173 of the 210 rows, by 14% or less.
 
 In short, lengua trades some raw speed for guarantees none of those languages make: the program
 is proven against a readable spec, holds only the permissions it declares, and can't corrupt
 memory.
 
-### What the safety filter stopped, still the owner's
+### What the safety filter stopped, tried again with the owner's word
 
 Each was stopped once or more, recorded below under "Stopped by the safety filter", and not
 retried, reworded or passed to another model. On 2026-11-10 the owner changed the model to Fable
-5.2 themselves and said of these three: "yes try them". Each gets one try; one stopped again is
-recorded and left.
+5.2 themselves and said of these three: "yes try them". Each got one try, on 2026-11-10 and 11.
+None was stopped again, and all three are done. What each left open is the owner's.
 - **Tests that try to get past the sandbox on macOS and Windows** (stopped 2026-11-05, after
-  three stops near that ground). ROADMAP's bypass cells and the spikes' checks of what the sandbox
-  refuses are left for the owner or another engineer. Not tried again yet.
+  three stops near that ground). **Done on 2026-11-10**, as the review of the host:
+  [docs/reviews/host-2026-11-10.md](docs/reviews/host-2026-11-10.md), with a test that failed
+  for each finding, its fix, and the suite on all five runners (42914865765); "The review of the
+  host" below has it. The sandbox of that stop belonged to the native macOS and Windows ports,
+  which the pivot superseded; in the WebAssembly lengua the wall is the host, the same on every
+  system. Windows's junctions, and macOS's own name folding against APFS, still have no test of
+  their own.
 - **A soundness review of the secret rule** (W10, stopped 2026-11-07). **Done on 2026-11-10**:
   the review is [docs/reviews/secret-rule-2026-11-10.md](docs/reviews/secret-rule-2026-11-10.md).
   It found the rule unsound in five places, each then shown by a test that failed (42877251634)
-  and fixed (42881405730; the suite on Linux on x86-64, 42884257361):
+  and fixed (42881405730; the suite on Linux on x86-64, 42884257361, and on all five runners at
+  3e08929, 42890372211):
   - a fill or a copy of a length that varies made bytes public that it may not write;
   - a secret written to a file or sent to a peer was public when read back;
   - an access the memory rules leave to the proof was taken to stay in its region;
@@ -144,7 +164,8 @@ recorded and left.
     the prover refuses it wasn't examined.
   - The rule's limits on depth and on operators followed have no test.
 - **Constant time in the engine's machine code** (W13, stopped 2026-11-07). **Done on
-  2026-11-10**, on main (the suite on all five runners at e317a30, 42940764016). For an idea with a `- Secret:` line, `check`,
+  2026-11-10**, on main at 33ed7fe (the suite on all five runners at e317a30, 42940764016, and
+  at 33ed7fe, 42947270993). For an idea with a `- Secret:` line, `check`,
   `run`, a run from a shell and the attester compile the module for this computer and read the
   machine code the engine made for each operator the secret rule found to take a secret
   (`src/checker/wasm/machine.rs`): a conditional branch, a jump or a call through a register, a
@@ -555,9 +576,14 @@ Runs, as they land:
 | W12 | 42393960971 (the benchmark, its workloads and the gate, at 9a549b3: the suite on all five runners and the gate, green); 42661776298 (the first gate run on all five runners: each runner's KNOWN_BEHIND, from its own KNOWN_BEHIND-<runner>.txt, at 2bad55a); on main with W11 |
 | W12b | 42728146781 (lengua's run made lean, at d6496e3: the suite on all five runners and the gate, green); 42728160641 (its bench on all five runners at d6496e3: on Linux on x86-64 a run's own cost fell from about 0.75 ms of CPU time and 5 MiB to 0.15 to 0.32 ms and 0.7 to 1.0 MiB; 94 rows newly ahead, taken out of KNOWN_BEHIND at 59f76f9); main at eff6b98, whose push suite 42732412732 is green |
 | W12c | 42756064246 (the programs made faster, at 076bcc1: the suite on all five runners, green, with the format job's layout applied at f4cf505, which 42759059023 compiles clean); 42756074550 (its bench on all five runners at 076bcc1: on Linux on x86-64, lengua's CPU time is 0.36 of the fastest WebAssembly build of C, C++ or Rust on tally, 0.61 on sort, 0.79 on histogram and crc32c, 0.90 on wc and files, and 1.10 on empty, as the report rounds them; 208 rows newly ahead on the five runners, taken out of KNOWN_BEHIND at 5714b42); its review's 5 findings fixed before them; main at f4cf505, whose push suite 42760180544 is green |
-| W13 | 42927099111 (the first build, at 69f6623: its own test on Linux on x86-64 showed that it passed a lane shift whose code the address map gives no operator); 42934398868 (the check's tests on Linux on x86-64 and on ARM64, green, with that code read too); 42937233986 (the suite on Linux on x86-64 at e317a30, green); 42940764016 (the suite on all five runners at e317a30, green: each runner reads its own CPU's code); on `wip/machine-time`, on main |
+| W13 | 42927099111 (the first build, at 69f6623: its own test on Linux on x86-64 showed that it passed a lane shift whose code the address map gives no operator); 42934398868 (the check's tests on Linux on x86-64 and on ARM64, green, with that code read too); 42937233986 (the suite on Linux on x86-64 at e317a30, green); 42940764016 (the suite on all five runners at e317a30, green: each runner reads its own CPU's code); on main at 33ed7fe, whose push suite 42947270993 is green |
 | W14 | 42387284972 (the suite on all five runners and the gate at 83641b5); 42387777039 (release at 7835d9a: the five archives built, each installed on a clean runner of its system and CPU, doctor and the release check, green); main at 7835d9a. The agent's test in this session, 2026-11-07, with that Linux x86-64 archive: below |
 | W17a | 42753840475 (lengua's tooling in Rust, at d0e9ea6: the suite on all five runners and the gate, green); 42753851417 (release at d0e9ea6: the five archives built by `cargo xtask release`, each installed by `lengua-mcp install` on a clean runner of its system and CPU, doctor and the release check, green); 42753863525 (the goldens recorded by `cargo xtask golden` and compared by `cargo xtask golden-diff`: the raw view differs only in four proof lines that ran out of time, which the runner's load decides); 42753874793 (the bench through `cargo xtask bench-wasm` and `bench-report` on Linux on x86-64, to its report); with W12c merged, at bce6cd5: 42765232534 (the suite on all five runners and the gate, green) and 42765242004 (release on all five, each archive installed on a clean runner, green); main at bce6cd5 |
+| The slow tests' fixes | 42882525719 (at 7f37839: the suite on all five runners and the gate, green) and 42882548367 (the slow tests the suite leaves out, on all five runners at 7f37839, green: a run looks at a proof's time before every step, and the memory guard reads free memory on Windows and macOS too); on main with the secret rule's fixes at 3e08929, whose suite on all five runners is 42890372211, green |
+| The secret rule's review (2026-11-10) | 42877251634 (the review's five findings as tests, at fb91dad on Linux on x86-64: they fail, as they should before the fixes); 42881405730 (the fixes at 85f6304: they pass); 42884257361 (the suite on Linux on x86-64 at 85f6304, green); on main at 3e08929 (42890372211, the suite on all five runners, green). The review: [docs/reviews/secret-rule-2026-11-10.md](docs/reviews/secret-rule-2026-11-10.md) |
+| The host's review (2026-11-10) | 42904330205 (a test for each finding, at 43c3fbe on Linux on x86-64: all 19 new tests fail before the fixes); 42907709201 (the fixes at 75121d6: the suite on Linux on x86-64 passes; the format job's layout is applied at 9b7d59a); 42911144089 (the suite on Linux on x86-64 at 9b7d59a, green); 42914865765 (the suite on all five runners at 9b7d59a, green); main at 5e73a1b. The review: [docs/reviews/host-2026-11-10.md](docs/reviews/host-2026-11-10.md) |
+| W17b | 42919127514 (z3 as WebAssembly measured against native z3 on all five runners, at 18e8f06: 1.70 to 2.28 times the time, and a proof lost on three runners, so the bar isn't met and native z3 stays; the table is under the decisions above); the work is kept at the tag `archive/wip/z3-wasm`, not merged; the measurement written on main at 5f9b9e2 |
+| W15, the finish-line run | All at main 33ed7fe, on all five runners: 42947270993 (main's push run: format, the suite and the gate job, green); 42947285372 (the slow tests the suite leaves out, green); 42947303258 (release: the five archives built, each installed on a clean runner of its system and CPU, green); 42947294489 (the bench: it ran to its reports on all five, and the gate failed on each: 20 rows ahead that KNOWN_BEHIND named, taken out at 28afe67, which leaves 1,037; 22 rows behind or undecided that it doesn't name; and 12 native C++ builds that failed, 2 on macOS on ARM64 and 5 on each Windows runner). The reports are in [docs/benchmarks](docs/benchmarks/README.md) |
 | W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](docs/history/PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
 
 ## Superseded by the pivot
@@ -607,17 +633,76 @@ this file at the tag `native-final`.
   - **CPU time on Windows, for a short run.** Windows counts a process's CPU time in 15.6 ms
     ticks, so every version of a short workload reads 15.6 ms. Its CPU rows can't be decided on
     Windows on x86-64 or on ARM64, whatever the programs do. KNOWN_BEHIND keeps them. Example:
-    shout against Rust, on Windows on ARM64, was ahead in run 42728160641 and undecided in run
-    42756074550.
+    shout against Rust, on Windows on ARM64, was ahead in run 42728160641 and undecided in runs
+    42756074550 and 42947294489.
   - **The server's CPU time on Linux on x86-64**, against C, C++ and Rust compiled to
     WebAssembly. The 64 clients' wall time decides the workload, and its CPU totals are about
     equal. It was ahead in run 42728160641 and undecided in run 42756074550, so the ratchet keeps
-    it off the list.
+    it off the list. In run 42947294489 it was undecided against C and Rust and ahead against
+    C++, each at 1.00×.
   - **wc's peak memory on Linux on x86-64, against C++ compiled to WebAssembly.** The run adds
-    about 0.7 MiB, which is about the gap. It was ahead in run 42728160641 and behind in run
-    42756074550.
+    about 0.7 MiB, which is about the gap. It was ahead in run 42728160641, behind in run
+    42756074550 (1.01×) and ahead again in run 42947294489 (0.99×).
+  - **The finish-line run's 22 rows** (42947294489, at 33ed7fe): behind or undecided, and
+    KNOWN_BEHIND doesn't name them. Each is named as its report names it (runner, workload,
+    version, measure), with the run's verdict and lengua's median over the other version's:
+    - Linux on x86-64, 3 rows:
+      - `linux-x86_64 upcase rust-wasm memory`: behind, 1.02×
+      - `linux-x86_64 server c-wasm cpu`: undecided, 1.00×
+      - `linux-x86_64 server rust-wasm cpu`: undecided, 1.00×
+    - Linux on ARM64, 12 rows:
+      - `linux-aarch64 add cpp-wasm cpu`: behind, 1.05×
+      - `linux-aarch64 upcase-stdin cpp-wasm cpu`: undecided, 1.00×
+      - `linux-aarch64 upcase-stdin rust-wasm memory`: behind, 1.01×
+      - `linux-aarch64 shout c-wasm cpu`: behind, 1.03×
+      - `linux-aarch64 shout cpp-wasm cpu`: behind, 1.07×
+      - `linux-aarch64 wc cpp cpu`: behind, 1.03× (the one row of the 22 against a native build)
+      - `linux-aarch64 histogram cpp-wasm memory`: behind, 1.00×
+      - `linux-aarch64 crc32c c-wasm memory`: behind, 1.00×
+      - `linux-aarch64 crc32c cpp-wasm memory`: behind, 1.00×
+      - `linux-aarch64 readings c-wasm memory`: behind, 1.00×
+      - `linux-aarch64 readings cpp-wasm memory`: behind, 1.01×
+      - `linux-aarch64 readings rust-wasm memory`: behind, 1.00×
+    - macOS on ARM64, 2 rows:
+      - `macos-aarch64 empty rust-wasm cpu`: undecided, 1.00×
+      - `macos-aarch64 shout rust-wasm cpu`: undecided, 1.01×
+    - Windows on x86-64, 1 row:
+      - `windows-x86_64 wc rust-wasm cpu`: undecided, 1.00×
+    - Windows on ARM64, 4 rows:
+      - `windows-aarch64 upcase cpp-wasm wall`: behind, 1.00×
+      - `windows-aarch64 shout rust-wasm cpu`: undecided, 1.00×
+      - `windows-aarch64 server cpp-wasm cpu`: undecided, 0.99×
+      - `windows-aarch64 readings cpp-wasm cpu`: undecided, 1.00×
 
-  Until the owner picks, a bench run fails on these rows wherever they don't come out ahead.
+    Of the 22, 13 are CPU time, 8 peak memory and 1 wall time; 13 are behind and 9 undecided.
+    Where each stood before, from KNOWN_BEHIND's history and the earlier reports:
+    - 14 were ahead in run 42756074550, so commit 5714b42 took them out of the list, and one run
+      later they are behind or undecided: the 11 rows of Linux on ARM64 other than add, the
+      upcase row of Linux on x86-64, and the upcase and readings rows of Windows on ARM64.
+    - 7 were ahead in run 42728160641 and left the list at 59f76f9. In run 42756074550, four of
+      them were still ahead (add on Linux on ARM64, empty and shout on macOS on ARM64, the server
+      on Windows on ARM64) and three were undecided (the two server rows on Linux on x86-64, and
+      shout on Windows on ARM64, the cases above).
+    - 1 was never on the list: wc's CPU time against Rust's module on Windows on x86-64 was ahead
+      in the first run (42661776298), whose rows not ahead made the list, and in run 42756074550
+      (1.00×), and is undecided now (1.00×).
+
+  **What the three runs show, said plainly.** Rows of small programs and of peak memory move
+  between ahead and behind from run to run:
+  - The same run found 20 rows ahead that the list named, and they left it (commit 28afe67).
+    All but two are ahead by 4% or less: 9 are wall time and 7 CPU time of add, empty,
+    hypotenuse, upcase, the server and histogram, and 4 are peak memory at 0.99× or 1.00×. Run
+    42756074550 had found each of them behind or undecided, at 0.91× to 1.04×.
+  - The 22 rows above went the other way in the same run, at 0.99× to 1.07×.
+  - A runner's CPU isn't the same from run to run either: Linux on x86-64 had an AMD EPYC 9V74 in
+    run 42756074550 and an AMD EPYC 7763 in run 42947294489.
+
+  So the ratchet takes a row out on one run that the next run finds behind again, and the list
+  may not take it back. The 20 rows taken out this time can do the same in the next run. With
+  the list as it is, a bench run fails wherever one of these rows doesn't come out ahead, and
+  no change to lengua's programs settles a row that sits at 1.00×. The owner decides: keep the
+  finish line open, accept such rows as stated exceptions, or change what the gate asks of a
+  row this close (more runs, or a margin). Until they pick, it stays open.
 - **The decisions above**, each the owner's to keep or reverse.
 
 ## Deferred, and why
@@ -651,7 +736,8 @@ this file at the tag `native-final`.
 ## Stopped by the safety filter
 
 Claude's safety filter has stopped some replies. What a stop hits is listed here, and never
-routed around through other models or subagents.
+routed around through other models or subagents. An item is tried again only with the owner's
+word, as the last three were.
 - **2026-10-31 to 2026-11-02.** The items those stops left were done on 2026-11-04 by Sonnet 5.5,
   with the owner's permission, on GitHub's runners and on both Linux targets: two examples, the
   hardening pass's red team (done defensively), and two ARM64 twins. The record is in the git
@@ -663,19 +749,26 @@ routed around through other models or subagents.
   near it is left alone.
 - **2026-11-05.** A reply (Opus 5.5) was stopped while round 1's workflow and the macOS and Windows
   spikes were being planned. Nothing was lost, and its content isn't produced again. With three
-  stops near the same ground, the tests that try to get past the sandbox on macOS and Windows are
-  left for the owner or another engineer.
+  stops near the same ground, the tests that try to get past the sandbox on macOS and Windows
+  were left for the owner or another engineer. On 2026-11-10, with the owner's word, the ground
+  was tried once as the review of the host
+  ([docs/reviews/host-2026-11-10.md](docs/reviews/host-2026-11-10.md)), its tests and its fixes,
+  with no stop (above).
 - **2026-11-07.** A review of W10's secret rule for soundness (src/checker/wasm/secret.rs on
   `wip/secret`) was stopped partway, when it had only read files. It confirmed no finding and
-  showed nothing about the rule, so the rule hasn't passed a soundness review. Its content isn't
-  produced again, and the owner decides how the review goes on.
+  showed nothing about the rule, so the rule hadn't passed a soundness review then. On 2026-11-10,
+  with the owner's word, the review was done from the start with no stop:
+  [docs/reviews/secret-rule-2026-11-10.md](docs/reviews/secret-rule-2026-11-10.md). It found the
+  rule unsound in five places, each fixed since (above).
 - **2026-11-07, W13.** A reply (Opus 5.5) was stopped while W13, checking the engine's machine
   code for an idea's secrets, was being designed, before anything was written. It is the second
-  stop on that ground in a day, so W13 is left for the owner: not retried, reworded or passed to
-  another model. The secret rule over main.wat (W10) stands, and the engine's compiled code is
-  trusted for timing. W11 removes the native decoders W13 would have used; the tag
+  stop on that ground in a day, so W13 was left for the owner then: not retried, reworded or
+  passed to another model. W11 removed the native decoders W13 would have used; the tag
   `native-final` keeps them. On 2026-11-10 the owner changed the model to Fable 5.2 and said to
-  try it: W13 was built that day, with no stop (above).
+  try it: W13 was built that day, with no stop, and is on main at 33ed7fe (above).
+
+All three items those stops left were tried on 2026-11-10 and 11 with the owner's word, each
+once, and none was stopped again. None of the three is left stopped.
 
 ## The agent's test in this session (W14, 2026-11-07)
 
