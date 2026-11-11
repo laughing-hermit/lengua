@@ -49,7 +49,14 @@ Only what its idea's `- Uses:` and `- Network:` lines name:
 - always its arguments, standard output and standard error, and its exit;
 - standard input, with `standard input` or `the terminal`;
 - the files and folders beneath the working folder, with `files`: a path that starts with `/`,
-  or that would climb above the working folder, is refused with `NOTCAPABLE`;
+  or that would climb above the working folder, is refused with `NOTCAPABLE`. A symbolic link,
+  and on Windows a junction, is never followed, and a file with more than one name, a hard link,
+  is never opened (`ACCES`): its other name may be a file outside the folder, and the system
+  gives lengua no way to tell. That holds on Linux, macOS and Windows, wherever the file system
+  counts a file's names. It costs the files that have a second name for another reason: in a
+  tree of hard-linked backups (`cp -al`, `rsync --link-dest`), in a package manager's folders
+  that link from a store (pnpm, uv), in a Cargo `target` folder or an OSTree checkout. Copy
+  such a file to a new name to give it to a program;
 - the environment variables each `--env NAME=value` gives, with `the environment`, and no
   others; `--env` for an idea without it is refused;
 - the clock, rounded down to a microsecond, with `the clock`;

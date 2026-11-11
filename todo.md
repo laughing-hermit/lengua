@@ -142,8 +142,8 @@ and none was stopped again. What each left open is the owner's.
   for each finding, its fix, and the suite on all five runners (42914865765); "The review of the
   host" below has it. The sandbox of that stop belonged to the native macOS and Windows ports,
   which the pivot superseded; in the WebAssembly lengua the wall is the host, the same on every
-  system. Windows's junctions, and macOS's own name folding against APFS, still have no test of
-  their own.
+  system. Windows's junctions, and macOS's own name folding against its file system, got tests
+  of their own on 2026-11-11 ("The gaps the two reviews left open", below).
 - **A soundness review of the secret rule** (W10, stopped 2026-11-07). **Done on 2026-11-10**:
   the review is [docs/reviews/secret-rule-2026-11-10.md](docs/reviews/secret-rule-2026-11-10.md).
   It found the rule unsound in five places, each then shown by a test that failed (42877251634)
@@ -155,14 +155,9 @@ and none was stopped again. What each left open is the owner's.
   - a secret stored outside every region was not followed;
   - the count of one `fd_read` of a secret standard input, which shows where its lines end, was
     public.
-  Still open from it, for the owner:
-  - Arguments or environment text longer than their region can spill secret text that the rule
-    doesn't mark. The fix belongs to the memory rules: hold the program to check
-    `args_sizes_get` against the region.
-  - The memory rules' own gap behind the third finding stays: a store past a limit the rules
-    don't follow can overwrite another region. The secret rule is sound against it now; whether
-    the prover refuses it wasn't examined.
-  - The rule's limits on depth and on operators followed have no test.
+  What it left open was closed on 2026-11-11 ("The gaps the two reviews left open", below):
+  arguments or environment text longer than their region, the memory rules' own gap behind the
+  third finding, and the tests of the rule's limits on depth and on operators followed.
 - **Constant time in the engine's machine code** (W13, stopped 2026-11-07). **Done on
   2026-11-10**, on main at 33ed7fe (the suite on all five runners at e317a30, 42940764016, and
   at 33ed7fe, 42947270993). For an idea with a `- Secret:` line, `check`,
@@ -233,15 +228,15 @@ fix costs a user:
 11. **main.wat's memory** has at most 16,384 pages, 1 GiB. Cost: a larger program reads its
     input a part at a time.
 
+Closed on 2026-11-11 ("The gaps the two reviews left open", below): `check`'s words after a
+lock is put back, the hard link, `stdin_file`'s check and read, the data folder's mode at the
+server's start and at a shell's run, and the tests of Windows's junctions and of macOS's own
+name folding.
+
 Still open from it, for the owner:
-- `check` doesn't read the data folder's record of a wrong module: with an earlier lock put back
-  it says done while `run` refuses. `run` is the wall; `check`'s words lag.
-- A hard link in a working folder to a file elsewhere is that file, on every system. Refusing
-  files with more than one link would cost users who keep hard-linked backups.
 - A link that another process plants in the working folder while a program runs is followed
   beneath the folder (cap-std holds it there), since lengua's listings are kept until the
   program itself changes something.
-- `stdin_file` is checked, then read by its path: another process can swap it in between.
 - `check` writes index.md and log.md in the parent of a handed folder, with titles from the
   handed idea.
 - The tests of a handed folder may each take a worker with 1 GiB of memory; nothing bounds the
@@ -252,8 +247,72 @@ Still open from it, for the owner:
   failed first: the named pipes (main.wat and lengua.lock), `fd_write` past the deadline, the
   `PLUGIN_DATA` folder, and the numeric spellings of the loopback. The TLS shutdown's wait and the
   connections' total have no test: both need a place that doesn't answer.
-- Windows's junctions, and macOS's own name folding against APFS, still have no test of their
-  own.
+
+### The gaps the two reviews left open (2026-11-11)
+
+Seven, each with a test that failed before its fix where there was something to fix (run
+RUN_A, on Linux on x86-64: the seven tests of the first six failed, and the three new tests of
+the secret rule's limits passed) and passes after it (RUN_B, on Linux on x86-64, macOS on ARM64
+and Windows on x86-64; the suite on Linux on x86-64, RUN_FULL1, and on all five systems,
+RUN_FULL5). The tests are the `review_gaps` modules of `src/checker/wasm/tests.rs`,
+`src/server/wat.rs`, `tests/host_hard.rs` and `tests/wasm_limits.rs`.
+1. **The memory rules took a write they leave to the proof to stay in its region.** What the
+   prover does with such an obligation was read first: it holds the access inside the program's
+   memory and follows no region (`src/prove/wasm/memory.rs`), and check's memory line already
+   said so ("tested, not proven"). The unsound part was the rules' own: after a store at an
+   index checked against a limit loaded from memory, or one in an unsafe block, they still took
+   an iovec array in another region to hold what the code had stored, and judged the buffer of
+   the next call by it. Now only a write the rules bound themselves keeps what they know of the
+   other regions; after any other they know nothing of memory, and the buffers of a call that
+   follows are an obligation, on its line. Cost: a program that fills an iovec array, then makes
+   such a write, then calls, gets one more obligation in its memory line; filling the array
+   after the write avoids it.
+2. **`args_get` and `environ_get` wrote past a region that was too small**: the rules took the
+   buffer to end with its region, and the host writes what it has. The host can't refuse: it
+   runs the module without its names, so it knows no region. So the rules hold the program:
+   they follow the count and the size `args_sizes_get` wrote, through a load and a local, to the
+   unsigned checks that bound them, judge the two buffers by those bounds, and refuse a call
+   with a size no check bounds (bounds, with the lines to write). Every program of examples/,
+   tests/fixtures and the template already checked both, and passes unchanged; the two
+   obligations each left its proofs for `args_get` are gone from its memory line. Cost: the two
+   calls and the checks stand in one function, and the count is checked too, not only the size
+   of the text.
+3. **`check` after a lock is put back** reads the data folder's record: it says tests_failed,
+   with what the proof found and that lengua.lock doesn't record it, from the server whose own
+   job found nothing and from a new one. Cost: none.
+4. **The data folder** is made 0700, where it is there with another mode, when the server
+   starts and at each run from a shell, on Linux and macOS. Cost: none. On Windows lengua still
+   sets no permissions: the folder lies in the user's own `%LOCALAPPDATA%`.
+5. **A file with more than one name, a hard link, isn't opened**: `path_open` gives `ACCES`,
+   and a file that was to be emptied is emptied only once it is known to have one name. The
+   count is the open file's own, `fstat` on Linux and macOS and `GetFileInformationByHandle` on
+   Windows (`lengua_os::link_count`), so it holds on all five systems, on every file system
+   that counts hard links. Cost: a file with a second name anywhere on its volume, inside the
+   working folder too, isn't opened: files in a tree of hard-linked backups, in pnpm's or uv's
+   folders, in a Cargo `target` folder, in an OSTree checkout. The user copies the file. Such a
+   file still lists, and `path_filestat_get` still gives its size.
+6. **`stdin_file`** is opened once beneath the folder, by cap-std, and read from the file that
+   opened. The test swaps the name between a file of the folder and a link to one outside
+   while the reads go on: before the fix a read gave the outside file's bytes within 223 reads.
+   Cost: none.
+7. **The tests the reviews found missing**: the secret rule's limit on depth, by blocks and by
+   calls, 200 and 300 deep, made by the test; its limit on operators followed, with a loop of
+   140,000 operators that the rule follows until it has followed 4,000,000; blocks nested
+   10,000 deep, which the checker refuses on its own stack (no pass goes a call deeper for each
+   block, so there was nothing to fix); a junction in the working folder, on the Windows
+   runners; and names that differ in case or normalization, against the macOS runner's own file
+   system.
+
+Still open from them, for the owner:
+- A read through an address the rules leave to the proof may read another region, and a write
+  may change a read-only one: that stays "tested, not proven", as the memory line says. Only a
+  proof that follows regions would close it.
+- At a call, a buffer the rules leave to the proof is taken to be apart from the call's other
+  buffers when its address is made from another region (M4).
+- `path_filestat_get` gives the size of a file with more than one name, and `stdin_file` reads
+  one.
+- Reparse points other than junctions and symbolic links (a cloud folder's placeholders, say)
+  have no test: the runners have none to make.
 
 ### What the permission checks refused
 

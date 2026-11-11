@@ -1836,7 +1836,8 @@ mod tests {
     const IDEA: &str = include_str!("../../tests/fixtures/add/idea.md");
 
     /// What the review of the host left open (todo.md), held by a test that failed before its
-    /// fix.
+    /// fix: on Linux and macOS, where the test can make the link it swaps in.
+    #[cfg(unix)]
     mod review_gaps {
         use super::*;
 
@@ -1845,7 +1846,6 @@ mod tests {
         /// the look and the read, gets nothing of that file read. Here a thread swaps the name
         /// between a file of the folder and such a link for as long as the reads go on, and every
         /// read that gives bytes gives the folder's own.
-        #[cfg(unix)]
         #[test]
         fn stdin_file_is_the_file_that_opened_whatever_takes_its_name() {
             use std::sync::atomic::{AtomicBool, Ordering};
