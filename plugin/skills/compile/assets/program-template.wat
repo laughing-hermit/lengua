@@ -17,8 +17,6 @@
   (global $EXIT_IO_FAILED i32 (i32.const 4))
   ;; A started program gets no input.
   (global $NO_INPUT i32 (i32.const 0))
-  ;; The fewest bytes a write takes.
-  (global $ONE_BYTE i32 (i32.const 1))
 
   ;; Regions (rule 3, M1), from 1024 up: the two commands and the messages, read-only, then
   ;; what lengua writes.
@@ -70,7 +68,8 @@
             ;; lengua writes at most the room it is lent.
             (if (i32.gt_u (local.get $size) (global.get $said.size))
               (then (call $assert_fail (i32.const 1)) unreachable))
-            (br_if $hostname_done (i32.lt_u (local.get $size) (global.get $ONE_BYTE)))
+            ;; A program that printed nothing leaves nothing to print.
+            (br_if $hostname_done (i32.eqz (local.get $size)))
             (br_if $io_failed
               (call $write_all (global.get $STDOUT) (global.get $said) (local.get $size)))
             (br $hostname_done))
@@ -95,7 +94,8 @@
             ;; lengua writes at most the room it is lent.
             (if (i32.gt_u (local.get $size) (global.get $said.size))
               (then (call $assert_fail (i32.const 2)) unreachable))
-            (br_if $whoami_done (i32.lt_u (local.get $size) (global.get $ONE_BYTE)))
+            ;; A program that printed nothing leaves nothing to print.
+            (br_if $whoami_done (i32.eqz (local.get $size)))
             (br_if $io_failed
               (call $write_all (global.get $STDOUT) (global.get $said) (local.get $size)))
             (br $whoami_done))

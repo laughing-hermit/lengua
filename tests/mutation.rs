@@ -55,6 +55,35 @@ const EQUIVALENT: &[(&str, &str)] = &[
         "$sizes.size grows from 8 to 9: no code reads the size, args_sizes_get still writes 8 \
          bytes at 2048, and the next region, $argv, starts at 2064",
     ),
+    (
+        "examples/copy/main.wat L60:const+1",
+        "$buffer moves from 65536 to 65537: its 65,537 bytes end at 131,074, inside the three \
+         pages, it is the last region, and $fill and $write_all are both lent the same address",
+    ),
+    (
+        "examples/key/main.wat L40:const+1",
+        "$key moves from 1088 to 1089: it is one byte and the last region, $fill is lent the \
+         same address, and the program never reads the key's value",
+    ),
+];
+
+/// Mutants of a program lengua tests and can't prove that no test of its idea can reach, each
+/// with why: a test has no way to make what they change happen, so they pass every test, and
+/// no proof stands behind the tests to catch them. A run that finds another names it here,
+/// with why, or gets a test that reaches it.
+const UNREACHED: &[(&str, &str)] = &[
+    (
+        "examples/copy/main.wat L23:const+1",
+        "$EXIT_IO_FAILED moves from 4 to 5: the program exits with it only when a read, a write \
+         or a close of a file it opened fails, or a write to standard error does, and no step \
+         of a test makes one of them fail",
+    ),
+    (
+        "examples/key/main.wat L22:const+1",
+        "$AS_BEFORE moves from 0 to 1: the program gives it to term_raw only once the terminal \
+         is raw, and a test has no terminal. tests/wasm_named.rs runs the program at a \
+         pseudo-terminal on Linux and macOS, where the terminal's mode after the run shows it",
+    ),
 ];
 
 /// The programs whose mutants are checked: each idea, then its main.wat.
@@ -272,7 +301,11 @@ async fn survivors(session: &Session, programs: &[(&str, &str)], proven: bool) -
             } else {
                 matches!(found, Fate::Rules | Fate::Tests)
             };
-            if !caught && !EQUIVALENT.iter().any(|(known, _)| *known == named) {
+            let judged = EQUIVALENT
+                .iter()
+                .chain(UNREACHED)
+                .any(|(known, _)| *known == named);
+            if !caught && !judged {
                 survived.push(named);
             }
             *tally.entry(format!("{found:?}")).or_insert(0) += 1;
