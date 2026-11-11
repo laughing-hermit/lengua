@@ -21,7 +21,7 @@ W0 to W14 and W17a are on main, W17b is measured, and W15's finish-line run is d
 isn't reached: the gate passed on no runner in that run, nor in the first run with its noise
 margin (42964232679; W15 below). What is left goes in this order
 (todo.md): W15's report to the owner (the agent's test with the final archive ran on 2026-11-11, and W16 is done);
-then, after the finish line, W18 to W21.
+then, after the finish line, W18 to W24.
 
 ## W0. Record the decision
 
@@ -412,6 +412,28 @@ C, C++ and Rust can't promise.
 A shared, proven standard set (sorting, hash tables, JSON, HTTP, compression, dates) that programs
 build on with `- Builds on:`. The agent assembles programs from verified pieces instead of writing
 everything new, which makes them faster to build and to prove.
+
+## W22. Scale
+
+After W21 (the owner, 2026-11-11: "that evolution needs to function better than a programming
+language. Not have stuff missing"). Every program so far is a few hundred lines of main.wat. W22
+builds one of several thousand from an idea, and records what breaks first: the agent's hold of
+the code, `check`'s time, the proofs, or the rules. What breaks gets its fix: ideas in parts that
+build on each other, modules checked alone and linked, proofs kept for parts that didn't change.
+*Not started.*
+
+## W23. Working with other code
+
+A lengua program as a library other languages call (its module with a stated interface, and a
+native build where the caller needs one), and a named outside WebAssembly module a lengua program
+calls, held to the grants its idea gives it and marked "trusted, not proven". Each is declared in
+the idea. *Not started.*
+
+## W24. Tools
+
+What a programmer expects beside `check`: a run that stops at a line of main.wat and shows its
+values, a profile of a run's time by function and line, and a trace of what a run asked the host
+for. Each is a tool call or a flag. *Not started.*
 
 ## Before the pivot
 

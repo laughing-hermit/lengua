@@ -37,8 +37,8 @@
 //! limit they don't follow, of a length they don't bound) the proof holds inside the memory, not
 //! inside a region: it may touch any region, and bytes outside them all, which stay secret once
 //! a secret may be there, as no store the rule follows makes them public. The buffer `args_get`
-//! or `environ_get` fills is the exception: it is taken to end with its region, as the sizes the
-//! program asked for are taken to fit.
+//! or `environ_get` fills ends with its region at the latest: the memory rules refuse a call
+//! whose sizes the program didn't check against its regions first.
 //!
 //! A secret that leaves may come back: once main.wat writes a secret to a descriptor that may be
 //! a file's or a connection's, or sends one with `sock_send`, anywhere in the program, what

@@ -771,22 +771,53 @@ fn kept_or_built(
 }
 
 /// The bytes of `name`, a file inside `folder`, as a run's standard input: at most
-/// [`MAX_STDIN_FILE`], since main.wat's worker gets them with the job.
+/// [`MAX_STDIN_FILE`], since main.wat's worker gets them with the job. The file is opened once,
+/// beneath the folder, where cap-std resolves every name of its path, so no name or link leads
+/// out; what is then looked at and read is the file that opened, whatever takes its name
+/// afterwards. A name that isn't a regular file is refused before anything opens, so a named
+/// pipe isn't waited on.
 fn read_stdin_file(folder: &Path, name: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
     let unreadable = |error: std::io::Error| format!("stdin_file {name}: {error}");
-    let inside = folder.join(name).canonicalize().map_err(unreadable)?;
-    if !inside.starts_with(folder) || !inside.is_file() {
-        return Err(format!("stdin_file {name} must be a file inside folder"));
-    }
-    let size = std::fs::metadata(&inside).map_err(unreadable)?.len();
-    if size > MAX_STDIN_FILE {
-        return Err(format!(
+    let outside = || format!("stdin_file {name} must be a file inside folder");
+    // Why a path didn't open: nothing has the name, or it isn't beneath the folder.
+    let unopened = |error: std::io::Error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            unreadable(error)
+        } else {
+            outside()
+        }
+    };
+    let large = |size: u64| {
+        format!(
             "stdin_file {name} holds {size} bytes, and main.wat's standard input from a file \
              holds at most {} MiB: give it a smaller file",
             MAX_STDIN_FILE / 1024 / 1024
-        ));
+        )
+    };
+    let root = cap_std::fs::Dir::open_ambient_dir(folder, cap_std::ambient_authority())
+        .map_err(unreadable)?;
+    if !root.metadata(name).map_err(unopened)?.is_file() {
+        return Err(outside());
     }
-    std::fs::read(&inside).map_err(unreadable)
+    let file = root.open(name).map_err(unopened)?;
+    let opened = file.metadata().map_err(unreadable)?;
+    if !opened.is_file() {
+        return Err(outside());
+    }
+    if opened.len() > MAX_STDIN_FILE {
+        return Err(large(opened.len()));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(opened.len()).unwrap_or(0));
+    file.take(MAX_STDIN_FILE + 1)
+        .read_to_end(&mut bytes)
+        .map_err(unreadable)?;
+    // A file that grew past the most while it was read.
+    let read = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if read > MAX_STDIN_FILE {
+        return Err(large(read));
+    }
+    Ok(bytes)
 }
 
 /// How lengua makes the connection `reach` for a run from a shell, given `args`: a place, or
@@ -1803,6 +1834,63 @@ mod tests {
 
     /// The add idea as an Attested Computation.
     const IDEA: &str = include_str!("../../tests/fixtures/add/idea.md");
+
+    /// What the review of the host left open (todo.md), held by a test that failed before its
+    /// fix: on Linux and macOS, where the test can make the link it swaps in.
+    #[cfg(unix)]
+    mod review_gaps {
+        use super::*;
+
+        /// `stdin_file` is opened once, and what is checked and read is the file that opened:
+        /// another process that puts a link to a file outside the folder under the name, between
+        /// the look and the read, gets nothing of that file read. Here a thread swaps the name
+        /// between a file of the folder and such a link for as long as the reads go on, and every
+        /// read that gives bytes gives the folder's own.
+        #[test]
+        fn stdin_file_is_the_file_that_opened_whatever_takes_its_name() {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            let outside = tempfile::tempdir().expect("a folder outside");
+            let secret = outside.path().join("secret.txt");
+            std::fs::write(&secret, "outside").expect("a file outside");
+            let made = tempfile::tempdir().expect("the working folder");
+            let folder = made.path().canonicalize().expect("the folder");
+            let (name, file, link) = (
+                folder.join("in.txt"),
+                folder.join("file"),
+                folder.join("link"),
+            );
+            std::fs::write(&file, "inside").expect("the folder's file");
+            std::os::unix::fs::symlink(&secret, &link).expect("a link");
+            let done = AtomicBool::new(false);
+            let mut read = 0_u32;
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    while !done.load(Ordering::Relaxed) {
+                        for other in [&file, &link] {
+                            let _ = std::fs::rename(other, &name);
+                            let _ = std::fs::rename(&name, other);
+                        }
+                    }
+                });
+                let until = std::time::Instant::now() + Duration::from_secs(3);
+                let mut leaked = None;
+                while leaked.is_none() && std::time::Instant::now() < until {
+                    match read_stdin_file(&folder, "in.txt") {
+                        Ok(bytes) if bytes == b"inside" => read += 1,
+                        Ok(bytes) => leaked = Some(bytes),
+                        Err(_) => {}
+                    }
+                }
+                done.store(true, Ordering::Relaxed);
+                assert_eq!(
+                    leaked.as_deref().map(String::from_utf8_lossy),
+                    None,
+                    "after {read} reads of the folder's own file"
+                );
+            });
+            assert!(read > 0, "the folder's own file was never read");
+        }
+    }
 
     /// A run in lengua's own temporary folder is held to a test's file limits; one in a folder
     /// of the user's is held to none.

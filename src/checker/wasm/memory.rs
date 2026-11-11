@@ -24,10 +24,18 @@
 //! - **M8, stack.** The deepest call path's locals and operands fit within the engine's stack.
 //! - **Borrowed buffers.** Every buffer a host call reads or writes, as `src/wasm/wasi.rs` lists
 //!   them (an iovec array and the buffers it points to, a path, the place a count is written),
-//!   lies inside a region with room for every byte the call may touch.
+//!   lies inside a region with room for every byte the call may touch. `args_get` and
+//!   `environ_get` take no length: they write what the host has. So the rules follow the two
+//!   sizes `args_sizes_get` or `environ_sizes_get` wrote, from the memory they were written to,
+//!   through a load and a local, to the unsigned checks that bound them, and hold the two
+//!   buffers to those bounds; a call with a size no check bounds is refused.
 //!
 //! What the rules can't settle (an address loaded from memory, an index checked against a limit
-//! they don't follow, the sizes `args_get` writes) is an [`Obligation`] for the proof.
+//! they don't follow) is an [`Obligation`] for the proof, which holds it inside the program's
+//! memory, not inside its region. So a write the rules leave to the proof, or one made in an
+//! unsafe block, may land in any region: after it the rules know nothing of what memory holds
+//! (no iovec, no size the host wrote), and say so where that matters, as an obligation or a
+//! refusal.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -65,6 +73,10 @@ const MAX_NESTING: usize = 256;
 
 /// The most iovec entries followed at one call.
 const MAX_IOVECS: u64 = 64;
+
+/// The bytes of an address or a size in memory: what `args_sizes_get` writes for each of its
+/// two sizes, and `args_get` for each argument's address.
+const WORD_BYTES: u64 = 4;
 
 /// A version of a local's value: the operator that set it, or the join or loop head where paths
 /// meet, and the local.
@@ -240,10 +252,46 @@ impl Offset {
     }
 }
 
+/// A size the host gives the program, the same for the whole run: what `args_sizes_get` and
+/// `environ_sizes_get` write, and so how much `args_get` and `environ_get` write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HostSize {
+    /// How many arguments there are, the program's name included.
+    ArgumentCount,
+    /// How many bytes the arguments' text takes, each with its NUL.
+    ArgumentBytes,
+    /// How many environment variables there are.
+    VariableCount,
+    /// How many bytes the variables' text takes, each with its NUL.
+    VariableBytes,
+}
+
+impl HostSize {
+    /// The count and the bytes the host call `function` writes or goes by, when it is one of
+    /// the four that do.
+    fn pair(function: &Function<'_>) -> Option<[Self; 2]> {
+        if function.is_host("args_sizes_get") || function.is_host("args_get") {
+            Some([Self::ArgumentCount, Self::ArgumentBytes])
+        } else if function.is_host("environ_sizes_get") || function.is_host("environ_get") {
+            Some([Self::VariableCount, Self::VariableBytes])
+        } else {
+            None
+        }
+    }
+}
+
 /// What a fact the code's checks establish says of a local's value: of the version of it the
 /// check read, so once the local holds another value, the fact says nothing of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fact {
+    /// One of the host's sizes is at most `most`. It says nothing of a local: the size is the
+    /// same for the whole run, so the fact holds from the check on.
+    HostAtMost {
+        /// The size.
+        size: HostSize,
+        /// The most it may be.
+        most: u64,
+    },
     /// Its value is below `limit`, unsigned; `None` when the limit is one the rules don't
     /// bound.
     Below {
@@ -749,12 +797,19 @@ struct Slot {
     /// The local it was just read from, at the version it read: a check of the value says
     /// something of that version alone.
     local: Option<Version>,
+    /// The host's size it is, when it's one: loaded from where `args_sizes_get` or
+    /// `environ_sizes_get` wrote it, or read from a local that holds what was loaded.
+    size: Option<HostSize>,
 }
 
 impl Slot {
     /// A value read from no local.
     fn new(value: Value) -> Self {
-        Self { value, local: None }
+        Self {
+            value,
+            local: None,
+            size: None,
+        }
     }
 
     /// The local it was just read from, for reports.
@@ -767,6 +822,7 @@ impl Slot {
         Self {
             value: value.clone(),
             local: self.local,
+            size: None,
         }
     }
 }
@@ -960,10 +1016,26 @@ impl Compare {
     }
 }
 
+/// Adds to `test` what the unsigned comparison `sized OP other` says of the host's size that
+/// `sized` is, when it is one and the rules bound `other`: the most the size may be when the
+/// comparison is true, or when it's false.
+fn size_facts(test: &mut Test, op: Compare, sized: &Slot, other: &Slot) {
+    let (Some(size), (_, Some(high))) = (sized.size, limit(other)) else {
+        return;
+    };
+    let at_most = |most: u64| Fact::HostAtMost { size, most };
+    match op {
+        Compare::Below => test.when_true.push(at_most(high.saturating_sub(1))),
+        Compare::AtLeast => test.when_false.push(at_most(high.saturating_sub(1))),
+        Compare::AtMost | Compare::Equal => test.when_true.push(at_most(high)),
+        Compare::Above | Compare::NotEqual => test.when_false.push(at_most(high)),
+    }
+}
+
 /// What the comparison `operator` of `a` and `b` gives, when it is one.
 fn compare(operator: &Operator<'_>, a: &Slot, b: &Slot) -> Option<Value> {
     if let Some(kind) = Compare::of(operator) {
-        let test = match (kind, a.local, b.local) {
+        let mut test = match (kind, a.local, b.local) {
             (Err(()), local, other) => {
                 let facts: Vec<Fact> = [local, other]
                     .into_iter()
@@ -979,6 +1051,10 @@ fn compare(operator: &Operator<'_>, a: &Slot, b: &Slot) -> Option<Value> {
             (Ok(kind), None, Some(local)) => bound_facts(local, kind.swapped(), a),
             (Ok(_), None, None) => Test::default(),
         };
+        if let Ok(kind) = kind {
+            size_facts(&mut test, kind, a, b);
+            size_facts(&mut test, kind.swapped(), b, a);
+        }
         return Some(Value::Test(Box::new(test)));
     }
     let same = a.local.filter(|local| b.local == Some(*local));
@@ -1028,6 +1104,8 @@ struct Local {
     value: Value,
     /// Which version of it this is.
     version: Version,
+    /// The host's size it holds, when it holds one as it was loaded.
+    size: Option<HostSize>,
 }
 
 /// What the checker knows at a point of a function.
@@ -1040,6 +1118,12 @@ struct State {
     /// What the code wrote at a constant offset of a region, with a 4-byte store, by region and
     /// offset: what an iovec array holds.
     memory: BTreeMap<(usize, i64), Value>,
+    /// Where memory holds one of the host's sizes, by region and offset: the 4 bytes
+    /// `args_sizes_get` or `environ_sizes_get` wrote there, which no write may have changed
+    /// since.
+    sizes: BTreeMap<(usize, i64), HostSize>,
+    /// The most each of the host's sizes may be, as the checks on every way here show.
+    most: BTreeMap<HostSize, u64>,
     /// The versions of locals a check has shown aren't zero, whatever their values are: a
     /// divisor's guard.
     nonzero: BTreeSet<Version>,
@@ -1067,6 +1151,7 @@ impl State {
                 } else {
                     (at, to_u32(index))
                 },
+                size: mine.size.filter(|size| theirs.size == Some(*size)),
             })
             .collect();
         let memory = self
@@ -1075,12 +1160,32 @@ impl State {
             .filter(|(key, value)| other.memory.get(*key) == Some(*value))
             .map(|(key, value)| (*key, value.clone()))
             .collect();
+        let sizes = self
+            .sizes
+            .iter()
+            .filter(|(key, size)| other.sizes.get(*key) == Some(*size))
+            .map(|(key, size)| (*key, *size))
+            .collect();
+        // A size is bounded here when each way bounds it: by the larger of the two.
+        let most = self
+            .most
+            .iter()
+            .filter_map(|(size, mine)| Some((*size, (*mine).max(*other.most.get(size)?))))
+            .collect();
         Self {
             reachable: true,
             locals,
             memory,
+            sizes,
+            most,
             nonzero,
         }
+    }
+
+    /// Forgets what memory holds: after a write that may land anywhere.
+    fn forget(&mut self) {
+        self.memory.clear();
+        self.sizes.clear();
     }
 
     /// Applies `facts`, which hold here: each of the version of its local it was established
@@ -1091,6 +1196,11 @@ impl State {
                 return;
             }
             let version = match fact {
+                Fact::HostAtMost { size, most } => {
+                    let known = self.most.entry(*size).or_insert(*most);
+                    *known = (*known).min(*most);
+                    continue;
+                }
                 Fact::Below { local, .. }
                 | Fact::AtLeast { local, .. }
                 | Fact::Zero { local }
@@ -1172,6 +1282,10 @@ pub struct Record {
     /// For a host call with an iovec array: each entry's address and length, as the code before
     /// the call wrote them; `None` when the rules can't say.
     pub iovecs: Option<Vec<(Value, Value)>>,
+    /// For a call of `args_get` or `environ_get`: the most bytes the host writes through each of
+    /// its two arguments, as the checks before the call hold the host's sizes; `None` where no
+    /// check does.
+    pub sized: [Option<u64>; 2],
 }
 
 /// How far a function reaches through what a parameter lends it.
@@ -1223,6 +1337,9 @@ pub enum Room {
     Length(Value),
     /// As many as the rules can't say.
     Unsettled,
+    /// As many as the host has for `args_get` or `environ_get`, which no check before the call
+    /// holds to a number.
+    Unchecked,
 }
 
 /// Which of the buffers a call borrows an access is.
@@ -1660,6 +1777,7 @@ impl Interpreter<'_, '_> {
             locals.push(Local {
                 value,
                 version: (entry, to_u32(index)),
+                size: None,
             });
         }
         for (position, ty) in function.locals.iter().enumerate() {
@@ -1671,12 +1789,15 @@ impl Interpreter<'_, '_> {
             locals.push(Local {
                 value,
                 version: (entry, to_u32(function.params.len() + position)),
+                size: None,
             });
         }
         State {
             reachable: true,
             locals,
             memory: BTreeMap::new(),
+            sizes: BTreeMap::new(),
+            most: BTreeMap::new(),
             nonzero: BTreeSet::new(),
         }
     }
@@ -1722,6 +1843,7 @@ impl Interpreter<'_, '_> {
             *record = Some(Record {
                 operands,
                 iovecs: None,
+                sized: [None; 2],
             });
         }
     }
@@ -1754,10 +1876,11 @@ impl Interpreter<'_, '_> {
             if let Some(slot) = state.locals.get_mut(to_usize(*local)) {
                 slot.value = Self::anything(ty);
                 slot.version = (at, *local);
+                slot.size = None;
             }
         }
         state.nonzero.retain(|(_, index)| !written.contains(index));
-        state.memory.clear();
+        state.forget();
     }
 
     /// Follows the code from `at` to the `end` or `else` that ends its block, and gives that
@@ -2041,36 +2164,86 @@ impl Interpreter<'_, '_> {
         Slot {
             value,
             local: Some(local.version),
+            size: local.size,
         }
     }
 
-    /// Writes `value` to local `index` at `at`: a new version of it, of which no check has said
-    /// anything yet.
-    fn write_local(state: &mut State, at: usize, index: u32, value: Value) {
+    /// Writes the value of `slot` to local `index` at `at`: a new version of it, of which no
+    /// check has said anything yet.
+    fn write_local(state: &mut State, at: usize, index: u32, slot: Slot) {
         if let Some(local) = state.locals.get_mut(to_usize(index)) {
-            local.value = value.stored();
+            local.value = slot.value.stored();
             local.version = (at, index);
+            local.size = slot.size;
         }
         state.nonzero.retain(|(_, local)| *local != index);
     }
 
-    /// What a store of `width` bytes through `address` at `at` does to what memory is known to
-    /// hold; a 4-byte store keeps `value`.
-    fn stored(state: &mut State, address: &Value, width: u64, value: Option<Value>) {
+    /// What a write of `width` bytes through `address` does to what memory is known to hold; a
+    /// 4-byte store keeps `value`. Only a write the rules themselves hold inside the region its
+    /// address names (`held`, from [`held`]) leaves the other regions as they were: one left to
+    /// the proof, or made in an unsafe block, may land in any region, so after it nothing is
+    /// known of any.
+    fn stored(state: &mut State, address: &Value, held: bool, width: u64, value: Option<Value>) {
         match address {
-            Value::Address { region, offset } => match offset.constant() {
+            Value::Address { region, offset } if held => match offset.constant() {
                 Some(start) => {
                     let width = signed(width).unwrap_or(i64::MAX);
-                    state.memory.retain(|(known, at), _| {
-                        *known != *region || *at + 4 <= start || *at >= start.saturating_add(width)
-                    });
+                    let apart = |known: usize, at: i64| {
+                        known != *region || at + 4 <= start || at >= start.saturating_add(width)
+                    };
+                    state.memory.retain(|(known, at), _| apart(*known, *at));
+                    state.sizes.retain(|(known, at), _| apart(*known, *at));
                     if let Some(value) = value {
                         state.memory.insert((*region, start), value.stored());
                     }
                 }
-                None => state.memory.retain(|(known, _), _| *known != *region),
+                None => {
+                    state.memory.retain(|(known, _), _| *known != *region);
+                    state.sizes.retain(|(known, _), _| *known != *region);
+                }
             },
-            _ => state.memory.clear(),
+            _ => state.forget(),
+        }
+    }
+
+    /// The most bytes a call of `function` writes through each of its two arguments, for
+    /// `args_get` and `environ_get`: four for each argument or variable the host has, and the
+    /// bytes of their text, as the checks on the way here hold those sizes.
+    fn sized(function: &Function<'_>, state: &State) -> [Option<u64>; 2] {
+        let writes_them = function.is_host("args_get") || function.is_host("environ_get");
+        let Some([count, bytes]) = HostSize::pair(function).filter(|_| writes_them) else {
+            return [None; 2];
+        };
+        [
+            state
+                .most
+                .get(&count)
+                .and_then(|count| count.checked_mul(WORD_BYTES)),
+            state.most.get(&bytes).copied(),
+        ]
+    }
+
+    /// Keeps where `args_sizes_get` or `environ_sizes_get`, called with `arguments`, wrote the
+    /// host's two sizes: at a constant offset of a region, the 4 bytes inside it. A load of
+    /// them is then the host's size, until a write may change them.
+    fn sizes_written(&self, function: &Function<'_>, arguments: &[Value], state: &mut State) {
+        let asks = function.is_host("args_sizes_get") || function.is_host("environ_sizes_get");
+        let Some(pair) = HostSize::pair(function).filter(|_| asks) else {
+            return;
+        };
+        let bytes = signed(WORD_BYTES).unwrap_or(i64::MAX);
+        // The count is written first, then the bytes: over the count, where the two overlap.
+        for (argument, size) in arguments.iter().zip(pair) {
+            if let Value::Address { region, offset } = argument
+                && let Some(at) = offset.constant()
+                && held(self.module, argument, &Room::Bytes(WORD_BYTES))
+            {
+                state.sizes.retain(|(known, other), _| {
+                    known != region || other.saturating_add(bytes) <= at || *other >= at + bytes
+                });
+                state.sizes.insert((*region, at), size);
+            }
         }
     }
 
@@ -2138,32 +2311,38 @@ impl Interpreter<'_, '_> {
                 iovecs = Self::iovecs(state, iovs, count);
             }
         }
+        let sized = Self::sized(function, state);
         // What the call may write, memory no longer holds what the code wrote there.
         match function.kind {
-            Kind::Own => state.memory.clear(),
+            Kind::Own => state.forget(),
             _ => {
                 for lend in lends_of(function).iter().filter(|lend| lend.written) {
                     if let Some(address) = arguments.get(lend.argument) {
-                        Self::stored(state, address, u64::MAX, None);
+                        let room = room_of(lend, &arguments, &sized);
+                        let held = held(module, address, &room);
+                        Self::stored(state, address, held, u64::MAX, None);
                     }
                 }
                 if writes_iovec_buffers(function) {
                     match &iovecs {
                         Some(entries) => {
-                            for (buffer, _) in entries {
-                                Self::stored(state, buffer, u64::MAX, None);
+                            for (buffer, length) in entries {
+                                let held = held(module, buffer, &Room::Length(length.clone()));
+                                Self::stored(state, buffer, held, u64::MAX, None);
                             }
                         }
-                        None => state.memory.clear(),
+                        None => state.forget(),
                     }
                 }
             }
         }
+        self.sizes_written(function, &arguments, state);
         let results = self.results(function, &arguments);
         if let Some(record) = self.records.get_mut(at) {
             *record = Some(Record {
                 operands: arguments,
                 iovecs,
+                sized,
             });
         }
         for value in results {
@@ -2235,12 +2414,12 @@ impl Interpreter<'_, '_> {
             Operator::LocalSet { local_index } => {
                 let slot = self.pop();
                 self.record(at, vec![slot.value.clone()]);
-                Self::write_local(state, at, *local_index, slot.value);
+                Self::write_local(state, at, *local_index, slot);
             }
             Operator::LocalTee { local_index } => {
                 let slot = self.pop();
                 self.record(at, vec![slot.value.clone()]);
-                Self::write_local(state, at, *local_index, slot.value);
+                Self::write_local(state, at, *local_index, slot);
                 let read = Self::read_local(state, *local_index);
                 self.stack.push(read);
             }
@@ -2272,7 +2451,11 @@ impl Interpreter<'_, '_> {
             | Operator::MemoryInit { .. } => {
                 let operands = self.pop_n(3);
                 if let Some(destination) = operands.first() {
-                    Self::stored(state, &destination.value, u64::MAX, None);
+                    let room = operands
+                        .get(2)
+                        .map_or(Room::Unsettled, |length| Room::Length(length.value.clone()));
+                    let held = held(self.module, &destination.value, &room);
+                    Self::stored(state, &destination.value, held, u64::MAX, None);
                 }
                 self.record(at, operands.into_iter().map(|slot| slot.value).collect());
             }
@@ -2288,10 +2471,27 @@ impl Interpreter<'_, '_> {
                             .first()
                             .map(|address| shifted(address, memarg.offset));
                         if let Some(address) = address {
-                            Self::stored(state, &address, width, kept);
+                            let held = held(self.module, &address, &Room::Bytes(width));
+                            Self::stored(state, &address, held, width, kept);
                         }
                     } else {
-                        self.push(loaded(operator));
+                        // A whole word loaded from where the host wrote one of its sizes is
+                        // that size.
+                        let from = values
+                            .first()
+                            .map(|address| shifted(address, memarg.offset));
+                        let size = match (operator, from) {
+                            (Operator::I32Load { .. }, Some(Value::Address { region, offset })) => {
+                                offset
+                                    .constant()
+                                    .and_then(|at| state.sizes.get(&(region, at)).copied())
+                            }
+                            _ => None,
+                        };
+                        self.stack.push(Slot {
+                            size,
+                            ..Slot::new(loaded(operator))
+                        });
                     }
                     self.record(at, values);
                     return;
@@ -2521,9 +2721,10 @@ fn follow(
     (interpreter.records, returns, interpreter.too_deep)
 }
 
-/// The room a lent buffer of `bytes` takes, given the call's `arguments`.
-fn room_of(bytes: Bytes, arguments: &[Value]) -> Room {
-    match bytes {
+/// The room the buffer `lend` takes, given the call's `arguments` and, for `args_get` and
+/// `environ_get`, the most the host writes through each (`sized`).
+fn room_of(lend: &wasi::Lend, arguments: &[Value], sized: &[Option<u64>; 2]) -> Room {
+    match lend.bytes {
         Bytes::Fixed(count) => Room::Bytes(u64::from(count)),
         Bytes::Argument(argument) => arguments
             .get(argument)
@@ -2544,7 +2745,11 @@ fn room_of(bytes: Bytes, arguments: &[Value]) -> Room {
                 }))
             }
         }
-        Bytes::Sized => Room::Unsettled,
+        Bytes::Sized => sized
+            .get(lend.argument)
+            .copied()
+            .flatten()
+            .map_or(Room::Unchecked, Room::Bytes),
     }
 }
 
@@ -2626,7 +2831,7 @@ fn accesses(
                 };
                 let shown = callee.shown();
                 for lend in lends_of(callee) {
-                    let room = room_of(lend.bytes, &record.operands);
+                    let room = room_of(lend, &record.operands, &record.sized);
                     push(
                         format!(
                             "the buffer {shown} borrows in argument {}",
@@ -2684,7 +2889,7 @@ fn summarize(function: &Function<'_>, accesses: &[Access], returns: Option<Value
                 let range = length.range().width(32);
                 range.bounded().then_some(range.high)
             }
-            Room::Unsettled => None,
+            Room::Unsettled | Room::Unchecked => None,
         };
         // Each address the access may go through, of several.
         for address in parts(&access.address) {
@@ -2776,13 +2981,32 @@ pub enum Verdict {
     Loose(String),
     /// The proof's to hold.
     Unsettled(String),
+    /// Borrowed buffers: what `args_get` or `environ_get` writes isn't held to its region by a
+    /// check of the sizes before the call.
+    Unsized(String),
 }
+
+/// What to write where `args_get` or `environ_get` is called with nothing that holds what the
+/// host writes to the two regions.
+const SIZES_FIX: &str = "call `$args_sizes_get` (for the environment, `$environ_sizes_get`) \
+                         first, in the same function, and leave unless both sizes it wrote fit: \
+                         `(br_if $usage (i32.gt_u (i32.load (global.get $sizes)) (global.get \
+                         $MAX_ARGUMENTS)))` for the count, each one's address taking 4 bytes of \
+                         the first region, and `(br_if $usage (i32.gt_u (i32.load offset=4 \
+                         (global.get $sizes)) (global.get $args.size)))` for the text's bytes";
 
 /// How `access`, an access of `function`, stands against its region.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn judge(module: &Module<'_>, function: &Function<'_>, access: &Access) -> Vec<Verdict> {
     let what = &access.what;
+    // Whatever its address is: nothing says how many bytes the host writes there.
+    if access.room == Room::Unchecked {
+        return vec![Verdict::Unsized(format!(
+            "{what} gets as many bytes as the host has for it, and no check before the call \
+             holds that to its region"
+        ))];
+    }
     let in_unsafe = module.in_unsafe_block(access.line);
     let (offset, owner, name) = match &access.address {
         Value::Address { region, offset } => {
@@ -2843,7 +3067,7 @@ pub fn judge(module: &Module<'_>, function: &Function<'_>, access: &Access) -> V
                 range.linear.filter(|_| range.bounded()),
             )
         }
-        Room::Unsettled => {
+        Room::Unsettled | Room::Unchecked => {
             verdicts.push(Verdict::Unsettled(format!(
                 "{what} touches as many bytes of {name} as the call is given, which the rules \
                  don't follow"
@@ -2921,6 +3145,46 @@ pub fn judge(module: &Module<'_>, function: &Function<'_>, access: &Access) -> V
     verdicts
 }
 
+/// Whether the rules themselves hold a write of `room` bytes through `address` inside the region
+/// the address names: where [`judge`] finds nothing to report and leaves nothing to the proof.
+/// Any other write (through an address the rules don't follow, at an index checked against a
+/// limit they don't follow, of a length they don't bound, or past its region in an unsafe block)
+/// is held only inside the program's memory, so it may change any region.
+fn held(module: &Module<'_>, address: &Value, room: &Room) -> bool {
+    let Value::Address { region, offset } = address else {
+        return false;
+    };
+    let Some(region) = module.regions.get(*region) else {
+        return false;
+    };
+    let (room_high, room_linear) = match room {
+        Room::Bytes(bytes) => (Some(*bytes), None),
+        Room::Length(value) => {
+            let range = value.range().width(32);
+            (
+                range.bounded().then_some(range.high),
+                range.linear.filter(|_| range.bounded()),
+            )
+        }
+        Room::Unsettled | Room::Unchecked => return false,
+    };
+    let exact_end = offset
+        .linear
+        .zip(room_linear)
+        .and_then(|(start, length)| start.sum(length));
+    let end = exact_end.or_else(|| {
+        offset
+            .high
+            .zip(room_high)
+            .and_then(|(high, room)| high.checked_add(signed(room)?))
+    });
+    matches!(
+        (offset.low, end),
+        (Some(low), Some(end))
+            if low >= 0 && u64::try_from(end).is_ok_and(|end| end <= region.size)
+    )
+}
+
 /// The byte range of `access` in its region, when the rules bound it: from its first byte to
 /// just past its last.
 fn span(access: &Access) -> Option<(i64, i64)> {
@@ -2937,7 +3201,7 @@ fn span(access: &Access) -> Option<(i64, i64)> {
             }
             range.high
         }
-        Room::Unsettled => return None,
+        Room::Unsettled | Room::Unchecked => return None,
     };
     Some((offset.low?, offset.high?.checked_add(signed(room)?)?))
 }
@@ -3014,6 +3278,9 @@ pub fn check(
                         what,
                         division: false,
                     }),
+                    Verdict::Unsized(problem) => {
+                        violation(Rule::Bounds, access.line, problem, SIZES_FIX);
+                    }
                     // Rule 9's, reported with the rules.
                     Verdict::Unchecked(_) | Verdict::Loose(_) => {}
                 }

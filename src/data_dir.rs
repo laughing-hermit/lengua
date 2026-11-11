@@ -95,6 +95,30 @@ impl DataDir {
         let name = crate::hash::Sha256Hex::of(root.to_string_lossy().as_bytes());
         self.0.join("graph").join(format!("{name}.lock"))
     }
+
+    /// Makes the folder the user's alone, mode 0700 on Linux and macOS, where it is there with
+    /// another mode: as when the engine's cache made it first, under the user's umask, or
+    /// something changed it since. The server does this as it starts and a run from a shell
+    /// before it reads the key, so the folder isn't open to others until the key is next made
+    /// or loaded for a record. A folder that isn't there yet is left to whatever makes it, the
+    /// key's first use among them, which makes it with that mode. On Windows it does nothing:
+    /// the folder lies under the user's own `%LOCALAPPDATA%`, which the system keeps from other
+    /// users. A mode that can't be set is left: lengua then works as it did.
+    pub fn keep_private(&self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let open = std::fs::metadata(&self.0)
+                .is_ok_and(|found| found.is_dir() && found.permissions().mode() & 0o777 != 0o700);
+            if open {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = &self.0;
+        }
+    }
 }
 
 #[cfg(test)]

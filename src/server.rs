@@ -307,9 +307,11 @@ impl BlockProof {
 }
 
 impl LenguaServer {
-    /// Creates a server that keeps its private data in `data_dir`.
+    /// Creates a server that keeps its private data in `data_dir`, which it makes the user's
+    /// alone where the folder is there with another mode ([`DataDir::keep_private`]).
     #[must_use]
     pub fn new(data_dir: DataDir) -> Self {
+        data_dir.keep_private();
         Self {
             tool_router: Self::tool_router(),
             data_dir: Arc::new(data_dir),
@@ -1063,11 +1065,51 @@ impl LenguaServer {
                 .is_some_and(|proofs| {
                     proofs.module_sha256 == checking.module && !proofs.wrong.is_empty()
                 });
+            // The same for a verdict the data folder alone keeps, as when an earlier lock was put
+            // back in the folder.
+            let recorded_wrong = recorded_wrong
+                || wrong_record(self.data_dir.path(), &files[0], &checking.module).exists();
             if ended && recorded_wrong && !checking.found.lock().is_ok_and(|found| found.wrong) {
                 return None;
             }
         }
         Some(Arc::clone(checking))
+    }
+
+    /// Takes what the data folder keeps a proof found wrong about this module of this idea
+    /// ([`wrong_record`]), for a lock that doesn't record it: each generated test the record
+    /// names is found wrong, with what the proof found and why the lock doesn't say so, and the
+    /// others are tested, not proven. Gives whether the record named one.
+    fn kept_wrong(&self, checking: &Checking, suite: &TestSuite) -> bool {
+        let kept = wrong_record(self.data_dir.path(), &checking.files[0], &checking.module);
+        let Ok(text) = std::fs::read_to_string(kept) else {
+            return false;
+        };
+        let record = wrong_lines(&text);
+        let Ok(mut found) = checking.found.lock() else {
+            return false;
+        };
+        let named = |block: &testfile::Generated| {
+            let id = block.id.to_string();
+            record.iter().find(|(known, _)| *known == id)
+        };
+        if !suite.generated.iter().any(|block| named(block).is_some()) {
+            return false;
+        }
+        for (block, proof) in suite.generated.iter().zip(&mut found.proofs) {
+            match named(block) {
+                Some((_, what)) => {
+                    proof.detail = Some(format!(
+                        "{what} (lengua.lock doesn't record this, as when an earlier lock was \
+                         put back, but lengua's data folder keeps it)"
+                    ));
+                    proof.wrong = true;
+                }
+                None => proof.detail = Some("tested, not proven".to_owned()),
+            }
+        }
+        found.wrong = true;
+        true
     }
 
     /// Takes the proofs lengua.lock records about this very module, after a restart lost the job
@@ -1085,7 +1127,16 @@ impl LenguaServer {
             .flatten()
             .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
             .and_then(|lock| lock.proofs)
-            .filter(|proofs| proofs.module_sha256 == checking.module)?;
+            .filter(|proofs| proofs.module_sha256 == checking.module);
+        // What a proof found wrong about this module of this idea and the lock doesn't record,
+        // as when an earlier lock was put back in the folder: the data folder keeps it, `run`
+        // refuses the module for it, and check says it, with where it comes from.
+        if stamp.as_ref().is_none_or(|stamp| stamp.wrong.is_empty())
+            && self.kept_wrong(checking, suite)
+        {
+            return Some(Vec::new());
+        }
+        let stamp = stamp?;
         let mut found = checking.found.lock().ok()?;
         let mut any_wrong = false;
         let mut further = Vec::new();
@@ -2173,6 +2224,25 @@ fn remember_wrong(data_dir: &DataDir, lock: &Lock) {
     }
 }
 
+/// What a record [`remember_wrong`] wrote says: each generated test's id with what its proof
+/// found, a line each; a line that doesn't begin one belongs to the one before, whose text held
+/// a line break.
+fn wrong_lines(text: &str) -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        let begun = line
+            .strip_prefix("generated ")
+            .and_then(|rest| rest.split_once(": "));
+        if let Some((id, what)) = begun {
+            found.push((id.to_owned(), what.to_owned()));
+        } else if let Some((_, what)) = found.last_mut() {
+            what.push('\n');
+            what.push_str(line);
+        }
+    }
+    found
+}
+
 /// [`state_of`] for a run: the folder's state, with the snapshot it comes from, whose lock is the
 /// one lengua's key verified, and the bytes of idea.md and main.wat that snapshot hashed, which
 /// the run takes in place of reading the lock or either file again. What that lock records a proof
@@ -2235,6 +2305,8 @@ pub struct ShellRun {
 ///
 /// Fails, saying why, when lengua won't run the program or can't start it.
 pub fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i32, String> {
+    // The data folder holds the key the run is about to read: the user's alone.
+    data_dir.keep_private();
     wat::run_from_shell(data_dir, request, || {
         let here = std::env::current_dir()
             .map_err(|error| format!("can't read the current folder: {error}"))?;
