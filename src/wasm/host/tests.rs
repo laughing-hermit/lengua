@@ -56,6 +56,7 @@ pub(super) fn world(policy: Policy) -> World {
         ),
         instant_sleeps: true,
         events: None,
+        beyond: crate::wasm::host::Beyond::default(),
     }
 }
 
@@ -826,7 +827,8 @@ fn every_function_is_defined_with_the_tables_signature() {
     let engine = engine::engine(Setup::Test, None).expect("the engine");
     let linker = linker(&engine).expect("the host");
     let mut store = wasmtime::Store::new(&engine, Host::new(world(Policy::default())));
-    for function in wasi::FUNCTIONS.iter().chain(wasi::NET_FUNCTIONS) {
+    let own = wasi::own_functions().map(|(_, function)| function);
+    for function in wasi::FUNCTIONS.iter().chain(own) {
         let defined = linker
             .get(&mut store, wasi::module_of(function), function.name)
             .ok()

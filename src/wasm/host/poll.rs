@@ -54,7 +54,7 @@ fn reaches(host: &Host, fd: u32, write: bool) -> bool {
     match host.fds.get(fd) {
         Some(Descriptor::Stdin) => !write && policy.reads_input(),
         Some(Descriptor::Stdout | Descriptor::Stderr) => write,
-        Some(Descriptor::Folder(_) | Descriptor::File(_)) => policy.files,
+        Some(Descriptor::Folder(_) | Descriptor::File(_)) => policy.holds_files(),
         Some(Descriptor::Listener(_) | Descriptor::Socket(_) | Descriptor::Datagram(_)) => {
             policy.network()
         }
@@ -68,10 +68,11 @@ fn ready(host: &mut Host, fd: u32, kind: u8) -> Option<(u16, u64, u16)> {
     let write = kind == event::FD_WRITE;
     match host.fds.get_mut(fd) {
         None => Some((errno::BADF, 0, 0)),
-        Some(Descriptor::Stdin) if !write => {
-            let (bytes, ended) = host.stdin.ready();
-            Some((0, bytes, if ended { event::HANGUP } else { 0 }))
-        }
+        // Input a thread of lengua's reads, a raw terminal's keys, may have nothing yet.
+        Some(Descriptor::Stdin) if !write => host
+            .stdin
+            .pending()
+            .map(|(bytes, ended)| (0, bytes, if ended { event::HANGUP } else { 0 })),
         Some(Descriptor::Stdout | Descriptor::Stderr) if write => Some((0, 0, 0)),
         Some(Descriptor::File(_)) => Some((0, 0, 0)),
         Some(Descriptor::Listener(listener)) if !write => listener.ready().then_some((0, 1, 0)),

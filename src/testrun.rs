@@ -723,6 +723,7 @@ async fn check_one_way(
         listen,
         stands: Some(&stands),
         names: &network.names,
+        programs: &network.programs,
         reversed,
         stdout_closed: test.stdout_closed,
         ..crate::wasm::Spec::new(&args, stdin.as_bytes(), target.policy)

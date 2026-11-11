@@ -21,7 +21,8 @@ use super::{
     BlockProof, CheckParams, CheckReport, Checking, ConnectionReport, FURTHER, Found, IdeaStage,
     LenguaServer, Model, Passed, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun, Stage,
     VERIFIED_NOTE, Witness, already_serving, background_limits, check_wait, cost_line, counted,
-    ended_report, idea_problems, keep_tested, own_folder_problem, proof_time, proven_detail,
+    ended_report, idea_problems, keep_tested, may_reach, own_folder_problem, own_folders,
+    proof_time, proven_detail,
     random_seed, reaches, read_optional, settled, state_for_run, state_of, wait_for,
     working_folder,
 };
@@ -862,6 +863,8 @@ struct Checked<'r> {
     to_run: ToRun,
     /// The connections lengua makes for it, in order.
     connections: Vec<Made>,
+    /// lengua's own folders, where no file or folder an argument names may lie.
+    own: Vec<PathBuf>,
 }
 
 impl Order for Checked<'_> {
@@ -881,6 +884,7 @@ impl Order for Checked<'_> {
             policy: Policy::of(&self.ready.uses, network),
             listen: network.listens.map(|port| (port, network.serves_anywhere)),
             connections: &self.connections,
+            own: &self.own,
             source: match &self.to_run {
                 ToRun::Kept(_) => Source::Text {
                     text: &self.ready.code,
@@ -943,6 +947,7 @@ pub(super) fn run_from_shell(
             ready,
             to_run,
             connections,
+            own: own_folders(data_dir),
         })
     })?;
     match ended.map_err(|error| format!("couldn't run the program: {error}"))? {
@@ -1420,6 +1425,7 @@ impl LenguaServer {
                 .map_err(|error| format!("lengua couldn't keep the module: {error}"))?,
         );
         let connections = reaches(&network);
+        let own = own_folders(&self.data_dir);
         let (max_file_size, max_written) = run_file_limits(workspace.is_some());
         let spec = Spec {
             folder: workspace.as_deref(),
@@ -1428,12 +1434,13 @@ impl LenguaServer {
             listen: network.listens.map(|port| (port, network.serves_anywhere)),
             // A run reaches the real computers its idea grants, not a test's own.
             stands: None,
+            own: &own,
             setup: Setup::Run,
             max_written,
             alone: true,
             ..Spec::new(&params.args, &stdin, Policy::of(&uses, &network))
         };
-        let may_reach = network.reach.describe();
+        let may_reach = may_reach(&uses, &network);
         // A server, of TCP connections or of UDP datagrams, serves in the background.
         if network.listens.is_some() || network.reach.receives.is_some() {
             let mut report = self

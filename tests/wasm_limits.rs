@@ -964,6 +964,7 @@ fn a_worker_ends_when_its_server_does() {
         connections: Vec::new(),
         listen: None,
         internet: None,
+        own: Vec::new(),
         random: None,
         clock: Vec::new(),
         reversed: false,

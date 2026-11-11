@@ -23,7 +23,7 @@ unwrap_used = "warn"
 # lengua-spawn starts a program with, its wait and its counts; on macOS, the system's counts of the
 # computer's memory and of a process's.
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", default-features = false, features = ["process", "resource", "signal"] }
+nix = { version = "0.31", default-features = false, features = ["ioctl", "process", "resource", "signal", "term"] }
 
 # Windows's counters of a process (its times, its working set and its peak) and of the computer's
 # memory. The version the lock already holds for the rest of the workspace.

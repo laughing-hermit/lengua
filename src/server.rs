@@ -703,9 +703,9 @@ impl LenguaServer {
         // What the idea grants at run time is said at every stage, so the user hears it before
         // any run.
         if let Ok(Some(idea_text)) = read_optional(&folder, IDEA_FILE)
-            && let Ok((_, network)) = idea::grants(&idea_text)
+            && let Ok((uses, network)) = idea::grants(&idea_text)
         {
-            report.may_reach = network.reach.describe();
+            report.may_reach = may_reach(&uses, &network);
         }
         Ok(Json(report))
     }
@@ -2443,6 +2443,32 @@ fn own_folder_problem(data_dir: &DataDir, folder: &Path) -> Option<String> {
         ));
     }
     None
+}
+
+/// lengua's own folders, with their links followed as far as they exist: the data folder and
+/// the folder of compiled modules. No file or folder an argument of a program names is one
+/// of them, lies in one or holds one ([`crate::named::forbidden`]).
+fn own_folders(data_dir: &DataDir) -> Vec<PathBuf> {
+    vec![
+        canonical(data_dir.path()),
+        canonical(&crate::wasm::engine::cache_folder(data_dir)),
+    ]
+}
+
+/// What the terminal's grant lets a program do, in words, as [`may_reach`] says it.
+pub const TERMINAL_GRANT: &str = "it may read the terminal's size and set the terminal to give \
+                                  its keys as they're pressed; lengua puts the terminal back \
+                                  as it was when the program ends";
+
+/// What an idea grants a program to reach by itself while it runs, each grant in words, for
+/// the user who is about to run it: the network it opens, the files and folders its
+/// arguments name, the programs it starts, and the terminal.
+fn may_reach(uses: &[idea::Use], network: &idea::Network) -> Vec<String> {
+    let mut lines = network.reach.describe();
+    if uses.contains(&idea::Use::Terminal) {
+        lines.push(TERMINAL_GRANT.to_owned());
+    }
+    lines
 }
 
 fn random_seed() -> Result<u64, String> {

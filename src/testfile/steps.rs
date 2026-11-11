@@ -60,7 +60,8 @@ const GIVEN_PHRASES: &str = "`Given the arguments `…` and `…``, `Given no ar
      `…` that receives `…` and replies `…``, `Given a server at `example.org` on port `…` that \
      receives `…` and replies `…``, `Given a computer at `192.0.2.53` on UDP port `…` that \
      receives `…` and replies `…``, `Given the addresses `192.0.2.7` for the name \
-     `example.org``, `Given a client that sends `…``, `And the clients connect at once`, `And \
+     `example.org``, `Given the program `hostname` prints `…` and exits with code `0``, `Given \
+     a client that sends `…``, `And the clients connect at once`, `And \
      standard output is closed`";
 const THEN_PHRASES: &str = "`Then it prints `…``, `Then it prints `…` to standard error`, \
      `Then it prints nothing`, `Then it prints text that matches `rule``, `Then the file `name` \
@@ -402,6 +403,28 @@ impl Reading {
                 (!hex.is_empty()).then_some(())?;
                 self.wrote("random".into());
                 self.random = Some(hex);
+                return Some(());
+            }
+            // ``the program `hostname` prints `box` and exits with code `0` ``: what a command
+            // the program starts gives, in every test of the idea. A test starts nothing.
+            if at.is("program") {
+                let stood = crate::idea::program_stood(tokens)?;
+                let arguments: Vec<&str> = stood.arguments.iter().map(String::as_str).collect();
+                let granted = self
+                    .reach
+                    .runs
+                    .iter()
+                    .any(|rule| rule.covers(&stood.program, &arguments));
+                if !granted {
+                    self.found.push((
+                        self.line,
+                        format!(
+                            "idea.md grants no start of `{}` with those arguments: the test says \
+                             what a command gives that a `- Runs:` line covers",
+                            stood.program
+                        ),
+                    ));
+                }
                 return Some(());
             }
             // ``the addresses `192.0.2.7` and `2001:db8::1` for the name `example.org` ``: what
