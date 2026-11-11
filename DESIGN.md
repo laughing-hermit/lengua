@@ -242,16 +242,16 @@ lengua.lock records the parts with the code: each part's folder, lengua's hash o
 the SHA-256 of its main.wat, and the functions taken. The record is of the parts as they were
 when the program's tests passed.
 
-**The library.** lengua ships four parts, in the compile skill's `assets/parts`, and holds
+**The library.** lengua ships five parts, in the compile skill's `assets/parts`, and holds
 the same files in `examples/`, where the suite and the golden ledger take them with every other
 program: `decimal` (`$decimal_parse`, `$decimal_format`), `lines` (`$lines_read`, `$lines_end`),
-`crc32` (`$crc32_update`) and `bytes` (`$bytes_equal`). lengua-mcp carries their text, so `check`
-says of a part whether it is the library's, unchanged. A library part is checked on the user's
-computer like any other part; lengua trusts no part for being its own. `examples/sum` and
-`examples/checksums` are built on them. Their limits are fixed: a function reaches a fixed
-number of bytes whatever length it is given, so each part states the longest text it takes, 20
-bytes for a number and 4096 for a text. The library's assertions are numbered from 800, each
-part its own.
+`crc32` (`$crc32_update`), `bytes` (`$bytes_equal`) and `sort64` (`$sort64`). lengua-mcp carries
+their text, so `check` says of a part whether it is the library's, unchanged. A library part is
+checked on the user's computer like any other part; lengua trusts no part for being its own.
+`examples/sum` and `examples/checksums` are built on them. Their limits are fixed: a function
+reaches a fixed number of bytes whatever length it is given, so each part states the most it
+takes: 20 bytes for a number, 4096 for a text and 256 numbers for a sort. The library's
+assertions are numbered from 800, each part its own.
 
 ## The rules
 

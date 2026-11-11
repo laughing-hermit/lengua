@@ -247,8 +247,8 @@ by one concrete example in its steps, and its generated tests try that rule with
   in backticks of their own.
 - **Programs built from parts:** look for a part before you specify what a program does for
   itself. lengua's library is in the compile skill's `assets/parts` (`decimal`, `lines`, `crc32`,
-  `bytes`), each a folder with its own idea.md and code; a program of the user's can be a part
-  too. Put the part's folder beside the program's, in one bundle, and name it under
+  `bytes`, `sort64`), each a folder with its own idea.md and code; a program of the user's can be a
+  part too. Put the part's folder beside the program's, in one bundle, and name it under
   `# Constraints`, by a path relative to this idea: `- Builds on: [decimal](../decimal/idea.md)`.
   A part's `# Contract` section says what each function it offers reads, writes and gives, with
   its limits: take those limits into Purpose. [Parts](references/parts.md) says how to build on

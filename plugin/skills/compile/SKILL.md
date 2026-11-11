@@ -61,11 +61,11 @@ alone, by the steps below: `check` refuses any other code file and says what to 
    connections goes on forever. **Look for a part before you write a routine**:
    [parts](references/parts.md) lists lengua's library, in `assets/parts`: `decimal` reads and
    writes whole numbers, `lines` reads an input and finds its lines, `crc32` computes a
-   CRC-32, and `bytes` compares bytes. To take from a part, the idea names it
-   (`- Builds on:`), its folder stands beside the program's, and `check` on the part's folder
-   says done. Then copy each function you use from the part's `main.wat` word for word, under
-   a `;; from: ../decimal` line above its `(func`, with the constants it reads, and lend it
-   regions with the room its contract states. `check` holds each copy to the part at every
+   CRC-32, `bytes` compares bytes, and `sort64` sorts numbers. To take from a part, the idea
+   names it (`- Builds on:`), its folder stands beside the program's, and `check` on the part's
+   folder says done. Then copy each function you use from the part's `main.wat` word for word,
+   under a `;; from: ../decimal` line above its `(func`, with the constants it reads, and lend
+   it regions with the room its contract states. `check` holds each copy to the part at every
    check, and its `parts` lines say what main.wat takes and what the part's own proofs cover.
    Never rewrite what a part already does, and number your own assertions from 1 to 799: the
    library's are 800 and up.

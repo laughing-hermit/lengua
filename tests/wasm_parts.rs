@@ -114,7 +114,7 @@ fn the_skill_ships_the_library_s_parts_as_the_examples_hold_them() {
         assert!(!stated.offers.is_empty(), "{name} offers nothing");
         for offer in &stated.offers {
             assert!(
-                offer.name.starts_with(&format!("{name}_")),
+                offer.name == name || offer.name.starts_with(&format!("{name}_")),
                 "{name} offers ${}, which doesn't carry the part's name",
                 offer.name
             );
@@ -452,5 +452,46 @@ async fn a_part_s_contract_is_held_to_its_main_wat() {
     session.record(&part).await;
     let done = session.settle(&part).await;
     assert_eq!(done["state"], "done", "{done}");
+    session.service.cancel().await.expect("close the session");
+}
+
+/// The secret rule goes through a taken function as through any other: bytes with its input
+/// named secret is refused, since `$lines_end` and `$bytes_equal`, each word for word its
+/// part's, branch on the bytes they read; without the `- Secret:` line the same main.wat is
+/// done.
+#[tokio::test]
+async fn the_secret_rule_goes_through_a_taken_function() {
+    let session = Session::start(Protocol::Discover).await;
+    let program = Program::new();
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/bytes");
+    session
+        .settle_parts(&program, &folder)
+        .await
+        .expect("the parts bytes builds on are done");
+    let idea = example("bytes", "idea.md");
+    let secret = changed(
+        &idea,
+        "- Uses: standard input\n",
+        "- Uses: standard input\n- Secret: standard input\n",
+    );
+    program.write("idea.md", &secret);
+    program.write("main.wat", &example("bytes", "main.wat"));
+    let report = session.record(&program).await;
+    assert_eq!(report["state"], "code_problems", "{report}");
+    assert!(
+        report["problems"]
+            .to_string()
+            .contains("so a secret decides"),
+        "{report}"
+    );
+    program.write("idea.md", &idea);
+    session.record(&program).await;
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    assert_eq!(
+        lines(&done, "contract"),
+        ["$bytes_equal: reads 4096 bytes at `$a`; reads 4096 bytes at `$b`"],
+        "{done}"
+    );
     session.service.cancel().await.expect("close the session");
 }

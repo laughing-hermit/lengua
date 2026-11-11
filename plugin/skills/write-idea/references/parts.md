@@ -9,14 +9,16 @@ word for word, where `check` holds each copy to the part. This page says what th
 Look for a part before you specify what a program must do for itself. lengua's library is in
 the compile skill's `assets/parts` folder: `decimal` reads and writes whole numbers in decimal,
 `lines` reads an input into memory and finds its lines, `crc32` computes the CRC-32 of bytes,
-and `bytes` says if two runs of bytes are the same. Each is a folder with its own `idea.md` and
-`main.wat`. A program of the user's own can be a part too, once its idea has a contract.
+`bytes` says if two runs of bytes are the same, and `sort64` sorts whole numbers. Each is a
+folder with its own `idea.md` and `main.wat`. A program of the user's own can be a part too,
+once its idea has a contract.
 
 1. **Read the part's `# Contract` section**, in its `idea.md`. Each item is one function: what
    it reads and writes through the addresses it is lent, what it gives, and its limits, such as
    the longest text it takes.
 2. **Put the part's folder beside the program's**, in one bundle, with each part that part
-   builds on: `lines` and `crc32` build on `decimal`, and `bytes` on `lines`.
+   builds on: `lines` and `crc32` build on `decimal`, `bytes` on `lines`, and `sort64` on
+   `lines` and `decimal`.
 3. **Name each part under `# Constraints`**, by a path relative to this idea:
 
    ```markdown

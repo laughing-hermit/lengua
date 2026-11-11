@@ -143,10 +143,10 @@ Describe a program to your agent: "Use lengua to write a program that ...". Then
    every test, what is proven, and any change made to the idea after your words.
 
 A program can build on parts: programs whose ideas offer some of their functions, each with a
-stated contract. lengua ships four (`decimal`, `lines`, `crc32` and `bytes`), and a program of your
-own can be one. The agent names the part in the idea (`- Builds on:`), copies the functions it
-takes into `main.wat` word for word, and `check` holds each copy to the part at every check
-and says what the program takes ([DESIGN.md](DESIGN.md), Parts).
+stated contract. lengua ships five (`decimal`, `lines`, `crc32`, `bytes` and `sort64`), and a
+program of your own can be one. The agent names the part in the idea (`- Builds on:`), copies
+the functions it takes into `main.wat` word for word, and `check` holds each copy to the part
+at every check and says what the program takes ([DESIGN.md](DESIGN.md), Parts).
 
 Run it with the `run` tool, which gives it 10 seconds by default (up to 40) and 8 MiB of each
 output stream, in a fresh folder or in one you name. A server keeps serving in the background
@@ -373,9 +373,9 @@ the six are at 1.05× to 1.08×. [todo.md](todo.md) names the six.
 - `crates/lengua-os/`: the one crate allowed unsafe code, each call in a safe function.
 - `plugin/`: the plugin as it ships: its manifests, the two skills with their references and
   templates, its [README](plugin/README.md) and licence.
-- `examples/`: 22 programs, each a folder of `idea.md` and `main.wat`. Four are the library's
-  parts, `decimal`, `lines`, `crc32` and `bytes`, the same files the compile skill ships in its
-  `assets/parts`, and `sum` and `checksums` are built on them.
+- `examples/`: 23 programs, each a folder of `idea.md` and `main.wat`. Five are the library's
+  parts, `decimal`, `lines`, `crc32`, `bytes` and `sort64`, the same files the compile skill
+  ships in its `assets/parts`, and `sum` and `checksums` are built on them.
 - `tests/`: the suite, the 29 programs of `tests/fixtures`, the host's 109 cases in
   `tests/host-cases`, and the vendored schemas.
 - `benches/`: the gate, and the C, C++ and Rust versions of its workloads.
@@ -443,10 +443,10 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
 - **W20, parallelism:** WebAssembly's threads, as structured fork-join that the rules show free
   of data races.
 - **W21, a library of proven parts** that programs build on with `- Builds on:`. Built: the
-  mechanism (a part's contract, the copy `check` holds to the part, the lock's record) and four
-  parts, `decimal`, `lines`, `crc32` and `bytes`, with two programs on them. Left: the prover
-  proves a taken function again in each program, and sorting, hash tables, SHA-256, HTTP,
-  JSON, compression and dates have no part.
+  mechanism (a part's contract, the copy `check` holds to the part, the lock's record) and five
+  parts, `decimal`, `lines`, `crc32`, `bytes` and `sort64`, with two programs on them. Left:
+  the prover proves a taken function again in each program, and hash tables, SHA-256, HTTP, a
+  faster sort, JSON, compression and dates have no part.
 - **W22, scale; W23, working with other code; W24, tools:** what a programming language has
   that lengua still lacks ([todo.md](todo.md)).
 

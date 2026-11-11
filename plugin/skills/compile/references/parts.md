@@ -24,6 +24,7 @@ Look for a part before you write a routine. The library's parts are in this skil
 | [lines](../assets/parts/lines/idea.md) | `$lines_read (fd, text)`, `$lines_end (text, from, length)` | Read all of an input into memory, and find where each line ends | A text of at most 4096 bytes; one byte more says the input is longer |
 | [crc32](../assets/parts/crc32/idea.md) | `$crc32_update (crc, at, length)` | The CRC-32 of zlib, gzip and PNG, a piece at a time | At most 4096 bytes a call; a longer text takes a call for each piece |
 | [bytes](../assets/parts/bytes/idea.md) | `$bytes_equal (a, b, length)` | Say if two runs of bytes are the same | At most 4096 bytes a call; it stops at the first byte that differs, so it is not for secrets |
+| [sort64](../assets/parts/sort64/idea.md) | `$sort64 (at, count)` | Sort whole numbers of 64 bits where they are, from the smallest to the largest | At most 256 numbers a call; about 33000 steps for 256; its branches follow the numbers, so it is not for secrets |
 
 Each part's `idea.md` has the whole contract: what each argument is, what the function gives,
 and what stops the program. A part's limits are fixed: a function reaches a fixed number of
@@ -38,8 +39,9 @@ prints the CRC-32 of each line, with all three.
 
 1. **Put the part beside the program.** Copy the part's folder into the program's bundle, as a
    sibling of the program's folder: `decimal/` beside `sum/`. Copy also each part that part
-   builds on: lines and crc32 build on decimal, and bytes on lines. Never edit a part you copied
-   from the library: `check` then no longer names it as the library's.
+   builds on: lines and crc32 build on decimal, bytes on lines, and sort64 on lines and decimal.
+   Never edit a part you copied from the library: `check` then no longer names it as the
+   library's.
 2. **Name it in the idea**, under `# Constraints`, with the write-idea skill:
    `- Builds on: [lines](../lines/idea.md), [decimal](../decimal/idea.md)`.
 3. **Check the part until it is done**: call `check` with the part's folder as `path`, the first
@@ -60,7 +62,8 @@ prints the CRC-32 of each line, with all three.
    length is at most 4096, check it before the call. A function stops the program with one of
    its own assertions when an argument is outside its contract.
 8. **Number your own assertions from 1 to 799.** The library's parts use 800 to 899, each part
-   its own: decimal 801 to 805, lines 821 to 824, crc32 831 and 832, bytes 841 and 842.
+   its own: decimal 801 to 805, lines 821 to 824, crc32 831 and 832, bytes 841 and 842, sort64
+   851 to 854.
 
 A call, from `examples/sum`: the line's start is checked first, so the 20 bytes that
 `$decimal_parse` may read from there are inside `$text`, and the result is tested at once.

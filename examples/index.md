@@ -23,5 +23,6 @@ okf_version: "0.2"
 * [secret-equal](secret-equal/idea.md) - Prints same if the two lines of its input are the same and diff if not, with no branch on their bytes. Code: [main.wat](secret-equal/main.wat)
 * [sha256](sha256/idea.md) - Prints the SHA-256 digest of standard input. Code: [main.wat](sha256/main.wat)
 * [sort](sort/idea.md) - Sorts the lines of standard input in byte order and can drop duplicate lines. Code: [main.wat](sort/main.wat)
+* [sort64](sort64/idea.md) - A part that sorts whole numbers of 64 bits, and prints the numbers on the lines of standard input in order. Code: [main.wat](sort64/main.wat)
 * [sum](sum/idea.md) - Adds the whole numbers on the lines of standard input and prints the sum. Code: [main.wat](sum/main.wat)
 * [upcase](upcase/idea.md) - Copies a text file to another file with its ASCII letters in capitals. Code: [main.wat](upcase/main.wat)

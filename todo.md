@@ -448,8 +448,8 @@ What was built:
    for a part, each function it offers.
 6. **The library**, in the compile skill's `assets/parts` and in `examples/`: `decimal`
    (`$decimal_parse`, `$decimal_format`), `lines` (`$lines_read`, `$lines_end`), `crc32`
-   (`$crc32_update`) and `bytes` (`$bytes_equal`). lines and crc32 are themselves built on
-   decimal, and bytes on lines.
+   (`$crc32_update`), `bytes` (`$bytes_equal`) and `sort64` (`$sort64`). lines and crc32 are
+   themselves built on decimal, bytes on lines, and sort64 on lines and decimal.
 7. **Two programs built on them**: `examples/sum`, on lines and decimal, and
    `examples/checksums`, on lines, crc32 and decimal.
 8. **The skills**: write-idea and compile teach the agent to look for a part before it writes a
@@ -461,7 +461,7 @@ What was built:
    offer and a part changed after its check, each refused; a change to a part caught by the
    part's own tests; a region with less room than the contract states and a read-only region,
    each refused by the memory rules; a contract that isn't what main.wat does, refused. The
-   four parts joined the mutation test, and every program built on parts goes from its
+   five parts joined the mutation test, and every program built on parts goes from its
    request to done with the others.
 
 ### What the permission checks refused
@@ -830,9 +830,10 @@ Each can be reversed.
     other program, and a test holds the two copies to each other. Cost: each part's tests and
     proofs run once on each computer that builds on it.
   - **A part's limits are fixed.** The rules compute one reach for each parameter, whatever
-    length a call passes, so `decimal` reaches 20 bytes and `lines` and `crc32` 4096, and a
-    caller's region needs that room after the last place it lends. A program that needs more
-    writes its own function. A part whose sizes its caller sets isn't built.
+    length a call passes, so `decimal` reaches 20 bytes, `lines`, `crc32` and `bytes` 4096,
+    and `sort64` 256 numbers, and a caller's region needs that room after the last place it
+    lends. A program that needs more writes its own function. A part whose sizes its caller
+    sets isn't built.
   - **The library's assertions are numbered from 800**, each part its own range, and its
     names carry the part's name (`$decimal_parse`, `$DECIMAL_TEN`), since a program's
     assertion numbers and names are one set. Cost: a program built on the library numbers its
@@ -932,7 +933,7 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
   HTTP, compression, dates) that programs build on with `- Builds on:`. The agent assembles
   programs from verified pieces instead of writing everything new, which makes them faster to
   build and to prove.
-  **The mechanism and the first four parts were built on 2026-11-11** (branch `wip/parts`;
+  **The mechanism and the first five parts were built on 2026-11-11** (branch `wip/parts`;
   "W21's parts", above, has what was built, its runs and what is left, and the decisions are
   with the others, above).
 - **Nothing missing** (the owner, 2026-11-11: "that evolution needs to function better than a

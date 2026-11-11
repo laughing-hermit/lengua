@@ -414,11 +414,12 @@ macro_rules! library_part {
 }
 
 /// lengua's library of parts, in the order of their names.
-pub const LIBRARY: [LibraryPart; 4] = [
+pub const LIBRARY: [LibraryPart; 5] = [
     library_part!("bytes"),
     library_part!("crc32"),
     library_part!("decimal"),
     library_part!("lines"),
+    library_part!("sort64"),
 ];
 
 /// The part of lengua's library that `idea` and `code` are, a folder's idea.md and main.wat:
