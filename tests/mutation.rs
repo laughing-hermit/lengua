@@ -264,8 +264,8 @@ async fn survivors(session: &Session, programs: &[(&str, &str)]) -> Vec<String> 
             let program = if built_on_parts { &bundle } else { &fresh };
             program.write("idea.md", &idea_text);
             program.write("main.wat", &mutant);
-            session.record(&program).await;
-            let report = session.settle(&program).await;
+            session.record(program).await;
+            let report = session.settle(program).await;
             let found = fate(&report);
             eprintln!("{code} {name}: {found:?}");
             let named = format!("{code} {name}");
