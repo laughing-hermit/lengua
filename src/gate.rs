@@ -2,18 +2,26 @@
 //! row is a workload and another language's version of it, compiled to WebAssembly and run the
 //! same way, or built natively; on each row, lengua's measures are set against the other's: CPU
 //! and wall time by a one-sided Mann-Whitney U test at p < [`ALPHA`] over runs that alternate,
-//! peak memory and size as measured. A row the test can't decide is undecided, never level.
+//! peak memory and size as measured.
+//!
+//! A row's measure is ahead, level or behind ([`Verdict`]). The runners are shared machines, and
+//! over the gate's first four runs rows of small programs and of peak memory moved between ahead
+//! and behind by a few percent with no change in the programs, so the gate has a noise margin,
+//! [`MARGIN`] (the owner, 2026-11-11): a measure is level when the test can't decide it, or when
+//! lengua's value is within the margin of the other's, either way. Ahead and behind are the gaps
+//! past the margin, and only they move the gate.
 //!
 //! The runs of a row grow until both its tests decide: the gate looks at them at each count of
 //! [`LOOKS`], up to [`MAX_RUNS`] or [`MAX_ROW`], and each look decides at [`LOOK_ALPHA`], ALPHA
 //! split over the looks, so that a row looked at again and again is still decided wrongly with a
 //! chance below ALPHA.
 //!
-//! `KNOWN_BEHIND`, a file at the repository's root, names the rows where lengua isn't ahead yet,
-//! and it may only shrink: a run that finds lengua not ahead on a row the list doesn't name, or
-//! ahead on one it names, fails ([`ratchet`]), and says the list that would pass ([`proposal`]);
-//! and a change to the list that names a row the list before it didn't fails the run too
-//! ([`grown`]), as the bench holds each change in the list's history to the list it replaced.
+//! `KNOWN_BEHIND`, a file at the repository's root, names the rows where lengua is behind by more
+//! than the margin, and it may only shrink: a run that finds lengua behind on a row the list
+//! doesn't name, or level or ahead on one it names, fails ([`ratchet`]), and says the list that
+//! would pass ([`proposal`]); and a change to the list that names a row the list before it didn't
+//! fails the run too ([`grown`]), as the bench holds each change in the list's history to the list
+//! it replaced. A level row needs no line and fails no run.
 
 use std::cmp::Ordering;
 use std::fmt::Write as _;
@@ -32,6 +40,20 @@ pub const LOOKS: [usize; 8] = [20, 40, 80, 160, 320, 640, 1280, MAX_RUNS];
 /// The level of each look: [`ALPHA`] split over the [`LOOKS`] (Bonferroni's bound), so that the
 /// chance that any look of a row decides wrongly is below ALPHA.
 pub const LOOK_ALPHA: f64 = ALPHA / LOOKS.len() as f64;
+
+/// The gate's noise margin: 5% of the other version's value, either way. A measure where lengua's
+/// value is from 0.95 to 1.05 times the other's, both ends included, is level ([`within_margin`]).
+///
+/// The number is the owner's (2026-11-11), from the gate's first four runs on the five runners
+/// (42661776298, 42728160641, 42756074550 and 42947294489; todo.md, "A row the gate can't
+/// decide"). The last of them found 22 rows behind or undecided that the run before it had found
+/// ahead or undecided, at 0.99× to 1.07×: 20 of the 22 at 1.03× or less, and the other two at
+/// 1.05× and 1.07×. It found 20 more rows ahead that the run before it had found behind or
+/// undecided at 0.91× to 1.04×, all but two of them ahead by 4% or less. The programs were the
+/// same; the runner's CPU model wasn't always (Linux on x86-64 ran on an AMD EPYC 9V74 in one run
+/// and an AMD EPYC 7763 in the next). So 5% covers nearly every row that changed sides, and not
+/// all: a row that moves further than the margin from one run to the next still fails a run.
+pub const MARGIN: f64 = 0.05;
 
 /// The longest a workload's rows run.
 pub const MAX_ROW: Duration = Duration::from_secs(600);
@@ -106,28 +128,64 @@ impl Measure {
     pub const fn tested(self) -> bool {
         matches!(self, Self::Cpu | Self::Wall)
     }
+
+    /// Whether the noise margin, [`MARGIN`], applies to it. It does to CPU time, wall time and
+    /// peak memory, which change from run to run on the same machine. It doesn't to size: a
+    /// module's or an executable's bytes are the same on every run, so size is compared exactly.
+    #[must_use]
+    pub const fn margined(self) -> bool {
+        !matches!(self, Self::Size)
+    }
 }
 
-/// What the gate finds on a row and measure.
+/// What the gate finds on a row and measure. A row's measure ends as ahead, level or behind, or
+/// as not measured; undecided is what the test alone says, before the margin makes it level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
-    /// lengua's is lower: with the test, at p < [`ALPHA`]; as measured, smaller.
+    /// lengua's is lower by more than [`MARGIN`]: with the test, decided at p < [`ALPHA`] too;
+    /// for size, which has no margin, smaller at all.
     Ahead,
-    /// The other's is lower, as surely.
+    /// The other's is lower, as surely and by as much: lengua's is higher by more than
+    /// [`MARGIN`], or, for size, larger at all. The one verdict KNOWN_BEHIND names.
     Behind,
-    /// Neither, as far as the runs go.
+    /// Neither: the test can't decide, or the two values are within [`MARGIN`] of each other,
+    /// whichever is lower and however surely; for size, the same number of bytes. A level row
+    /// needs no line in KNOWN_BEHIND and fails no run.
+    Level,
+    /// What the test alone finds when neither side's p is below its level ([`tested_verdict`]).
+    /// No row ends here: [`with_margin`] makes it level.
     Undecided,
+    /// The row has no values: a version that couldn't be built or run. The bench fails on such
+    /// a version by itself; the list is neither held to the row nor loses its line for it.
+    Unmeasured,
 }
 
 impl Verdict {
+    /// Every verdict.
+    pub const ALL: [Self; 5] = [
+        Self::Ahead,
+        Self::Behind,
+        Self::Level,
+        Self::Undecided,
+        Self::Unmeasured,
+    ];
+
     /// The word the report and KNOWN_BEHIND use.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Ahead => "ahead",
             Self::Behind => "behind",
+            Self::Level => "level",
             Self::Undecided => "undecided",
+            Self::Unmeasured => "not measured",
         }
+    }
+
+    /// The verdict `name` names.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|verdict| verdict.name() == name)
     }
 }
 
@@ -217,9 +275,10 @@ pub fn p_smaller(smaller: &[f64], larger: &[f64]) -> f64 {
     normal_cdf((u + step / 2.0 - mean) / variance.sqrt())
 }
 
-/// The gate's verdict on lengua's runs against another version's, for a measure the test decides
-/// at level `alpha`, and the p-value of the side it decided, or the smaller of the two when it
-/// decided none.
+/// What the test alone finds on lengua's runs against another version's, for a measure the test
+/// decides at level `alpha`: ahead, behind or undecided, and the p-value of the side it decided,
+/// or the smaller of the two when it decided none. The margin isn't in it: [`with_margin`] makes
+/// a row's verdict of it.
 #[must_use]
 pub fn tested_verdict(lengua: &[f64], other: &[f64], alpha: f64) -> (Verdict, f64) {
     let ahead = p_smaller(lengua, other);
@@ -239,14 +298,57 @@ pub fn looks_at(runs: usize) -> bool {
     LOOKS.contains(&runs)
 }
 
-/// The gate's verdict on a measure taken as measured, lengua's against another version's: ahead
-/// when lengua's is smaller, behind when it is larger, and undecided when they're the same.
+/// Whether `lengua`'s value is within [`MARGIN`] of `other`'s, either way: at least 0.95 times
+/// it and at most 1.05 times it, both ends included. So lengua at 1.05 times the other's is
+/// within, and at 1.06 times isn't; two zeros are within, and a zero and anything above it
+/// aren't.
 #[must_use]
-pub fn measured_verdict(lengua: f64, other: f64) -> Verdict {
+pub fn within_margin(lengua: f64, other: f64) -> bool {
+    lengua >= other * (1.0 - MARGIN) && lengua <= other * (1.0 + MARGIN)
+}
+
+/// The gate's verdict on a measure the test decides, CPU or wall time, from what the test alone
+/// found, `tested`, and each version's median, `lengua`'s and `other`'s:
+///
+/// - level when the test left it undecided, whatever the medians are: the runs can't tell the
+///   two apart, so neither is called ahead;
+/// - level when the test decided, either way, and lengua's median is within [`MARGIN`] of the
+///   other's: a row decided ahead at 0.98× is level, not ahead, and one decided behind at 1.02×
+///   is level, not behind, so a gap this small moves the gate neither way;
+/// - level when the test and the medians disagree: decided ahead with a median higher by more
+///   than the margin, or decided behind with one lower by more than it;
+/// - ahead when the test decided lengua's lower and its median is lower by more than the margin;
+/// - behind when the test decided the other's lower and lengua's median is higher by more than
+///   the margin: a row decided behind at 1.06× is behind.
+///
+/// A verdict that isn't the test's (level, not measured) stays as it is. Where the clock counts
+/// in ticks as long as the run (CPU time on Windows, for a short workload), the medians are whole
+/// ticks and often the same, and such a row is then level whatever the test decides.
+#[must_use]
+pub fn with_margin(tested: Verdict, lengua: f64, other: f64) -> Verdict {
+    match tested {
+        Verdict::Undecided => Verdict::Level,
+        Verdict::Ahead if lengua < other && !within_margin(lengua, other) => Verdict::Ahead,
+        Verdict::Behind if lengua > other && !within_margin(lengua, other) => Verdict::Behind,
+        Verdict::Ahead | Verdict::Behind => Verdict::Level,
+        Verdict::Level | Verdict::Unmeasured => tested,
+    }
+}
+
+/// The gate's verdict on `measure`, one taken as measured, peak memory or size, lengua's value
+/// against another version's. Peak memory has the margin ([`Measure::margined`]): level when
+/// lengua's is within [`MARGIN`] of the other's, ahead when it is lower by more, and behind when
+/// it is higher by more. Size has none: ahead when lengua's is smaller, behind when it is larger
+/// by a byte, and level only when the two are the same.
+#[must_use]
+pub fn measured_verdict(measure: Measure, lengua: f64, other: f64) -> Verdict {
+    if measure.margined() && within_margin(lengua, other) {
+        return Verdict::Level;
+    }
     match lengua.total_cmp(&other) {
         Ordering::Less => Verdict::Ahead,
         Ordering::Greater => Verdict::Behind,
-        Ordering::Equal => Verdict::Undecided,
+        Ordering::Equal => Verdict::Level,
     }
 }
 
@@ -263,8 +365,8 @@ pub fn median(values: &[f64]) -> Option<f64> {
     }
 }
 
-/// One line of KNOWN_BEHIND: a row and measure where lengua isn't ahead yet, each field a name or
-/// `*` for every one.
+/// One line of KNOWN_BEHIND: a row and measure where lengua is behind, each field a name or `*`
+/// for every one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listed {
     /// The runner.
@@ -314,7 +416,7 @@ impl Listed {
     }
 }
 
-/// KNOWN_BEHIND: the rows where lengua isn't ahead yet.
+/// KNOWN_BEHIND: the rows where lengua is behind by more than the margin.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KnownBehind {
     /// Its lines, in order.
@@ -409,9 +511,12 @@ pub struct Found {
     pub verdict: Verdict,
 }
 
-/// Where `found`, a run's verdicts on `target`, disagree with `known`: each row where lengua isn't
-/// ahead that the list doesn't name, and each row the list names where lengua is ahead now, which
-/// the list must then leave out, as it only shrinks. Empty when they agree.
+/// Where `found`, a run's verdicts on `target`, disagree with `known`: each row where lengua is
+/// behind that the list doesn't name, and each row the list names where lengua is level or ahead
+/// now, which the list must then leave out, as it only shrinks. A level row the list doesn't name
+/// is no problem, and neither is a row that wasn't measured, named or not: the bench fails on the
+/// version that couldn't be measured, and the list keeps its line until a run measures the row.
+/// Empty when they agree.
 #[must_use]
 pub fn ratchet(known: &KnownBehind, target: &str, found: &[Found]) -> Vec<String> {
     let mut problems = Vec::new();
@@ -423,22 +528,30 @@ pub fn ratchet(known: &KnownBehind, target: &str, found: &[Found]) -> Vec<String
             row.versus,
             row.measure.name()
         );
-        match (row.verdict, named) {
-            (Verdict::Ahead, Some(listed)) if listed.every_row() => problems.push(format!(
-                "{what}: lengua is ahead, and KNOWN_BEHIND line {} still names every row of \
-                 {target}: write out the rows where lengua isn't ahead in its place, as the run's \
-                 KNOWN_BEHIND-{target}.txt does",
+        // The test's own undecided is level, should a caller pass it without the margin.
+        let verdict = match row.verdict {
+            Verdict::Undecided => Verdict::Level,
+            other => other,
+        };
+        match (verdict, named) {
+            (Verdict::Ahead | Verdict::Level, Some(listed)) if listed.every_row() => {
+                problems.push(format!(
+                    "{what}: lengua is {}, and KNOWN_BEHIND line {} still names every row of \
+                     {target}: write out the rows where lengua is behind in its place, as the \
+                     run's KNOWN_BEHIND-{target}.txt does",
+                    verdict.name(),
+                    listed.line
+                ));
+            }
+            (Verdict::Ahead | Verdict::Level, Some(listed)) => problems.push(format!(
+                "{what}: lengua is {} now, and KNOWN_BEHIND line {} names the row: take it out, \
+                 as the list names only rows behind by more than the margin, and only shrinks",
+                verdict.name(),
                 listed.line
             )),
-            (Verdict::Ahead, Some(listed)) => problems.push(format!(
-                "{what}: lengua is ahead now, and KNOWN_BEHIND line {} names the row: take it \
-                 out, as the list only shrinks",
-                listed.line
-            )),
-            (Verdict::Behind | Verdict::Undecided, None) => problems.push(format!(
-                "{what}: lengua is {}, and KNOWN_BEHIND doesn't name the row: make lengua's \
-                 program or its engine faster, where the list may not grow",
-                row.verdict.name()
+            (Verdict::Behind, None) => problems.push(format!(
+                "{what}: lengua is behind by more than the margin, and KNOWN_BEHIND doesn't name \
+                 the row: make lengua's program or its engine faster, where the list may not grow"
             )),
             _ => {}
         }
@@ -487,19 +600,30 @@ pub fn grown(
 }
 
 /// The lines of KNOWN_BEHIND that `found`, a run's verdicts on `target`, would pass with: a line
-/// for each row and measure where lengua isn't ahead, with what the gate found.
+/// for each row and measure where lengua is behind, and one for each that wasn't measured and
+/// that `known`, the list as it is, names, with what the gate found. A level or ahead row gets no
+/// line; a row not measured keeps the line it has and gets none it hasn't, so the list the run
+/// proposes leaves no row out unmeasured and names none it didn't find behind.
 #[must_use]
-pub fn proposal(target: &str, found: &[Found]) -> String {
+pub fn proposal(known: &KnownBehind, target: &str, found: &[Found]) -> String {
     let mut lines = String::new();
-    for row in found.iter().filter(|row| row.verdict != Verdict::Ahead) {
-        let _ = writeln!(
-            lines,
-            "{target} {} {} {}  # {}",
-            row.workload,
-            row.versus,
-            row.measure.name(),
-            row.verdict.name()
-        );
+    for row in found {
+        let named = known.naming(target, &row.workload, &row.versus, row.measure);
+        let listed = match row.verdict {
+            Verdict::Behind => true,
+            Verdict::Unmeasured => named.is_some(),
+            Verdict::Ahead | Verdict::Level | Verdict::Undecided => false,
+        };
+        if listed {
+            let _ = writeln!(
+                lines,
+                "{target} {} {} {}  # {}",
+                row.workload,
+                row.versus,
+                row.measure.name(),
+                row.verdict.name()
+            );
+        }
     }
     lines
 }
@@ -588,9 +712,96 @@ mod tests {
         assert_eq!(median(&[3.0, 1.0, 2.0]), Some(2.0));
         assert_eq!(median(&[4.0, 1.0, 2.0, 3.0]), Some(2.5));
         assert_eq!(median(&[]), None);
-        assert_eq!(measured_verdict(1.0, 2.0), Verdict::Ahead);
-        assert_eq!(measured_verdict(2.0, 1.0), Verdict::Behind);
-        assert_eq!(measured_verdict(2.0, 2.0), Verdict::Undecided);
+    }
+
+    /// The margin's edges: 5% of the other's value either way, both ends within.
+    #[test]
+    fn the_margin_is_five_percent_either_way_with_its_ends_within() {
+        assert!((MARGIN - 0.05).abs() < f64::EPSILON);
+        for within in [95.0, 96.0, 100.0, 104.0, 105.0] {
+            assert!(within_margin(within, 100.0), "{within}");
+        }
+        for outside in [0.0, 94.0, 94.9, 105.1, 106.0, 200.0] {
+            assert!(!within_margin(outside, 100.0), "{outside}");
+        }
+        // Two zeros are level; a zero and a tick of the clock aren't; no number is no measure.
+        assert!(within_margin(0.0, 0.0));
+        assert!(!within_margin(0.0, 15_625_000.0));
+        assert!(!within_margin(15_625_000.0, 0.0));
+        assert!(!within_margin(f64::NAN, 100.0));
+    }
+
+    /// CPU and wall time: ahead and behind are what the test decides past the margin, and
+    /// everything else is level.
+    #[test]
+    fn a_tested_measure_is_ahead_or_behind_only_past_the_margin() {
+        // Decided behind at 1.06× is behind; at 1.05× and at 1.02× it is level.
+        assert_eq!(with_margin(Verdict::Behind, 106.0, 100.0), Verdict::Behind);
+        assert_eq!(with_margin(Verdict::Behind, 105.0, 100.0), Verdict::Level);
+        assert_eq!(with_margin(Verdict::Behind, 102.0, 100.0), Verdict::Level);
+        // Decided ahead at 0.94× is ahead; at 0.95× and at 0.98× it is level, not ahead.
+        assert_eq!(with_margin(Verdict::Ahead, 94.0, 100.0), Verdict::Ahead);
+        assert_eq!(with_margin(Verdict::Ahead, 95.0, 100.0), Verdict::Level);
+        assert_eq!(with_margin(Verdict::Ahead, 98.0, 100.0), Verdict::Level);
+        // Undecided is level, whatever the medians.
+        for lengua in [50.0, 100.0, 130.0] {
+            let verdict = with_margin(Verdict::Undecided, lengua, 100.0);
+            assert_eq!(verdict, Verdict::Level, "{lengua}");
+        }
+        // The test and the medians on different sides: level.
+        assert_eq!(with_margin(Verdict::Ahead, 120.0, 100.0), Verdict::Level);
+        assert_eq!(with_margin(Verdict::Behind, 80.0, 100.0), Verdict::Level);
+        // Medians of the same tick: level, whatever the test decided.
+        assert_eq!(with_margin(Verdict::Behind, 0.0, 0.0), Verdict::Level);
+        // A row not measured stays so.
+        let unmeasured = with_margin(Verdict::Unmeasured, 0.0, 0.0);
+        assert_eq!(unmeasured, Verdict::Unmeasured);
+        // From the runs themselves: apart by far more than the margin, and by less than it.
+        let verdict = |lengua: &[f64], other: &[f64]| {
+            let tested = tested_verdict(lengua, other, LOOK_ALPHA).0;
+            let medians = (median(lengua), median(other));
+            let (Some(ours), Some(theirs)) = medians else {
+                return Verdict::Unmeasured;
+            };
+            with_margin(tested, ours, theirs)
+        };
+        let (low, high) = (run_of(1, 20), run_of(41, 60));
+        assert_eq!(verdict(&low, &high), Verdict::Ahead);
+        assert_eq!(verdict(&high, &low), Verdict::Behind);
+        let (near, far) = (run_of(1001, 1020), run_of(1021, 1040));
+        assert_eq!(tested_verdict(&far, &near, LOOK_ALPHA).0, Verdict::Behind);
+        assert_eq!(verdict(&far, &near), Verdict::Level);
+        assert_eq!(verdict(&near, &far), Verdict::Level);
+        assert_eq!(verdict(&[], &near), Verdict::Unmeasured);
+    }
+
+    /// Peak memory has the margin; size, the same on every run, is compared to the byte.
+    #[test]
+    fn memory_has_the_margin_and_size_is_exact() {
+        let memory = |lengua, other| measured_verdict(Measure::Memory, lengua, other);
+        assert_eq!(memory(94.0, 100.0), Verdict::Ahead);
+        assert_eq!(memory(95.0, 100.0), Verdict::Level);
+        assert_eq!(memory(100.0, 100.0), Verdict::Level);
+        assert_eq!(memory(105.0, 100.0), Verdict::Level);
+        assert_eq!(memory(106.0, 100.0), Verdict::Behind);
+        let size = |lengua, other| measured_verdict(Measure::Size, lengua, other);
+        assert_eq!(size(999.0, 1000.0), Verdict::Ahead);
+        assert_eq!(size(1000.0, 1000.0), Verdict::Level);
+        assert_eq!(size(1001.0, 1000.0), Verdict::Behind);
+        let margined = Measure::ALL.map(Measure::margined);
+        assert_eq!(margined, [true, true, true, false]);
+    }
+
+    /// Each verdict has a word of its own, which names it back.
+    #[test]
+    fn each_verdict_has_its_word() {
+        let words = Verdict::ALL.map(Verdict::name);
+        let expected = ["ahead", "behind", "level", "undecided", "not measured"];
+        assert_eq!(words, expected);
+        for verdict in Verdict::ALL {
+            assert_eq!(Verdict::from_name(verdict.name()), Some(verdict));
+        }
+        assert_eq!(Verdict::from_name("tied"), None);
     }
 
     /// KNOWN_BEHIND's lines: rows of four fields, names or `*`, reasons after `#`.
@@ -613,8 +824,9 @@ mod tests {
         assert!(bad[1].contains("\"linux-riscv\""), "{bad:?}");
     }
 
-    /// A row behind that the list doesn't name fails the run, and so does one ahead that it
-    /// names; the list that passes names exactly the rows not ahead.
+    /// A row behind that the list doesn't name fails the run, and so does one level or ahead
+    /// that it names; a level row it doesn't name passes, and a row not measured says nothing;
+    /// the list that passes names exactly the rows behind.
     #[test]
     fn the_ratchet_holds_the_list_to_what_the_run_found() {
         let found = |workload: &str, measure, verdict| Found {
@@ -625,26 +837,53 @@ mod tests {
         };
         let runs = [
             found("add", Measure::Cpu, Verdict::Behind),
-            found("add", Measure::Wall, Verdict::Undecided),
+            found("add", Measure::Wall, Verdict::Level),
+            found("add", Measure::Memory, Verdict::Level),
             found("add", Measure::Size, Verdict::Ahead),
+            found("sort", Measure::Cpu, Verdict::Behind),
+            found("sort", Measure::Wall, Verdict::Unmeasured),
+            found("sort", Measure::Memory, Verdict::Unmeasured),
         ];
-        let known =
-            KnownBehind::parse("linux-x86_64 add c-wasm cpu\nlinux-x86_64 add c-wasm size\n")
-                .expect("a list");
+        let known = KnownBehind::parse(
+            "linux-x86_64 add c-wasm cpu\nlinux-x86_64 add c-wasm memory\n\
+             linux-x86_64 add c-wasm size\nlinux-x86_64 sort c-wasm memory\n",
+        )
+        .expect("a list");
         let problems = ratchet(&known, "linux-x86_64", &runs);
-        assert_eq!(problems.len(), 2, "{problems:?}");
-        let undecided = problems[0].contains("wall: lengua is undecided");
-        let ahead = problems[1].contains("size: lengua is ahead now");
-        assert!(undecided && ahead, "{problems:?}");
-        // The list the run proposes passes it.
-        let proposed = KnownBehind::parse(&proposal("linux-x86_64", &runs)).expect("a list");
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        let level = problems[0].contains("add c-wasm memory: lengua is level now");
+        let ahead = problems[1].contains("add c-wasm size: lengua is ahead now");
+        let behind = problems[2].contains("sort c-wasm cpu: lengua is behind by more than");
+        assert!(level && ahead && behind, "{problems:?}");
+        // The list the run proposes passes it: the rows behind, and the row not measured that
+        // the list named, but not the one it didn't name.
+        let proposed = proposal(&known, "linux-x86_64", &runs);
+        let lines: Vec<&str> = proposed.lines().collect();
+        let expected = [
+            "linux-x86_64 add c-wasm cpu  # behind",
+            "linux-x86_64 sort c-wasm cpu  # behind",
+            "linux-x86_64 sort c-wasm memory  # not measured",
+        ];
+        assert_eq!(lines, expected);
+        let proposed = KnownBehind::parse(&proposed).expect("a list");
         assert!(ratchet(&proposed, "linux-x86_64", &runs).is_empty());
-        // A line that names every row passes nothing ahead.
+        // The test's own undecided is held as level is.
+        let undecided = [found("add", Measure::Memory, Verdict::Undecided)];
+        let problems = ratchet(&known, "linux-x86_64", &undecided);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("lengua is level now"), "{problems:?}");
+        assert!(proposal(&known, "linux-x86_64", &undecided).is_empty());
+        // A line that names every row passes nothing level or ahead.
         let every = KnownBehind::parse("linux-x86_64 * * *\n").expect("a list");
         let problems = ratchet(&every, "linux-x86_64", &runs);
-        assert_eq!(problems.len(), 1, "{problems:?}");
-        assert!(problems[0].contains("names every row"), "{problems:?}");
-        // Another target's lines say nothing of this one's.
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        assert!(
+            problems[0].contains("wall: lengua is level"),
+            "{problems:?}"
+        );
+        let all = problems.iter().all(|one| one.contains("names every row"));
+        assert!(all, "{problems:?}");
+        // Another target's lines say nothing of this one's: its two rows behind are unnamed.
         assert_eq!(ratchet(&every, "macos-aarch64", &runs).len(), 2);
     }
 

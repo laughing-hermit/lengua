@@ -29,7 +29,9 @@ import (rule 3 of [the WebAssembly dialect](power-of-10-webassembly.md)).
 A descriptor not in use gives `BADF`. A program never opens a connection or a listener itself:
 lengua makes what the idea names before the program starts, so a program reaches only those.
 Files are names inside the working folder; a name that would leave it, with `..` or from `/`,
-gives `NOTCAPABLE`, and a link, which no name may lead through, gives `ACCES`.
+gives `NOTCAPABLE`, and a link, which no name may lead through, gives `ACCES`. So does a file
+with more than one name, a hard link: its other name may be outside the folder, so `path_open`
+opens no such file, to read or to write. A program reports it as it does any file it can't open.
 
 lengua's host passes each read of a file to the system once. On a local disk, a regular file's
 read gives every byte it asks for, up to the file's end, as the proofs take it: a read that

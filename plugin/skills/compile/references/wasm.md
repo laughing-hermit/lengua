@@ -419,6 +419,9 @@ with a fix:
 - an access with a computed index that no check keeps inside its region, or a constant one past
   it; a write to a read-only region; a call that writes a buffer while another argument names the
   same bytes; a call path too deep for the engine's stack;
+- `args_get` or `environ_get` called before the count and the size `args_sizes_get` or
+  `environ_sizes_get` wrote are loaded and checked, unsigned, against the two regions, in the
+  same function ([the dialect](power-of-10-webassembly.md), memory safety, shows the lines);
 - the trapping float-to-integer conversions (use `trunc_sat`), `reinterpret` of a float that may
   be NaN, a division whose divisor may be 0, relaxed SIMD, atomics, reference types, annotations;
 - a function never called, a local or a constant never read, and code that never runs;
@@ -426,8 +429,10 @@ with a fix:
   length, a loop's count, a division or a float operation, or reaches a host call but as the bytes
   it writes out: [constant-time.md](constant-time.md) says what to write instead.
 
-What the rules can't settle, such as an address loaded from memory or what `args_get` writes, is
-left to the proof, which `check` reports with the rest.
+What the rules can't settle, such as an address loaded from memory or an index checked against a
+limit loaded from memory, is left to the proof, which `check` reports with the rest. After a
+write of that kind the rules know nothing of what memory holds, so fill an iovec array after it,
+not before.
 
 ## lengua's library
 

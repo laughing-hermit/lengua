@@ -14,7 +14,10 @@
 //! The runs alternate: a round runs every version once, in an order shuffled from round to round.
 //! On each row, lengua against one other version, `lengua::gate` decides CPU and wall time with
 //! a one-sided Mann-Whitney U test, adding runs until both decide, and peak memory and size as
-//! measured. Everything the run measured goes to target/bench/results-<target>.json; the report,
+//! measured; a measure within the gate's noise margin, or one the test doesn't decide, is level,
+//! neither ahead nor behind (`gate::MARGIN`).
+//!
+//! Everything the run measured goes to target/bench/results-<target>.json; the report,
 //! BENCHMARKS-<target>.md, is written from that file alone; the lines of KNOWN_BEHIND the run
 //! passes with go to target/bench/KNOWN_BEHIND-<target>.txt. The bench fails where the run and
 //! KNOWN_BEHIND disagree, where a change in KNOWN_BEHIND's history named a row the list before it
@@ -1031,7 +1034,7 @@ fn misses(runner: &Runner, prepared: &Prepared, version: &Version) -> [Option<f6
 /// What the gate found on a row's measure.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Decided {
-    /// `ahead`, `behind` or `undecided`.
+    /// `ahead`, `level`, `behind` or `not measured`, as [`Verdict::name`] writes them.
     verdict: String,
     /// lengua's median, or its value.
     lengua: Option<f64>,
@@ -1042,31 +1045,40 @@ struct Decided {
 }
 
 impl Decided {
-    /// A measure the run didn't decide.
-    fn undecided() -> Self {
+    /// A measure the run has no values for.
+    fn unmeasured() -> Self {
         Self {
-            verdict: Verdict::Undecided.name().to_owned(),
+            verdict: Verdict::Unmeasured.name().to_owned(),
             ..Self::default()
         }
     }
 
-    /// A measure taken as measured: lengua's value against the other's.
-    fn measured(lengua: f64, other: f64) -> Self {
+    /// `measure`, one taken as measured, peak memory or size: lengua's value against the
+    /// other's, with the gate's margin where the measure has it.
+    fn measured(measure: Measure, lengua: f64, other: f64) -> Self {
+        let verdict = gate::measured_verdict(measure, lengua, other);
         Self {
-            verdict: gate::measured_verdict(lengua, other).name().to_owned(),
+            verdict: verdict.name().to_owned(),
             lengua: Some(lengua),
             other: Some(other),
             p: None,
         }
     }
 
-    /// A measure the test decides, over the first `runs` values of each.
+    /// A measure the test decides, over the first `runs` values of each: what the test found,
+    /// held to the gate's margin by the two medians, and the test's own p.
     fn tested(lengua: &[u64], other: &[u64], runs: usize) -> Self {
-        let (verdict, p) = tested(&lengua[..runs], &other[..runs]);
+        let (test, p) = tested(&lengua[..runs], &other[..runs]);
+        let ours = gate::median(&floats(&lengua[..runs]));
+        let theirs = gate::median(&floats(&other[..runs]));
+        let verdict = match (ours, theirs) {
+            (Some(ours), Some(theirs)) => gate::with_margin(test, ours, theirs),
+            _ => Verdict::Unmeasured,
+        };
         Self {
             verdict: verdict.name().to_owned(),
-            lengua: gate::median(&floats(&lengua[..runs])),
-            other: gate::median(&floats(&other[..runs])),
+            lengua: ours,
+            other: theirs,
             p: Some(p),
         }
     }
@@ -1086,7 +1098,8 @@ struct Row {
 }
 
 /// The row of `other` against `lengua`, over the runs both have: CPU and wall time decided by
-/// the test at a look's level, peak memory by the median of each one's peaks, and size as it is.
+/// the test at a look's level and held to the gate's margin, peak memory by the median of each
+/// one's peaks with the same margin, and size as it is, to the byte.
 /// Against a native build, lengua's size is its module's and `runtime`'s, the bytes of the
 /// lengua-mcp that runs it, as a native build needs nothing of lengua's to run; against another
 /// module, which runs in the same lengua-mcp, it is the module's alone.
@@ -1097,7 +1110,7 @@ fn row(lengua: &Measured, other: &Measured, runtime: u64) -> Row {
         return Row {
             versus: other.name.clone(),
             runs,
-            measures: vec![Decided::undecided(); Measure::ALL.len()],
+            measures: vec![Decided::unmeasured(); Measure::ALL.len()],
             problem: problem.or_else(|| Some("no runs were counted".to_owned())),
         };
     }
@@ -1106,8 +1119,8 @@ fn row(lengua: &Measured, other: &Measured, runtime: u64) -> Row {
         gate::median(&floats(&peaks[..runs.min(peaks.len())]))
     };
     let memory = match (peak(lengua), peak(other)) {
-        (Some(ours), Some(theirs)) => Decided::measured(ours, theirs),
-        _ => Decided::undecided(),
+        (Some(ours), Some(theirs)) => Decided::measured(Measure::Memory, ours, theirs),
+        _ => Decided::unmeasured(),
     };
     let size = if NATIVE.contains(&other.name.as_str()) {
         lengua.size.saturating_add(runtime)
@@ -1121,7 +1134,7 @@ fn row(lengua: &Measured, other: &Measured, runtime: u64) -> Row {
             Decided::tested(&lengua.cpu_ns, &other.cpu_ns, runs),
             Decided::tested(&lengua.wall_ns, &other.wall_ns, runs),
             memory,
-            Decided::measured(size as f64, other.size as f64),
+            Decided::measured(Measure::Size, size as f64, other.size as f64),
         ],
         problem: None,
     }
@@ -1212,6 +1225,10 @@ struct Results {
     look_alpha: f64,
     /// The most runs of each version of a workload.
     max_runs: usize,
+    /// The gate's noise margin, as a share of the other version's value; 0 in the results of a
+    /// run from before the gate had one.
+    #[serde(default)]
+    margin: f64,
     /// The longest a workload's rows ran, in seconds.
     row_seconds: u64,
     /// The rounds after each version's checked run that weren't counted.
@@ -1273,6 +1290,13 @@ fn compiler(language: &str) -> &'static str {
     }
 }
 
+/// The C++ standard every native C++ build is held to: C++17 with GNU's extensions, which the
+/// workloads' main.cpp files are written in (`std::optional`, `std::string_view`,
+/// `std::from_chars`). It is GCC's own default, and that of wasi-sdk's clang, which builds the
+/// same files to WebAssembly; Apple's clang and LLVM's clang on Windows default to an older
+/// standard and built none of those files without it.
+const CPP_STANDARD: &str = "-std=gnu++17";
+
 /// The sets of flags to build `language`'s native version with, in the order to try them, each
 /// with the libraries to link after the source: for speed on this CPU, as the system's
 /// developers build. Where the compiler doesn't take the CPU's own name, a CPU flag that every
@@ -1317,6 +1341,9 @@ fn flag_sets(language: &str) -> Vec<(Vec<&'static str>, Vec<&'static str>)> {
         for cpu in cpus {
             let mut set = flags.to_vec();
             set.push(*cpu);
+            if language == "cpp" {
+                set.push(CPP_STANDARD);
+            }
             sets.push((set, libraries.to_vec()));
         }
     }
@@ -1804,11 +1831,9 @@ fn wasm_toolchains(folder: &Path) -> BTreeMap<String, String> {
     toolchains
 }
 
-/// The verdict `name` names.
+/// The verdict `name` names; a word that names none is a measure not measured.
 fn verdict_named(name: &str) -> Verdict {
-    let decided = [Verdict::Ahead, Verdict::Behind];
-    let found = decided.into_iter().find(|verdict| verdict.name() == name);
-    found.unwrap_or(Verdict::Undecided)
+    Verdict::from_name(name).unwrap_or(Verdict::Unmeasured)
 }
 
 /// What the run found on each row and measure of `results`, as the ratchet takes it.
@@ -1829,18 +1854,22 @@ fn found(results: &Results) -> Vec<Found> {
     found
 }
 
-/// The lines of KNOWN_BEHIND that `results`, which found `found`, pass with, and what they are.
-fn proposal(results: &Results, found: &[Found]) -> String {
+/// The lines of KNOWN_BEHIND that `results`, which found `found`, pass with, and what they are:
+/// the rows behind by more than the margin, and the rows not measured that `known`, the list as
+/// it is, names.
+fn proposal(known: &KnownBehind, results: &Results, found: &[Found]) -> String {
     let Results {
         target,
         commit,
         run,
         ..
     } = results;
+    let margin = percent(results.margin);
     let mut text = format!(
-        "# The lines of KNOWN_BEHIND for {target} that the run passes with: a line for each row \
-         and measure\n# where lengua isn't ahead, with what the run found ({run}, at {commit}). \
-         They take the place\n# of KNOWN_BEHIND's lines for {target}.\n"
+        "# The lines of KNOWN_BEHIND for {target} that the run passes with ({run}, at {commit}): \
+         a line for\n# each row and measure where lengua is behind by more than the gate's \
+         margin of {margin}, and the\n# line the list has for each row the run couldn't measure. \
+         A level row has no line. They take\n# the place of KNOWN_BEHIND's lines for {target}.\n"
     );
     if !results.every_workload {
         let workloads = &results.workloads;
@@ -1848,8 +1877,13 @@ fn proposal(results: &Results, found: &[Found]) -> String {
         let measured = measured.join(", ");
         let _ = writeln!(text, "# Only these workloads were measured: {measured}.");
     }
-    text.push_str(&gate::proposal(target, found));
+    text.push_str(&gate::proposal(known, target, found));
     text
+}
+
+/// A share as a percentage: 0.05 is `5%`.
+fn percent(share: f64) -> String {
+    format!("{:.0}%", share * 100.0)
 }
 
 /// A number to three figures.
@@ -1925,7 +1959,10 @@ fn mark(verdict: &str) -> &'static str {
     match verdict {
         "ahead" => "✓",
         "behind" => "✗",
-        _ => "?",
+        "level" => "≈",
+        // The results of a run from before the gate had its margin.
+        "undecided" => "?",
+        _ => "–",
     }
 }
 
@@ -2167,6 +2204,8 @@ fn report(results: &Results) -> String {
         warm_up,
         ..
     } = results;
+    let margin = percent(results.margin);
+    let (low, high) = (1.0 - results.margin, 1.0 + results.margin);
     let looks: Vec<String> = results.looks.iter().map(ToString::to_string).collect();
     let looks = looks.join(", ");
     let mut out = String::new();
@@ -2220,8 +2259,19 @@ fn report(results: &Results) -> String {
          {looks} runs of each version, each look deciding at p < {look_alpha} ({alpha} split \
          over the looks), until both of the row's tests decide, up to {max_runs} runs or \
          {row_seconds} seconds. Peak memory, the median of the runs' peaks, and size are \
-         compared as measured. A measure the runs don't decide is undecided, never level, and \
-         KNOWN_BEHIND must name its row.\n"
+         compared as measured.\n"
+    );
+    let _ = writeln!(
+        out,
+        "The gate has a noise margin of {margin}, as the runners are shared machines and a row \
+         this close changes sides from one run to the next. A measure is level when the test \
+         doesn't decide it (its p isn't below {look_alpha}), or when lengua's value is from \
+         {low:.2} to {high:.2} times the other version's, whatever the test decides; for peak \
+         memory, when the two medians are that close. It is ahead or behind only past the \
+         margin, and for CPU and wall time only when the test decides it too. Size is the same \
+         on every run and has no margin: a byte more is behind. KNOWN_BEHIND names the rows \
+         where lengua is behind; a level row needs no line there and doesn't fail the gate. \
+         Every ratio and every p is printed below, whatever the verdict.\n"
     );
     let _ = writeln!(out, "The versions:\n");
     let _ = writeln!(out, "- lengua: lengua-mcp, run in {engine}");
@@ -2232,7 +2282,8 @@ fn report(results: &Results) -> String {
     let _ = writeln!(
         out,
         "lengua against each version, on CPU time, wall time, peak memory and size, in that \
-         order: ✓ lengua is ahead, ✗ behind, ? undecided, – not measured.\n"
+         order: ✓ lengua is ahead by more than {margin}, ✗ behind by more than {margin}, ≈ level \
+         (within {margin}, or not decided), – not measured.\n"
     );
     let _ = writeln!(out, "| workload | {} |", gate::VERSUS.join(" | "));
     let _ = writeln!(out, "|---|{}", "---|".repeat(gate::VERSUS.len()));
@@ -2271,7 +2322,8 @@ fn report(results: &Results) -> String {
     let _ = writeln!(out, "\n## Every row\n");
     let _ = writeln!(
         out,
-        "Each measure's verdict, lengua's median over the other version's, and the test's p.\n"
+        "Each measure's verdict (ahead, level, behind, or not measured), lengua's median over \
+         the other version's, and the test's p.\n"
     );
     row_lines(&mut out, &results.workloads);
     for outcome in &results.workloads {
@@ -2386,6 +2438,7 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
         alpha: gate::ALPHA,
         look_alpha: gate::LOOK_ALPHA,
         max_runs: gate::MAX_RUNS,
+        margin: gate::MARGIN,
         row_seconds: seconds,
         warm_up: WARM_UP,
         apart_runs: APART_RUNS,
@@ -2418,7 +2471,7 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
     std::fs::write(&file, json).map_err(|error| failed(file.display(), error))?;
     write_report(root, &results)?;
     let file = out.join(format!("KNOWN_BEHIND-{target}.txt"));
-    let lines = proposal(&results, &found);
+    let lines = proposal(&known, &results, &found);
     std::fs::write(&file, lines).map_err(|error| failed(file.display(), error))?;
     let mut failures = results.ratchet.clone();
     failures.extend(results.grown.iter().cloned());

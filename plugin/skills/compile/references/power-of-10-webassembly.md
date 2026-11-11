@@ -209,9 +209,36 @@ stays inside its own region is tested, not proven, and `check`'s memory line lis
 - **Borrowed buffers.** Every buffer a host call reads or writes (an iovec array and the buffers
   it points to, a path's bytes, the place a call writes a count) lies inside a region with room for
   every byte the call may touch: [the host](host.md) lists what each call borrows.
+- **The arguments and the environment.** `args_get` and `environ_get` take no length: the host
+  writes an address, 4 bytes, for each argument or variable into the first region, and every byte
+  of their text into the second. So call `args_sizes_get` (or `environ_sizes_get`) first, load
+  the count and the size it wrote, and leave unless both fit, before the call, in the same
+  function:
+
+  ```wat
+  (local.set $err
+    (call $args_sizes_get (global.get $sizes) (i32.add (global.get $sizes) (i32.const 4))))
+  (if (local.get $err) (then (call $assert_fail (i32.const 1)) unreachable))
+  ;; At most MAX_ARGUMENTS addresses: $argv.size is 4 times that.
+  (br_if $usage (i32.gt_u (i32.load (global.get $sizes)) (global.get $MAX_ARGUMENTS)))
+  ;; Text longer than $args holds.
+  (br_if $usage (i32.gt_u (i32.load offset=4 (global.get $sizes)) (global.get $args.size)))
+  (local.set $err (call $args_get (global.get $argv) (global.get $args)))
+  ```
+
+  `check` follows the two sizes from `$sizes` through an `i32.load`, and a local when the load
+  is kept in one, to an unsigned comparison (`i32.eq` and `i32.ne` with a constant count too),
+  and refuses an `args_get` whose count or size no check bounds, or bounds past its region. A
+  store into `$sizes`, a call of one of main.wat's own functions, or a write the rules can't
+  bound, between `args_sizes_get` and the load, makes the loaded number no longer the host's.
 
 A program whose design needs an address kept in memory (a table of pointers) is "tested, not
 proven" for memory, never proven: the memory rules can't follow a loaded address to its owner.
+The same holds for a write at an index checked only against a limit loaded from memory, and for
+one in an unsafe block: the proof holds it inside the program's memory, not inside its region,
+so after it `check` no longer knows what any region holds. An iovec array filled before such a
+write is the proof's to hold at the call (fill it after the write, at constant offsets, for the
+rules to follow it), and `args_get` after one is refused.
 
 ## Numbers
 
