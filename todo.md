@@ -134,10 +134,10 @@ memory.
 
 Each was stopped once or more, recorded below under "Stopped by the safety filter", and not
 retried, reworded or passed to another model. On 2026-11-10 the owner changed the model to Fable
-5.2 themselves and said of these three: "yes try them". Each got one try, on 2026-11-10 and 11.
-None was stopped again, and all three are done. What each left open is the owner's.
+5.2 themselves and said of these three: "yes try them". Each got one try, on 2026-11-10 and 11,
+and none was stopped again. What each left open is the owner's.
 - **Tests that try to get past the sandbox on macOS and Windows** (stopped 2026-11-05, after
-  three stops near that ground). **Done on 2026-11-10**, as the review of the host:
+  three stops near that ground). **Tried on 2026-11-10, with no stop**, as the review of the host:
   [docs/reviews/host-2026-11-10.md](docs/reviews/host-2026-11-10.md), with a test that failed
   for each finding, its fix, and the suite on all five runners (42914865765); "The review of the
   host" below has it. The sandbox of that stop belonged to the native macOS and Windows ports,
@@ -687,6 +687,8 @@ this file at the tag `native-final`.
       in the first run (42661776298), whose rows not ahead made the list, and in run 42756074550
       (1.00×), and is undecided now (1.00×).
 
+    So 19 of the 22 were ahead in run 42756074550, and the other 3 undecided there.
+
   **What the three runs show, said plainly.** Rows of small programs and of peak memory move
   between ahead and behind from run to run:
   - The same run found 20 rows ahead that the list named, and they left it (commit 28afe67).
@@ -699,10 +701,10 @@ this file at the tag `native-final`.
 
   So the ratchet takes a row out on one run that the next run finds behind again, and the list
   may not take it back. The 20 rows taken out this time can do the same in the next run. With
-  the list as it is, a bench run fails wherever one of these rows doesn't come out ahead, and
-  no change to lengua's programs settles a row that sits at 1.00×. The owner decides: keep the
-  finish line open, accept such rows as stated exceptions, or change what the gate asks of a
-  row this close (more runs, or a margin). Until they pick, it stays open.
+  the list as it is, a bench run fails wherever one of these rows doesn't come out ahead, and a
+  row that sits at 1.00× may stay undecided or change sides whatever the programs do. The owner
+  decides, as above: keep the finish line open, or accept such rows as stated exceptions. Until
+  they pick, it stays open.
 - **The decisions above**, each the owner's to keep or reverse.
 
 ## Deferred, and why
