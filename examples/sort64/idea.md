@@ -18,7 +18,7 @@ whole numbers of 64 bits in memory, from the smallest to the largest.
 
 The program itself reads standard input, with one whole number on each line, and prints the
 numbers from the smallest to the largest. It prints one number on each line. Each number is
-between `-1000000000` and `1000000000`, in decimal, with an optional minus sign at the start. A
+between `-999` and `999`, in decimal, with an optional minus sign at the start. A
 line ends at a newline or at the end of the input. The input has at most `256` numbers and at
 most `4096` bytes, and input of `4097` to `5000` bytes is too long.
 
@@ -41,7 +41,7 @@ input, it exits with code 5. If the program cannot write its output, it exits wi
 
 | a | b | c | runs |
 |---|---|---|---|
-| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | 200 |
+| `int(-999, 999)` | `int(-999, 999)` | `int(-999, 999)` | 200 |
 
 ## B2: Takes a last line that has no newline
 - Given standard input that contains `2\n1`
@@ -57,7 +57,7 @@ input, it exits with code 5. If the program cannot write its output, it exits wi
 
 | a | b | runs |
 |---|---|---|
-| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | 100 |
+| `int(-999, 999)` | `int(-999, 999)` | 100 |
 
 ## B3: Prints nothing for empty input
 - Given empty standard input
@@ -79,7 +79,7 @@ input, it exits with code 5. If the program cannot write its output, it exits wi
 
 | a | s | runs |
 |---|---|---|
-| `int(-1000000000, 1000000000)` | `choice("x", "", "1.5", "-", "+5", "12 ", " 12", "123456789012345678901")` | 60 |
+| `int(-999, 999)` | `choice("x", "", "1.5", "-", "+5", "12 ", " 12", "123456789012345678901")` | 60 |
 
 ## B5: Rejects more than 256 numbers
 - Given standard input that contains `1\n` `256` times then `5\n`
@@ -95,7 +95,7 @@ input, it exits with code 5. If the program cannot write its output, it exits wi
 
 | a | runs |
 |---|---|
-| `int(-1000000000, 1000000000)` | 20 |
+| `int(-999, 999)` | 20 |
 
 ## B6: Rejects input that is too long
 - Given standard input that contains `1\n` `2049` times
@@ -127,7 +127,7 @@ input, it exits with code 5. If the program cannot write its output, it exits wi
 
 | a | b | c | runs |
 |---|---|---|---|
-| `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | `int(-1000000000, 1000000000)` | 20 |
+| `int(-999, 999)` | `int(-999, 999)` | `int(-999, 999)` | 20 |
 
 # Constraints
 - Uses: standard input

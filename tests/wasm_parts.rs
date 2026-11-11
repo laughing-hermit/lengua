@@ -641,3 +641,28 @@ async fn crc32_s_proof_with_its_full_time() {
     }
     session.service.cancel().await.expect("close the session");
 }
+
+/// How far sort64's proofs go with a build's full five minutes: each proof's line is printed,
+/// for a person to read. None is asserted proven; the part must be done, its tests passed.
+#[tokio::test]
+#[ignore = "measures sort64's proofs over five minutes: by hand, or on CI's dispatch"]
+async fn sort64_s_proof_with_its_full_time() {
+    let session = Session::proving_for(Protocol::Discover, 300).await;
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/sort64");
+    let program = Program::new();
+    session
+        .settle_parts(&program, &folder)
+        .await
+        .expect("lines and decimal, which sort64 builds on, are done");
+    write_example(&program, "sort64");
+    session.record(&program).await;
+    let report = session.settle(&program).await;
+    println!("SORT state {}", report["state"]);
+    for field in ["problems", "proofs"] {
+        for line in lines(&report, field) {
+            println!("SORT {field}: {line}");
+        }
+    }
+    assert_eq!(report["state"], "done", "{report}");
+    session.service.cancel().await.expect("close the session");
+}
