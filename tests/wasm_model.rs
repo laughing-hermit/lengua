@@ -302,8 +302,8 @@ const FOLLOWED_IN_FULL: [&str; 8] = [
 ];
 
 /// The fewest programs of examples/ and tests/fixtures that [`programs`] finds: the 15 examples
-/// and the 28 fixtures. The templates come besides.
-const AT_LEAST: usize = 43;
+/// and the 29 fixtures. The templates come besides.
+const AT_LEAST: usize = 44;
 
 /// Whether the program in `folder` is one of [`FOLLOWED_IN_FULL`].
 fn followed_in_full(folder: &Path) -> bool {

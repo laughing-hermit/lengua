@@ -1873,6 +1873,14 @@ const FORGETS_THE_BYTE_BEFORE: (&str, &str) = (
     "(call $count_piece (local.get $got) (global.get $SPACE))",
 );
 
+/// The word and line counter that asserts the byte it carries is at most 100, which a letter
+/// from `e` on isn't: wrong for a text of a buffer-full or more that has one at a buffer-full's
+/// end.
+const ASSERTS_MORE_THAN_A_BYTE: (&str, &str) = (
+    "(global $BYTE_MASK i32 (i32.const 255))",
+    "(global $BYTE_MASK i32 (i32.const 100))",
+);
+
 /// count, whose words in a buffer-full depend on whether the one before ended inside a word,
 /// carries the last byte of one buffer-full to the next, which its `$count_piece` asserts is a
 /// byte. The induction's step finds that the local stays a byte from one time at the read
@@ -1890,11 +1898,15 @@ fn proves_a_vector_word_count_for_every_length_as_its_carried_byte_stays_a_byte(
     let built = build(&source).expect("count builds");
     let module = Module::new(&built, policy).expect("the model");
     let step = crate::prove::induction::step(&module, &blocks[0], &stream_budget(600));
-    let found = step.as_ref().unwrap_or_else(|refused| panic!("{refused:?}"));
+    let found = step
+        .as_ref()
+        .unwrap_or_else(|refused| panic!("{refused:?}"));
     assert_eq!(found.chunk, 64, "{step:?}");
     assert_eq!(found.lookback, 1, "{step:?}");
+    // From a newline to `z`, the least and the most of the text's characters: the range of a
+    // byte of the buffer, loaded and widened.
     assert!(
-        found.hook.ranged.values().any(|range| *range == (0, 255)),
+        found.hook.ranged.values().any(|range| *range == (10, 122)),
         "the carried byte: {step:?}"
     );
     let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(1200));
@@ -1918,7 +1930,30 @@ fn proves_a_vector_word_count_for_every_length_as_its_carried_byte_stays_a_byte(
     let Some(Value::Str(text)) = found.get("text") else {
         panic!("a word counted twice: {found:?}");
     };
-    assert!(text.len() > 64, "a word counted twice: {} bytes", text.len());
+    assert!(
+        text.len() > 64,
+        "a word counted twice: {} bytes",
+        text.len()
+    );
+    // The step takes the carried byte's range from its term, not from what the program
+    // asserts of it: an assertion that it is at most 100 fails for a later byte.
+    let asserts = edited(&source, ASSERTS_MORE_THAN_A_BYTE);
+    let built = build(&asserts).expect("it builds");
+    let module = Module::new(&built, policy).expect("the model");
+    let step = crate::prove::induction::step(&module, &blocks[0], &stream_budget(600));
+    assert!(step.is_err(), "{step:?}");
+    let verdict = prove_wasm(&built, policy, &blocks[0], &stream_budget(1200));
+    let Verdict::Counterexample(found) = &verdict else {
+        panic!("an assertion a byte fails: {verdict:?}");
+    };
+    let Some(Value::Str(text)) = found.get("text") else {
+        panic!("an assertion a byte fails: {found:?}");
+    };
+    assert!(
+        text.len() >= 64,
+        "an assertion a byte fails: {} bytes",
+        text.len()
+    );
 }
 
 /// The vowel counter with a buffer of 64 bytes, as [`LINES_AT_64`].
@@ -1975,7 +2010,9 @@ fn proves_a_vector_vowel_count_for_every_length_by_induction() {
     let source = edited_fixture("vowels", &VOWELS_AT_64);
     let built = build(&source).expect("vowels builds");
     let module = Module::new(&built, policy).expect("the model");
-    let closed = blocks.last().expect("its block with standard output closed");
+    let closed = blocks
+        .last()
+        .expect("its block with standard output closed");
     for (name, block) in [("the count", &blocks[0]), ("closed output", closed)] {
         let step = crate::prove::induction::step(&module, block, &stream_budget(600));
         assert!(step.is_ok(), "{name}: {step:?}");
@@ -1994,7 +2031,11 @@ fn proves_a_vector_vowel_count_for_every_length_by_induction() {
     }
     for (name, bug, longer_than) in [
         ("steps without u", STEPS_LEAVE_U_OUT, 15),
-        ("the last buffer-full's count alone", KEEPS_THE_LAST_FULLS_VOWELS, 64),
+        (
+            "the last buffer-full's count alone",
+            KEEPS_THE_LAST_FULLS_VOWELS,
+            64,
+        ),
         ("a tail a byte short", TAIL_STOPS_A_BYTE_SHORT, 14),
     ] {
         let wrong = edited(&source, bug);

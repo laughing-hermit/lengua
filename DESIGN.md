@@ -359,10 +359,25 @@ question.
 
 By induction, a block is proven for every length when its program reads standard input in one
 loop of its own through `$fill`, as one ASCII text, and maps it byte by byte or counts in step
-with it. From any state the loop can be in at its head, one more buffer-full must keep what it
-writes and counts in step with the formula; the base proves every input of up to a buffer-full.
-A program that reads with `fd_read` itself, reads in several places, waits on `poll_oneoff` or is
+with it. The counts are `len`, `words` and `count` of the text or of the text mapped byte by byte
+(`lower`, `upper`, `tr`), and sums of them, as a count of vowels is; output that is the same for
+every text, as with standard output closed, needs no count. From any state the loop can be in at
+its head, one more buffer-full must keep what it writes and counts in step with the formula; the
+base proves every input of up to a buffer-full. At the head, what a time round changes is any
+value, a count is anything it can have grown to, and a value that stays in a range by its own
+terms, as a byte carried from one buffer-full to the next does, is any value in that range. A
+program that reads with `fd_read` itself, reads in several places, waits on `poll_oneoff` or is
 on the network is proven by length only.
+
+The base takes each final piece of up to a buffer-full, one length at a time where one question
+for all of them takes too many paths. So the buffer's size decides whether the proof for every
+length ends in its time: with a buffer of 4,096 bytes it does, and with one of 64 KiB the step
+holds but the base runs out of time, and the line says how far it got.
+
+Counts meet as terms, with no solver: the conditions a count counts that test the same byte are
+written as the byte's sets of values, so five counts of one letter each and one count of the
+bytes that are one of the five are the same term (`src/prove/term.rs`). A step of 16 bytes with
+SIMD128's compares, `i8x16.bitmask` and `i32.popcnt` is then the formula's own count.
 
 How input arrives is part of a proof. A module that reads only through `$fill` with a stop it knows,
 off the network, is proven with its input cut into pieces any way. A networked block is proven for

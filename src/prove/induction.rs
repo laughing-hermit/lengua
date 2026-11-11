@@ -1,8 +1,9 @@
 //! Proof by induction over a streaming program's read loop. A program that reads standard
 //! input a buffer-full at a time through fill, and either writes each buffer-full's bytes mapped
 //! one by one, as `upper`, `lower` and `tr` map them, or keeps counts that add up over the
-//! buffer-fulls, as `len` and `count` of one character do, and writes them at the end, is
-//! proven for every length in two parts:
+//! buffer-fulls, as `len` and `count` of one character do, and sums of such counts, of the text
+//! or of the text mapped byte by byte, and writes them at the end, or writes the same for every
+//! text, is proven for every length in two parts:
 //!
 //! - the step: from any state the loop can be in at its head with more than a buffer-full
 //!   left, one time round reads exactly a buffer-full, writes the formula's bytes for it (or,
@@ -17,7 +18,17 @@
 //! what one time round changes, from the first time at the head and then from the head with all
 //! that made arbitrary, until nothing new changes; everything else stays as it was the first
 //! time. A count is kept in a register that went from a constant to it and the buffer-full's
-//! count, and goes on adding from any count so far.
+//! count, and goes on adding from any count so far: at most one a byte read for each count of
+//! its sum.
+//!
+//! What a time round changes is any value at the head, with one exception that assumes less of
+//! the program: a slot that started as a constant and whose term after a time round has a range
+//! narrower than its width, as a byte loaded and widened has, is any value in that range, the
+//! start's value included. Each later round holds the slot's term after a time round from such
+//! a value to that range again, by the term's own range, which no path's conditions narrow: so
+//! the range holds the first time at the head and after every time round, and a program's own
+//! assertion that the value it carries is a byte is met. A slot that leaves its range is any
+//! value from the next round on.
 //!
 //! A count whose buffer-full's part depends on the bytes before it, as `words` does on whether
 //! the last buffer-full ended inside a word, is checked a buffer-full later: the step reads two
@@ -769,7 +780,9 @@ pub(super) fn step<P: Program>(
                     let found = ranged(&pool, snapshot.held(slot), &ends);
                     let known = grown.ranged.get(&slot).copied();
                     found.map(|(low, high)| {
-                        known.map_or((low, high), |(least, most)| (low.min(least), high.max(most)))
+                        known.map_or((low, high), |(least, most)| {
+                            (low.min(least), high.max(most))
+                        })
                     })
                 } else {
                     hook.ranged

@@ -3282,6 +3282,47 @@ impl Pool {
         Some(self.zero_extend(result, width - 64))
     }
 
+    /// `a`, a sum one of whose parts is a choice between two constants, as the choice between
+    /// the sum with the one and the sum with the other: `x + ite(c, -1, 1)` is
+    /// `ite(c, x - 1, x + 1)`, bit for bit, at any width. A dividend rounded a step away from
+    /// zero before it's halved then has one form, whether a program added a chosen step to it,
+    /// as WebAssembly's `select` of two constants does, or a formula chose between two sums. A
+    /// sum with no such part, or with two, is itself.
+    fn choice_out(&mut self, a: Term) -> Term {
+        let width = self.width(a);
+        let linear = self.linear_view(a);
+        let mut found: Option<(Term, u128)> = None;
+        for (part, times) in &linear.parts {
+            if let Node::Ite(_, then, otherwise) = *self.node(*part)
+                && self.constant(then).is_some()
+                && self.constant(otherwise).is_some()
+            {
+                if found.is_some() {
+                    return a;
+                }
+                found = Some((*part, *times));
+            }
+        }
+        let Some((choice, times)) = found else {
+            return a;
+        };
+        let Node::Ite(condition, then, otherwise) = *self.node(choice) else {
+            return a;
+        };
+        let (Some(then), Some(otherwise)) = (self.constant(then), self.constant(otherwise)) else {
+            return a;
+        };
+        let mut rest = linear;
+        rest.parts.remove(&choice);
+        let rest = self.linear_term(width, rest);
+        let with = |pool: &mut Self, step: u128| {
+            let step = pool.bv(width, step.wrapping_mul(times) & mask(width));
+            pool.add(rest, step)
+        };
+        let (then, otherwise) = (with(self, then), with(self, otherwise));
+        self.ite(condition, then, otherwise)
+    }
+
     /// Signed `a / b`, toward zero, as SMT-LIB defines it (also for zero and overflow).
     pub fn sdiv(&mut self, a: Term, b: Term) -> Term {
         let width = self.width(a);
@@ -3310,6 +3351,7 @@ impl Pool {
             && c > 0
             && c <= mask(width - 1)
         {
+            let a = self.choice_out(a);
             if let Some(quotient) = self
                 .divided(a, c, true)
                 .or_else(|| self.reduced(a, c, true))
@@ -5937,6 +5979,33 @@ mod tests {
         let fifty = pool.bv(64, 50);
         let expected = pool.mul(x, fifty);
         assert_eq!(half, expected);
+        // The step chosen first and then added, as WebAssembly's select of two constants and
+        // an add write it, is the same dividend: for the cents, and for a sum 2 doesn't divide.
+        let minus_one = pool.bv(64, mask(64));
+        let step = pool.ite(negative, minus_one, one);
+        let stepped = pool.add(cents, step);
+        assert_eq!(pool.sdiv(stepped, two), expected);
+        let below = pool.slt(x, zero);
+        let (up, down) = (pool.add(x, one), pool.sub(x, one));
+        let chosen = pool.ite(below, down, up);
+        let step = pool.ite(below, minus_one, one);
+        let added = pool.add(x, step);
+        let (chosen, added) = (pool.sdiv(chosen, two), pool.sdiv(added, two));
+        assert_eq!(added, chosen);
+        for (first, second) in (0..10_i64).flat_map(|a| (0..10_i64).map(move |b| (a, b))) {
+            let values: HashMap<String, u128> = [
+                ("a".to_owned(), first.unsigned_abs().into()),
+                ("b".to_owned(), second.unsigned_abs().into()),
+            ]
+            .into();
+            let sum = first - second;
+            let wanted = (sum + if sum < 0 { -1 } else { 1 }) / 2;
+            assert_eq!(
+                pool.evaluate(added, &values),
+                Some(u128::from(wanted.cast_unsigned())),
+                "{first} and {second}"
+            );
+        }
         // A sum that shares its factor with the divisor: (10 y) / 100 is y / 10.
         let ten = pool.bv(64, 10);
         let y = pool.mul(a, ten);

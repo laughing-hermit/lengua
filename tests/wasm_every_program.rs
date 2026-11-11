@@ -18,9 +18,9 @@ use serde_json::Value;
 /// with an idea.md and a main.wat.
 const FOLDERS: [&str; 2] = ["examples", "tests/fixtures"];
 
-/// The fewest programs the two folders hold: the 15 examples, and the 28 fixtures, the prover's
+/// The fewest programs the two folders hold: the 15 examples, and the 29 fixtures, the prover's
 /// small add, echo and greet and the benchmark's ten among them.
-const AT_LEAST: usize = 43;
+const AT_LEAST: usize = 44;
 
 /// A value of a reply as text, or none.
 fn text(value: &Value) -> &str {

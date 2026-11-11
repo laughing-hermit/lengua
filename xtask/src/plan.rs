@@ -3,7 +3,9 @@
 //! suite, the slow ignored tests and the bench, and a dispatch what it asks (`EVENT`, `MODE`,
 //! `TARGETS`). The goldens' legs run on linux-x86_64 alone: the dispatched ref and, unless an
 //! earlier run's recordings are reused (`GOLDEN_BASE_RUN`), the base (`GOLDEN_BASE`), each on a
-//! runner of its own so that the two run at once. A job's checkout is shallow unless it must read
+//! runner of its own so that the two run at once; or, in the `runners` view (`GOLDEN_VIEW`), the
+//! dispatched ref alone on each target asked for, to compare the runners' recordings with each
+//! other. A job's checkout is shallow unless it must read
 //! other commits: a bench holds each change to KNOWN_BEHIND in the history to the list before it
 //! (the list may only shrink) and reads any commit it is measured against, and a golden leg reads
 //! the commit it doesn't run. The step's outputs are `matrix`, and `bench`, whether a bench runs,
@@ -50,6 +52,11 @@ pub fn runners(list: &str) -> Result<Vec<Runner>, String> {
     Ok(runners)
 }
 
+/// Every runner of xtask/targets.json, in its order.
+pub fn every_runner() -> Result<Vec<Runner>, String> {
+    runners(TARGETS)
+}
+
 /// What a plan is made from: the event, and a dispatch's inputs.
 #[derive(Debug, Clone, Default)]
 pub struct Asked {
@@ -63,7 +70,16 @@ pub struct Asked {
     pub golden_base: String,
     /// An earlier golden run whose base recordings are reused.
     pub golden_base_run: String,
+    /// How the goldens are compared: raw or ledger, between two commits, or runners, between the
+    /// targets' recordings of the dispatched ref.
+    pub golden_view: String,
 }
+
+/// The goldens' view that compares the runners' recordings of one commit.
+pub const RUNNERS_VIEW: &str = "runners";
+
+/// What starts the label of a golden leg of the `runners` view, before its target.
+pub const RUNNER_LEG: &str = "runner-";
 
 /// One job of the matrix.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,7 +161,12 @@ pub fn plan(
             });
         }
     }
-    if mode == "golden" {
+    if mode == "golden" && asked.golden_view == RUNNERS_VIEW {
+        // The dispatched ref on each target asked for, each leg named after its target.
+        for job in &mut jobs {
+            job.label = format!("{RUNNER_LEG}{}", job.runner.target);
+        }
+    } else if mode == "golden" {
         if asked.golden_base.is_empty() && asked.golden_base_run.is_empty() {
             return Err(GOLDEN_NEEDS.to_owned());
         }
@@ -199,6 +220,7 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
         targets: ci::setting("TARGETS"),
         golden_base: ci::setting("GOLDEN_BASE"),
         golden_base_run: ci::setting("GOLDEN_BASE_RUN"),
+        golden_view: ci::setting("GOLDEN_VIEW"),
     };
     let jobs = plan(&asked, &runners(TARGETS)?, full_hash)?;
     let listed: Vec<String> = jobs.iter().map(Job::json).collect();
@@ -308,5 +330,35 @@ mod tests {
             ..asked
         };
         assert!(plan(&neither, &listed(), none).is_err());
+    }
+
+    /// The runners view records the dispatched ref on each target asked for, each leg named
+    /// after its target, and needs no base.
+    #[test]
+    fn the_runners_view_records_on_each_target() {
+        let asked = Asked {
+            event: "workflow_dispatch".to_owned(),
+            mode: "golden".to_owned(),
+            targets: "all".to_owned(),
+            golden_view: RUNNERS_VIEW.to_owned(),
+            ..Asked::default()
+        };
+        let jobs = plan(&asked, &listed(), none).expect("a plan");
+        assert_eq!(jobs.len(), 5);
+        assert_eq!(
+            jobs[4].json(),
+            "{\"target\":\"windows-aarch64\",\"runner\":\"windows-11-arm\",\
+             \"label\":\"runner-windows-aarch64\",\"ref\":\"\",\"mode\":\"golden\",\"depth\":1}"
+        );
+        let two = Asked {
+            targets: "linux-x86_64,macos-aarch64".to_owned(),
+            ..asked
+        };
+        let labels: Vec<String> = plan(&two, &listed(), none)
+            .expect("a plan")
+            .into_iter()
+            .map(|job| job.label)
+            .collect();
+        assert_eq!(labels, ["runner-linux-x86_64", "runner-macos-aarch64"]);
     }
 }
