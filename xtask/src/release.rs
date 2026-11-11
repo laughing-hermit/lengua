@@ -4,7 +4,8 @@
 //! dist/lengua-<version>-<target>.tar.gz (.zip on Windows), and its SHA-256 beside it in the same
 //! name with .sha256 added.
 //!
-//! The archive is the plugin, ready to load: the skills and the manifests, server/lengua-mcp
+//! The archive is the plugin, ready to load: the skills and the manifests, server/lengua-mcp and
+//! server/lengua-run, the small program that runs a checked program, built without the compiler
 //! (.exe on Windows, which the manifests then start), solvers/ with the z3 and cvc5 that
 //! xtask/tools.tsv pins for the target, LICENSE and licenses/ (the licences of everything it
 //! ships: lengua's, the solvers' with those of the parts cvc5 links in, and those of the Rust
@@ -177,7 +178,8 @@ const LINUX: Words = Words {
     install: "In this folder, run `server/lengua-mcp install`.",
     options: "`--check` only checks, `--prefix <folder>` makes `<folder>` lengua's marketplace \
               folder, with the plugin in its `lengua/` folder, where what it replaces must be an \
-              earlier lengua install, and `--link` also puts `lengua-mcp` in `~/.local/bin`, to \
+              earlier lengua install, and `--link` also puts `lengua-mcp` and `lengua-run` in \
+              `~/.local/bin`, to \
               run programs from a shell.",
     destination: "`~/.local/share/lengua/plugins/lengua` (under `$XDG_DATA_HOME` when it is set)",
     loader: "\
@@ -199,7 +201,8 @@ const MACOS: Words = Words {
     install: "In this folder, run `server/lengua-mcp install`.",
     options: "`--check` only checks, `--prefix <folder>` makes `<folder>` lengua's marketplace \
               folder, with the plugin in its `lengua/` folder, where what it replaces must be an \
-              earlier lengua install, and `--link` also puts `lengua-mcp` in `~/.local/bin`, to \
+              earlier lengua install, and `--link` also puts `lengua-mcp` and `lengua-run` in \
+              `~/.local/bin`, to \
               run programs from a shell. On macOS a browser marks what it downloads, and macOS \
               won't start the unsigned server or solvers so marked, the install included: if \
               you trust this archive, clear the mark from this folder first, with `xattr -dr \
@@ -356,28 +359,37 @@ fn copy_into(from: &Path, path: &Path) -> Result<(), String> {
     files::copy(from, path)
 }
 
-/// lengua-mcp, built as a release: with none of the shell's RUSTFLAGS, so that it is the same
-/// wherever it is built, and on Windows with the C runtime linked in, so that it needs no Visual
-/// C++ redistributable (`--target` keeps that flag off build scripts and procedural macros).
-fn build(root: &Path, host: &str, windows: bool) -> Result<PathBuf, String> {
+/// The program `name` of the package `package`, built as a release: with none of the shell's
+/// RUSTFLAGS, so that it is the same wherever it is built, and on Windows with the C runtime
+/// linked in, so that it needs no Visual C++ redistributable (`--target` keeps that flag off
+/// build scripts and procedural macros). Each program is built by itself, with its own
+/// package's features alone: lengua-run's leave the engine's compiler out, which a build of the
+/// two together would put in both.
+fn build(
+    root: &Path,
+    host: &str,
+    windows: bool,
+    package: &str,
+    name: &str,
+) -> Result<PathBuf, String> {
     let mut command = ci::cargo();
     command
         .current_dir(root)
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .args(["build", "--release", "--locked", "--manifest-path"])
         .arg(root.join("Cargo.toml"))
-        .args(["--bin", "lengua-mcp"]);
+        .args(["--package", package, "--bin", name]);
     if windows {
         command
             .env("RUSTFLAGS", "-C target-feature=+crt-static")
             .args(["--target", host]);
         ci::must(&mut command)?;
         let release = root.join("target").join(host).join("release");
-        Ok(release.join("lengua-mcp.exe"))
+        Ok(release.join(format!("{name}.exe")))
     } else {
         command.env("RUSTFLAGS", "");
         ci::must(&mut command)?;
-        Ok(root.join("target").join("release").join("lengua-mcp"))
+        Ok(root.join("target").join("release").join(name))
     }
 }
 
@@ -706,9 +718,11 @@ impl Readme<'_> {
         format!(
             "# What lengua {version} for {described} ships, and its licences
 
-- **lengua**: the skills, the manifests and `server/lengua-mcp{exe}`, under the Apache License 2.0,
+- **lengua**: the skills, the manifests, `server/lengua-mcp{exe}` and `server/lengua-run{exe}`,
+  under the Apache License 2.0,
   in `LICENSE` beside this folder.
-- **The Rust crates compiled into lengua-mcp**: each one's licence and the licence files it
+- **The Rust crates compiled into lengua-mcp**, of which lengua-run holds some: each one's licence
+  and the licence files it
   ships, in `rust-crates.txt`.
 - **z3**, `solvers/z3{exe}`{z3_beside}, as its project releases it, under the MIT License:
   `z3/` holds {z3_listed}. Its source is at {z3_source}.{z3_runtime}
@@ -783,7 +797,8 @@ fn install_md(out: &Path, target: &str, version: &str, described: &str) -> Resul
         "# lengua {version} for {described}
 
 This folder is the lengua plugin: the skills `write-idea` and `compile`, the MCP server
-`server/lengua-mcp{exe}` with its tools `check` and `run`, the z3 and cvc5 solvers its
+`server/lengua-mcp{exe}` with its tools `check` and `run`, `server/lengua-run{exe}`, which runs a
+checked program from a shell, the z3 and cvc5 solvers its
 proofs need, in `solvers/`, and the licences of all of it, in `LICENSE` and `licenses/`.
 
 {install} It checks that this computer is {described}, copies the plugin to {destination}, adds
@@ -948,7 +963,10 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
     let windows = target.starts_with("windows-");
     let exe = if windows { ".exe" } else { "" };
     let name = format!("lengua-{version}-{target}");
-    let built = build(&root, &host, windows)?;
+    let built = build(&root, &host, windows, "lengua-mcp", "lengua-mcp")?;
+    // lengua-run after lengua-mcp, by itself: the program that runs checked programs, with no
+    // compiler in it.
+    let runner = build(&root, &host, windows, "lengua-run", "lengua-run")?;
 
     let stage = tempfile::tempdir().map_err(|error| format!("a staging folder: {error}"))?;
     let out = stage.path().join(&name);
@@ -956,6 +974,9 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
     let server = out.join("server").join(format!("lengua-mcp{exe}"));
     copy_into(&built, &server)?;
     ci::executable(&server)?;
+    let beside = out.join("server").join(format!("lengua-run{exe}"));
+    copy_into(&runner, &beside)?;
+    ci::executable(&beside)?;
 
     // The solvers, each as tools.tsv pins it for the target, checked against its SHA-256.
     let solvers = out.join("solvers");

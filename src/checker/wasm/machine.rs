@@ -197,15 +197,25 @@ pub struct Code {
 }
 
 impl Code {
-    /// The code `engine` compiles the module `wasm` to, or loads from its cache of compiled
-    /// modules, which holds the same bytes.
+    /// The code `engine`, one that compiles, makes of the module `wasm`, or loads from its cache
+    /// of compiled modules, which holds the same bytes.
     ///
     /// # Errors
     ///
     /// When the module doesn't compile, or the engine kept no address map.
     pub fn of(engine: &Engine, wasm: &[u8]) -> Result<Self, String> {
-        let module = Module::from_binary(engine, wasm)
+        let module = engine::compile(engine, wasm)
             .map_err(|error| format!("the engine couldn't compile the module: {error}"))?;
+        Self::of_module(&module)
+    }
+
+    /// The code of `module` as an engine holds it, compiled just now or loaded from what was
+    /// compiled before: the very code a run of that module executes.
+    ///
+    /// # Errors
+    ///
+    /// When the engine kept no address map.
+    pub fn of_module(module: &Module) -> Result<Self, String> {
         let map: Vec<(usize, Option<u32>)> = module
             .address_map()
             .map(Iterator::collect)
@@ -453,15 +463,57 @@ pub fn check(
     for &setup in setups {
         let engine = engine::engine(setup, cache).map_err(|error| unchecked(&error))?;
         let code = Code::of(&engine, wasm).map_err(|error| unchecked(&error))?;
-        let judged = judge(cpu, &code, taken);
-        passed.with_code = passed.with_code.max(judged.operators);
-        passed.instructions = passed.instructions.saturating_add(judged.instructions);
-        for violation in violations(cpu, taken, &judged.findings) {
-            if !refused.contains(&violation) {
-                refused.push(violation);
-            }
+        judge_into(cpu, &code, taken, &mut passed, &mut refused);
+    }
+    if refused.is_empty() {
+        Ok(passed)
+    } else {
+        Err(refused)
+    }
+}
+
+/// Holds `code` to the rule as [`check`] does, adding what it read to `passed` and what it
+/// refuses to `refused`, each violation once.
+fn judge_into(
+    cpu: Cpu,
+    code: &Code,
+    taken: &[Taken],
+    passed: &mut Passed,
+    refused: &mut Vec<Violation>,
+) {
+    let judged = judge(cpu, code, taken);
+    passed.with_code = passed.with_code.max(judged.operators);
+    passed.instructions = passed.instructions.saturating_add(judged.instructions);
+    for violation in violations(cpu, taken, &judged.findings) {
+        if !refused.contains(&violation) {
+            refused.push(violation);
         }
     }
+}
+
+/// Checks the machine code of `module`, a compiled module as an engine holds it, as [`check`]
+/// checks what an engine compiles: a run from a shell checks so the very code it is about to
+/// execute, which it loaded from what was compiled before.
+///
+/// # Errors
+///
+/// What the code has, as violations of the secret rule on main.wat's lines; or why the code
+/// couldn't be checked, as one with no line.
+pub fn check_loaded(module: &Module, taken: &[Taken]) -> Result<Passed, Vec<Violation>> {
+    let Some(cpu) = Cpu::here() else {
+        return Err(unchecked(
+            "it reads the code of x86-64 and ARM64 CPUs, and this CPU is neither",
+        ));
+    };
+    let mut passed = Passed {
+        cpu,
+        operators: taken.len(),
+        with_code: 0,
+        instructions: 0,
+    };
+    let mut refused: Vec<Violation> = Vec::new();
+    let code = Code::of_module(module).map_err(|error| unchecked(&error))?;
+    judge_into(cpu, &code, taken, &mut passed, &mut refused);
     if refused.is_empty() {
         Ok(passed)
     } else {

@@ -4,10 +4,11 @@
 
 mod wat;
 
-pub use self::wat::{Attestation, attest};
+pub use self::wat::{Attestation, NotRun, attest, compile_and_keep};
 
-// How wide the CPU's vectors go, which `lengua-mcp doctor` says as the machine line does.
-pub(crate) use self::wat::simd_level;
+// How wide the CPU's vectors go, which `lengua-mcp doctor` says as the machine line does, and the
+// compiled module a run loads, which `lengua-mcp measure` runs another toolchain's module from.
+pub(crate) use self::wat::{loaded_or_compiled, simd_level};
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -35,7 +36,7 @@ use crate::prove;
 use crate::runner::{self, End, Limits};
 use crate::state::{
     CODE_FILE, Files, IDEA_FILE, LEGACY_IDEA_FILE, LEGACY_TESTS_FILE, ProgramFolder, Snapshot,
-    State, stamped_copy, tested_module, wrong_record,
+    State, compiled_module, stamped_copy, tested_module, wrong_record,
 };
 use crate::testdiff;
 use crate::testfile::{self, TestSuite};
@@ -1587,8 +1588,10 @@ impl LenguaServer {
         }
     }
 
-    /// The command that runs `folder`'s program from a shell: then its arguments. The data folder
-    /// is named only where a shell wouldn't find this one by itself.
+    /// The command that runs `folder`'s program from a shell: then its arguments. It is
+    /// lengua-run, the small program beside this server that runs what check compiled, where it
+    /// is there, as in a release; else this server's own `run`, which runs the program too. The
+    /// data folder is named only where a shell wouldn't find this one by itself.
     fn shell_command(&self, folder: &ProgramFolder) -> String {
         let quote = |text: &str| {
             if !text.is_empty()
@@ -1601,15 +1604,21 @@ impl LenguaServer {
                 format!("'{}'", text.replace('\'', "'\\''"))
             }
         };
-        let mut command = quote(&self.launcher.to_string_lossy());
+        let runner = self.launcher.with_file_name(format!(
+            "{}{}",
+            crate::measure::RUNNER,
+            std::env::consts::EXE_SUFFIX
+        ));
+        let alone = runner.is_file();
+        let program = if alone { &runner } else { &*self.launcher };
+        let mut command = quote(&program.to_string_lossy());
         if DataDir::from_env().as_ref().map(DataDir::path) != Some(self.data_dir.path()) {
             command.push_str(" --data-dir ");
             command.push_str(&quote(&self.data_dir.path().to_string_lossy()));
         }
-        format!(
-            "{command} run {} --",
-            quote(&folder.path().to_string_lossy())
-        )
+        let run = if alone { "" } else { " run" };
+        let folder = quote(&folder.path().to_string_lossy());
+        format!("{command}{run} {folder} --")
     }
 
     /// What changed after the user's request, by the program's current lock; nothing when it
@@ -1709,7 +1718,9 @@ impl LenguaServer {
         remember_wrong(&self.data_dir, &lock);
         if let Some(module) = replaced {
             let builder = crate::wasm::text::BUILDER;
-            let _ = std::fs::remove_file(tested_module(self.data_dir.path(), builder, &module));
+            let data = self.data_dir.path();
+            let _ = std::fs::remove_file(tested_module(data, builder, &module));
+            let _ = std::fs::remove_file(compiled_module(data, builder, &module));
         }
         Ok(())
     }
@@ -2285,18 +2296,19 @@ fn wrong_lines(text: &str) -> Vec<(String, String)> {
 /// [`state_of`] for a run: the folder's state, with the snapshot it comes from, whose lock is the
 /// one lengua's key verified, and the bytes of idea.md and main.wat that snapshot hashed, which
 /// the run takes in place of reading the lock or either file again. What that lock records a proof
-/// found wrong is kept in the data folder too ([`remember_wrong`]).
+/// found wrong is kept in the data folder too ([`remember_wrong`]). With them, the key that
+/// verified the lock, when there is one: a run from a shell loads its compiled module under it.
 fn state_for_run(
     data_dir: &DataDir,
     folder: &ProgramFolder,
-) -> Result<(State, Snapshot, Files), String> {
+) -> Result<(State, Snapshot, Files, Option<Key>), String> {
     let key = Key::load(data_dir).map_err(|error| error.to_string())?;
     let (snapshot, files) = Snapshot::read_with_files(folder, key.as_ref())
         .map_err(|error| format!("can't read {folder}: {error}"))?;
     if let Some(lock) = snapshot.valid_lock() {
         remember_wrong(data_dir, lock);
     }
-    Ok((State::of(&snapshot), snapshot, files))
+    Ok((State::of(&snapshot), snapshot, files, key))
 }
 
 /// The connections `network` names, in order, as lengua makes them for a program: a port of this
@@ -2333,12 +2345,76 @@ pub struct ShellRun {
     pub args: Vec<String>,
 }
 
-/// Runs a checked program from a shell, script or service: `run`'s checks and confinement, with
-/// the shell's own standard input, output and error and no time limit, main.wat's module in this
-/// process. Returns the program's exit code, or 134 when it trapped, which it says on standard
-/// error. It is a plain function, and needs no async runtime: nothing on its way waits on one,
-/// and the connections lengua makes for a program have a runtime of their own. The engine starts
-/// while the checks run, from the folders on, and compiles nothing until they pass.
+impl ShellRun {
+    /// A run's own words, as `lengua-mcp run` and lengua-run take them: the program folder,
+    /// `--in` and `--env` options, then the program's arguments, after `--` or from the first
+    /// word that isn't an option, which an argument that starts with `-` needs.
+    ///
+    /// # Errors
+    ///
+    /// What is wrong with the words.
+    pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
+        let path = args.next().ok_or("run needs a program folder")?;
+        let mut request = Self {
+            path,
+            folder: None,
+            env: BTreeMap::new(),
+            args: Vec::new(),
+        };
+        while let Some(arg) = args.next() {
+            // The first word that isn't an option starts the program's arguments.
+            if !arg.starts_with('-') {
+                request.args = std::iter::once(arg).chain(args).collect();
+                break;
+            }
+            match arg.as_str() {
+                "--in" => request.folder = Some(args.next().ok_or("--in needs a folder")?),
+                "--env" => {
+                    let pair = args.next().ok_or("--env needs NAME=value")?;
+                    let (name, value) = pair
+                        .split_once('=')
+                        .ok_or_else(|| format!("--env {pair:?} isn't NAME=value"))?;
+                    request.env.insert(name.to_owned(), value.to_owned());
+                }
+                "--" => {
+                    request.args = args.collect();
+                    break;
+                }
+                other => {
+                    return Err(format!(
+                        "unknown option {other:?}: put the program's arguments after --"
+                    ));
+                }
+            }
+        }
+        Ok(request)
+    }
+}
+
+/// The program folder and the working folder of the run `request` asks for, named in full from
+/// the shell's current folder.
+fn shell_folders(request: &ShellRun) -> Result<(ProgramFolder, PathBuf), String> {
+    let here = std::env::current_dir()
+        .map_err(|error| format!("can't read the current folder: {error}"))?;
+    let absolute = |path: &str| here.join(path).to_string_lossy().into_owned();
+    let folder = ProgramFolder::new(&absolute(&request.path))?;
+    let workspace = working_folder(
+        &request
+            .folder
+            .as_deref()
+            .map_or_else(|| here.to_string_lossy().into_owned(), absolute),
+    )?;
+    Ok((folder, workspace))
+}
+
+/// Runs a checked program from a shell, script or service, as `lengua-mcp run` does: `run`'s
+/// checks and confinement, with the shell's own standard input, output and error and no time
+/// limit, main.wat's module in this process, on a thread of its own. Returns the program's exit
+/// code, or 134 when it trapped, which it says on standard error. It is a plain function, and
+/// needs no async runtime: nothing on its way waits on one, and the connections lengua makes
+/// for a program have a runtime of their own. What runs is the module check tested, in the
+/// compiled form kept under the user's key; where none is kept that this computer takes, this
+/// process compiles the module, once the checks have passed, and keeps it for the next run.
 ///
 /// # Errors
 ///
@@ -2346,19 +2422,34 @@ pub struct ShellRun {
 pub fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i32, String> {
     // The data folder holds the key the run is about to read: the user's alone.
     data_dir.keep_private();
-    wat::run_from_shell(data_dir, request, || {
-        let here = std::env::current_dir()
-            .map_err(|error| format!("can't read the current folder: {error}"))?;
-        let absolute = |path: &str| here.join(path).to_string_lossy().into_owned();
-        let folder = ProgramFolder::new(&absolute(&request.path))?;
-        let workspace = working_folder(
-            &request
-                .folder
-                .as_deref()
-                .map_or_else(|| here.to_string_lossy().into_owned(), absolute),
-        )?;
-        Ok((folder, workspace))
+    let on = crate::wasm::runner::On::Own;
+    wat::run_from_shell(data_dir, request, on, || shell_folders(request)).map_err(|not_run| {
+        match not_run {
+            NotRun::Refused(why) => why,
+            // A process that compiles is never told to leave a run to another.
+            NotRun::NotCompiled(why) => format!("the module isn't compiled: {why}"),
+            NotRun::Secret => "the idea names a secret, which this lengua can't check".to_owned(),
+        }
     })
+}
+
+/// Runs a checked program as [`run_from_shell`] does, in a process that only runs what was
+/// compiled before, lengua-run: every check `run` makes, then the compiled form of the module
+/// check tested, loaded only when it carries the seal of the user's key, on the process's main
+/// thread where its stack holds a program. It compiles nothing and never reads the engine's
+/// cache.
+///
+/// # Errors
+///
+/// [`NotRun::Refused`] when lengua won't run the program or can't start it; or what the
+/// process leaves to lengua-mcp, which runs the program with the same words: a module with no
+/// compiled form this computer takes ([`NotRun::NotCompiled`]), or an idea that names a secret
+/// ([`NotRun::Secret`]).
+pub fn run_alone(data_dir: &DataDir, request: &ShellRun) -> Result<i32, NotRun> {
+    // The data folder holds the key the run is about to read: the user's alone.
+    data_dir.keep_private();
+    let on = crate::wasm::runner::On::for_a_run_alone();
+    wat::run_from_shell(data_dir, request, on, || shell_folders(request))
 }
 
 /// The folder a `run` happens in: an existing absolute folder other than `/`, where confining

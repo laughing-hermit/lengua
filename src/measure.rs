@@ -13,12 +13,17 @@
 //! peak no higher than lengua-mcp's own is no peak of the program's: it is left out.
 //!
 //! It runs three kinds of program, each as it is run outside lengua's tests:
-//! - a program folder whose code is `main.wat`: `lengua-mcp run`, with every check `run` makes
-//!   (the lock, its signature, the module check kept held to the lock's hash of it) before the
+//! - a program folder whose code is `main.wat`: lengua-run ([`RUNNER`]), the small program
+//!   beside lengua-mcp that `check` tells a user to run a checked program with, or `lengua-mcp
+//!   run` where it isn't there, with every check `run` makes (the lock, its signature, the
+//!   compiled module held to the user's key and the lock's hash of the module) before the
 //!   module runs in lengua's host;
 //! - any WebAssembly module of WASI preview 1, such as a C, C++ or Rust toolchain makes: in
-//!   lengua's host too, in the engine's configuration for a run from a shell, with what its
-//!   `--uses` and `--network` words allow, as an idea's lines would ([`MODULE_FLAG`]);
+//!   lengua's host too, by the same program, in the engine's configuration for a run from a
+//!   shell, with what its `--uses` and `--network` words allow, as an idea's lines would
+//!   ([`MODULE_FLAG`]), and from its compiled form, kept in the data folder under the user's key
+//!   as a checked program's is: its first run compiles it, and `measure` hashes its file, so the
+//!   run it measures reads neither;
 //! - a native executable, as a shell starts it.
 //!
 //! A server is measured under load: once it takes a connection, `--clients` clients each send
@@ -41,9 +46,13 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::data_dir::DataDir;
+use crate::hash::Sha256Hex;
+use crate::lock::Key;
 use crate::runner::{End, Limits};
+use crate::server::NotRun;
 use crate::wasm::Policy;
-use crate::wasm::runner::{Here, Order, Source, run_once_checked};
+use crate::wasm::engine::{self, Setup};
+use crate::wasm::runner::{Here, On, Order, Source, run_once_checked};
 
 /// The hidden flag that starts this binary as the runner of one WebAssembly module, which
 /// `measure` gives the module's run after it, as JSON.
@@ -58,6 +67,11 @@ pub const REFUSED: i32 = 125;
 /// The small program that starts a program on Linux, beside lengua-mcp's own executable, where
 /// Cargo builds it (src/bin/lengua-spawn.rs).
 pub const SPAWNER: &str = "lengua-spawn";
+
+/// The small program that runs a checked program, beside lengua-mcp's own executable
+/// (crates/lengua-run): lengua built without the engine's compiler, which loads what was
+/// compiled before.
+pub const RUNNER: &str = "lengua-run";
 
 /// The bytes of one request to a server under load, its newline included.
 pub const REQUEST_BYTES: usize = 64;
@@ -314,6 +328,9 @@ fn bare(program: &Path) -> Command {
 struct ModuleRun {
     /// The module's file.
     module: PathBuf,
+    /// The module's SHA-256, as `measure` read it from that file before the run it measures:
+    /// the run loads the module's compiled form by it, and reads the file only to compile it.
+    sha256: String,
     /// The folder it runs in.
     folder: PathBuf,
     /// What it may reach, in an idea's `- Uses:` words.
@@ -324,8 +341,23 @@ struct ModuleRun {
     env: BTreeMap<String, String>,
     /// Its arguments.
     args: Vec<String>,
-    /// Where compiled modules are kept.
-    cache: Option<PathBuf>,
+    /// lengua's data folder, when `measure` has one: the module's compiled form is kept there
+    /// under the user's key, as a checked program's is.
+    data: Option<PathBuf>,
+}
+
+/// The program that runs a checked program or a module for `measure`, and whether it is
+/// lengua-run: lengua-run beside this lengua-mcp when it is there, as `check` tells a user to
+/// run a checked program; else this lengua-mcp itself, which runs both too.
+fn runner() -> Result<(PathBuf, bool), String> {
+    let lengua = std::env::current_exe()
+        .map_err(|error| format!("can't find lengua-mcp itself: {error}"))?;
+    let alone = lengua.with_file_name(format!("{RUNNER}{}", std::env::consts::EXE_SUFFIX));
+    if alone.is_file() {
+        Ok((alone, true))
+    } else {
+        Ok((lengua, false))
+    }
 }
 
 /// The command that runs `program`, of `kind`, in `folder`, as `request` asks.
@@ -336,20 +368,16 @@ fn command_for(
     program: &Path,
     folder: &Path,
 ) -> Result<Command, String> {
-    let lengua = || {
-        std::env::current_exe().map_err(|error| format!("can't find lengua-mcp itself: {error}"))
-    };
     let mut command = match kind {
         Kind::Wat => {
             let data_dir = data_dir.ok_or_else(|| crate::data_dir::NOT_FOUND.to_owned())?;
-            let mut command = bare(&lengua()?);
-            command
-                .arg("--data-dir")
-                .arg(data_dir.path())
-                .arg("run")
-                .arg(program)
-                .arg("--in")
-                .arg(folder);
+            let (runner, alone) = runner()?;
+            let mut command = bare(&runner);
+            command.arg("--data-dir").arg(data_dir.path());
+            if !alone {
+                command.arg("run");
+            }
+            command.arg(program).arg("--in").arg(folder);
             for (name, value) in &request.env {
                 command.arg("--env").arg(format!("{name}={value}"));
             }
@@ -357,17 +385,26 @@ fn command_for(
             command
         }
         Kind::Wasm => {
+            let wasm = std::fs::read(program)
+                .map_err(|error| format!("can't read {}: {error}", program.display()))?;
             let run = ModuleRun {
                 module: program.to_path_buf(),
+                sha256: Sha256Hex::of(&wasm).as_str().to_owned(),
                 folder: folder.to_path_buf(),
                 uses: request.uses.clone(),
                 network: request.network.clone(),
                 env: request.env.clone(),
                 args: request.args.clone(),
-                cache: data_dir.map(crate::wasm::engine::cache_folder),
+                data: data_dir.map(|data_dir| data_dir.path().to_path_buf()),
             };
+            // The module's compiled form is made here, before the run that is measured, where
+            // there is none yet: that run then loads it, and lengua-run never has to leave the
+            // run to lengua-mcp. A module that doesn't compile is the run's to report.
+            if run.data.is_some() {
+                let _ = module_compiled(&run);
+            }
             let spec = serde_json::to_string(&run).map_err(|error| error.to_string())?;
-            let mut command = bare(&lengua()?);
+            let mut command = bare(&runner()?.0);
             command.arg(MODULE_FLAG).arg(spec);
             command
         }
@@ -848,28 +885,28 @@ mod counters {
 }
 
 /// Runs the module that `spec`, a run as JSON, names, in lengua's host and attached to this
-/// process's own streams: in the engine's configuration for a run from a shell, counting nothing
-/// and stopping nothing, with what the run's `uses` and `network` words allow, as an idea's
-/// lines would. Gives the exit code: the module's own, [`TRAPPED`] when it trapped, or
-/// [`REFUSED`] when lengua couldn't run it, which it says on standard error.
+/// process's own streams, as [`run_module_alone`] does, in lengua-mcp, which compiles a module
+/// that has no compiled form yet. Gives the exit code: the module's own, [`TRAPPED`] when it
+/// trapped, or [`REFUSED`] when lengua couldn't run it, which it says on standard error.
 #[must_use]
 pub fn run_module(spec: &str) -> i32 {
-    match module_run(spec) {
+    match run_module_alone(spec) {
         Ok(code) => code,
-        Err(message) => {
+        Err(NotRun::Refused(message) | NotRun::NotCompiled(message)) => {
             eprintln!("lengua-mcp: {message}");
             REFUSED
         }
+        Err(NotRun::Secret) => REFUSED,
     }
 }
 
-/// A module of any toolchain, read, with what its words allow: what [`module_run`] hands its
-/// program's thread.
+/// A module of any toolchain, compiled, with what its words allow: what a module's run hands
+/// its program's thread.
 struct ModuleOrder<'r> {
     /// The run, as `measure` gave it.
     run: &'r ModuleRun,
-    /// The module's bytes.
-    wasm: Vec<u8>,
+    /// The module, compiled, in the engine that runs it.
+    compiled: wasmtime::Module,
     /// What its `uses` and `network` words allow.
     policy: Policy,
     /// The port it serves on, if it serves, and whether every address may reach it.
@@ -877,8 +914,8 @@ struct ModuleOrder<'r> {
 }
 
 impl Order for ModuleOrder<'_> {
-    fn wasm(&self) -> &[u8] {
-        &self.wasm
+    fn module(&self) -> &wasmtime::Module {
+        &self.compiled
     }
 
     fn here(&self) -> Here<'_> {
@@ -895,14 +932,71 @@ impl Order for ModuleOrder<'_> {
     }
 }
 
-/// [`run_module`]'s work: the engine starts while the module is read and its words turned into
-/// what it may reach, as it starts while `lengua-mcp run` checks a program.
-fn module_run(spec: &str) -> Result<i32, String> {
-    let run: ModuleRun = serde_json::from_str(spec)
-        .map_err(|error| format!("the module's run can't be read: {error}"))?;
-    let ended = run_once_checked(run.cache.as_deref(), || {
+/// The module `run` names, compiled, in the engine that runs it: with a data folder, its
+/// compiled form kept there under the user's key, as a checked program's is, loaded once its
+/// seal holds, or made by a process that compiles, from the module's file, which must still be
+/// the bytes `measure` hashed; with no data folder, compiled here and kept nowhere.
+fn module_compiled(run: &ModuleRun) -> Result<wasmtime::Module, NotRun> {
+    let module = Sha256Hex::parse(&run.sha256)
+        .ok_or_else(|| "the module's run names no SHA-256 of the module".to_owned())?;
+    let read = || {
         let wasm = std::fs::read(&run.module)
             .map_err(|error| format!("can't read {}: {error}", run.module.display()))?;
+        if Sha256Hex::of(&wasm) == module {
+            Ok(wasm)
+        } else {
+            Err(format!(
+                "{} changed since measure read it",
+                run.module.display()
+            ))
+        }
+    };
+    let Some(data) = &run.data else {
+        if !engine::compiles() {
+            return Err(NotRun::NotCompiled(
+                "measure has no data folder to keep its compiled form in".to_owned(),
+            ));
+        }
+        let compiler = engine::engine(Setup::Shell, None)?;
+        return engine::compile(&compiler, &read()?)
+            .map_err(|error| NotRun::Refused(format!("the module doesn't compile: {error}")));
+    };
+    let data_dir = DataDir::new(data.clone());
+    let key = match Key::load(&data_dir).map_err(|error| error.to_string())? {
+        Some(key) => key,
+        None if engine::compiles() => {
+            Key::load_or_create(&data_dir).map_err(|error| error.to_string())?
+        }
+        None => {
+            return Err(NotRun::NotCompiled(
+                "the data folder has no key to seal it with yet".to_owned(),
+            ));
+        }
+    };
+    crate::server::loaded_or_compiled(&data_dir, &key, &module, read)
+}
+
+/// Runs the module that `spec`, a run as JSON, names, in lengua's host and attached to this
+/// process's own streams: in the engine's configuration for a run from a shell, counting nothing
+/// and stopping nothing, with what the run's `uses` and `network` words allow, as an idea's
+/// lines would, from its compiled form, as a checked program runs ([`module_compiled`]). Gives
+/// the exit code: the module's own, or [`TRAPPED`] when it trapped, which it says on standard
+/// error.
+///
+/// # Errors
+///
+/// Why lengua couldn't run it; or, in a process that only runs what was compiled before, that
+/// the module has no compiled form it can load, which lengua-mcp makes when it is given the
+/// same run.
+pub fn run_module_alone(spec: &str) -> Result<i32, NotRun> {
+    let run: ModuleRun = serde_json::from_str(spec)
+        .map_err(|error| format!("the module's run can't be read: {error}"))?;
+    let on = if engine::compiles() {
+        On::Own
+    } else {
+        On::for_a_run_alone()
+    };
+    let ended = run_once_checked(on, || -> Result<ModuleOrder<'_>, NotRun> {
         let words: Vec<&str> = run.uses.iter().map(String::as_str).collect();
         let (uses, network) =
             crate::idea::constraints(&words, &run.network).map_err(|problems| {
@@ -914,7 +1008,7 @@ fn module_run(spec: &str) -> Result<i32, String> {
             })?;
         Ok(ModuleOrder {
             run: &run,
-            wasm,
+            compiled: module_compiled(&run)?,
             policy: Policy::of(&uses, &network),
             listen: network.listens.map(|port| (port, network.serves_anywhere)),
         })
@@ -923,12 +1017,13 @@ fn module_run(spec: &str) -> Result<i32, String> {
         End::Exited(code) => Ok(code),
         trapped @ End::Trapped(..) => {
             eprintln!(
-                "lengua-mcp: the module {}",
+                "{}: the module {}",
+                engine::name(),
                 trapped.describe(Limits::default())
             );
             Ok(TRAPPED)
         }
-        other => Err(other.describe(Limits::default())),
+        other => Err(NotRun::Refused(other.describe(Limits::default()))),
     }
 }
 

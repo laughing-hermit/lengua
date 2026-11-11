@@ -1,12 +1,12 @@
 # lengua against C, C++ and Rust on windows-aarch64
 
-Measured on windows-aarch64 (Cobalt 100, 4 threads at once) by `cargo bench --bench against_rust_and_c`, at commit cd54e79fc07fe745f5fcad008bd2a7da4a18ae9e, in https://github.com/laughing-hermit/lengua/actions/runs/42964232679. Every number here is that run's: the bench writes this file from the run's results alone, target/bench/results-windows-aarch64.json in its artifacts.
+Measured on windows-aarch64 (Cobalt 100, 4 threads at once) by `cargo bench --bench against_rust_and_c`, at commit 45b507bf262dab89bff38a1f9c35bdd5590c8965, in https://github.com/laughing-hermit/lengua/actions/runs/43099764273. Every number here is that run's: the bench writes this file from the run's results alone, target/bench/results-windows-aarch64.json in its artifacts.
 
 Every version of a workload does the same work in its own language's way: lengua's program in the fastest form lengua's dialect allows, with SIMD128 written by hand where the work is bytes, and C, C++ and Rust with their standard libraries and plain loops, written for their compilers to vectorize, with no SIMD written by hand. Each workload below says how each version does its work.
 
-Every version of a workload gets the same arguments, input and files, and gives the same output, checked before anything is measured. Each runs as people run it, in a process of its own, measured by `lengua-mcp measure`: its CPU time (in user space and in the kernel) and its peak resident memory as the system counts them for the process, its wall time on the clock, and the size of what ran. lengua's program runs through `lengua-mcp run`, with every check it makes; C, C++ and Rust compiled to WebAssembly run in lengua's host, in the same engine (wasmtime 50.0.1) with the same cache of compiled modules; their native builds, made on this runner, run as a shell starts them. Linux begins a process's count of its peak memory at what the process it was started from held, so there every version starts from lengua-spawn, a small process of lengua's that forks it and counts it, and writes the counts and the version's time on the clock for `measure`: the count begins at the few hundred KiB of lengua-spawn's copy, not at lengua-mcp's megabytes.
+Every version of a workload gets the same arguments, input and files, and gives the same output, checked before anything is measured. Each runs as people run it, in a process of its own, measured by `lengua-mcp measure`: its CPU time (in user space and in the kernel) and its peak resident memory as the system counts them for the process, its wall time on the clock, and the size of what ran. lengua's program runs through `lengua-run`, with every check a run makes; C, C++ and Rust compiled to WebAssembly run in lengua's host, by the same lengua-run in the same engine (wasmtime 50.0.1), each from its compiled form, kept under the user's key as a checked program's is; their native builds, made on this runner, run as a shell starts them. Linux begins a process's count of its peak memory at what the process it was started from held, so there every version starts from lengua-spawn, a small process of lengua's that forks it and counts it, and writes the counts and the version's time on the clock for `measure`: the count begins at the few hundred KiB of lengua-spawn's copy, not at lengua-mcp's megabytes.
 
-Size is a module's bytes on the rows against other modules, which run in the same lengua-mcp. Against a native build, lengua's size is its module's and that of the lengua-mcp it needs to run (18.8 MiB), and the native build's is its executable's alone: what it loads from the system's libraries, C's C library and C++'s where they are linked dynamically, isn't counted, and Rust's standard library, linked in, is.
+Size is a module's bytes on the rows against other modules, which run in the same lengua-run. Against a native build, lengua's size is its module's and that of the lengua-run it needs to run (4.91 MiB), and the native build's is its executable's alone: what it loads from the system's libraries, C's C library and C++'s where they are linked dynamically, isn't counted, and Rust's standard library, linked in, is.
 
 The runs alternate: each round runs every version once, in an order shuffled from round to round, after each version's checked run and 2 rounds that aren't counted. On each row, lengua against one other version, the gate decides CPU and wall time with a one-sided Mann-Whitney U test at p < 0.01: it looks at the row after 20, 40, 80, 160, 320, 640, 1280, 2000 runs of each version, each look deciding at p < 0.00125 (0.01 split over the looks), until both of the row's tests decide, up to 2000 runs or 600 seconds. Peak memory, the median of the runs' peaks, and size are compared as measured.
 
@@ -14,7 +14,7 @@ The gate has a noise margin of 5%, as the runners are shared machines and a row 
 
 The versions:
 
-- lengua: lengua-mcp, run in wasmtime 50.0.1
+- lengua: lengua-run, run in wasmtime 50.0.1
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 - cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
@@ -28,75 +28,89 @@ lengua against each version, on CPU time, wall time, peak memory and size, in th
 
 | workload | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|
-| empty | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| add | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| hypotenuse | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| upcase | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| upcase-stdin | ≈ ≈ ✗ ✗ | ≈ ≈ ✗ ✗ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| shout | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| wc | ≈ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ≈ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| histogram | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| crc32c | ≈ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| sort | ✓ ✓ ≈ ✓ | ✓ ✓ ✓ ✓ | ✓ ✓ ✓ ✓ | ✓ ✓ ≈ ✗ | ✓ ✓ ✓ ✗ | ✗ ✗ ≈ ✗ |
-| tally | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✗ | ✓ ✓ ✗ ✗ | ✓ ✓ ✗ ✗ |
-| server | ≈ ✓ ✗ ✓ | ≈ ✓ ✗ ✓ | ≈ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✓ ✗ ✗ ✗ |
-| files | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| readings | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| empty | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| add | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| hypotenuse | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| upcase | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| upcase-stdin | ≈ ≈ ≈ ✗ | ≈ ≈ ≈ ✗ | ≈ ≈ ≈ ✓ | ≈ ✗ ✗ ✗ | ≈ ✗ ✗ ✗ | ≈ ✗ ✗ ✗ |
+| shout | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| wc | ≈ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ≈ ✗ ✗ ✗ | ≈ ✗ ✗ ✗ | ≈ ≈ ✗ ✗ |
+| histogram | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ≈ ≈ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| crc32c | ≈ ✓ ≈ ✓ | ≈ ✓ ≈ ✓ | ≈ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| sort | ✓ ✓ ≈ ✓ | ✓ ✓ ✓ ✓ | ✓ ✓ ✓ ✓ | ✓ ✓ ≈ ✗ | ✓ ✓ ✓ ✗ | ✗ ✗ ✓ ✗ |
+| tally | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✗ | ✓ ✓ ✗ ✗ | ✓ ✓ ✗ ✗ |
+| server | ≈ ✓ ≈ ✓ | ≈ ✓ ≈ ✓ | ≈ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✓ ✗ ✗ ✗ |
+| files | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| readings | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
 
 Where the run and KNOWN_BEHIND disagree:
 
-- windows-aarch64 empty c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 846 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 empty c-wasm wall: lengua is level now, and KNOWN_BEHIND line 847 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 empty cpp-wasm cpu: lengua is level now, and KNOWN_BEHIND line 849 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 empty cpp-wasm wall: lengua is level now, and KNOWN_BEHIND line 850 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 empty rust-wasm cpu: lengua is level now, and KNOWN_BEHIND line 852 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 add c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 866 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 add cpp-wasm cpu: lengua is level now, and KNOWN_BEHIND line 868 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 add rust-wasm cpu: lengua is level now, and KNOWN_BEHIND line 870 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 hypotenuse c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 884 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 hypotenuse cpp-wasm cpu: lengua is level now, and KNOWN_BEHIND line 886 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 hypotenuse rust-wasm cpu: lengua is level now, and KNOWN_BEHIND line 888 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 upcase c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 902 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 upcase c-wasm wall: lengua is level now, and KNOWN_BEHIND line 903 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 upcase-stdin c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 919 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 upcase-stdin c-wasm wall: lengua is level now, and KNOWN_BEHIND line 920 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 upcase-stdin cpp-wasm cpu: lengua is level now, and KNOWN_BEHIND line 923 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 upcase-stdin cpp-wasm wall: lengua is level now, and KNOWN_BEHIND line 924 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 upcase-stdin rust-wasm cpu: lengua is level now, and KNOWN_BEHIND line 927 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 shout c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 941 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 shout c-wasm wall: lengua is level now, and KNOWN_BEHIND line 942 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 shout cpp-wasm cpu: lengua is level now, and KNOWN_BEHIND line 944 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 shout cpp-wasm wall: lengua is level now, and KNOWN_BEHIND line 945 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 sort c-wasm memory: lengua is level now, and KNOWN_BEHIND line 1005 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 sort c memory: lengua is level now, and KNOWN_BEHIND line 1006 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 sort cpp cpu: lengua is ahead now, and KNOWN_BEHIND line 1008 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 sort cpp wall: lengua is ahead now, and KNOWN_BEHIND line 1009 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 sort cpp memory: lengua is ahead now, and KNOWN_BEHIND line 1010 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 tally cpp cpu: lengua is ahead now, and KNOWN_BEHIND line 1020 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 tally cpp wall: lengua is ahead now, and KNOWN_BEHIND line 1021 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 server c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 1026 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- windows-aarch64 server rust-wasm cpu: lengua is level now, and KNOWN_BEHIND line 1029 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 empty c-wasm memory: lengua is level now, and KNOWN_BEHIND line 745 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 empty cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 746 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 empty rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 747 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 add c-wasm memory: lengua is level now, and KNOWN_BEHIND line 760 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 add cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 761 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 add rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 762 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 hypotenuse c-wasm memory: lengua is level now, and KNOWN_BEHIND line 775 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 hypotenuse cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 776 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 hypotenuse rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 777 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase c-wasm memory: lengua is level now, and KNOWN_BEHIND line 790 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 791 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 792 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase-stdin c-wasm memory: lengua is level now, and KNOWN_BEHIND line 805 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase-stdin cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 807 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase-stdin rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 809 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase-stdin c cpu: lengua is level now, and KNOWN_BEHIND line 810 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase-stdin cpp cpu: lengua is level now, and KNOWN_BEHIND line 814 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase-stdin rust cpu: lengua is level now, and KNOWN_BEHIND line 818 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 shout c-wasm memory: lengua is level now, and KNOWN_BEHIND line 822 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 shout cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 823 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 shout rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 824 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 wc c-wasm memory: lengua is level now, and KNOWN_BEHIND line 837 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 wc cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 838 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 wc rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 839 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 wc c cpu: lengua is level now, and KNOWN_BEHIND line 840 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 wc cpp cpu: lengua is level now, and KNOWN_BEHIND line 844 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 wc rust cpu: lengua is level now, and KNOWN_BEHIND line 848 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 wc rust wall: lengua is level now, and KNOWN_BEHIND line 849 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 histogram c-wasm memory: lengua is level now, and KNOWN_BEHIND line 852 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 histogram cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 853 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 histogram rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 854 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 crc32c c-wasm memory: lengua is level now, and KNOWN_BEHIND line 867 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 crc32c cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 868 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 crc32c rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 869 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 tally c-wasm memory: lengua is level now, and KNOWN_BEHIND line 887 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 tally cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 888 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 server c-wasm memory: lengua is level now, and KNOWN_BEHIND line 896 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 server cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 897 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 server rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 898 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 files c-wasm memory: lengua is level now, and KNOWN_BEHIND line 910 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 files cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 911 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 files rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 912 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 readings c-wasm memory: lengua is level now, and KNOWN_BEHIND line 925 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 readings cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 926 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 readings rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 927 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
 
 ## The native gaps
 
-lengua's median over that of the best native build, C's, C++'s or Rust's, on each measure, its size with lengua-mcp's: above 1, lengua takes that many times as much.
+lengua's median over that of the best native build, C's, C++'s or Rust's, on each measure, its size with lengua-run's: above 1, lengua takes that many times as much.
 
 | workload | CPU time | wall time | peak memory | size |
 |---|---|---|---|---|
-| empty | – | 1.91× | 2.49× | 189.99× |
-| add | – | 1.85× | 2.49× | 166.25× |
-| hypotenuse | – | 1.86× | 2.49× | 164.83× |
-| upcase | – | 1.79× | 2.15× | 161.38× |
-| upcase-stdin | 3.00× | 1.52× | 2.48× | 181.08× |
-| shout | – | 1.78× | 2.14× | 173.74× |
-| wc | 1.50× | 1.17× | 2.48× | 168.43× |
-| histogram | 1.33× | 1.24× | 2.46× | 165.54× |
-| crc32c | 4.00× | 2.24× | 2.46× | 175.32× |
-| sort | 1.19× | 1.17× | 1.01× | 166.27× |
-| tally | 0.68× | 0.66× | 2.27× | 154.30× |
-| server | 1.17× | 1.54× | 2.16× | 170.67× |
-| files | 2.18× | 2.13× | 2.43× | 162.06× |
-| readings | 4.00× | 3.20× | 2.49× | 161.38× |
+| empty | – | 1.44× | 1.53× | 49.54× |
+| add | – | 1.41× | 1.52× | 43.36× |
+| hypotenuse | – | 1.41× | 1.53× | 42.99× |
+| upcase | – | 1.41× | 1.42× | 42.09× |
+| upcase-stdin | 1.00× | 1.32× | 1.51× | 47.22× |
+| shout | – | 1.40× | 1.42× | 45.31× |
+| wc | 1.00× | 1.07× | 1.51× | 43.93× |
+| histogram | 1.33× | 1.15× | 1.50× | 43.17× |
+| crc32c | 2.00× | 2.02× | 1.51× | 45.72× |
+| sort | 1.12× | 1.09× | 0.96× | 43.38× |
+| tally | 0.65× | 0.64× | 1.49× | 40.26× |
+| server | 1.17× | 1.57× | 1.41× | 44.51× |
+| files | 2.00× | 1.83× | 1.53× | 42.27× |
+| readings | 3.50× | 2.97× | 1.53× | 42.09× |
 
 ## Every row
 
@@ -104,90 +118,90 @@ Each measure's verdict (ahead, level, behind, or not measured), lengua's median 
 
 | workload | against | runs | CPU time | wall time | peak memory | size |
 |---|---|---|---|---|---|---|
-| empty | c-wasm | 2000 | level, 1.00×, p 0.055 | level, 1.01×, p 2.4e-4 | behind, 1.08× | ahead, 0.89× |
-| empty | cpp-wasm | 2000 | level, 1.00×, p 0.137 | level, 1.01×, p 6.7e-6 | behind, 1.08× | ahead, 0.89× |
-| empty | rust-wasm | 2000 | level, 1.00×, p 0.354 | level, 0.99×, p 6.0e-20 | behind, 1.08× | ahead, 0.01× |
-| empty | c | 20 | behind, p 6.4e-6 | behind, 1.91×, p 3.4e-8 | behind, 2.49× | behind, 179.38× |
-| empty | cpp | 20 | behind, p 8.0e-7 | behind, 1.87×, p 3.4e-8 | behind, 2.49× | behind, 179.38× |
-| empty | rust | 20 | behind, p 8.0e-7 | behind, 1.80×, p 3.4e-8 | behind, 2.34× | behind, 189.99× |
-| add | c-wasm | 2000 | level, 1.00×, p 0.148 | level, 0.99×, p 6.3e-10 | behind, 1.08× | ahead, 0.04× |
-| add | cpp-wasm | 2000 | level, 1.00×, p 0.349 | level, 0.99×, p 2.6e-7 | behind, 1.08× | ahead, 0.04× |
-| add | rust-wasm | 2000 | level, 1.00×, p 0.498 | level, 0.98×, p 2.3e-60 | behind, 1.08× | ahead, 0.02× |
-| add | c | 40 | behind, p 6.0e-6 | behind, 1.83×, p 7.2e-15 | behind, 2.49× | behind, 135.33× |
-| add | cpp | 20 | behind, p 1.4e-4 | behind, 1.85×, p 3.4e-8 | behind, 2.48× | behind, 135.33× |
-| add | rust | 20 | behind, p 3.6e-5 | behind, 1.76×, p 3.4e-8 | behind, 2.34× | behind, 166.25× |
-| hypotenuse | c-wasm | 2000 | level, 1.00×, p 0.100 | level, 1.00×, p 2.5e-4 | behind, 1.08× | ahead, 0.05× |
-| hypotenuse | cpp-wasm | 2000 | level, 1.00×, p 0.007 | level, 0.99×, p 3.4e-5 | behind, 1.09× | ahead, 0.05× |
-| hypotenuse | rust-wasm | 2000 | level, 1.00×, p 0.192 | level, 0.98×, p 1.8e-56 | behind, 1.09× | ahead, 0.03× |
-| hypotenuse | c | 20 | behind, p 1.1e-4 | behind, 1.85×, p 3.4e-8 | behind, 2.49× | behind, 134.39× |
-| hypotenuse | cpp | 20 | behind, p 2.9e-4 | behind, 1.86×, p 3.4e-8 | behind, 2.49× | behind, 133.92× |
-| hypotenuse | rust | 40 | behind, p 1.1e-5 | behind, 1.75×, p 7.2e-15 | behind, 2.34× | behind, 164.83× |
-| upcase | c-wasm | 2000 | level, 1.00×, p 0.189 | level, 1.00×, p 0.011 | behind, 1.08× | ahead, 0.06× |
-| upcase | cpp-wasm | 2000 | level, 1.00×, p 0.202 | level, 1.00×, p 0.009 | behind, 1.08× | ahead, 0.06× |
-| upcase | rust-wasm | 2000 | level, 1.00×, p 0.235 | level, 0.99×, p 1.0e-14 | behind, 1.07× | ahead, 0.03× |
-| upcase | c | 40 | behind, p 2.8e-7 | behind, 1.79×, p 7.2e-15 | behind, 2.09× | behind, 126.46× |
-| upcase | cpp | 20 | behind, p 0.001 | behind, 1.75×, p 3.4e-8 | behind, 2.09× | behind, 126.46× |
-| upcase | rust | 40 | behind, p 1.0e-6 | behind, 1.73×, p 7.2e-15 | behind, 2.15× | behind, 161.38× |
-| upcase-stdin | c-wasm | 2000 | level, 1.00×, p 0.002 | level, 1.01×, p 3.5e-6 | behind, 1.09× | behind, 1.35× |
-| upcase-stdin | cpp-wasm | 2000 | level, 1.00×, p 0.025 | level, 1.00×, p 0.013 | behind, 1.09× | behind, 1.32× |
-| upcase-stdin | rust-wasm | 2000 | level, 1.00×, p 0.191 | level, 0.99×, p 5.1e-28 | behind, 1.09× | ahead, 0.03× |
-| upcase-stdin | c | 20 | behind, 3.00×, p 9.6e-7 | behind, 1.51×, p 3.4e-8 | behind, 2.48× | behind, 172.96× |
-| upcase-stdin | cpp | 20 | behind, 3.00×, p 1.8e-6 | behind, 1.52×, p 3.4e-8 | behind, 2.48× | behind, 172.96× |
-| upcase-stdin | rust | 20 | behind, 3.00×, p 9.6e-7 | behind, 1.43×, p 3.4e-8 | behind, 2.36× | behind, 181.08× |
-| shout | c-wasm | 640 | level, 1.00×, p 4.3e-4 | level, 1.01×, p 3.8e-5 | behind, 1.09× | ahead, 0.40× |
-| shout | cpp-wasm | 2000 | level, 1.00×, p 0.033 | level, 1.01×, p 1.5e-6 | behind, 1.09× | ahead, 0.40× |
-| shout | rust-wasm | 2000 | level, 1.00×, p 0.031 | level, 0.99×, p 6.8e-17 | behind, 1.08× | ahead, 0.03× |
-| shout | c | 20 | behind, p 2.8e-4 | behind, 1.78×, p 3.4e-8 | behind, 2.12× | behind, 168.43× |
-| shout | cpp | 20 | behind, p 1.2e-5 | behind, 1.77×, p 3.4e-8 | behind, 2.11× | behind, 168.43× |
-| shout | rust | 20 | behind, p 1.2e-5 | behind, 1.71×, p 3.4e-8 | behind, 2.14× | behind, 173.74× |
-| wc | c-wasm | 160 | level, 1.00×, p 1.7e-5 | ahead, 0.85×, p 8.9e-52 | behind, 1.09× | ahead, 0.10× |
-| wc | cpp-wasm | 20 | ahead, 0.23×, p 1.8e-8 | ahead, 0.22×, p 3.4e-8 | behind, 1.09× | ahead, 0.11× |
-| wc | rust-wasm | 80 | level, 1.00×, p 8.6e-4 | ahead, 0.85×, p 2.5e-27 | behind, 1.08× | ahead, 0.04× |
-| wc | c | 20 | behind, 1.50×, p 4.4e-4 | behind, 1.17×, p 3.4e-8 | behind, 2.48× | behind, 133.93× |
-| wc | cpp | 20 | behind, 1.50×, p 2.8e-5 | behind, 1.14×, p 3.4e-8 | behind, 2.48× | behind, 133.93× |
-| wc | rust | 20 | behind, 1.50×, p 0.001 | behind, 1.12×, p 3.4e-8 | behind, 2.37× | behind, 168.43× |
-| histogram | c-wasm | 20 | ahead, 0.67×, p 5.9e-8 | ahead, 0.68×, p 3.4e-8 | behind, 1.08× | ahead, 0.09× |
-| histogram | cpp-wasm | 20 | ahead, 0.67×, p 3.1e-8 | ahead, 0.69×, p 3.4e-8 | behind, 1.08× | ahead, 0.09× |
-| histogram | rust-wasm | 640 | level, 1.00×, p 3.0e-5 | level, 0.97×, p 1.8e-136 | behind, 1.07× | ahead, 0.03× |
-| histogram | c | 20 | behind, 1.33×, p 3.5e-8 | behind, 1.24×, p 3.4e-8 | behind, 2.45× | behind, 134.39× |
-| histogram | cpp | 20 | behind, 1.33×, p 1.3e-6 | behind, 1.24×, p 3.4e-8 | behind, 2.46× | behind, 134.39× |
-| histogram | rust | 20 | behind, 1.33×, p 1.0e-4 | behind, 1.20×, p 3.4e-8 | behind, 2.34× | behind, 165.54× |
-| crc32c | c-wasm | 40 | level, 1.00×, p 4.2e-4 | ahead, 0.86×, p 9.4e-14 | behind, 1.08× | ahead, 0.08× |
-| crc32c | cpp-wasm | 80 | ahead, 0.89×, p 2.2e-7 | ahead, 0.86×, p 7.6e-27 | behind, 1.08× | ahead, 0.08× |
-| crc32c | rust-wasm | 20 | ahead, 0.80×, p 5.1e-4 | ahead, 0.83×, p 3.4e-8 | behind, 1.08× | ahead, 0.04× |
-| crc32c | c | 20 | behind, 2.67×, p 2.5e-8 | behind, 2.22×, p 3.4e-8 | behind, 2.46× | behind, 134.86× |
-| crc32c | cpp | 20 | behind, 4.00×, p 2.2e-8 | behind, 2.24×, p 3.4e-8 | behind, 2.46× | behind, 134.86× |
-| crc32c | rust | 20 | behind, 4.00×, p 2.5e-8 | behind, 2.11×, p 3.4e-8 | behind, 2.34× | behind, 175.32× |
-| sort | c-wasm | 20 | ahead, 0.21×, p 2.7e-8 | ahead, 0.20×, p 3.4e-8 | level, 1.01× | ahead, 0.27× |
-| sort | cpp-wasm | 20 | ahead, 0.60×, p 2.5e-8 | ahead, 0.59×, p 3.4e-8 | ahead, 0.92× | ahead, 0.11× |
-| sort | rust-wasm | 20 | ahead, 0.68×, p 2.5e-8 | ahead, 0.67×, p 3.4e-8 | ahead, 0.92× | ahead, 0.07× |
-| sort | c | 20 | ahead, 0.45×, p 2.8e-8 | ahead, 0.43×, p 3.4e-8 | level, 1.01× | behind, 166.27× |
-| sort | cpp | 20 | ahead, 0.46×, p 2.6e-8 | ahead, 0.45×, p 3.4e-8 | ahead, 0.90× | behind, 151.87× |
-| sort | rust | 20 | behind, 1.19×, p 6.2e-8 | behind, 1.17×, p 3.9e-8 | level, 0.95× | behind, 163.45× |
-| tally | c-wasm | 20 | ahead, 0.55×, p 1.7e-8 | ahead, 0.55×, p 3.4e-8 | behind, 1.11× | ahead, 0.20× |
-| tally | cpp-wasm | 20 | ahead, 0.55×, p 1.7e-8 | ahead, 0.55×, p 3.4e-8 | behind, 1.11× | ahead, 0.12× |
-| tally | rust-wasm | 20 | ahead, 0.41×, p 1.6e-8 | ahead, 0.41×, p 3.4e-8 | behind, 1.10× | ahead, 0.08× |
-| tally | c | 20 | ahead, 0.68×, p 6.5e-9 | ahead, 0.66×, p 3.4e-8 | behind, 2.22× | behind, 131.21× |
-| tally | cpp | 20 | ahead, 0.68×, p 2.0e-8 | ahead, 0.65×, p 3.4e-8 | behind, 2.24× | behind, 127.31× |
-| tally | rust | 20 | ahead, 0.64×, p 1.8e-8 | ahead, 0.64×, p 3.4e-8 | behind, 2.27× | behind, 154.30× |
-| server | c-wasm | 71 | level, 1.01×, p 0.060 | ahead, 0.93×, p 1.8e-19 | behind, 1.09× | ahead, 0.12× |
-| server | cpp-wasm | 71 | level, 1.01×, p 0.080 | ahead, 0.93×, p 2.9e-19 | behind, 1.09× | ahead, 0.06× |
-| server | rust-wasm | 71 | level, 1.00×, p 0.361 | ahead, 0.93×, p 1.7e-20 | behind, 1.07× | ahead, 0.03× |
-| server | c | 20 | behind, 1.17×, p 2.9e-8 | behind, 1.17×, p 3.4e-8 | behind, 2.16× | behind, 170.67× |
-| server | cpp | 20 | behind, 1.17×, p 3.1e-8 | behind, 1.16×, p 3.5e-7 | behind, 2.15× | behind, 166.97× |
-| server | rust | 20 | ahead, 0.88×, p 4.7e-8 | behind, 1.54×, p 3.4e-8 | behind, 1.78× | behind, 141.28× |
-| files | c-wasm | 20 | ahead, 0.86×, p 1.4e-5 | ahead, 0.91×, p 5.3e-8 | behind, 1.08× | ahead, 0.05× |
-| files | cpp-wasm | 20 | ahead, 0.92×, p 1.8e-4 | ahead, 0.90×, p 6.2e-8 | behind, 1.08× | ahead, 0.05× |
-| files | rust-wasm | 20 | ahead, 0.92×, p 9.2e-6 | ahead, 0.90×, p 5.3e-8 | behind, 1.08× | ahead, 0.03× |
-| files | c | 20 | behind, 2.00×, p 1.0e-8 | behind, 1.96×, p 3.4e-8 | behind, 2.43× | behind, 127.30× |
-| files | cpp | 20 | behind, 2.00×, p 8.7e-9 | behind, 1.97×, p 3.4e-8 | behind, 2.43× | behind, 127.30× |
-| files | rust | 20 | behind, 2.18×, p 1.7e-8 | behind, 2.13×, p 3.4e-8 | behind, 2.31× | behind, 162.06× |
-| readings | c-wasm | 640 | level, 1.00×, p 2.9e-7 | level, 0.97×, p 2.0e-186 | behind, 1.08× | ahead, 0.04× |
-| readings | cpp-wasm | 1734 | level, 1.00×, p 0.013 | level, 0.99×, p 1.0e-299 | behind, 1.08× | ahead, 0.04× |
-| readings | rust-wasm | 80 | level, 1.00×, p 5.5e-4 | level, 0.95×, p 8.2e-27 | behind, 1.08× | ahead, 0.02× |
-| readings | c | 20 | behind, 4.00×, p 4.9e-9 | behind, 3.20×, p 3.4e-8 | behind, 2.49× | behind, 135.33× |
-| readings | cpp | 20 | behind, 4.00×, p 4.9e-9 | behind, 3.13×, p 3.4e-8 | behind, 2.48× | behind, 135.33× |
-| readings | rust | 20 | behind, 2.67×, p 2.0e-8 | behind, 2.44×, p 3.4e-8 | behind, 2.34× | behind, 161.38× |
+| empty | c-wasm | 2000 | level, 1.00×, p 0.042 | level, 1.03×, p 2.0e-143 | level, 1.02× | ahead, 0.89× |
+| empty | cpp-wasm | 2000 | level, 1.00×, p 0.133 | level, 1.03×, p 3.9e-157 | level, 1.02× | ahead, 0.89× |
+| empty | rust-wasm | 2000 | level, 1.00×, p 0.090 | level, 1.02×, p 7.9e-51 | level, 1.01× | ahead, 0.01× |
+| empty | c | 80 | behind, p 2.9e-5 | behind, 1.43×, p 4.7e-28 | behind, 1.53× | behind, 46.77× |
+| empty | cpp | 80 | behind, p 6.8e-4 | behind, 1.44×, p 4.7e-28 | behind, 1.53× | behind, 46.77× |
+| empty | rust | 160 | behind, p 3.0e-5 | behind, 1.36×, p 2.9e-54 | behind, 1.44× | behind, 49.54× |
+| add | c-wasm | 2000 | level, 2.00×, p 0.058 | level, 1.02×, p 3.5e-92 | level, 1.01× | ahead, 0.04× |
+| add | cpp-wasm | 2000 | level, p 0.032 | level, 1.02×, p 3.6e-102 | level, 1.01× | ahead, 0.04× |
+| add | rust-wasm | 2000 | level, 2.00×, p 0.110 | level, 1.02×, p 1.2e-50 | level, 1.01× | ahead, 0.02× |
+| add | c | 160 | behind, p 6.0e-7 | behind, 1.41×, p 5.7e-53 | behind, 1.52× | behind, 35.29× |
+| add | cpp | 80 | behind, p 6.9e-5 | behind, 1.41×, p 4.7e-28 | behind, 1.52× | behind, 35.29× |
+| add | rust | 160 | behind, p 6.6e-4 | behind, 1.34×, p 2.9e-54 | behind, 1.43× | behind, 43.36× |
+| hypotenuse | c-wasm | 2000 | level, 1.00×, p 0.207 | level, 1.03×, p 3.8e-111 | level, 1.01× | ahead, 0.05× |
+| hypotenuse | cpp-wasm | 2000 | level, 1.00×, p 0.015 | level, 1.03×, p 2.4e-118 | level, 1.01× | ahead, 0.05× |
+| hypotenuse | rust-wasm | 2000 | level, 1.00×, p 0.293 | level, 1.01×, p 4.9e-35 | level, 1.01× | ahead, 0.03× |
+| hypotenuse | c | 40 | behind, p 0.001 | behind, 1.41×, p 7.2e-15 | behind, 1.53× | behind, 35.05× |
+| hypotenuse | cpp | 20 | behind, p 0.001 | behind, 1.42×, p 3.4e-8 | behind, 1.52× | behind, 34.93× |
+| hypotenuse | rust | 20 | behind, p 0.001 | behind, 1.33×, p 3.4e-8 | behind, 1.43× | behind, 42.99× |
+| upcase | c-wasm | 1280 | level, 1.00×, p 1.5e-4 | level, 1.04×, p 2.8e-113 | level, 1.01× | ahead, 0.06× |
+| upcase | cpp-wasm | 1280 | level, 1.00×, p 1.7e-4 | level, 1.03×, p 4.2e-103 | level, 1.01× | ahead, 0.06× |
+| upcase | rust-wasm | 640 | level, 1.00×, p 2.0e-5 | level, 1.02×, p 7.5e-25 | level, 1.00× | ahead, 0.03× |
+| upcase | c | 40 | behind, p 8.1e-5 | behind, 1.40×, p 7.2e-15 | behind, 1.38× | behind, 32.98× |
+| upcase | cpp | 40 | behind, p 1.6e-4 | behind, 1.41×, p 1.4e-13 | behind, 1.38× | behind, 32.98× |
+| upcase | rust | 40 | behind, p 1.7e-4 | behind, 1.35×, p 7.2e-15 | behind, 1.42× | behind, 42.09× |
+| upcase-stdin | c-wasm | 2000 | level, 1.00×, p 2.4e-4 | level, 1.01×, p 1.2e-65 | level, 1.02× | behind, 1.35× |
+| upcase-stdin | cpp-wasm | 2000 | level, 1.00×, p 0.015 | level, 1.01×, p 2.8e-34 | level, 1.02× | behind, 1.32× |
+| upcase-stdin | rust-wasm | 2000 | level, 1.00×, p 0.001 | level, 1.01×, p 5.6e-33 | level, 1.01× | ahead, 0.03× |
+| upcase-stdin | c | 40 | level, 1.00×, p 4.3e-6 | behind, 1.32×, p 7.2e-15 | behind, 1.51× | behind, 45.10× |
+| upcase-stdin | cpp | 20 | level, 1.00×, p 0.001 | behind, 1.31×, p 3.4e-8 | behind, 1.51× | behind, 45.10× |
+| upcase-stdin | rust | 40 | level, 1.00×, p 4.3e-6 | behind, 1.26×, p 7.2e-15 | behind, 1.44× | behind, 47.22× |
+| shout | c-wasm | 2000 | level, 1.00×, p 9.1e-4 | level, 1.03×, p 1.1e-163 | level, 1.02× | ahead, 0.40× |
+| shout | cpp-wasm | 2000 | level, 1.00×, p 0.027 | level, 1.03×, p 9.4e-154 | level, 1.02× | ahead, 0.40× |
+| shout | rust-wasm | 2000 | level, 1.00×, p 0.080 | level, 1.01×, p 1.6e-50 | level, 1.01× | ahead, 0.03× |
+| shout | c | 80 | behind, p 1.2e-5 | behind, 1.40×, p 4.7e-28 | behind, 1.40× | behind, 43.92× |
+| shout | cpp | 160 | behind, p 6.1e-5 | behind, 1.39×, p 2.9e-54 | behind, 1.40× | behind, 43.92× |
+| shout | rust | 80 | behind, p 3.3e-5 | behind, 1.32×, p 4.7e-28 | behind, 1.42× | behind, 45.31× |
+| wc | c-wasm | 80 | level, 1.00×, p 5.7e-6 | ahead, 0.85×, p 4.7e-28 | level, 1.01× | ahead, 0.10× |
+| wc | cpp-wasm | 20 | ahead, 0.19×, p 1.1e-8 | ahead, 0.21×, p 3.4e-8 | level, 1.01× | ahead, 0.11× |
+| wc | rust-wasm | 20 | ahead, 0.83×, p 3.9e-4 | ahead, 0.85×, p 3.4e-8 | level, 1.02× | ahead, 0.04× |
+| wc | c | 160 | level, 1.00×, p 6.1e-5 | behind, 1.07×, p 5.1e-54 | behind, 1.51× | behind, 34.93× |
+| wc | cpp | 160 | level, 1.00×, p 5.2e-5 | behind, 1.06×, p 1.6e-49 | behind, 1.51× | behind, 34.93× |
+| wc | rust | 640 | level, 1.00×, p 6.8e-4 | level, 1.04×, p 1.6e-136 | behind, 1.44× | behind, 43.93× |
+| histogram | c-wasm | 20 | ahead, 0.67×, p 5.6e-8 | ahead, 0.67×, p 3.4e-8 | level, 1.01× | ahead, 0.09× |
+| histogram | cpp-wasm | 20 | ahead, 0.67×, p 7.9e-8 | ahead, 0.67×, p 3.4e-8 | level, 1.01× | ahead, 0.09× |
+| histogram | rust-wasm | 1280 | level, 1.00×, p 9.6e-7 | level, 0.98×, p 7.1e-181 | level, 1.02× | ahead, 0.03× |
+| histogram | c | 20 | behind, 1.33×, p 2.5e-5 | behind, 1.15×, p 3.4e-8 | behind, 1.50× | behind, 35.05× |
+| histogram | cpp | 20 | behind, 1.33×, p 2.9e-4 | behind, 1.15×, p 3.4e-8 | behind, 1.50× | behind, 35.05× |
+| histogram | rust | 40 | behind, 1.33×, p 2.4e-4 | behind, 1.11×, p 7.2e-15 | behind, 1.43× | behind, 43.17× |
+| crc32c | c-wasm | 20 | level, 1.00×, p 9.2e-4 | ahead, 0.87×, p 3.4e-8 | level, 1.02× | ahead, 0.08× |
+| crc32c | cpp-wasm | 40 | level, 1.00×, p 2.2e-6 | ahead, 0.86×, p 7.2e-15 | level, 1.02× | ahead, 0.08× |
+| crc32c | rust-wasm | 20 | level, 1.00×, p 3.4e-4 | ahead, 0.83×, p 3.4e-8 | level, 1.02× | ahead, 0.04× |
+| crc32c | c | 20 | behind, 2.00×, p 8.9e-8 | behind, 2.02×, p 3.4e-8 | behind, 1.51× | behind, 35.17× |
+| crc32c | cpp | 20 | behind, 2.00×, p 8.9e-8 | behind, 2.02×, p 3.4e-8 | behind, 1.51× | behind, 35.17× |
+| crc32c | rust | 20 | behind, 2.00×, p 9.9e-8 | behind, 1.96×, p 3.4e-8 | behind, 1.44× | behind, 45.72× |
+| sort | c-wasm | 20 | ahead, 0.20×, p 1.9e-8 | ahead, 0.20×, p 3.4e-8 | level, 1.00× | ahead, 0.27× |
+| sort | cpp-wasm | 20 | ahead, 0.58×, p 1.2e-8 | ahead, 0.57×, p 3.4e-8 | ahead, 0.91× | ahead, 0.11× |
+| sort | rust-wasm | 20 | ahead, 0.66×, p 1.6e-8 | ahead, 0.64×, p 3.4e-8 | ahead, 0.91× | ahead, 0.07× |
+| sort | c | 20 | ahead, 0.42×, p 1.6e-8 | ahead, 0.41×, p 3.4e-8 | level, 0.96× | behind, 43.38× |
+| sort | cpp | 20 | ahead, 0.43×, p 2.1e-8 | ahead, 0.42×, p 3.4e-8 | ahead, 0.85× | behind, 39.62× |
+| sort | rust | 20 | behind, 1.12×, p 9.1e-8 | behind, 1.09×, p 3.4e-8 | ahead, 0.90× | behind, 42.64× |
+| tally | c-wasm | 20 | ahead, 0.55×, p 5.0e-9 | ahead, 0.54×, p 3.4e-8 | level, 1.04× | ahead, 0.20× |
+| tally | cpp-wasm | 20 | ahead, 0.55×, p 1.2e-8 | ahead, 0.54×, p 3.4e-8 | level, 1.04× | ahead, 0.12× |
+| tally | rust-wasm | 20 | ahead, 0.39×, p 1.2e-8 | ahead, 0.40×, p 3.4e-8 | behind, 1.07× | ahead, 0.08× |
+| tally | c | 20 | ahead, 0.65×, p 1.1e-8 | ahead, 0.64×, p 3.4e-8 | behind, 1.46× | behind, 34.23× |
+| tally | cpp | 20 | ahead, 0.65×, p 7.8e-9 | ahead, 0.63×, p 3.4e-8 | behind, 1.47× | behind, 33.22× |
+| tally | rust | 20 | ahead, 0.61×, p 9.3e-9 | ahead, 0.62×, p 3.4e-8 | behind, 1.49× | behind, 40.26× |
+| server | c-wasm | 73 | level, 1.01×, p 1.5e-4 | ahead, 0.94×, p 1.4e-25 | level, 1.02× | ahead, 0.12× |
+| server | cpp-wasm | 73 | level, 1.01×, p 0.009 | ahead, 0.94×, p 9.4e-26 | level, 1.02× | ahead, 0.06× |
+| server | rust-wasm | 73 | level, 1.00×, p 0.080 | ahead, 0.88×, p 9.4e-26 | level, 1.01× | ahead, 0.03× |
+| server | c | 20 | behind, 1.16×, p 2.9e-8 | behind, 1.15×, p 3.4e-8 | behind, 1.41× | behind, 44.51× |
+| server | cpp | 20 | behind, 1.17×, p 3.0e-8 | behind, 1.15×, p 3.4e-8 | behind, 1.41× | behind, 43.55× |
+| server | rust | 20 | ahead, 0.88×, p 6.8e-7 | behind, 1.57×, p 3.4e-8 | behind, 1.16× | behind, 36.85× |
+| files | c-wasm | 20 | ahead, 0.92×, p 5.7e-5 | ahead, 0.91×, p 3.9e-8 | level, 1.03× | ahead, 0.05× |
+| files | cpp-wasm | 20 | ahead, 0.92×, p 1.2e-4 | ahead, 0.91×, p 3.4e-8 | level, 1.03× | ahead, 0.05× |
+| files | rust-wasm | 20 | ahead, 0.92×, p 2.3e-5 | ahead, 0.89×, p 3.9e-8 | level, 1.02× | ahead, 0.03× |
+| files | c | 20 | behind, 2.00×, p 1.1e-8 | behind, 1.78×, p 3.4e-8 | behind, 1.53× | behind, 33.20× |
+| files | cpp | 20 | behind, 2.00×, p 1.3e-8 | behind, 1.77×, p 3.4e-8 | behind, 1.53× | behind, 33.20× |
+| files | rust | 20 | behind, 2.00×, p 7.7e-9 | behind, 1.83×, p 3.4e-8 | behind, 1.45× | behind, 42.27× |
+| readings | c-wasm | 320 | level, 1.00×, p 1.2e-6 | level, 0.98×, p 1.8e-98 | level, 1.02× | ahead, 0.04× |
+| readings | cpp-wasm | 2000 | level, 1.00×, p 4.8e-4 | level, 0.99×, p 9.2e-219 | level, 1.02× | ahead, 0.04× |
+| readings | rust-wasm | 40 | level, 1.00×, p 1.9e-4 | level, 0.96×, p 7.2e-15 | level, 1.02× | ahead, 0.02× |
+| readings | c | 20 | behind, 3.50×, p 1.7e-9 | behind, 2.97×, p 3.4e-8 | behind, 1.53× | behind, 35.29× |
+| readings | cpp | 20 | behind, 3.50×, p 3.6e-9 | behind, 2.91×, p 3.4e-8 | behind, 1.53× | behind, 35.29× |
+| readings | rust | 20 | behind, 2.33×, p 3.3e-9 | behind, 2.26×, p 3.4e-8 | behind, 1.44× | behind, 42.09× |
 
 ## empty
 
@@ -195,15 +209,15 @@ Starts and exits with code 0: all of it is starting and ending a process, which 
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 2000 | 2000 | 2000 | 20 | 20 | 20 |
+| counted runs | 2000 | 2000 | 2000 | 2000 | 80 | 80 | 160 |
 | CPU time | 15.6 ms | 15.6 ms | 15.6 ms | 15.6 ms | 0.00 ns | 0.00 ns | 0.00 ns |
-| wall time | 21.0 ms | 20.9 ms | 20.9 ms | 21.3 ms | 11.3 ms | 11.6 ms | 12.0 ms |
-| peak memory | 11.6 MiB | 10.7 MiB | 10.7 MiB | 10.7 MiB | 4.66 MiB | 4.66 MiB | 4.95 MiB |
+| wall time | 15.9 ms | 15.4 ms | 15.4 ms | 15.6 ms | 11.0 ms | 11.0 ms | 11.5 ms |
+| peak memory | 7.12 MiB | 7.01 MiB | 7.01 MiB | 7.02 MiB | 4.67 MiB | 4.67 MiB | 4.96 MiB |
 | size | 319 B | 357 B | 357 B | 33.8 KiB | 108 KiB | 108 KiB | 102 KiB |
 
-Its rounds took 299 seconds.
+Its rounds took 264 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/empty
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/empty
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -223,15 +237,15 @@ Parses two whole numbers from its arguments and prints their sum: almost all of 
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 2000 | 2000 | 2000 | 40 | 20 | 20 |
-| CPU time | 15.6 ms | 15.6 ms | 15.6 ms | 15.6 ms | 0.00 ns | 0.00 ns | 0.00 ns |
-| wall time | 21.8 ms | 21.9 ms | 21.9 ms | 22.3 ms | 11.2 ms | 11.2 ms | 11.8 ms |
-| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.8 MiB | 4.69 MiB | 4.70 MiB | 4.98 MiB |
+| counted runs | 2000 | 2000 | 2000 | 2000 | 160 | 80 | 160 |
+| CPU time | 15.6 ms | 7.81 ms | 0.00 ns | 7.81 ms | 0.00 ns | 0.00 ns | 0.00 ns |
+| wall time | 15.4 ms | 15.1 ms | 15.0 ms | 15.1 ms | 10.9 ms | 10.9 ms | 11.5 ms |
+| peak memory | 7.16 MiB | 7.06 MiB | 7.06 MiB | 7.05 MiB | 4.70 MiB | 4.70 MiB | 4.99 MiB |
 | size | 1.22 KiB | 30.2 KiB | 29.0 KiB | 54.5 KiB | 142 KiB | 142 KiB | 116 KiB |
 
-Its rounds took 312 seconds.
+Its rounds took 259 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/add
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/add
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -251,15 +265,15 @@ Prints the hypotenuse of two decimal sides from its arguments, rounded to three 
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 2000 | 2000 | 2000 | 20 | 20 | 40 |
+| counted runs | 2000 | 2000 | 2000 | 2000 | 40 | 20 | 20 |
 | CPU time | 15.6 ms | 15.6 ms | 15.6 ms | 15.6 ms | 0.00 ns | 0.00 ns | 0.00 ns |
-| wall time | 21.1 ms | 21.2 ms | 21.2 ms | 21.6 ms | 11.2 ms | 11.1 ms | 11.7 ms |
-| peak memory | 11.7 MiB | 10.8 MiB | 10.7 MiB | 10.8 MiB | 4.69 MiB | 4.69 MiB | 4.98 MiB |
+| wall time | 16.0 ms | 15.6 ms | 15.6 ms | 15.8 ms | 11.2 ms | 11.2 ms | 11.9 ms |
+| peak memory | 7.16 MiB | 7.06 MiB | 7.06 MiB | 7.05 MiB | 4.70 MiB | 4.70 MiB | 4.99 MiB |
 | size | 1.52 KiB | 28.4 KiB | 28.9 KiB | 56.3 KiB | 144 KiB | 144 KiB | 117 KiB |
 
-Its rounds took 300 seconds.
+Its rounds took 262 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, examples/hypotenuse
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, examples/hypotenuse
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -279,15 +293,15 @@ Copies a 1 MiB text file to another with its ASCII letters in capitals: a file o
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 2000 | 2000 | 2000 | 40 | 20 | 40 |
+| counted runs | 1280 | 1280 | 1280 | 640 | 40 | 40 | 40 |
 | CPU time | 15.6 ms | 15.6 ms | 15.6 ms | 15.6 ms | 0.00 ns | 0.00 ns | 0.00 ns |
-| wall time | 22.6 ms | 22.5 ms | 22.5 ms | 22.9 ms | 12.4 ms | 12.8 ms | 12.8 ms |
-| peak memory | 12.2 MiB | 11.2 MiB | 11.2 MiB | 11.4 MiB | 5.80 MiB | 5.80 MiB | 5.65 MiB |
+| wall time | 18.2 ms | 17.6 ms | 17.6 ms | 17.7 ms | 12.7 ms | 12.7 ms | 13.2 ms |
+| peak memory | 8.03 MiB | 7.92 MiB | 7.92 MiB | 8.02 MiB | 5.81 MiB | 5.81 MiB | 5.66 MiB |
 | size | 1.93 KiB | 33.4 KiB | 33.4 KiB | 59.0 KiB | 152 KiB | 152 KiB | 120 KiB |
 
-Its rounds took 311 seconds.
+Its rounds took 161 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, examples/upcase
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, examples/upcase
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -307,15 +321,15 @@ Copies 64 MiB of standard input to standard output with its ASCII letters in cap
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 2000 | 2000 | 2000 | 20 | 20 | 20 |
-| CPU time | 46.9 ms | 46.9 ms | 46.9 ms | 46.9 ms | 15.6 ms | 15.6 ms | 15.6 ms |
-| wall time | 45.4 ms | 45.2 ms | 45.3 ms | 46.0 ms | 30.7 ms | 30.4 ms | 32.3 ms |
-| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.8 MiB | 4.73 MiB | 4.73 MiB | 4.97 MiB |
+| counted runs | 2000 | 2000 | 2000 | 2000 | 40 | 20 | 40 |
+| CPU time | 31.2 ms | 31.2 ms | 31.2 ms | 31.2 ms | 31.2 ms | 31.2 ms | 31.2 ms |
+| wall time | 40.5 ms | 39.9 ms | 40.0 ms | 40.1 ms | 30.4 ms | 30.6 ms | 31.8 ms |
+| peak memory | 7.16 MiB | 7.05 MiB | 7.05 MiB | 7.07 MiB | 4.73 MiB | 4.74 MiB | 4.98 MiB |
 | size | 1.20 KiB | 912 B | 929 B | 35.6 KiB | 112 KiB | 112 KiB | 106 KiB |
 
-Its rounds took 498 seconds.
+Its rounds took 464 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/upcase-stdin
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/upcase-stdin
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -335,15 +349,15 @@ Reads 1 MiB of standard input whole, then prints it with its ASCII letters in ca
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 640 | 2000 | 2000 | 20 | 20 | 20 |
+| counted runs | 2000 | 2000 | 2000 | 2000 | 80 | 160 | 80 |
 | CPU time | 15.6 ms | 15.6 ms | 15.6 ms | 15.6 ms | 0.00 ns | 0.00 ns | 0.00 ns |
-| wall time | 21.0 ms | 20.5 ms | 20.9 ms | 21.3 ms | 11.7 ms | 11.7 ms | 12.2 ms |
-| peak memory | 12.0 MiB | 11.0 MiB | 11.0 MiB | 11.1 MiB | 5.66 MiB | 5.67 MiB | 5.59 MiB |
+| wall time | 16.9 ms | 16.4 ms | 16.4 ms | 16.7 ms | 12.1 ms | 12.4 ms | 12.8 ms |
+| peak memory | 7.93 MiB | 7.76 MiB | 7.76 MiB | 7.88 MiB | 5.67 MiB | 5.68 MiB | 5.60 MiB |
 | size | 1.24 KiB | 3.07 KiB | 3.09 KiB | 40.5 KiB | 114 KiB | 114 KiB | 111 KiB |
 
-Its rounds took 246 seconds.
+Its rounds took 281 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/shout
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/shout
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -363,15 +377,15 @@ Counts the lines and words of 64 MiB of standard input, as `wc -lw` does. lengua
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 160 | 160 | 20 | 80 | 20 | 20 | 20 |
-| CPU time | 46.9 ms | 46.9 ms | 203 ms | 46.9 ms | 31.2 ms | 31.2 ms | 31.2 ms |
-| wall time | 47.0 ms | 55.4 ms | 215 ms | 56.6 ms | 40.4 ms | 41.2 ms | 41.9 ms |
-| peak memory | 11.8 MiB | 10.8 MiB | 10.8 MiB | 10.9 MiB | 4.76 MiB | 4.76 MiB | 4.98 MiB |
+| counted runs | 640 | 80 | 20 | 20 | 160 | 160 | 640 |
+| CPU time | 31.2 ms | 46.9 ms | 203 ms | 46.9 ms | 31.2 ms | 31.2 ms | 31.2 ms |
+| wall time | 44.9 ms | 52.4 ms | 213 ms | 53.1 ms | 41.8 ms | 42.2 ms | 43.2 ms |
+| peak memory | 7.18 MiB | 7.09 MiB | 7.09 MiB | 7.06 MiB | 4.77 MiB | 4.77 MiB | 4.99 MiB |
 | size | 1.91 KiB | 18.4 KiB | 17.9 KiB | 53.9 KiB | 144 KiB | 144 KiB | 114 KiB |
 
-Its rounds took 37 seconds.
+Its rounds took 109 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, examples/count
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, examples/count
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -391,15 +405,15 @@ Counts each byte value of 64 MiB of standard input. Every version counts in four
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 640 | 20 | 20 | 640 | 20 | 20 | 20 |
+| counted runs | 1280 | 20 | 20 | 1280 | 20 | 20 | 40 |
 | CPU time | 62.5 ms | 93.8 ms | 93.8 ms | 62.5 ms | 46.9 ms | 46.9 ms | 46.9 ms |
-| wall time | 68.4 ms | 101 ms | 101 ms | 70.7 ms | 56.0 ms | 55.8 ms | 57.7 ms |
-| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.9 MiB | 4.76 MiB | 4.76 MiB | 5.00 MiB |
+| wall time | 64.7 ms | 94.7 ms | 95.2 ms | 66.0 ms | 55.6 ms | 55.4 ms | 57.5 ms |
+| peak memory | 7.17 MiB | 7.09 MiB | 7.09 MiB | 7.06 MiB | 4.77 MiB | 4.77 MiB | 5.01 MiB |
 | size | 1.58 KiB | 18.1 KiB | 18.1 KiB | 55.5 KiB | 144 KiB | 144 KiB | 116 KiB |
 
-Its rounds took 121 seconds.
+Its rounds took 225 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/histogram
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/histogram
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -419,15 +433,15 @@ The CRC-32C of 64 MiB of standard input. Natively, C, C++ and Rust use the CPU's
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 80 | 40 | 80 | 20 | 20 | 20 | 20 |
-| CPU time | 62.5 ms | 62.5 ms | 70.3 ms | 78.1 ms | 23.4 ms | 15.6 ms | 15.6 ms |
-| wall time | 65.4 ms | 76.1 ms | 75.9 ms | 79.2 ms | 29.5 ms | 29.3 ms | 31.1 ms |
-| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.8 MiB | 4.75 MiB | 4.75 MiB | 4.99 MiB |
+| counted runs | 40 | 20 | 40 | 20 | 20 | 20 | 20 |
+| CPU time | 62.5 ms | 62.5 ms | 62.5 ms | 62.5 ms | 31.2 ms | 31.2 ms | 31.2 ms |
+| wall time | 63.2 ms | 72.6 ms | 73.1 ms | 76.1 ms | 31.2 ms | 31.2 ms | 32.1 ms |
+| peak memory | 7.18 MiB | 7.06 MiB | 7.06 MiB | 7.06 MiB | 4.76 MiB | 4.76 MiB | 5.00 MiB |
 | size | 1.61 KiB | 19.1 KiB | 19.1 KiB | 39.6 KiB | 143 KiB | 143 KiB | 110 KiB |
 
-Its rounds took 24 seconds.
+Its rounds took 15 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/crc32c
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/crc32c
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -448,14 +462,14 @@ Sorts the lines of 64 MiB of standard input in byte order, as `LC_ALL=C sort` do
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
 | counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
-| CPU time | 297 ms | 1.43 s | 492 ms | 438 ms | 656 ms | 641 ms | 250 ms |
-| wall time | 293 ms | 1.44 s | 500 ms | 440 ms | 680 ms | 657 ms | 249 ms |
-| peak memory | 80.6 MiB | 79.6 MiB | 87.6 MiB | 87.7 MiB | 79.7 MiB | 89.7 MiB | 84.6 MiB |
+| CPU time | 297 ms | 1.48 s | 516 ms | 453 ms | 703 ms | 688 ms | 266 ms |
+| wall time | 295 ms | 1.49 s | 521 ms | 460 ms | 716 ms | 703 ms | 270 ms |
+| peak memory | 76.5 MiB | 76.3 MiB | 84.4 MiB | 84.4 MiB | 79.7 MiB | 89.7 MiB | 84.6 MiB |
 | size | 3.84 KiB | 14.4 KiB | 33.6 KiB | 53.3 KiB | 116 KiB | 127 KiB | 118 KiB |
 
-Its rounds took 103 seconds.
+Its rounds took 107 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/sort-large
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/sort-large
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -476,14 +490,14 @@ Counts each different word of 64 MiB of standard input, 4,096 different words fr
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
 | counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
-| CPU time | 180 ms | 328 ms | 328 ms | 438 ms | 266 ms | 266 ms | 281 ms |
-| wall time | 181 ms | 332 ms | 332 ms | 443 ms | 276 ms | 279 ms | 282 ms |
-| peak memory | 12.0 MiB | 10.8 MiB | 10.8 MiB | 10.9 MiB | 5.39 MiB | 5.34 MiB | 5.27 MiB |
+| CPU time | 172 ms | 312 ms | 312 ms | 438 ms | 266 ms | 266 ms | 281 ms |
+| wall time | 175 ms | 325 ms | 325 ms | 438 ms | 276 ms | 278 ms | 282 ms |
+| peak memory | 7.88 MiB | 7.57 MiB | 7.55 MiB | 7.36 MiB | 5.40 MiB | 5.35 MiB | 5.28 MiB |
 | size | 4.38 KiB | 21.6 KiB | 37.5 KiB | 55.0 KiB | 147 KiB | 152 KiB | 125 KiB |
 
 Its rounds took 51 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/tally
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/tally
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -503,15 +517,15 @@ A server: 64 clients at once each send 1,000 lines of 64 bytes, one at a time, a
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 71 | 71 | 71 | 71 | 20 | 20 | 20 |
-| CPU time | 1.59 s | 1.58 s | 1.58 s | 1.59 s | 1.36 s | 1.36 s | 1.81 s |
-| wall time | 1.60 s | 1.71 s | 1.71 s | 1.73 s | 1.38 s | 1.39 s | 1.04 s |
-| peak memory | 11.5 MiB | 10.5 MiB | 10.6 MiB | 10.7 MiB | 5.30 MiB | 5.31 MiB | 6.45 MiB |
+| counted runs | 73 | 73 | 73 | 73 | 20 | 20 | 20 |
+| CPU time | 1.53 s | 1.52 s | 1.52 s | 1.53 s | 1.32 s | 1.31 s | 1.73 s |
+| wall time | 1.54 s | 1.63 s | 1.65 s | 1.76 s | 1.34 s | 1.34 s | 985 ms |
+| peak memory | 7.55 MiB | 7.36 MiB | 7.41 MiB | 7.50 MiB | 5.32 MiB | 5.33 MiB | 6.47 MiB |
 | size | 1.82 KiB | 15.7 KiB | 31.1 KiB | 54.0 KiB | 113 KiB | 116 KiB | 136 KiB |
 
-Its rounds took 639 seconds.
+Its rounds took 638 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/shout-server
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/shout-server
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -532,14 +546,14 @@ Reads each of the 4,096 small files of its folder, of 1 to 4,096 bytes, to its e
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
 | counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
-| CPU time | 188 ms | 219 ms | 203 ms | 203 ms | 93.8 ms | 93.8 ms | 85.9 ms |
-| wall time | 198 ms | 218 ms | 219 ms | 220 ms | 101 ms | 100 ms | 92.9 ms |
-| peak memory | 11.9 MiB | 11.1 MiB | 11.1 MiB | 11.1 MiB | 4.90 MiB | 4.90 MiB | 5.16 MiB |
+| CPU time | 188 ms | 203 ms | 203 ms | 203 ms | 93.8 ms | 93.8 ms | 93.8 ms |
+| wall time | 188 ms | 208 ms | 207 ms | 211 ms | 106 ms | 106 ms | 103 ms |
+| peak memory | 7.52 MiB | 7.32 MiB | 7.32 MiB | 7.41 MiB | 4.91 MiB | 4.91 MiB | 5.17 MiB |
 | size | 1.71 KiB | 37.7 KiB | 37.7 KiB | 62.1 KiB | 152 KiB | 152 KiB | 119 KiB |
 
 Its rounds took 30 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/files
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/files
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -559,15 +573,15 @@ Reads the clock that only goes forward a million times. lengua's program: tests/
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 1734 | 640 | 1734 | 80 | 20 | 20 | 20 |
-| CPU time | 125 ms | 125 ms | 125 ms | 125 ms | 31.2 ms | 31.2 ms | 46.9 ms |
-| wall time | 124 ms | 128 ms | 126 ms | 131 ms | 39.1 ms | 40.0 ms | 51.3 ms |
-| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.8 MiB | 4.70 MiB | 4.71 MiB | 5.00 MiB |
+| counted runs | 2000 | 320 | 2000 | 40 | 20 | 20 | 20 |
+| CPU time | 109 ms | 109 ms | 109 ms | 109 ms | 31.2 ms | 31.2 ms | 46.9 ms |
+| wall time | 114 ms | 116 ms | 115 ms | 119 ms | 38.5 ms | 39.3 ms | 50.7 ms |
+| peak memory | 7.20 MiB | 7.09 MiB | 7.09 MiB | 7.07 MiB | 4.71 MiB | 4.72 MiB | 5.01 MiB |
 | size | 1.21 KiB | 30.3 KiB | 28.8 KiB | 59.9 KiB | 142 KiB | 142 KiB | 120 KiB |
 
-Its rounds took 603 seconds.
+Its rounds took 577 seconds.
 
-- lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/readings
+- lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/readings
 
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
 
@@ -583,25 +597,25 @@ Its rounds took 603 seconds.
 
 ## lengua's run apart from its module
 
-After the gate's rounds, each workload's lengua program ran against lengua-module: the very module that `lengua-mcp run` runs, built by lengua from the same main.wat and run by `lengua-mcp measure` as the other modules are, in the same engine with the same cache of compiled modules and with the words of the program's idea. The two ran alone, in rounds of their own, in an order shuffled from round to round, after 2 rounds that weren't counted, until each had 160 runs, or for 60 seconds once each had 20. Each cell gives lengua's median against lengua-module's, then the shift from lengua-module's runs to lengua's: the median of every difference of a lengua run less a lengua-module run (Hodges and Lehmann's estimate), with its 95% interval (Mann-Whitney's normal bound). The shift is what lengua's run does before and around running its module.
+After the gate's rounds, each workload's lengua program ran against lengua-module: the very module that `lengua-run` runs, built by lengua from the same main.wat and run by `lengua-mcp measure` as the other modules are, by the same program, in the same engine, from its compiled form kept under the same key and with the words of the program's idea. The two ran alone, in rounds of their own, in an order shuffled from round to round, after 2 rounds that weren't counted, until each had 160 runs, or for 60 seconds once each had 20. Each cell gives lengua's median against lengua-module's, then the shift from lengua-module's runs to lengua's: the median of every difference of a lengua run less a lengua-module run (Hodges and Lehmann's estimate), with its 95% interval (Mann-Whitney's normal bound). The shift is what lengua's run does before and around running its module.
 
 Windows counts CPU time in ticks of 15.6 ms, so on a short run each version's median is a whole number of ticks, and a shift of medians is none or a whole tick. The CPU time cells give means instead: each run's ticks sample its CPU time, so a mean converges on it. A cell gives lengua's mean against lengua-module's, then the difference of the means, with its 95% interval (1.96 standard errors either side, Welch's). Wall time and peak memory give medians, as on every runner.
 
 | workload | runs | CPU time | wall time | peak memory |
 |---|---|---|---|---|
-| empty | 160, 160 in 12 s | means 15.6 ms against 15.7 ms: -97.7 µs (-2.34 ms to +2.15 ms) | 20.5 ms against 20.4 ms: +93.3 µs (-30.7 µs to +222 µs) | 11.6 MiB against 10.7 MiB: +888 KiB (+884 KiB to +888 KiB) |
-| add | 160, 160 in 11 s | means 16.0 ms against 15.6 ms: +391 µs (-1.71 ms to +2.49 ms) | 20.3 ms against 20.1 ms: +184 µs (+49.7 µs to +319 µs) | 11.7 MiB against 10.8 MiB: +928 KiB (+924 KiB to +928 KiB) |
-| hypotenuse | 160, 160 in 12 s | means 17.9 ms against 15.3 ms: +2.54 ms (+230 µs to +4.85 ms) | 20.5 ms against 20.4 ms: +91.7 µs (-72.1 µs to +263 µs) | 11.7 MiB against 10.8 MiB: +944 KiB (+940 KiB to +944 KiB) |
-| upcase | 160, 160 in 13 s | means 19.3 ms against 18.2 ms: +1.17 ms (-903 µs to +3.25 ms) | 23.3 ms against 23.1 ms: +292 µs (+113 µs to +471 µs) | 12.1 MiB against 11.2 MiB: +984 KiB (+980 KiB to +988 KiB) |
-| upcase-stdin | 160, 160 in 19 s | means 41.8 ms against 41.4 ms: +391 µs (-2.58 ms to +3.36 ms) | 44.5 ms against 44.9 ms: -238 µs (-561 µs to +74.6 µs) | 11.7 MiB against 10.8 MiB: +960 KiB (+956 KiB to +960 KiB) |
-| shout | 160, 160 in 12 s | means 16.1 ms against 16.4 ms: -293 µs (-2.18 ms to +1.59 ms) | 21.4 ms against 21.2 ms: +70.8 µs (-151 µs to +289 µs) | 12.0 MiB against 11.0 MiB: +980 KiB (+980 KiB to +984 KiB) |
-| wc | 160, 160 in 21 s | means 46.7 ms against 44.6 ms: +2.05 ms (-676 µs to +4.78 ms) | 48.4 ms against 48.2 ms: +246 µs (-86.4 µs to +581 µs) | 11.8 MiB against 10.8 MiB: +1.00 MiB (+1020 KiB to +1.00 MiB) |
-| histogram | 160, 160 in 27 s | means 65.6 ms against 64.9 ms: +684 µs (-1.43 ms to +2.79 ms) | 68.7 ms against 68.6 ms: +80.8 µs (-288 µs to +426 µs) | 11.7 MiB against 10.8 MiB: +924 KiB (+924 KiB to +924 KiB) |
-| crc32c | 160, 160 in 27 s | means 63.9 ms against 63.0 ms: +879 µs (-2.26 ms to +4.02 ms) | 66.1 ms against 66.1 ms: -24.1 µs (-297 µs to +249 µs) | 11.7 MiB against 10.8 MiB: +928 KiB (+924 KiB to +928 KiB) |
-| sort | 97, 97 in 60 s | means 289 ms against 288 ms: +1.29 ms (-2.94 ms to +5.52 ms) | 296 ms against 296 ms: +7.80 µs (-2.98 ms to +2.77 ms) | 80.6 MiB against 79.6 MiB: +1.03 MiB (+1.03 MiB to +1.04 MiB) |
-| tally | 153, 153 in 60 s | means 175 ms against 175 ms: +817 µs (-1.47 ms to +3.11 ms) | 180 ms against 180 ms: +190 µs (-421 µs to +800 µs) | 12.0 MiB against 10.9 MiB: +1.04 MiB (+1.03 MiB to +1.04 MiB) |
-| server | 20, 20 in 70 s | means 1.60 s against 1.61 s: -1.56 ms (-17.5 ms to +14.3 ms) | 1.61 s against 1.61 s: +3.59 ms (-6.78 ms to +16.9 ms) | 11.5 MiB against 10.5 MiB: +956 KiB (+944 KiB to +988 KiB) |
-| files | 139, 139 in 60 s | means 192 ms against 192 ms: -112 µs (-3.23 ms to +3.01 ms) | 198 ms against 198 ms: +277 µs (-904 µs to +1.47 ms) | 11.9 MiB against 11.0 MiB: +944 KiB (+940 KiB to +948 KiB) |
-| readings | 160, 160 in 45 s | means 122 ms against 121 ms: +977 µs (-1.83 ms to +3.78 ms) | 124 ms against 124 ms: +169 µs (-29.9 µs to +368 µs) | 11.7 MiB against 10.8 MiB: +928 KiB (+924 KiB to +928 KiB) |
+| empty | 160, 160 in 10 s | means 10.7 ms against 9.08 ms: +1.66 ms (-540 µs to +3.86 ms) | 15.5 ms against 15.1 ms: +444 µs (+346 µs to +536 µs) | 7.11 MiB against 7.01 MiB: +104 KiB (+104 KiB to +104 KiB) |
+| add | 160, 160 in 10 s | means 9.86 ms against 10.8 ms: -977 µs (-3.23 ms to +1.27 ms) | 15.9 ms against 15.3 ms: +518 µs (+442 µs to +599 µs) | 7.16 MiB against 7.05 MiB: +108 KiB (+108 KiB to +108 KiB) |
+| hypotenuse | 160, 160 in 11 s | means 11.7 ms against 8.40 ms: +3.32 ms (+1.08 ms to +5.56 ms) | 16.6 ms against 16.0 ms: +615 µs (+478 µs to +756 µs) | 7.16 MiB against 7.05 MiB: +112 KiB (+108 KiB to +112 KiB) |
+| upcase | 160, 160 in 11 s | means 11.8 ms against 11.5 ms: +293 µs (-1.92 ms to +2.50 ms) | 18.1 ms against 17.4 ms: +776 µs (+661 µs to +897 µs) | 8.03 MiB against 7.91 MiB: +124 KiB (+124 KiB to +124 KiB) |
+| upcase-stdin | 160, 160 in 19 s | means 35.1 ms against 34.1 ms: +977 µs (-837 µs to +2.79 ms) | 40.9 ms against 40.3 ms: +464 µs (+235 µs to +688 µs) | 7.16 MiB against 7.05 MiB: +116 KiB (+116 KiB to +116 KiB) |
+| shout | 160, 160 in 11 s | means 10.4 ms against 10.2 ms: +195 µs (-2.16 ms to +2.55 ms) | 16.5 ms against 16.1 ms: +389 µs (+307 µs to +468 µs) | 7.93 MiB against 7.82 MiB: +120 KiB (+120 KiB to +120 KiB) |
+| wc | 160, 160 in 20 s | means 38.3 ms against 38.0 ms: +293 µs (-1.94 ms to +2.52 ms) | 45.2 ms against 44.7 ms: +591 µs (+389 µs to +785 µs) | 7.18 MiB against 7.07 MiB: +116 KiB (+116 KiB to +116 KiB) |
+| histogram | 160, 160 in 26 s | means 58.0 ms against 57.3 ms: +684 µs (-1.51 ms to +2.87 ms) | 65.1 ms against 64.5 ms: +529 µs (+343 µs to +722 µs) | 7.17 MiB against 7.06 MiB: +116 KiB (+112 KiB to +116 KiB) |
+| crc32c | 160, 160 in 25 s | means 56.2 ms against 56.1 ms: +97.7 µs (-2.34 ms to +2.54 ms) | 62.4 ms against 61.9 ms: +557 µs (+392 µs to +729 µs) | 7.18 MiB against 7.06 MiB: +120 KiB (+120 KiB to +124 KiB) |
+| sort | 96, 96 in 60 s | means 288 ms against 286 ms: +2.44 ms (-717 µs to +5.60 ms) | 297 ms against 296 ms: +576 µs (-152 µs to +1.34 ms) | 76.5 MiB against 76.3 MiB: +152 KiB (+148 KiB to +156 KiB) |
+| tally | 156, 156 in 60 s | means 168 ms against 167 ms: +1.60 ms (-860 µs to +4.07 ms) | 175 ms against 174 ms: +799 µs (+225 µs to +1.37 ms) | 7.87 MiB against 7.71 MiB: +160 KiB (+160 KiB to +160 KiB) |
+| server | 20, 20 in 67 s | means 1.53 s against 1.54 s: -10.2 ms (-24.8 ms to +4.48 ms) | 1.54 s against 1.55 s: -6.62 ms (-12.6 ms to +1.08 ms) | 7.55 MiB against 7.42 MiB: +116 KiB (+100 KiB to +140 KiB) |
+| files | 144, 144 in 60 s | means 182 ms against 184 ms: -2.17 ms (-4.74 ms to +395 µs) | 190 ms against 191 ms: -1.14 ms (-2.05 ms to -193 µs) | 7.52 MiB against 7.42 MiB: +100 KiB (+100 KiB to +100 KiB) |
+| readings | 160, 160 in 42 s | means 108 ms against 106 ms: +1.46 ms (-377 µs to +3.31 ms) | 114 ms against 114 ms: +497 µs (+370 µs to +624 µs) | 7.20 MiB against 7.08 MiB: +120 KiB (+120 KiB to +124 KiB) |
 
 The runs are lengua's and lengua-module's counted runs, in that order, and how long their counted rounds took.

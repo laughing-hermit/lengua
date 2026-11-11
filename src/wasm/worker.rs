@@ -70,7 +70,7 @@ impl Worker {
                 job.module.display()
             ));
         }
-        let module = Module::from_binary(engine, &bytes)
+        let module = engine::compile(engine, &bytes)
             .map_err(|error| format!("the engine couldn't compile the module: {error:#}"))?;
         if self.order.len() == KEPT_MODULES
             && let Some(oldest) = self.order.pop_front()

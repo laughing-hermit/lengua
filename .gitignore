@@ -1,6 +1,8 @@
 /target/
 /plugin/server/lengua-mcp
 /plugin/server/lengua-mcp.exe
+/plugin/server/lengua-run
+/plugin/server/lengua-run.exe
 /examples/*/lengua.lock
 /dist/
 /examples/log.md

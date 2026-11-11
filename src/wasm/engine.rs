@@ -5,16 +5,26 @@
 //! Three configurations ([`Setup`]): a test's counts every operation it executes as Wasmtime's
 //! fuel, which is deterministic, and stops at a deadline through the engine's epochs; a run's
 //! stops at its deadline the same way and counts nothing; a run from a shell, or a benchmark's,
-//! does neither, so it pays for nothing it doesn't use. Compiled modules are kept in Wasmtime's
-//! own cache, in the `cache` folder of lengua's data folder.
+//! does neither, so it pays for nothing it doesn't use.
+//!
+//! Two engines for each: one that compiles ([`engine`]), with Wasmtime's own cache of compiled
+//! modules in the `cache` folder of lengua's data folder, which the tests' workers and the `run`
+//! tool use; and one that only runs ([`runner`]), with no compiler in it, which a run from a
+//! shell loads a module into that was compiled ahead of the run and sealed with the user's key
+//! ([`crate::lock::Key::compile_sealed`]). The two take the same settings wherever a compiled
+//! module depends on them ([`shared`]), so the second takes what the first compiled. lengua-run
+//! is built without the compiler (the `compiler` feature off) and holds only the second.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use wasmparser::WasmFeatures;
-use wasmtime::{Cache, CacheConfig, Config, Engine, Strategy};
+#[cfg(feature = "compiler")]
+use wasmtime::{Cache, CacheConfig, Strategy};
+use wasmtime::{Config, Engine, Module};
 
 /// The WebAssembly features lengua's programs may use, the engine's and the validator's alike:
 /// floats, mutable globals, saturating float-to-int conversions, sign extension, reference types
@@ -118,19 +128,48 @@ impl Setup {
     }
 }
 
-/// The engine's configuration for `setup`, keeping compiled modules in `cache` when given.
-///
-/// # Errors
-///
-/// When the cache can't be set up in that folder.
-pub fn config(setup: Setup, cache: Option<&Path>) -> Result<Config, String> {
-    let mut config = Config::new();
-    config.strategy(Strategy::Cranelift);
+/// Set once a process says it only runs what was compiled before ([`run_only`]).
+static RUNS_ONLY: AtomicBool = AtomicBool::new(false);
+
+/// What a process that can't compile says of a module it would have to.
+const NO_COMPILER: &str = "this lengua only runs modules compiled before, and has no compiler";
+
+/// Whether this build holds the engine's compiler (the `compiler` feature): lengua-mcp's does,
+/// and lengua-run's doesn't when it is built by itself, as it ships.
+pub const BUILT_WITH_COMPILER: bool = cfg!(feature = "compiler");
+
+/// Says that this process only runs what was compiled before: lengua-run, which calls the
+/// compiler nowhere, also in a build that has one, as the tests' build of the whole workspace
+/// does.
+pub fn run_only() {
+    RUNS_ONLY.store(true, Ordering::Relaxed);
+}
+
+/// Whether this process can compile a module: its build has the compiler (the `compiler`
+/// feature), and it isn't lengua-run ([`run_only`]).
+#[must_use]
+pub fn compiles() -> bool {
+    cfg!(feature = "compiler") && !RUNS_ONLY.load(Ordering::Relaxed)
+}
+
+/// The program this process is, as what it says on standard error begins: lengua-run once it
+/// said it only runs ([`run_only`]), else lengua-mcp.
+#[must_use]
+pub fn name() -> &'static str {
+    if RUNS_ONLY.load(Ordering::Relaxed) {
+        "lengua-run"
+    } else {
+        "lengua-mcp"
+    }
+}
+
+/// The settings of `setup` that a compiled module depends on, which Wasmtime holds a module to
+/// when it loads one: the engine that compiles and the engine that only runs set them here, and
+/// nowhere else, so that the second takes what the first compiled.
+fn shared(config: &mut Config, setup: Setup) {
     // Every feature off, then lengua's on: whatever Wasmtime's defaults are, its set is this one.
     config.wasm_features(WasmFeatures::all(), false);
     config.wasm_features(FEATURES, true);
-    config.cranelift_nan_canonicalization(true);
-    config.parallel_compilation(true);
     config.consume_fuel(setup.counts());
     config.epoch_interruption(setup.interrupts());
     config.max_wasm_stack(MAX_WASM_STACK);
@@ -138,6 +177,58 @@ pub fn config(setup: Setup, cache: Option<&Path>) -> Result<Config, String> {
     // idea's machine code reads: Wasmtime's own default, set here so that it holds whatever the
     // default becomes.
     config.generate_address_map(true);
+    // A run from a shell starts a module once, in a process of its own. Wasmtime's image of a
+    // module's first memory, mapped copy-on-write, pays where a module starts many times: for
+    // one start it costs a file in memory, made and taken away again (about 0.1 ms of a run
+    // that takes 1 ms, as W19 measured). Without it the module's data is copied in once.
+    if setup == Setup::Shell {
+        config.memory_init_cow(false);
+    }
+}
+
+/// The configuration of the engine that runs, for `setup`, what [`config`]'s engine compiled,
+/// and compiles nothing: where the build has a compiler, it is left out of this engine.
+#[must_use]
+pub fn runner_config(setup: Setup) -> Config {
+    let mut config = Config::new();
+    #[cfg(feature = "compiler")]
+    config.enable_compiler(false);
+    shared(&mut config, setup);
+    config
+}
+
+/// This process's engine that runs what was compiled for a run from a shell ([`Setup::Shell`])
+/// and compiles nothing, made at its first use. It stops no program, so it has no clock.
+///
+/// # Errors
+///
+/// When the engine can't be made here.
+pub fn runner() -> Result<Engine, String> {
+    static RUNNER: OnceLock<Result<Engine, String>> = OnceLock::new();
+    RUNNER
+        .get_or_init(|| {
+            Engine::new(&runner_config(Setup::Shell))
+                .map_err(|error| format!("the WebAssembly engine couldn't start: {error}"))
+        })
+        .clone()
+}
+
+/// The configuration of the engine that compiles for `setup`, keeping compiled modules in
+/// `cache` when given.
+///
+/// # Errors
+///
+/// When the cache can't be set up in that folder, or this process has no compiler.
+#[cfg(feature = "compiler")]
+pub fn config(setup: Setup, cache: Option<&Path>) -> Result<Config, String> {
+    if !compiles() {
+        return Err(NO_COMPILER.to_owned());
+    }
+    let mut config = Config::new();
+    config.strategy(Strategy::Cranelift);
+    shared(&mut config, setup);
+    config.cranelift_nan_canonicalization(true);
+    config.parallel_compilation(true);
     if let Some(folder) = cache {
         let mut settings = CacheConfig::new();
         settings.with_directory(folder);
@@ -158,13 +249,23 @@ pub fn config(setup: Setup, cache: Option<&Path>) -> Result<Config, String> {
     Ok(config)
 }
 
-/// This process's engine for `setup`, made at its first use with compiled modules kept in
-/// `cache`, which later calls don't change: a process has one data folder. An engine that stops
-/// programs has a thread that moves its epoch on every [`TICK`].
+/// The configuration of the engine that compiles: none, in a build without the compiler.
 ///
 /// # Errors
 ///
-/// When the engine can't be made here.
+/// Always: this build has no compiler.
+#[cfg(not(feature = "compiler"))]
+pub fn config(_setup: Setup, _cache: Option<&Path>) -> Result<Config, String> {
+    Err(NO_COMPILER.to_owned())
+}
+
+/// This process's engine that compiles for `setup`, made at its first use with compiled modules
+/// kept in `cache`, which later calls don't change: a process has one data folder. An engine
+/// that stops programs has a thread that moves its epoch on every [`TICK`].
+///
+/// # Errors
+///
+/// When the engine can't be made here, or this process has no compiler.
 pub fn engine(setup: Setup, cache: Option<&Path>) -> Result<Engine, String> {
     static TEST: OnceLock<Result<Engine, String>> = OnceLock::new();
     static RUN: OnceLock<Result<Engine, String>> = OnceLock::new();
@@ -187,6 +288,24 @@ pub fn engine(setup: Setup, cache: Option<&Path>) -> Result<Engine, String> {
         Ok(engine)
     })
     .clone()
+}
+
+/// The module `wasm`, compiled by `engine`, one of [`engine`]'s, or loaded from its cache of
+/// compiled modules.
+///
+/// # Errors
+///
+/// When the engine doesn't compile the module, or this build has no compiler.
+pub fn compile(engine: &Engine, wasm: &[u8]) -> wasmtime::Result<Module> {
+    #[cfg(feature = "compiler")]
+    {
+        Module::from_binary(engine, wasm)
+    }
+    #[cfg(not(feature = "compiler"))]
+    {
+        let _ = (engine, wasm);
+        Err(wasmtime::Error::msg(NO_COMPILER))
+    }
 }
 
 /// Moves `engine`'s epoch on every [`TICK`], for as long as the process lives.
@@ -234,12 +353,12 @@ mod tests {
     use super::*;
 
     /// A module the engine compiles; `text` is WebAssembly text.
-    fn compiles(setup: Setup, text: &str) -> Result<(), String> {
+    fn taken(setup: Setup, text: &str) -> Result<(), String> {
         let wasm = crate::wasm::text::build(text)
             .map_err(|problem| problem.to_string())?
             .wasm;
         let engine = engine(setup, None)?;
-        wasmtime::Module::from_binary(&engine, &wasm)
+        compile(&engine, &wasm)
             .map(|_| ())
             .map_err(|error| error.to_string())
     }
@@ -274,10 +393,10 @@ mod tests {
                      (i32.const 1)))))";
         for setup in Setup::ALL {
             for text in [simd, bulk, saturating, sign, values, table, grows] {
-                assert_eq!(compiles(setup, text), Ok(()), "{setup:?}: {text}");
+                assert_eq!(taken(setup, text), Ok(()), "{setup:?}: {text}");
             }
             let engine = engine(setup, None).expect("the engine");
-            let module = wasmtime::Module::from_binary(&engine, OVERLONG);
+            let module = compile(&engine, OVERLONG);
             assert!(module.is_ok(), "{setup:?}: {:?}", module.err());
         }
         assert!(validate(OVERLONG).is_ok(), "{:?}", validate(OVERLONG).err());
@@ -345,6 +464,49 @@ mod tests {
             used(asserts).iter().any(|name| name == "bulk-memory"),
             "{:?}",
             used(asserts)
+        );
+    }
+
+    /// The engine that only runs takes what the engine that compiles made, in every
+    /// configuration: Wasmtime holds a compiled module to the settings it was compiled with,
+    /// and the two engines share every one of them. It compiles nothing itself, and it refuses
+    /// what was compiled for another configuration, so a module compiled to be counted or
+    /// stopped never runs where nothing counts or stops it.
+    #[test]
+    fn the_engine_that_only_runs_takes_what_the_other_compiled() {
+        let text = "(module (memory (export \"memory\") 1) (data (i32.const 8) \"lengua\") (func \
+                    (export \"_start\") (i32.store8 (i32.const 0) (i32.load8_u (i32.const 8)))))";
+        let wasm = crate::wasm::text::build(text).expect("it builds").wasm;
+        let hash = crate::hash::Sha256Hex::of(&wasm);
+        let key = crate::lock::Key::from_bytes([7; 32]);
+        let sealed = |setup: Setup| {
+            let compiler = engine(setup, None).expect("the engine that compiles");
+            key.compile_sealed(&compiler, &hash, &wasm)
+                .expect("it compiles")
+        };
+        for setup in Setup::ALL {
+            let runner = Engine::new(&runner_config(setup)).expect("the engine that runs");
+            let loaded = key.load_sealed(&runner, &hash, &sealed(setup));
+            assert!(loaded.is_ok(), "{setup:?}: {:?}", loaded.err());
+            assert!(
+                Module::from_binary(&runner, &wasm).is_err(),
+                "{setup:?}: the engine that only runs compiled a module"
+            );
+            for other in Setup::ALL {
+                let refused = key.load_sealed(&runner, &hash, &sealed(other)).err();
+                if other != setup {
+                    assert!(
+                        matches!(refused, Some(lengua_os::Unsealed::Engine(_))),
+                        "{setup:?} took {other:?}'s module: {refused:?}"
+                    );
+                }
+            }
+        }
+        // The process's own engine that runs is the one for a run from a shell.
+        let runner = runner().expect("the engine that runs");
+        assert!(
+            key.load_sealed(&runner, &hash, &sealed(Setup::Shell))
+                .is_ok()
         );
     }
 

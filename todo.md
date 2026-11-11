@@ -92,7 +92,7 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 | 1. AI language, Agent Plugin | The WebAssembly plugin: `write-idea`, `compile`, `check`, `run`; `idea.md` an Attested Computation in STE with its tests inside, and `main.wat`; the graph's `index.md` and `log.md`, and `verified` written at `done` (W1, W3, W3b, W6, W9). The native product is retired, kept at the tag (W11, 42713054140). The suite on all five runners at main 33ed7fe, its push run (42947270993) | Loading the plugin into Claude Code itself, the owner's step |
 | 2. One product everywhere | The one suite passes natively on all five runners (42947270993, at 33ed7fe), and so do the slow tests the suite leaves out (42947285372). The goldens hold the WebAssembly checker's and prover's recordings to a baseline, on Linux on x86-64 (42716553289). W17b's run (42919127514) recorded the prover's questions on each of the five runners. On the branch wip/proof-depth, a golden dispatch with `golden_view=runners` records the goldens on each runner and compares them: at 7ad6530 (43022892954) the checker's reports and the model's runs are the same text on all five, and all 161 proof lines have the same verdict on all five, none out of time on one runner alone | The runners view is on wip/proof-depth, not on main yet. The number of questions still differs between runners, which W17b's run showed (Windows on ARM64 asked 10,310 where the others asked about 2,400) and the view doesn't compare: it leaves the counts out |
 | 3. The same bits, each machine's CPU | One set of WebAssembly features on every machine, with NaNs made canonical, so every machine computes the same bits and proofs and tests hold on each; Cranelift compiles each module for the machine's own CPU when a worker first runs it, during `check`'s tests, and Wasmtime's cache keeps it; the `machine` line tells the agent the CPU's vectors and caches (W4, W10, 42386323947) | Nothing: the owner decided on 2026-11-11 that the point is the same bits on every machine, which is what lengua does. The faster sets the engine has, relaxed SIMD and wide arithmetic, stay off: they aren't finished standards, and relaxed SIMD gives different results on different CPUs |
-| 4. Competitive | The gate has run on all five runners five times and passed on none: 42661776298 (W12, at 9a549b3), 42728160641 (W12b, at d6496e3), 42756074550 (W12c, at 076bcc1), 42947294489 (the finish-line run, at 33ed7fe) and 42964232679 (the first with the 5% noise margin the owner decided on 2026-11-11, at cd54e79 on `wip/gate-margin`), whose reports are in [docs/benchmarks](docs/benchmarks/README.md). KNOWN_BEHIND fell from 1,359 rows to 898 (94 off after W12b, 208 after W12c, 20 after the finish-line run, 139 with the margin: 127 level and 12 ahead). It names only rows behind by more than the margin. Of them, against C, C++ and Rust compiled to WebAssembly: 22 on Linux on x86-64, 16 on Linux on ARM64, 16 on macOS on ARM64, 41 on Windows on x86-64 and 41 on Windows on ARM64, peak memory the most common measure among them (114 of the 136). Every native C++ version was built in the last run, on all five runners | The gate has passed on no runner. The last run measured the list from before the margin; with the list as it is now, its results pass on Windows on ARM64 and fail on the other four, on 6 rows behind by more than the margin that the list doesn't name (5 against the WebAssembly builds), and no run has measured the new list yet. Against the WebAssembly builds, KNOWN_BEHIND names 136 rows, which point 4 needs gone: 114 of peak memory (78 of them on the two Windows runners, at 1.07× to 1.14×), 10 of CPU time, 2 of wall time and 10 of size. A row whose gap sits near 5% can still change sides between runs ("A row the gate can't decide"). Against the native builds, the gaps are published, as the point asks |
+| 4. Competitive | The gate has run on all five runners five times and passed on none: 42661776298 (W12, at 9a549b3), 42728160641 (W12b, at d6496e3), 42756074550 (W12c, at 076bcc1), 42947294489 (the finish-line run, at 33ed7fe) and 42964232679 (the first with the 5% noise margin the owner decided on 2026-11-11, at cd54e79 on `wip/gate-margin`), whose reports are in [docs/benchmarks](docs/benchmarks/README.md). KNOWN_BEHIND fell from 1,359 rows to 898 (94 off after W12b, 208 after W12c, 20 after the finish-line run, 139 with the margin: 127 level and 12 ahead). It names only rows behind by more than the margin. Of them, against C, C++ and Rust compiled to WebAssembly: 22 on Linux on x86-64, 16 on Linux on ARM64, 16 on macOS on ARM64, 41 on Windows on x86-64 and 41 on Windows on ARM64, peak memory the most common measure among them (114 of the 136). Every native C++ version was built in that run, on all five runners. The run after it, the first with lengua-run (W19; 43084459708 at 45b507b, with 43099764273 for Windows on ARM64), found 137 more rows level or ahead: the list names 761 rows, 24 of them against the WebAssembly builds (4 on Linux on x86-64, 4 on Linux on ARM64, 10 on macOS on ARM64, 3 on each Windows runner) | The gate has passed on no runner. The last run measured the list of 898 rows; with the list as it is now, its results pass on Windows on ARM64 and fail on the other four, on 26 rows behind by more than the margin that the list doesn't name (24 against the WebAssembly builds, most of them the time of a workload that is nearly all start-up), and no run has measured the new list yet. Against the WebAssembly builds, KNOWN_BEHIND names 24 rows, which point 4 needs gone, with those 24 unnamed ones. A row whose gap sits near 5% can still change sides between runs ("A row the gate can't decide"). Against the native builds, the gaps are published, as the point asks |
 | 5. Safe and proven | The dialect's rules and memory rules over main.wat (W5), proofs on z3 and cvc5 by length and by induction (W8), the secret rule over main.wat (W10), and lengua's host holding a program to what its idea grants, with no OS sandbox around it (W4): the suite on all five runners at 33ed7fe (42947270993). On 2026-11-10 the secret rule was reviewed for soundness and its five findings fixed ([the review](docs/reviews/secret-rule-2026-11-10.md); the suite on all five at 3e08929, 42890372211); the host was reviewed and its eleven holes fixed ([the review](docs/reviews/host-2026-11-10.md); the suite on all five, 42914865765); and W13, the check of the engine's machine code for an idea's secrets, was built, and is on main | Some proofs stay "tested, not proven", so those programs aren't proven or bounded to a length: sorts and tallies over 8 bytes, SHA-256, AES-128, and servers that wait with `poll_oneoff`. What the two reviews and W13 left open is listed under "Still open", each for the owner |
 | 6. Truthful documents | README, DESIGN, the white paper, ROADMAP, the plugin's README, docs/run.md and docs/check.md describe the WebAssembly lengua; the native lengua's ledger, sessions and benchmarks are in [docs/history](docs/history); the latest bench run's five reports are in [docs/benchmarks](docs/benchmarks/README.md) (42964232679, the first with the gate's margin), and the documents' numbers are counted from them | The report to the owner (W15) |
 | 7. Shippable | One archive per runner, built by `cargo xtask release` and installed by its own `lengua-mcp install` on a clean runner of each of the five, with doctor and the release check green (at 33ed7fe, 42947303258). The agent's test in the interactive session ran twice: with W14's Linux x86-64 archive (2026-11-07), and with the final one from 42947303258 (2026-11-11). The archives are unsigned | Publishing the archives, which is the owner's |
@@ -496,8 +496,8 @@ Its runs, each a dispatch of ci.yml on the branch:
 - 43084292537 (the library, `tests/wasm_named.rs`, every program, the templates and the skills;
   Linux on x86-64, at 28bd12b): every test passed: 569 of the library, every program of
   `examples/` and `tests/fixtures` from its request to done, the nine templates, the three runs.
-- 43084696723 (the defences taken out, commit 502060c on `wip/reach-2-off`; Linux on x86-64):
-  23 of the tests failed, as the review lists.
+- 43084696723 (the defences taken out, commit 502060c, the tag `archive/wip/reach-2-off`; Linux
+  on x86-64): 23 of the tests failed, as the review lists.
 - 43085916748 (the mutation test, `examples/follow` and the three new examples; Linux on
   x86-64, at 28bd12b): of follow's eight mutants four broke a rule and four failed a test. The
   three new examples had seven that passed every test, each judged: `tests/mutation.rs` names
@@ -532,6 +532,17 @@ Its runs, each a dispatch of ci.yml on the branch:
   a pseudo-terminal too; and the library's tests, but the one on Windows on ARM64.
 - The suite on all five systems with the two faults fixed ran at the commit that has this line,
   so this list can't name it: the commit that lands the branch on main names that run.
+- 43109219212 (the same suite at 9b7cd87, with the two faults fixed): Linux on x86-64 and on
+  ARM64 passed, and the run was replaced before the other three ended, because main moved:
+  W19's lean runner landed, and the branch took main in. `lengua-run`, which a shell's run
+  now uses, runs a program through the same host and the same grants as `lengua-mcp run`, and
+  its linker, which defines only what a module imports, defines the three new modules too.
+  `crates/lengua-run/tests/alone.rs` holds that with the three examples: `copy` opens the
+  files its arguments name and no file of lengua's own, `computer` starts `hostname` and
+  `whoami`, `key` hears that a run with no terminal has none, and on Linux and macOS `key`
+  reads a key at a pseudo-terminal, which is afterwards as it was.
+- 43101617400 (compile; Linux and Windows on x86-64): a trial of that merge, on a branch since
+  removed, built with clippy clean before main moved.
 
 Still open from it, for the owner:
 - **A started program can't work on the user's folder.** It runs in an empty folder of
@@ -818,6 +829,58 @@ Each can be reversed.
   whose reply never named it. No proof by induction is lost: those tests give files on disk and
   no standard input, and the induction over a read loop takes only standard input as one text,
   so it never took them (src/prove/induction.rs, `streamed`).
+- **A run from a shell loads compiled code only under the user's key** (W19). `check` compiles
+  the module it tested for a run from a shell, and seals what the engine made with the user's
+  key: an HMAC-SHA256 over a domain of its own, the module's SHA-256 and the compiled bytes. A
+  run hands the engine a file only once its seal holds, and reads no cache of compiled modules.
+  The one call that needs unsafe code, Wasmtime's `Module::deserialize`, is in
+  `crates/lengua-os` behind `load_sealed`, which checks the seal itself; `compile_sealed`,
+  beside it, is the only function that makes a seal, over what `Engine::precompile_module` gave
+  it. Wasmtime's cache stays where a process compiles many modules: the tests' workers and the
+  `run` tool. A sealed module is copied into the engine's own memory, never mapped from its
+  file: mapping saved about 0.05 ms on Linux on x86-64 (42962697250), and a mapped file can
+  change after its seal was checked.
+- **The seal is ring's HMAC, and the files' hashes stay the sha2 crate's** (W19). A run computes
+  the seal over the whole compiled module: 12 KiB for add on x86-64, and 135 KiB on ARM64, where
+  the engine lays code out for 64 KiB pages. The sha2 crate has the CPU's SHA-256 instructions
+  on x86-64 alone, and ring, which lengua's TLS already brings, has them on ARM64 too: over
+  add's compiled module on Linux on ARM64 ring took 0.06 ms and the sha2 crate 0.32 ms, and on
+  x86-64 each took 0.01 ms (42971426958). ring for the hashes of idea.md and main.wat was
+  tried and bought nothing (42967736363: a run of add took 1.24 ms with it and 1.16 ms without
+  on x86-64, 1.48 ms and 1.45 ms on ARM64), so they stay as they were.
+- **lengua-run is the lengua crate without the compiler** (W19), not a second program with
+  code of its own: one host, one set of checks, one place that says what a run may do. The
+  `compiler` feature holds Cranelift and Wasmtime's cache, and `crates/lengua-run` builds the
+  crate without it. Cargo gives a build of the whole workspace one set of features, so only
+  `cargo build --package lengua-run` leaves the compiler out: the release, the bench and
+  `cargo xtask plugin` build it so, CI lints that build by itself, and the release check holds
+  the archive's lengua-run to it. In the tests' build lengua-run holds a compiler it never
+  calls, which its `--version` says.
+- **What lengua-run leaves to lengua-mcp** (W19): a module with no compiled form it can load,
+  which it says on standard error, since lengua-mcp then compiles it; and an idea that names a
+  secret, whose machine code is read before every run with main.wat's rules, which would put
+  the checker in lengua-run. It starts lengua-mcp, beside it, with the same words.
+- **A run from a shell is one thread, with the functions its module imports** (W19).
+  lengua-run runs the program on its main thread where the system lets that thread's stack grow
+  to 8 MiB or more, which Linux and macOS do by default; elsewhere, and on Windows, where an
+  executable's main thread has 1 MiB, on a thread of its own with 16 MiB. The engine that only
+  runs starts in about 0.04 ms, so it no longer starts beside the checks: this reverses W12c's
+  two threads. The host defines only the WASI functions the module imports, not all 46. The
+  Shell setup maps no copy-on-write image of a module's memory.
+- **Tried in W19 and left out**, each measured on Linux (42962697250, 42967736363,
+  42971426958): mapping the compiled module from its file (0.05 ms less, and no seal can hold
+  it); ring for the two files' hashes (no faster); leaving what a run loaded to the process's
+  end in place of handing it back (0.04 ms more, on x86-64 and on ARM64).
+- **The bench runs the other modules as it runs lengua's** (W19): by the same lengua-run, from
+  their compiled form under the same key. `measure` hashes a module's file before the run it
+  measures, so a module's measured run reads neither its file nor a lock, and lengua's reads
+  and checks its three files. Against a native build, lengua's size is its module's and
+  lengua-run's, the program a user needs to run it.
+- **A test changed with the design** (W19): `a_shell_runs_the_module_check_kept` took away the
+  module `check` kept, or put another in its place, and held the next run to build main.wat
+  and keep the module again. A run now reads that file only when it has no compiled form to
+  load, so the test takes the compiled form away before each of those runs, and holds the run
+  to keep both files again. Every assertion it had is still made.
 - **W18's network (2026-11-11)**, each made without asking, on the owner's standing word, and
   each the owner's to reverse:
   - **lengua's own imports, in a module named `lengua_net_1`.** WASI preview 1 has no function
@@ -1057,12 +1120,30 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
     databases on any path.
 - **W19. Native speed: a lean runner and native builds.** Most of the gap to native builds is
   start-up and the engine, not the program.
-  - A run-only binary: Wasmtime's runtime without its compiler loads the module `check` compiled
-    ahead of time, authenticated as it is today. Start-up goes from about 2.5 ms toward C's
-    0.4 ms, and memory from about 10 MiB toward a few.
-  - An optional native build of the proven main.wat, through wasm2c and clang, as Firefox
-    sandboxes C libraries at close to native speed. The proof still holds, since it covers
-    WebAssembly's semantics, and main.wat stays the one shared artifact.
+  - **Step 1, built (branch `wip/lean-runner`, with main's W18 merged in at 45b507b): a run
+    that starts sooner and holds less.** `check` compiles the module ahead of its runs and seals
+    it with the user's key, and lengua-run, lengua built without the compiler, loads it and runs
+    it, with every check a run makes and the same host, network grants included. On Linux on
+    x86-64 the empty program went from 2.20 ms of CPU time and 11.4 MiB to 1.33 ms and 5.50 MiB,
+    and the program that runs it from 23.1 MiB to 5.87 MiB; against C's native build, from 5.49
+    times the CPU time and 9.42 times the memory to 2.64 and 4.73 times (42964232679 before,
+    43084459708 after). [ROADMAP.md](ROADMAP.md) has what was measured first, what each part
+    bought, every runner's numbers, and what a run still pays; the decisions are above.
+  - Step 2, open: an optional native build of the proven main.wat, through wasm2c and clang,
+    as Firefox sandboxes C libraries at close to native speed. The proof still holds, since it
+    covers WebAssembly's semantics, and main.wat stays the one shared artifact.
+  - Open after step 1:
+    - The gate's list: 26 rows behind that it doesn't name, under "A row the gate can't decide"
+      below.
+    - The tests' workers and the `run` tool still load compiled code from Wasmtime's cache,
+      which holds no seal.
+    - lengua-run still holds TLS and main.wat's parser (ROADMAP.md says what a run pays).
+    - On Windows a run that lengua-run leaves to lengua-mcp is two processes, tied by a job;
+      on a Unix it is one.
+    - `two_checks_at_once_leave_a_consistent_index` (tests/graph.rs) failed once on Linux on
+      x86-64 (42975969779), with one of two records in log.md, at a commit where it passed on
+      that runner in another run (42975753981), and it has passed on all five since
+      (43022864858, 43083574889). It records two ideas and runs nothing of W19's.
 - **W20. Parallelism.** WebAssembly's threads (shared memory and atomics), as structured
   fork-join alone. The rules show that a program has no data race, so its results stay the same
   on every run, which free threads in C, C++ and Rust can't promise.
@@ -1118,6 +1199,7 @@ Runs, as they land:
 | The host's review (2026-11-10) | 42904330205 (a test for each finding, at 43c3fbe on Linux on x86-64: all 19 new tests fail before the fixes); 42907709201 (the fixes at 75121d6: the suite on Linux on x86-64 passes; the format job's layout is applied at 9b7d59a); 42911144089 (the suite on Linux on x86-64 at 9b7d59a, green); 42914865765 (the suite on all five runners at 9b7d59a, green); main at 5e73a1b. The review: [docs/reviews/host-2026-11-10.md](docs/reviews/host-2026-11-10.md) |
 | W17b | 42919127514 (z3 as WebAssembly measured against native z3 on all five runners, at 18e8f06: 1.70 to 2.28 times the time, and a proof lost on three runners, so the bar isn't met and native z3 stays; the table is under the decisions above); the work is kept at the tag `archive/wip/z3-wasm`, not merged; the measurement written on main at 5f9b9e2 |
 | W15, the finish-line run | All at main 33ed7fe, on all five runners: 42947270993 (main's push run: format, the suite and the gate job, green); 42947285372 (the slow tests the suite leaves out, green); 42947303258 (release: the five archives built, each installed on a clean runner of its system and CPU, green); 42947294489 (the bench: it ran to its reports on all five, and the gate failed on each: 20 rows ahead that KNOWN_BEHIND named, taken out at 28afe67, which leaves 1,037; 22 rows behind or undecided that it doesn't name; and 12 native C++ builds that failed, 2 on macOS on ARM64 and 5 on each Windows runner). The reports are in [docs/benchmarks](docs/benchmarks/README.md) |
+| W19, step 1 (on `wip/lean-runner`) | 42962697250, 42967736363 and 42971426958 (what a run's time and memory go to, and what each change buys, measured on Linux on x86-64 and ARM64); 42975753981 and 43022864858 (the suite before the merge, on Linux on x86-64 and on all five runners, green); 42975980745 (release at d6b871c, green); 43022878824 (a bench that ran into its time limit on both Windows runners, which showed that on Windows lengua-mcp outlived the lengua-run that left it a run: fixed at e504ab0). At 45b507b, with main's W18 merged in, on all five runners: 43083574889 (the suite, green); 43084441775 (release: the five archives built with lengua-run beside lengua-mcp, each installed on a clean runner, where lengua-run says it holds no compiler and runs add from what check compiled, green); 43084459708 (the bench; 43099764273 for Windows on ARM64, whose files GitHub didn't keep): 137 rows left KNOWN_BEHIND, which names 761, and 26 rows are behind that it doesn't name |
 | Proof depth (2026-11-11) | 42961610246 (the goldens at main 1508847, twice: identical); 42976169988 (the vowel count's proof by its buffer's size, at fd20338: every length in 15 s with 1,024 bytes and in 191 s with 4,096; with 64 KiB bounded at 4,635 bytes); at 7ad6530: 43022877257 (the suite on all five runners, green), 43022883114 (the slow tests on all five, green), 43022887884 (the golden ledger against main: count's and words' steps hold, mean's three blocks proven where they ran out of time, five lines with another reason for no induction, vowels new; no proof lost) and 43022892954 (the runners view: 161 proof lines, the same verdict on all five) |
 | The gate's margin (the owner's decision, 2026-11-11) | On the branch `wip/gate-margin`: 42962012528 (the gate's unit tests on Linux on x86-64 at f87c47c, green, with clippy; the format job's layout applied at b4eb385); 42964220148 (format, the suite on Linux on x86-64 and the gate job at cd54e79, green); 42964232679 (the bench on all five runners at cd54e79, against the list from before the margin: the gate failed on each; 139 rows KNOWN_BEHIND named are level or ahead, 127 and 12, taken out, which leaves 898; 6 rows behind by more than the margin that it doesn't name, 1 on Linux on x86-64, 2 on Linux on ARM64, 2 on macOS on ARM64 and 1 on Windows on x86-64; no build failed, every native C++ version built with `-std=gnu++17`). The reports are in [docs/benchmarks](docs/benchmarks/README.md). No run has measured the new list yet |
 | W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](docs/history/PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
@@ -1194,6 +1276,26 @@ this file at the tag `native-final`.
   - **Left for the owner:** the 6 rows. The list may not grow, so either lengua gets faster on
     them, or they are accepted as stated exceptions, or the margin or the ratchet changes. No
     run has measured the new list yet: the counts here are from run 42964232679's reports.
+  - **The first run with lengua-run (W19; 43084459708 at 45b507b, and 43099764273 for Windows
+    on ARM64)** measured the 898 rows. It found 135 of them level and 2 ahead, which left the
+    list: it names 761. It found 26 rows behind by more than the margin that the list doesn't
+    name: 3 on Linux on x86-64, 9 on Linux on ARM64, 11 on macOS on ARM64, 3 on Windows on
+    x86-64 and none on Windows on ARM64. [docs/benchmarks](docs/benchmarks/README.md) names
+    each.
+    - Of the 6 rows above, two are no longer behind: `linux-x86_64 upcase-stdin c-wasm memory`
+      and `windows-x86_64 wc cpp wall`. Four still are: `shout` against c-wasm and cpp-wasm on
+      CPU time on Linux on ARM64, and `upcase` against the same two on CPU time on macOS on
+      ARM64.
+    - 21 of the 26 are the CPU or wall time of empty, hypotenuse, upcase or shout against C's
+      or C++'s module. This is W19's own effect, and it is real: every module now starts in
+      about 1.3 ms on Linux on x86-64, where it took 2 ms, and lengua's run still reads and
+      checks lengua.lock, idea.md and main.wat, about 0.1 ms, which the others' runs don't
+      do. That was under 5% of a run before and is 6% to 8% now.
+    - Peak memory went the other way: lengua was behind the other modules on 115 of the 210
+      rows in the run before and is on 7 now.
+    - **Left for the owner:** the 26 rows. lengua's checks can't go, as they are what a run
+      promises. The choices are those above, or a gate that sets the other modules' runs
+      against lengua's module run the same way, which the reports' last section measures.
 
   The rows as they stood before the margin, kept as the record:
   - **CPU time on Windows, for a short run.** Windows counts a process's CPU time in 15.6 ms
@@ -1429,6 +1531,11 @@ none changed a result, and each is recorded here for the owner:
 - W12c's fixer ran `awk` twice to count line lengths, and W15's fixer once as a filter over the
   bench reports, whose output it didn't use. awk is a text tool like the grep and sed the rule
   allows, not a build or a run of code. Both are listed because the fixers reported them.
+- W19's builder (2026-11-11) ran `awk` several times, to pick lines out of CI's logs and once to
+  count line lengths, before it read this list; it used grep, sed and cut from then on. It also
+  asked for `python3 --version`, which the permission check refused, so nothing ran. And it
+  staged one commit with `git add -u`, tracked files only, where its brief said to name each
+  file: the commit holds only W19's files.
 - On 2026-11-11 the session ran `git add -A` in the owner's own checkout, and commit fe77cc5 took
   in `site/`: the old site's `node_modules` and build output, 12,225 files left untracked on the
   owner's computer since W17a deleted the site. The next commit took them out, and `.gitignore`

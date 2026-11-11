@@ -70,7 +70,7 @@ fn run_for(text: &str, world: World, time: Duration) -> Executed {
     let engine = engine::engine(Setup::Test, None).expect("the engine");
     let linker = linker(&engine).expect("the host");
     let built = crate::wasm::text::build(text).unwrap_or_else(|problem| panic!("{problem}"));
-    let module = wasmtime::Module::from_binary(&engine, &built.wasm).expect("it compiles");
+    let module = engine::compile(&engine, &built.wasm).expect("it compiles");
     runner::execute(
         &engine,
         &linker,

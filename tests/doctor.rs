@@ -8,8 +8,9 @@ use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::process::Command;
 
 /// What doctor checks, in the order of its lines.
-const CHECKED: [&str; 8] = [
+const CHECKED: [&str; 9] = [
     "server: ",
+    "runner: ",
     "engine: ",
     "cpu: ",
     "z3: ",
