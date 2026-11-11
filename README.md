@@ -442,7 +442,11 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
   the proven `main.wat` through wasm2c.
 - **W20, parallelism:** WebAssembly's threads, as structured fork-join that the rules show free
   of data races.
-- **W21, a library of proven parts** that programs build on with `- Builds on:`.
+- **W21, a library of proven parts** that programs build on with `- Builds on:`. Built: the
+  mechanism (a part's contract, the copy `check` holds to the part, the lock's record) and four
+  parts, `decimal`, `lines`, `crc32` and `bytes`, with two programs on them. Left: the prover
+  proves a taken function again in each program, and sorting, hash tables, SHA-256, HTTP,
+  JSON, compression and dates have no part.
 - **W22, scale; W23, working with other code; W24, tools:** what a programming language has
   that lengua still lacks ([todo.md](todo.md)).
 

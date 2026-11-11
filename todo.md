@@ -416,6 +416,54 @@ Still open from it, for the owner:
 - **One listener or one UDP port** in a program, and one of each kind at most.
 - **IPv6 for what lengua binds**: the UDP port, as the TCP listener, is IPv4 only.
 
+### W21's parts: functions a program takes, already checked (2026-11-11)
+
+The first parts of W21, on the branch `wip/parts`, not merged. DESIGN.md ("Parts") has the
+design as built, the compile skill's references/parts.md what an agent does, and the decisions
+are with the others ("Decisions made during the pivot", W21's parts).
+
+What was there before: an idea's `- Builds on:` line, the graph's edges and its cycle check,
+and a first form of the copy: a function under a `;; from: <part>` line had to match the
+function of that name in a checked program, comments and spacing aside. Nothing said what a part
+offers, what its function reaches, or which of the program's own globals and functions the copy
+then used; the lock recorded no part; `check`'s reply named none; and no part existed.
+
+What was built:
+1. **The contract**, a `# Contract` section in a part's idea.md (`src/wasm/contract.rs`): each
+   function a program may take, with `reads N bytes at`, `writes N bytes at` or `uses no
+   memory`. The checker now gives what the memory rules find each function does through each
+   address it is lent (`Report::lends`), and `check` holds the section to it, in the server and
+   in the attester.
+2. **What a program can take** (`src/server/parts.rs`): a function the part defines itself,
+   that names no region and no global that changes, names functions and globals by name, and
+   calls no function of the part that the contract doesn't offer.
+3. **The copy, held with what it names**: the function word for word, each constant it reads
+   exactly as the part defines it, each function of the part it calls taken too, each host
+   function it calls imported the same way; a part that isn't checked, has no contract, or was
+   found wrong by a proof is refused. The check runs at every `check`.
+4. **The lock**: `[code]` records each part's folder, the hashes of its idea.md and its
+   main.wat, and the functions taken (`src/lock.rs`, both of its readers).
+5. **The reply**: `parts`, a line for each part with what main.wat takes from it, whether it is
+   the library's, unchanged, and what the part's own lock records of its proofs; `contract`,
+   for a part, each function it offers.
+6. **The library**, in the compile skill's `assets/parts` and in `examples/`: `decimal`
+   (`$decimal_parse`, `$decimal_format`), `lines` (`$lines_read`, `$lines_end`), `crc32`
+   (`$crc32_update`) and `bytes` (`$bytes_equal`). lines and crc32 are themselves built on
+   decimal, and bytes on lines.
+7. **Two programs built on them**: `examples/sum`, on lines and decimal, and
+   `examples/checksums`, on lines, crc32 and decimal.
+8. **The skills**: write-idea and compile teach the agent to look for a part before it writes a
+   routine, to name it and place it, and how to write a part; each has a parts.md.
+9. **The tests** (`tests/wasm_parts.rs`, and the library's own): the skill's parts are the
+   examples'; a part's contract as the rules hold it; a program on two parts from its parts
+   unchecked to done, its reply, its lock and a run; a changed operator, a changed constant, a
+   part the idea doesn't name, a part nothing is taken from, a function the contract doesn't
+   offer and a part changed after its check, each refused; a change to a part caught by the
+   part's own tests; a region with less room than the contract states and a read-only region,
+   each refused by the memory rules; a contract that isn't what main.wat does, refused. The
+   four parts joined the mutation test, and every program built on parts goes from its
+   request to done with the others.
+
 ### What the permission checks refused
 
 Claude Code's permission checks refused these actions. Each refusal was taken as given, with
@@ -729,6 +777,69 @@ Each can be reversed.
   - **The policy carries the grants by reference**, kept once for the process, so it stays a
     small value every caller copies, and a worker gets them with its job.
 
+- **W21's parts (2026-11-11)**, each made without asking, on the owner's standing word, and
+  each the owner's to reverse:
+  - **A program takes a part's functions by copying them, and `check` holds each copy to the
+    part.** The other way was for `check` to link modules itself. Copying keeps main.wat the
+    one text lengua builds, checks, tests, proves and runs, so every guarantee is still one
+    statement about main.wat: the rules, the memory rules, the secret rule and the proofs go
+    through a taken function as through any other, with nothing new to trust. Linking would
+    have added a second artifact, a linker inside lengua's trusted code, and rules, a secret
+    rule and a prover that cross a module's edge. Cost: a program built on parts is as long as
+    one that wrote the functions itself, and is proven as slowly.
+  - **A part is a whole program, with a `# Contract` section in its idea.** The section lists
+    each function a program may take, with what it reads and writes through the addresses it
+    is lent: `reads N bytes at`, `writes N bytes at`, `uses no memory`. Those clauses are what
+    the memory rules already compute for every function, so `check` holds the section to
+    main.wat exactly, and the rules hold every call to it. What a function's other arguments
+    must be, and what it gives, are the idea's own words after the clauses: lengua reads them
+    no further, and the function checks its arguments itself, with assertions.
+  - **A contract is needed to take from a part.** Before W21, main.wat could take a function
+    from any checked program. Now the part's idea must offer the function. Cost: a program
+    someone built that way must add the section to the part.
+  - **A taken function means in the program what it means in the part.** `check` holds, word
+    for word, the function, each constant it reads, each function of the part it calls (taken
+    the same way) and each host function it imports. A function a contract offers names no
+    region and no global that changes, and names nothing by its number. So its result depends
+    only on its arguments, the bytes it is lent and the host. Cost: a part's function can't
+    keep a table in a region of its own, so crc32 computes a bit at a time, eight steps a
+    byte, where the benchmark's crc32c reads sixteen tables; and a function a part took from
+    another part can't be offered on.
+  - **main.wat is held to its parts at every `check`**, not only when its two files change: a
+    job on the same files may be older than a change to a part. A part that changed is no
+    longer checked, so the program is refused until the part is checked again.
+  - **The prover proves a taken function again in each program.** It follows main.wat's
+    module, the taken functions with it, for the program's own generated tests. A part's
+    proofs aren't used: they are of the part's own program, for its inputs, and say nothing of
+    another caller's arguments. To use a contract in place of a body, the contract would have
+    to state what the function computes, as a formula over its arguments and the bytes it is
+    lent, and the prover would have to prove the body against it once, for every argument and
+    every memory, then assume it at each call and hold each call's arguments to it. None of
+    that is built, and `check` claims none of it: a program's `proofs` say what the solvers
+    showed of that program, and its `parts` lines repeat what each part's own lock records.
+  - **lengua.lock records the parts in `[code]`**: each part's folder, the hashes of its
+    idea.md and its main.wat, and the functions taken, in a `parts` line written only for a
+    program that takes from a part. The lock's format stays 7: a lock with no parts is byte
+    for byte what it was, so no lock made before changes, and a lengua from before W21
+    refuses a lock that has the line, as one with a field it doesn't write.
+  - **The library is in the compile skill's `assets/parts`, and each part is checked on the
+    user's computer.** The agent copies a part's folder beside the program's and checks it
+    like any program; lengua-mcp carries the parts' text only to say whether a part is the
+    library's, unchanged. lengua trusts no part for being its own. The same files are in
+    `examples/`, where the suite, the model's test and the golden ledger take them with every
+    other program, and a test holds the two copies to each other. Cost: each part's tests and
+    proofs run once on each computer that builds on it.
+  - **A part's limits are fixed.** The rules compute one reach for each parameter, whatever
+    length a call passes, so `decimal` reaches 20 bytes and `lines` and `crc32` 4096, and a
+    caller's region needs that room after the last place it lends. A program that needs more
+    writes its own function. A part whose sizes its caller sets isn't built.
+  - **The library's assertions are numbered from 800**, each part its own range, and its
+    names carry the part's name (`$decimal_parse`, `$DECIMAL_TEN`), since a program's
+    assertion numbers and names are one set. Cost: a program built on the library numbers its
+    own assertions from 1 to 799.
+  - **The attester holds a part's contract to its main.wat, and holds no program to its
+    parts**: it reads one folder, and a part is checked where it is used.
+
 ## Roadmap: the pivot's milestones (2026-11-06)
 
 Each merges to main when green on the runners it names; [ROADMAP.md](ROADMAP.md) has the detail.
@@ -821,6 +932,9 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
   HTTP, compression, dates) that programs build on with `- Builds on:`. The agent assembles
   programs from verified pieces instead of writing everything new, which makes them faster to
   build and to prove.
+  **The mechanism and the first four parts were built on 2026-11-11** (branch `wip/parts`;
+  "W21's parts", above, has what was built, its runs and what is left, and the decisions are
+  with the others, above).
 - **Nothing missing** (the owner, 2026-11-11: "that evolution needs to function better than a
   programming language. Not have stuff missing"; "yes add them to todo.md"). A programming
   language gives more than W18 to W21 cover. Three more, after them:

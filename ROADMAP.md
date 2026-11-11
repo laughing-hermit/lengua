@@ -432,6 +432,29 @@ A shared, proven standard set (sorting, hash tables, JSON, HTTP, compression, da
 build on with `- Builds on:`. The agent assembles programs from verified pieces instead of writing
 everything new, which makes them faster to build and to prove.
 
+**The mechanism and the first four parts, built on 2026-11-11** (branch `wip/parts`). A part is
+a program whose idea has a `# Contract` section: each function a program may take, with what it
+reads and writes through the addresses it is lent. `check` holds the section to what the memory
+rules find in the part's main.wat. A program names the part in its idea and copies each function
+it takes into its own main.wat, under a `;; from:` line; at every check, `check` holds the copy
+to the part word for word, with each constant it reads and each function it calls, and refuses
+a part that changed, has no contract, or that a proof found wrong. main.wat stays the one text
+lengua builds, checks, tests, proves and runs, so the rules, the secret rule and the proofs go
+through a taken function as through any other, and the memory rules refuse a call that lends
+less room than the contract states. lengua.lock records each part with its hashes, and
+`check`'s reply names what a program takes from each part and what the part's own proofs cover.
+The library, in the compile skill's `assets/parts` and in `examples/`: `decimal` (a whole number
+read from decimal text and written as it), `lines` (an input read into memory, and where each
+line ends), `crc32` (the CRC-32 of zlib, gzip and PNG) and `bytes` (whether two runs of bytes
+are the same). `examples/sum` and `examples/checksums` are built on them, and both skills teach
+an agent to look for a part first.
+
+What it doesn't do yet: the prover proves a taken function again in each program, since a
+contract states what a function reaches and not what it computes, so a program built on parts
+is no faster to prove; a part's limits are fixed, 20 bytes for a number and 4096 for a text; and
+of the set above, sorting, hash tables, SHA-256, the lines of an HTTP request, JSON, compression
+and dates have no part (todo.md, "W21's parts", has what is left and every run).
+
 ## W22. Scale
 
 After W21 (the owner, 2026-11-11: "that evolution needs to function better than a programming
