@@ -40,8 +40,8 @@ use crate::platform::{Cache, CacheHolds, Machine};
 use crate::prove::{self, Verdict};
 use crate::runner::{End, Limits};
 use crate::state::{
-    CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, ProgramFolder, State, compiled_module, tested_module,
-    wrong_record,
+    CODE_FILE, IDEA_FILE, MODULE_FILE, NATIVE_CODE_FILE, ProgramFolder, State, compiled_module,
+    tested_module, wrong_record,
 };
 use crate::testfile::{self, TestSuite};
 use crate::testrun;
@@ -602,6 +602,10 @@ struct Runnable {
     secrets: Vec<idea::Source>,
     /// The SHA-256 of the module check tested.
     module: Sha256Hex,
+    /// The module itself, in a folder whose code is a module made elsewhere
+    /// ([`MODULE_FILE`]): the very bytes whose hash the lock was held to. `None` for a
+    /// program, whose module main.wat builds.
+    wasm: Option<Vec<u8>>,
     /// The user's key, which verified the lock: a run from a shell loads the module's compiled
     /// form under it ([`loaded_or_compiled`]).
     key: Key,
@@ -694,13 +698,18 @@ fn loaded_keeps_secrets(
 /// ([`built_as_tested`]) or by a shell's run ([`kept_or_built`]). idea.md and main.wat are read
 /// once, by the state's own read: what is built and compared, and the idea's grants, come from
 /// the very bytes whose hashes the lock was held to. Of the idea, a run reads only its grants
-/// ([`idea::grants`]): check judged the rest of this very text.
+/// and its secrets, in one reading ([`idea::granted`]): check judged the rest of this very
+/// text. With `module`, the folder's code is a module made elsewhere ([`MODULE_FILE`]), as
+/// `lengua-mcp measure` keeps one of another toolchain: the same checks, on that file in
+/// main.wat's place, and its lock must record the module's own hash as the module that runs.
 fn runnable(
     data_dir: &DataDir,
     folder: &ProgramFolder,
     env: &BTreeMap<String, String>,
+    module: bool,
 ) -> Result<Runnable, String> {
-    let (state, snapshot, files, key) = state_for_run(data_dir, folder)?;
+    let code_file = if module { MODULE_FILE } else { CODE_FILE };
+    let (state, snapshot, files, key) = state_for_run(data_dir, folder, code_file)?;
     if state != State::Ready {
         return Err(format!(
             "lengua runs a program only when its idea and code match lengua.lock, and {folder} \
@@ -745,15 +754,29 @@ fn runnable(
             wrong.join("; ")
         ));
     }
-    let code = text_of(folder, CODE_FILE, files.code)?.ok_or_else(|| {
-        format!("There's no {CODE_FILE} in {folder}. Write it with the compile skill.")
-    })?;
+    let missing = || format!("There's no {code_file} in {folder}. Write it with the compile skill.");
+    let (code, wasm) = if module {
+        if stamp.sha256 != stamp.module_sha256 {
+            return Err(format!(
+                "lengua.lock records another module than {MODULE_FILE} to run, so {folder} \
+                 isn't a module's folder"
+            ));
+        }
+        (String::new(), Some(files.code.ok_or_else(missing)?))
+    } else {
+        (text_of(folder, CODE_FILE, files.code)?.ok_or_else(missing)?, None)
+    };
     let idea_text = text_of(folder, IDEA_FILE, files.idea)?.ok_or_else(|| {
         format!("There's no {IDEA_FILE} in {folder}. Write it with the write-idea skill first.")
     })?;
-    let (uses, network) =
-        idea::grants(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
-    let secrets = idea::secrets(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
+    let (uses, network, secrets) =
+        idea::granted(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
+    if module && !secrets.is_empty() {
+        return Err(format!(
+            "{IDEA_FILE} names a secret, and a module made elsewhere has no main.wat to hold \
+             to the secret rule, so it won't run"
+        ));
+    }
     if !env.is_empty() && !uses.contains(&Use::Environment) {
         return Err(format!(
             "{IDEA_FILE} doesn't use the environment, so the program gets no environment \
@@ -766,6 +789,7 @@ fn runnable(
         network,
         secrets,
         module: stamp.module_sha256.clone(),
+        wasm,
         key,
     })
 }
@@ -795,6 +819,10 @@ fn kept_or_built(
     folder: &ProgramFolder,
     ready: &Runnable,
 ) -> Result<Vec<u8>, String> {
+    // A module made elsewhere is its folder's code, already held to the lock's hash.
+    if let Some(wasm) = &ready.wasm {
+        return Ok(wasm.clone());
+    }
     let kept = tested_module(data_dir.path(), text::BUILDER, &ready.module);
     if let Ok(wasm) = std::fs::read(&kept)
         && Sha256Hex::of(&wasm) == ready.module
@@ -1000,10 +1028,14 @@ impl Order for Checked<'_> {
             policy: Policy::of(&self.ready.uses, network),
             listen: network.listens.map(|port| (port, network.serves_anywhere)),
             connections: &self.connections,
-            // main.wat is built only if the program traps, to place the trap on its line.
-            source: Source::Text {
-                text: &self.ready.code,
-                module: &self.ready.module,
+            // main.wat is built only if the program traps, to place the trap on its line; a
+            // module made elsewhere has no main.wat, and its trap is named without a line.
+            source: match self.ready.wasm {
+                Some(_) => Source::Unknown,
+                None => Source::Text {
+                    text: &self.ready.code,
+                    module: &self.ready.module,
+                },
             },
         }
     }
@@ -1032,7 +1064,7 @@ pub(super) fn run_from_shell(
 ) -> Result<i32, NotRun> {
     let ended = run_once_checked(on, || -> Result<Checked<'_>, NotRun> {
         let (folder, workspace) = folders()?;
-        let ready = runnable(data_dir, &folder, &request.env)?;
+        let ready = runnable(data_dir, &folder, &request.env, request.module)?;
         // The working folder of a program that uses files is never one of lengua's own or the
         // system's: said before anything is built or compiled.
         if ready.uses.contains(&Use::Files)
@@ -1511,7 +1543,7 @@ impl LenguaServer {
         folder: &ProgramFolder,
         params: &RunParams,
     ) -> Result<RunReport, String> {
-        let ready = runnable(&self.data_dir, folder, &params.env)?;
+        let ready = runnable(&self.data_dir, folder, &params.env, false)?;
         // What this server's job found wrong in the module the run holds, which lengua.lock may
         // not record, refuses it too, before anything is built.
         if let Some(wrong) = self.proven_wrong(folder, &ready.module).await {

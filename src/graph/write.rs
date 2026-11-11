@@ -123,18 +123,42 @@ pub fn write_within(
     day: Day,
     bounds: Bounds,
 ) -> Result<(Graph, Written), String> {
+    write_locked(data_dir, folder, events, day, bounds, 0)
+}
+
+/// [`write_within`]'s work. The bundle's root is found twice: once to know whose lock to take,
+/// and again under that lock, which is the one that counts. Another writer may be making the
+/// bundle's first index.md at that moment, and a look that falls in the middle of it finds an
+/// index.md that declares no bundle yet, then finds the file: a foreign index, to all
+/// appearances, which lengua leaves alone. Under the lock no writer of lengua's is in the
+/// middle of anything. Where the second look names another root, as when an index that
+/// declares a bundle appeared higher up, it starts again with that root, `tries` times at most.
+fn write_locked(
+    data_dir: &DataDir,
+    folder: &Path,
+    events: &[Event],
+    day: Day,
+    bounds: Bounds,
+    tries: u8,
+) -> Result<(Graph, Written), String> {
+    let first = scan::bundle_root(folder);
+    let key = std::fs::canonicalize(&first.path).unwrap_or_else(|_| first.path.clone());
+    let writers = bundle_mutex(&key);
+    let one_at_a_time = writers.lock().unwrap_or_else(PoisonError::into_inner);
+    let across_processes = lock_file(data_dir, &key)
+        .map_err(|error| format!("couldn't take the lock on the bundle's files: {error}"))?;
     let root = scan::bundle_root(folder);
+    if root.path != first.path && tries < 3 {
+        drop(across_processes);
+        drop(one_at_a_time);
+        return write_locked(data_dir, folder, events, day, bounds, tries + 1);
+    }
     if root.refused.is_some() {
         return Ok((
             Graph::of(root, folder, data_dir, bounds),
             Written::default(),
         ));
     }
-    let key = std::fs::canonicalize(&root.path).unwrap_or_else(|_| root.path.clone());
-    let writers = bundle_mutex(&key);
-    let _one_at_a_time = writers.lock().unwrap_or_else(PoisonError::into_inner);
-    let _across_processes = lock_file(data_dir, &key)
-        .map_err(|error| format!("couldn't take the lock on the bundle's files: {error}"))?;
     let graph = Graph::of(root, folder, data_dir, bounds);
     let index_path = graph.root.path.join(INDEX_FILE);
     let before = read_optional(&index_path)?;

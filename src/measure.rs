@@ -151,6 +151,11 @@ pub struct Request {
     pub uses: Vec<String>,
     /// For a module, an idea's `- Network:` line after its colon, or nothing.
     pub network: String,
+    /// For a module, the idea it runs under (`--idea`): the module then runs as a checked
+    /// program does, with every check a run makes, and what it may reach comes from the idea's
+    /// own lines, not from `uses` and `network`. Without it a module runs with no lock and no
+    /// idea, by its `uses` and `network` words.
+    pub idea: Option<PathBuf>,
     /// The load, for a server.
     pub serve: Option<Load>,
     /// Whether the CPU's counters count its misses too, where the system has them.
@@ -201,6 +206,7 @@ impl Request {
                         .ok_or_else(|| format!("--env {pair:?} isn't NAME=value"))?;
                     request.env.insert(name.to_owned(), value.to_owned());
                 }
+                "--idea" => request.idea = Some(PathBuf::from(value(&mut args, "--idea")?)),
                 "--uses" => {
                     request.uses = value(&mut args, "--uses")?
                         .split(',')
@@ -360,6 +366,71 @@ fn runner() -> Result<(PathBuf, bool), String> {
     }
 }
 
+/// The folder `measure` keeps for `wasm`, a module of another toolchain, to run under the idea
+/// `idea` as a checked program runs, in `measured/` of the data folder: the idea as idea.md,
+/// the module as main.wasm in main.wat's place, and a lengua.lock that the user's key signs,
+/// written by the code that writes every lock, which records the idea's hash and the module's
+/// as its code's and as the module that runs. The module is compiled and sealed there too, as
+/// check compiles a program's. A run of the folder then reads and checks the lock, the idea and
+/// the module as a run of lengua's own program does, by the same code, and takes what it may
+/// reach from the idea's lines. It is made once for a module and an idea, and kept.
+///
+/// # Errors
+///
+/// When the key, the folder or one of its files can't be made.
+fn module_folder(data_dir: &DataDir, idea: &[u8], wasm: &[u8]) -> Result<PathBuf, String> {
+    use crate::lock::{CodeStamp, IdeaStamp, Lock, RequestStamp};
+    use crate::state::{IDEA_FILE, MODULE_FILE};
+    let key = Key::load_or_create(data_dir).map_err(|error| error.to_string())?;
+    let module = Sha256Hex::of(wasm);
+    let recorded = crate::trust::idea_hash(idea);
+    let folder = data_dir
+        .path()
+        .join("measured")
+        .join(format!("{}-{}", module.short(), recorded.short()));
+    let failed = |error: std::io::Error| format!("{}: {error}", folder.display());
+    std::fs::create_dir_all(&folder).map_err(failed)?;
+    for (name, bytes) in [(IDEA_FILE, idea), (MODULE_FILE, wasm)] {
+        let file = folder.join(name);
+        if std::fs::read(&file).ok().as_deref() != Some(bytes) {
+            std::fs::write(&file, bytes).map_err(failed)?;
+        }
+    }
+    let stamped = crate::lock::read(&folder, Some(&key))
+        .ok()
+        .flatten()
+        .is_some_and(|lock| {
+            lock.idea.sha256 == recorded
+                && lock.code.is_some_and(|code| {
+                    code.sha256 == module && code.module_sha256 == module
+                })
+        });
+    if !stamped {
+        let lock = Lock {
+            request: RequestStamp {
+                words: vec!["measure this module as a checked program runs".to_owned()],
+                idea: recorded.clone(),
+            },
+            idea: IdeaStamp { sha256: recorded },
+            code: Some(CodeStamp {
+                sha256: module.clone(),
+                module_sha256: module.clone(),
+                engine: engine::ENGINE.to_owned(),
+                max_stack_bytes: 0,
+                unsafe_blocks: 0,
+                features: engine::features_used(wasm),
+            }),
+            proofs: None,
+        };
+        crate::lock::write(&folder, &lock, &key).map_err(failed)?;
+    }
+    // Compiled before the run that is measured, where it isn't yet: that run then loads it, and
+    // lengua-run never has to leave the run to lengua-mcp. A module that doesn't compile is the
+    // run's to report.
+    let _ = crate::server::loaded_or_compiled(data_dir, &key, &module, || Ok(wasm.to_vec()));
+    Ok(folder)
+}
+
 /// The command that runs `program`, of `kind`, in `folder`, as `request` asks.
 fn command_for(
     kind: Kind,
@@ -368,6 +439,27 @@ fn command_for(
     program: &Path,
     folder: &Path,
 ) -> Result<Command, String> {
+    // A module with an idea runs as a checked program does, from the folder kept for it.
+    if let (Kind::Wasm, Some(idea)) = (kind, &request.idea) {
+        let data_dir = data_dir.ok_or_else(|| crate::data_dir::NOT_FOUND.to_owned())?;
+        let read = |path: &Path| {
+            std::fs::read(path).map_err(|error| format!("can't read {}: {error}", path.display()))
+        };
+        let kept = module_folder(data_dir, &read(idea)?, &read(program)?)?;
+        let (runner, alone) = runner()?;
+        let mut command = bare(&runner);
+        command.arg("--data-dir").arg(data_dir.path());
+        if !alone {
+            command.arg("run");
+        }
+        command.arg(kept).arg("--module").arg("--in").arg(folder);
+        for (name, value) in &request.env {
+            command.arg("--env").arg(format!("{name}={value}"));
+        }
+        command.arg("--").args(&request.args);
+        command.current_dir(folder);
+        return Ok(command);
+    }
     let mut command = match kind {
         Kind::Wat => {
             let data_dir = data_dir.ok_or_else(|| crate::data_dir::NOT_FOUND.to_owned())?;

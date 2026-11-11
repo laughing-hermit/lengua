@@ -2293,9 +2293,10 @@ fn wrong_lines(text: &str) -> Vec<(String, String)> {
 fn state_for_run(
     data_dir: &DataDir,
     folder: &ProgramFolder,
+    code_file: &str,
 ) -> Result<(State, Snapshot, Files, Option<Key>), String> {
     let key = Key::load(data_dir).map_err(|error| error.to_string())?;
-    let (snapshot, files) = Snapshot::read_with_files(folder, key.as_ref())
+    let (snapshot, files) = Snapshot::read_with_code(folder, key.as_ref(), code_file)
         .map_err(|error| format!("can't read {folder}: {error}"))?;
     if let Some(lock) = snapshot.valid_lock() {
         remember_wrong(data_dir, lock);
@@ -2335,6 +2336,10 @@ pub struct ShellRun {
     pub env: BTreeMap<String, String>,
     /// The program's command-line arguments.
     pub args: Vec<String>,
+    /// Whether the folder's code is a module made elsewhere, main.wasm, where a program's is
+    /// main.wat (`--module`): a folder `lengua-mcp measure` made for a module of another
+    /// toolchain, which runs with every check a program's run makes.
+    pub module: bool,
 }
 
 impl ShellRun {
@@ -2352,6 +2357,7 @@ impl ShellRun {
             folder: None,
             env: BTreeMap::new(),
             args: Vec::new(),
+            module: false,
         };
         while let Some(arg) = args.next() {
             // The first word that isn't an option starts the program's arguments.
@@ -2361,6 +2367,7 @@ impl ShellRun {
             }
             match arg.as_str() {
                 "--in" => request.folder = Some(args.next().ok_or("--in needs a folder")?),
+                "--module" => request.module = true,
                 "--env" => {
                     let pair = args.next().ok_or("--env needs NAME=value")?;
                     let (name, value) = pair

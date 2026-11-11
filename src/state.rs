@@ -21,6 +21,12 @@ pub const LEGACY_IDEA_FILE: &str = "spec.md";
 /// The code's file name inside a program folder: the WebAssembly text lengua compiles an idea to.
 pub const CODE_FILE: &str = crate::wasm::CODE_FILE;
 
+/// The code file of a folder `lengua-mcp measure` makes for a module of another toolchain, such
+/// as C's: the module itself, where a program's folder holds main.wat. The lock of such a folder
+/// records the module's SHA-256 as its code's and as its module's, and a run of it makes every
+/// check a run of a program makes ([`crate::measure`]).
+pub const MODULE_FILE: &str = "main.wasm";
+
 /// The code file of the native lengua, which compiled an idea to assembly: lengua reads none. A
 /// folder that holds one is told that lengua compiles to main.wat since 0.2.0, and that the tag
 /// `native-final` keeps the native lengua.
@@ -238,10 +244,24 @@ impl Snapshot {
     ///
     /// Fails when a file exists but can't be read.
     pub fn read_with_files(folder: &ProgramFolder, key: Option<&Key>) -> io::Result<(Self, Files)> {
+        Self::read_with_code(folder, key, CODE_FILE)
+    }
+
+    /// [`Self::read_with_files`] of a folder whose code is the file `code_file`: main.wat, or
+    /// [`MODULE_FILE`] in a folder `lengua-mcp measure` made for a module of another toolchain.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a file exists but can't be read.
+    pub fn read_with_code(
+        folder: &ProgramFolder,
+        key: Option<&Key>,
+        code_file: &str,
+    ) -> io::Result<(Self, Files)> {
         // Each as a regular file of a bounded size: a program folder may come from anyone.
         let read = |name: &str| read_file(&folder.file(name));
         let idea = read(IDEA_FILE)?;
-        let code = read(CODE_FILE)?;
+        let code = read(code_file)?;
         let snapshot = Self {
             idea: idea.as_deref().map(crate::trust::idea_hash),
             code: code.as_deref().map(Sha256Hex::of),

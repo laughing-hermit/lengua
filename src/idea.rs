@@ -1174,6 +1174,24 @@ pub fn secrets(text: &str) -> Result<Vec<Source>, Vec<Problem>> {
         .unwrap_or_default())
 }
 
+/// What a run reads of an idea, in one reading of its lines: its grants ([`grants`]) and the
+/// inputs its `- Secret:` line names ([`secrets`]). A run from a shell takes all three, and
+/// reads the idea's lines once for them.
+///
+/// # Errors
+///
+/// As [`grants`].
+pub fn granted(text: &str) -> Result<(Vec<Use>, Network, Vec<Source>), Vec<Problem>> {
+    let mut parser = constraints_read(text)?;
+    let uses = parser.uses.take().unwrap_or_default();
+    let secrets = parser
+        .secrets
+        .take()
+        .map(|(_, secrets)| secrets)
+        .unwrap_or_default();
+    Ok((uses, parser.network, secrets))
+}
+
 /// The lines of `# Constraints` of an idea's `text`, read as [`parse`] reads them, and nothing
 /// else of the idea; or the problems [`grants`] reports.
 fn constraints_read(text: &str) -> Result<Parser, Vec<Problem>> {
