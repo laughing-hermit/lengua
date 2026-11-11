@@ -62,9 +62,6 @@ fn now() -> u64 {
 /// Ends every watched connection that no byte has crossed for its time, and forgets those and
 /// the closed ones.
 fn look() {
-    if reach::UNDEFENDED {
-        return;
-    }
     let now = now();
     let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
     held.retain(|held| {
@@ -457,7 +454,7 @@ fn held(host: &Host) -> usize {
 
 /// Refuses one more connection or socket of the program's own when it holds the most it may.
 fn room(host: &Host) -> Result<(), Refusal> {
-    if !reach::UNDEFENDED && held(host) >= OPEN_AT_ONCE {
+    if held(host) >= OPEN_AT_ONCE {
         return Err(Refusal::Full(format!(
             "the program holds {OPEN_AT_ONCE} connections of its own open, the most it may at \
              once: it closes one first"
@@ -606,10 +603,6 @@ fn open_tcp(
             }
         },
         None => {
-            if reach::UNDEFENDED {
-                // Checked once, then resolved again to connect.
-                addresses_of(host.resolver, &computer, private, within)?;
-            }
             let addresses = addresses_of(host.resolver, &computer, private, within)?;
             reach::dial(&place, &addresses, port, left())?
         }
@@ -942,8 +935,7 @@ pub fn udp_send_to(
     let Some(heard) = &datagrams.bound else {
         return Err(Fail::Errno(errno::BADF));
     };
-    let known = heard.senders.get(&to).copied();
-    let Some((received, sent)) = known.or(reach::UNDEFENDED.then_some((u64::MAX, 0))) else {
+    let Some((received, sent)) = heard.senders.get(&to).copied() else {
         return Err(Fail::Errno(errno::NOTCAPABLE));
     };
     if heard.anywhere && sent.saturating_add(size) > received.saturating_mul(REPLY_FACTOR) {
