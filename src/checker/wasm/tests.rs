@@ -168,20 +168,10 @@ fn the_template_passes_every_rule() {
     assert!(report.facts.max_stack_bytes > 0);
     assert!(report.facts.max_stack_bytes <= memory::MAX_STACK_BYTES);
     assert_eq!(report.facts.regions.len(), 7);
-    // What args_get writes is sized when the program runs: the proof holds it, and nothing else
-    // is left to it.
-    assert_eq!(
-        report.facts.obligations.len(),
-        2,
-        "{:#?}",
-        report.facts.obligations
-    );
+    // What args_get writes is sized when the program runs, and the template's checks of the
+    // two sizes hold it to the regions: nothing is left to the proof.
     assert!(
-        report
-            .facts
-            .obligations
-            .iter()
-            .all(|obligation| obligation.what.contains("$args_get")),
+        report.facts.obligations.is_empty(),
         "{:#?}",
         report.facts.obligations
     );
