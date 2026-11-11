@@ -63,6 +63,7 @@ const PROGRAMS: &[(&str, &str)] = &[
     ("examples/decimal/idea.md", "examples/decimal/main.wat"),
     ("examples/lines/idea.md", "examples/lines/main.wat"),
     ("examples/crc32/idea.md", "examples/crc32/main.wat"),
+    ("examples/bytes/idea.md", "examples/bytes/main.wat"),
     ("examples/upcase/idea.md", "examples/upcase/main.wat"),
     ("examples/fetch/idea.md", "examples/fetch/main.wat"),
     (

@@ -7,6 +7,7 @@ okf_version: "0.2"
 * [add](add/idea.md) - Adds the two whole numbers in its arguments and prints the sum. Code: [main.wat](add/main.wat)
 * [aes](aes/idea.md) - Encrypts blocks of hexadecimal data with AES-128 in ECB mode, in portable code. Code: [main.wat](aes/main.wat)
 * [archive](archive/idea.md) - Moves a file into the archive folder and makes the folder if it does not exist. Code: [main.wat](archive/main.wat)
+* [bytes](bytes/idea.md) - A part that compares two runs of bytes, and says if the first two lines of standard input are the same. Code: [main.wat](bytes/main.wat)
 * [checksums](checksums/idea.md) - Prints the CRC-32 of each line of standard input. Code: [main.wat](checksums/main.wat)
 * [count](count/idea.md) - Counts the lines and words of standard input and prints the two counts, as wc -lw does. Code: [main.wat](count/main.wat)
 * [crc32](crc32/idea.md) - A part that computes the CRC-32 of bytes, and prints the CRC-32 of standard input. Code: [main.wat](crc32/main.wat)

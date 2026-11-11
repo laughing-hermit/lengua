@@ -266,8 +266,11 @@ impl Lock {
                     .parts
                     .iter()
                     .map(|part| {
-                        let functions: Vec<String> =
-                            part.functions.iter().map(|name| toml_string(name)).collect();
+                        let functions: Vec<String> = part
+                            .functions
+                            .iter()
+                            .map(|name| toml_string(name))
+                            .collect();
                         format!(
                             "{{ part = {}, idea = \"{}\", code = \"{}\", functions = [{}] }}",
                             toml_string(&part.part),

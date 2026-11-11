@@ -86,7 +86,8 @@ async fn sum_with_its_parts(session: &Session) -> (Program, Program, Program) {
 /// knows each by those files, and each states a contract.
 #[test]
 fn the_skill_ships_the_library_s_parts_as_the_examples_hold_them() {
-    let shipped = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/compile/assets/parts");
+    let shipped =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugin/skills/compile/assets/parts");
     let mut folders: Vec<String> = std::fs::read_dir(&shipped)
         .expect("the skill's parts")
         .map(|entry| {
@@ -99,7 +100,10 @@ fn the_skill_ships_the_library_s_parts_as_the_examples_hold_them() {
         .collect();
     folders.sort();
     let known: Vec<&str> = parts::LIBRARY.iter().map(|part| part.name).collect();
-    assert_eq!(folders, known, "the library the server knows is the one the skill ships");
+    assert_eq!(
+        folders, known,
+        "the library the server knows is the one the skill ships"
+    );
     for part in parts::LIBRARY {
         let name = part.name;
         assert_eq!(part.idea, example(name, "idea.md"), "{name}/idea.md");
@@ -246,7 +250,10 @@ async fn a_copy_that_isn_t_the_part_s_is_refused() {
     );
     refused(
         &tampered,
-        &["main.wat's $decimal_parse differs from", "copy it again word for word"],
+        &[
+            "main.wat's $decimal_parse differs from",
+            "copy it again word for word",
+        ],
     )
     .await;
     // A constant a taken function reads, changed.
@@ -287,7 +294,10 @@ async fn a_copy_that_isn_t_the_part_s_is_refused() {
     );
     refused(
         &unoffered,
-        &["doesn't offer $text_length", "($decimal_parse and $decimal_format)"],
+        &[
+            "doesn't offer $text_length",
+            "($decimal_parse and $decimal_format)",
+        ],
     )
     .await;
     // The untouched main.wat is done.

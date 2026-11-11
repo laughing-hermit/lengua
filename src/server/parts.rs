@@ -94,7 +94,11 @@ impl Taken {
 
     /// The part in one line of `check`'s reply.
     fn line(&self) -> String {
-        let functions: Vec<String> = self.functions.iter().map(|name| format!("${name}")).collect();
+        let functions: Vec<String> = self
+            .functions
+            .iter()
+            .map(|name| format!("${name}"))
+            .collect();
         let whose = self.library.map_or_else(
             || "a part of this bundle".to_owned(),
             |name| format!("lengua's library part `{name}`, unchanged"),
@@ -226,7 +230,8 @@ fn global<'f>(fields: &'f [Field], name: &str) -> Option<&'f Field> {
 fn function<'f>(fields: &'f [Field], name: &str) -> Option<&'f Field> {
     fields.iter().find(|field| {
         field.name == name
-            && (field.keyword == "func" || (field.keyword == "import" && field.body.contains("(func ")))
+            && (field.keyword == "func"
+                || (field.keyword == "import" && field.body.contains("(func ")))
     })
 }
 
@@ -250,7 +255,7 @@ fn keeps_to_itself(taken: &Field, theirs: &[Field]) -> Option<String> {
              number means another thing in another program, so name it with `$`"
         ));
     }
-    for used in parts::names(&taken.body) {
+    for used in parts::globals(&taken.body) {
         let Some(field) = global(theirs, &used) else {
             continue;
         };
@@ -314,20 +319,25 @@ fn held_to(mine: &Field, from: &str, fields: &[Field], source: &Taken) -> Vec<St
         )];
     }
     let mut problems = Vec::new();
-    for used in parts::names(&mine.body) {
+    // Each constant the function reads: the program's must be the part's.
+    for used in parts::globals(&mine.body) {
+        if let Some(constant) = global(&source.fields, &used)
+            && global(fields, &used).is_none_or(|own| own.body != constant.body)
+        {
+            problems.push(format!(
+                "{CODE_FILE}'s ${name}, from {from}, reads `${used}`, which {CODE_FILE} must \
+                 define as the part does: `{}`",
+                constant.body
+            ));
+        }
+    }
+    // Each function it calls: the part's own, taken too, or a host function, imported alike.
+    // lengua's library's functions are neither's to define.
+    for used in parts::calls(&mine.body) {
         if used == *name {
             continue;
         }
-        if let Some(constant) = global(&source.fields, &used) {
-            // A constant the function reads: the program's must be the part's.
-            if global(fields, &used).is_none_or(|own| own.body != constant.body) {
-                problems.push(format!(
-                    "{CODE_FILE}'s ${name}, from {from}, reads `${used}`, which {CODE_FILE} \
-                     must define as the part does: `{}`",
-                    constant.body
-                ));
-            }
-        } else if let Some(called) = function(&source.fields, &used) {
+        if let Some(called) = function(&source.fields, &used) {
             let own = function(fields, &used);
             if called.imports() {
                 // A host function the part imports: the same import, under the same name.
@@ -481,7 +491,7 @@ pub(super) fn contract_problems(idea_text: &str, code: &str, lends: &[Lends]) ->
             ));
             continue;
         }
-        for used in parts::names(&offered.body) {
+        for used in parts::calls(&offered.body) {
             let calls_unoffered = used != offer.name
                 && contract.offer(&used).is_none()
                 && fields
@@ -547,13 +557,19 @@ mod tests {
     #[test]
     fn a_part_offers_only_what_a_program_can_take() {
         let both = contract("- `$scale`: uses no memory. Ten times.\n- `$times`: uses no memory.");
-        assert_eq!(contract_problems(&both, PART, &lends()), Vec::<String>::new());
+        assert_eq!(
+            contract_problems(&both, PART, &lends()),
+            Vec::<String>::new()
+        );
         assert_eq!(
             contract_lines(&both),
             ["$scale: uses no memory", "$times: uses no memory"]
         );
         // No section, no part.
-        assert_eq!(contract_problems("# Purpose\nText.\n", PART, &lends()), Vec::<String>::new());
+        assert_eq!(
+            contract_problems("# Purpose\nText.\n", PART, &lends()),
+            Vec::<String>::new()
+        );
         let problems = |items: &str| contract_problems(&contract(items), PART, &lends()).join("\n");
         assert!(
             problems("- `$scale`: uses no memory.").contains(
@@ -578,7 +594,9 @@ mod tests {
             },
             shown: "/bundle/numbers".to_owned(),
             fields: parts::fields(PART),
-            contract: contract::read(&idea_text).expect("no problem").expect("a contract"),
+            contract: contract::read(&idea_text)
+                .expect("no problem")
+                .expect("a contract"),
             idea: Sha256Hex::of(b"idea"),
             code: Sha256Hex::of(b"code"),
             library: None,
@@ -610,12 +628,20 @@ mod tests {
         assert!(held(&format!("(module\n{times})\n")).contains("reads `$TEN`"));
         // The part's function it calls, missing or the program's own.
         let alone = format!("(module\n{scale})\n");
-        assert!(held(&alone).contains("calls `$times`, the part's own"), "{}", held(&alone));
+        assert!(
+            held(&alone).contains("calls `$times`, the part's own"),
+            "{}",
+            held(&alone)
+        );
         let own = format!(
             "(module\n  (global $TEN i32 (i32.const 10))\n{scale}{})\n",
             times.replace("  ;; from: ../numbers\n", "")
         );
-        assert!(held(&own).contains("calls `$times`, the part's own"), "{}", held(&own));
+        assert!(
+            held(&own).contains("calls `$times`, the part's own"),
+            "{}",
+            held(&own)
+        );
         // A copy that differs, a function the part doesn't have, and one it doesn't offer.
         let differs = whole.replace("i32.mul", "i32.add");
         assert!(held(&differs).contains("differs from /bundle/numbers/main.wat's"));
@@ -623,7 +649,11 @@ mod tests {
         assert!(held(unknown).contains("has no $half"));
         let unoffered = "(module\n  ;; from: ../numbers\n  (func $put (param $n i32)\n    \
                          (i32.store (global.get $out) (local.get $n))))\n";
-        assert!(held(unoffered).contains("doesn't offer $put"), "{}", held(unoffered));
+        assert!(
+            held(unoffered).contains("doesn't offer $put"),
+            "{}",
+            held(unoffered)
+        );
     }
 
     #[test]

@@ -316,8 +316,8 @@ impl Contract {
             if unbounded {
                 continue;
             }
-            let same = held.len() == offer.lent.len()
-                && held.iter().all(|lent| offer.lent.contains(lent));
+            let same =
+                held.len() == offer.lent.len() && held.iter().all(|lent| offer.lent.contains(lent));
             if !same {
                 let rules = Offer {
                     lent: held,
@@ -439,7 +439,11 @@ mod tests {
         ];
         let problems = contract.problems(&writes);
         assert_eq!(problems.len(), 2, "{problems:#?}");
-        assert!(problems[1].contains("says `$start`: uses no memory, but in main.wat it reads 1 byte at `$at`"));
+        assert!(
+            problems[1].contains(
+                "says `$start`: uses no memory, but in main.wat it reads 1 byte at `$at`"
+            )
+        );
         let unbounded = [lends("parse", &[("at", false, None)])];
         let problems = contract.problems(&unbounded).join("\n");
         assert!(problems.contains("can't say how far"), "{problems}");

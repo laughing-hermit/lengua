@@ -1,8 +1,9 @@
 //! main.wat's fields as its text writes them, for what it takes from the parts its idea builds
 //! on (`- Builds on:`): a function taken from a part is marked `;; from: <part>` on a line above
-//! its `(func`, and is the part's own function word for word, as are the constants and the
-//! functions it names ([`fields`], [`names`]; `check` holds them in `src/server/parts.rs`). And
-//! lengua's own library of parts, as the compile skill ships it ([`LIBRARY`]).
+//! its `(func`, and is the part's own function word for word, as are the constants it reads and
+//! the functions it calls ([`fields`], [`globals`], [`calls`]; `check` holds them in
+//! `src/server/parts.rs`). And lengua's own library of parts, as the compile skill ships it
+//! ([`LIBRARY`]).
 
 /// One of main.wat's own functions, as its text writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -339,18 +340,34 @@ fn words(body: &str) -> Vec<&str> {
     found
 }
 
-/// Every name a field's text uses, without the `$`, each once, in order: its own, its locals'
-/// and labels', and those of the functions and globals it names.
-#[must_use]
-pub fn names(body: &str) -> Vec<String> {
+/// The names that stand right after one of `instructions` in a field's text, without the `$`,
+/// each once, in order.
+fn named_after(body: &str, instructions: &[&str]) -> Vec<String> {
+    let words = words(body);
     let mut found: Vec<String> = Vec::new();
-    for word in words(body) {
-        let name = identifier(word);
-        if !name.is_empty() && !found.contains(&name) {
-            found.push(name);
+    for pair in words.windows(2) {
+        if instructions.contains(&pair[0]) {
+            let name = identifier(pair[1]);
+            if !name.is_empty() && !found.contains(&name) {
+                found.push(name);
+            }
         }
     }
     found
+}
+
+/// The globals a function's text reads or writes, without the `$`, each once, in order: the
+/// names after `global.get` and `global.set`. A local or a label of the same name is none.
+#[must_use]
+pub fn globals(body: &str) -> Vec<String> {
+    named_after(body, &["global.get", "global.set"])
+}
+
+/// The functions a function's text calls, without the `$`, each once, in order: the names after
+/// `call`, and after `return_call` and `ref.func`, which the dialect refuses.
+#[must_use]
+pub fn calls(body: &str) -> Vec<String> {
+    named_after(body, &["call", "return_call", "ref.func"])
 }
 
 /// The first function or global a field's text names by its number, not its name, as
@@ -397,7 +414,8 @@ macro_rules! library_part {
 }
 
 /// lengua's library of parts, in the order of their names.
-pub const LIBRARY: [LibraryPart; 3] = [
+pub const LIBRARY: [LibraryPart; 4] = [
+    library_part!("bytes"),
     library_part!("crc32"),
     library_part!("decimal"),
     library_part!("lines"),
@@ -493,10 +511,14 @@ mod tests {
         assert_eq!(found[2].body, "(global $TEN i64 (i64.const 10))");
         assert_eq!(found[5].from.as_deref(), Some("../decimal"));
         assert_eq!(found[6].from, None);
-        // A function's names: its own, its locals', and what it calls and reads. A string's `$`
-        // names nothing.
-        assert_eq!(names(&found[5].body), ["double", "n", "TEN"]);
-        assert_eq!(names(&found[4].body), Vec::<String>::new());
+        // What a function reads and what it calls: a local or a label of a global's name, and a
+        // string's `$`, are neither.
+        assert_eq!(globals(&found[5].body), ["TEN"]);
+        assert_eq!(calls(&found[5].body), Vec::<String>::new());
+        assert_eq!(calls(&found[6].body), ["double"]);
+        assert_eq!(globals(&found[4].body), Vec::<String>::new());
+        let shadowed = "(func $f (param $TEN i32) (result i32) (block $TEN (local.get $TEN)))";
+        assert_eq!(globals(shadowed), Vec::<String>::new());
         // A function or a global named by its number.
         assert_eq!(numbered(&found[5].body), None);
         assert_eq!(numbered(&found[6].body).as_deref(), Some("call 0"));
