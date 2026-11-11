@@ -617,6 +617,9 @@ Each can be reversed.
   - **One address lengua refuses, refuses the name.** Whoever answers for a name chooses its
     addresses, so a name with a public address and the loopback's is refused whole. Cost: a
     name whose DNS mixes public and private addresses can't be reached without the grant.
+  - **A name refused for its addresses reads as a name with none** (`NOENT`), so a program
+    granted any computer can't learn which names the user's own network has. The run's report
+    says the reason. Cost: the program can't tell its user why; the report does.
   - **The limits**: 64 connections and datagram sockets of a program's own at once; 300
     seconds with no byte crossing a connection, then lengua ends it; 5 seconds to connect; 16
     addresses a name; 65,507 bytes a datagram. They are lengua's, the same for every idea: an

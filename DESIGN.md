@@ -546,6 +546,9 @@ Every such call goes the same way, and the order is the defence:
    0.0.0.0/8, fc00::/7, fe80::/10), unless the line ends with `, private addresses too` or
    writes that address itself. An IPv6 address that carries an IPv4 one (written inside it,
    IPv4-compatible, NAT64's 64:ff9b::/96, 6to4's 2002::/16) is held to the IPv4 address's class.
+   The program hears `NOENT` for a name lengua refuses by its addresses, as for a name with
+   none, so it can't learn from the refusals which names a private network has; the run's
+   report says what it was. An address the program wrote itself gets `NOTCAPABLE`.
 4. lengua connects to the addresses it checked and to no others, within 5 seconds (`dial`), so
    a name that resolves anew between the check and the connection changes nothing. Over TLS, it
    checks the computer's certificate for the name.

@@ -74,12 +74,15 @@ computer its idea doesn't grant, by any spelling, and never this computer.
 - **lengua ends a connection that no byte crosses for five minutes**: its next read gives the
   end, and its next write `PIPE`.
 - **What the errors mean**: `NOTCAPABLE`, the idea grants no such computer, port or TLS, or the
-  computer is this one, or one of its addresses is in a private network the idea's line doesn't
+  text names this computer, or it is an address of a private network the idea's line doesn't
   reach; `INVAL`, the text is no computer's name or address, or the port is none; `NAMETOOLONG`,
-  more than 253 bytes; `NOENT`, the name has no address; `CONNREFUSED`, the computer didn't take
-  the connection, or its certificate didn't check; `TIMEDOUT`, no answer within 5 seconds;
-  `MFILE`, as above. Give the user a different message for `NOTCAPABLE` than for a computer that
-  is down: the first is the idea's, and no retry changes it.
+  more than 253 bytes; `NOENT`, the name has no address, or none lengua reaches: a name that
+  resolves to this computer or into a private network reads as a name with no address, so a
+  program can't learn which names a private network has, and the run's report says which it
+  was; `CONNREFUSED`, the computer didn't take the connection, or its certificate didn't check;
+  `TIMEDOUT`, no answer within 5 seconds; `MFILE`, as above. Give the user a different message
+  for `NOTCAPABLE` than for a computer that is down: the first is the idea's, and no retry
+  changes it.
 - **The name is as the user or a server wrote it**: lengua takes capitals and a dot at the end,
   and an address in any standard writing. It refuses a number that only an older parsing reads
   as an address, such as `2130706433` or `127.1`, with `INVAL`.

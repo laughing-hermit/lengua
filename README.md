@@ -76,8 +76,8 @@ On any other computer, `lengua-mcp check <folder>` checks such a folder again fr
 files, and ends with `attested` or `not attested` ([docs/check.md](docs/check.md)).
 
 The other examples are in [examples/index.md](examples/index.md): files, the environment,
-random bytes, a server, a client, a sort, SHA-256, AES-128 and a comparison that keeps its
-input secret.
+random bytes, a server, a client, a client that follows a redirect to a computer it learns
+while it runs, a sort, SHA-256, AES-128 and a comparison that keeps its input secret.
 
 ## Install
 
@@ -342,7 +342,7 @@ gate to pass. [todo.md](todo.md) names the 22 rows and holds the choice for the 
 - `crates/lengua-os/`: the one crate allowed unsafe code, each call in a safe function.
 - `plugin/`: the plugin as it ships: its manifests, the two skills with their references and
   templates, its [README](plugin/README.md) and licence.
-- `examples/`: 15 programs, each a folder of `idea.md` and `main.wat`.
+- `examples/`: 16 programs, each a folder of `idea.md` and `main.wat`.
 - `tests/`: the suite, the 28 programs of `tests/fixtures`, the host's 109 cases in
   `tests/host-cases`, and the vendored schemas.
 - `benches/`: the gate, and the C, C++ and Rust versions of its workloads.

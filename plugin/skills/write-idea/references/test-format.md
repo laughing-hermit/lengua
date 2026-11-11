@@ -178,7 +178,8 @@ program starts and for everything the program opens itself.
   `2001:db8::1` for the name `www.example.org` `` gives the name those addresses, in every test
   of the idea; any other name has none. The program gets IPv4 addresses first, each family in
   order. lengua holds a test's addresses to its rules as it holds real ones, so a name given
-  `127.0.0.1` is refused, which a test may show.
+  `127.0.0.1` isn't reached, which a test may show: the program hears that the name has no
+  address.
 - **A program that serves** gets its listening socket from lengua, in every test. The test's
   client connects once a connection and behaves as curl and browsers do: it
   sends its text and keeps its side of the connection open until the program starts answering

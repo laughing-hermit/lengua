@@ -3,7 +3,9 @@
 //! names and no links, folders listed in order and turned round in a test's second run, the
 //! clock and random bytes a test supplies, sleeps that end at once in a test, `PIPE` on a closed
 //! standard output, `FBIG` past a file's limit, and connections lengua made before the program
-//! started, at fixed descriptors. Every function checks the program's idea ([`policy::Policy`])
+//! started, at fixed descriptors. Beside WASI's functions it gives lengua's own, in a module of
+//! their own, for what an idea grants a program to open on the network by itself ([`open`]).
+//! Every function checks the program's idea ([`policy::Policy`])
 //! before it does anything, and every buffer it borrows is checked against the program's memory:
 //! one outside it stops the program as a load outside it would.
 

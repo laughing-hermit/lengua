@@ -1,9 +1,9 @@
-//! The connections lengua makes for a program. A program never connects by itself: for each
-//! place its idea names, lengua's host makes the connection before the program starts and hands
-//! it over, so the program holds no network of its own, on every system, and a connection
-//! behaves the same everywhere. A connection lengua couldn't make is handed over already ended,
-//! and the run's report says why: the program can't tell a place that refused it from one that
-//! broke off.
+//! The connections lengua makes for a program. Unless its idea grants it connections of its own
+//! ([`crate::reach`]), a program never connects by itself: for each place its idea names,
+//! lengua's host makes the connection before the program starts and hands it over, so the
+//! program holds no network of its own, on every system, and a connection behaves the same
+//! everywhere. A connection lengua couldn't make is handed over already ended, and the run's
+//! report says why: the program can't tell a place that refused it from one that broke off.
 //!
 //! A connection over TLS is the same to the program: lengua does TLS on it, in Rust, outside the
 //! program, which reads and writes the plain bytes and holds no crypto. lengua checks the

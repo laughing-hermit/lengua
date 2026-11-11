@@ -1,5 +1,6 @@
 //! The network: the listener lengua binds for a server, and the connections lengua makes before
-//! the program starts or the program accepts. The program never connects by itself. A connection
+//! the program starts or the program accepts. The program connects by itself only where its idea
+//! grants it, through [`super::open`], and such a connection is one of these too. A connection
 //! behaves as `crate::connect` says on every system: what the other end sends is read, its end of
 //! sending is a read of 0, a connection lengua couldn't make or one that broke off is ended both
 //! ways (reads give 0, writes `PIPE`), and over TLS lengua does the TLS, in Rust, so the program

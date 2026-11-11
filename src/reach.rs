@@ -584,6 +584,10 @@ pub enum Refusal {
     NotGranted(String),
     /// The name has no address.
     NoAddress(String),
+    /// The name has an address lengua's rules refuse. The program hears what it hears of a name
+    /// with no address, so it can't learn which names of a private network exist; the run's
+    /// report has the reason.
+    Unreached(String),
     /// The place didn't take the connection.
     NotMade(String),
     /// The place didn't answer in time.
@@ -601,9 +605,22 @@ impl Refusal {
             | Self::TooLong(words)
             | Self::NotGranted(words)
             | Self::NoAddress(words)
+            | Self::Unreached(words)
             | Self::NotMade(words)
             | Self::NoAnswer(words)
             | Self::Full(words) => words,
+        }
+    }
+}
+
+impl Refusal {
+    /// The refusal of a name, where this is the refusal of its addresses: what lengua's rules
+    /// refuse of a name's addresses is the name [`Refusal::Unreached`].
+    #[must_use]
+    pub fn of_a_name(self) -> Self {
+        match self {
+            Self::NotGranted(why) => Self::Unreached(why),
+            other => other,
         }
     }
 }

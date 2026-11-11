@@ -385,7 +385,7 @@ const fn errno_of(refusal: &Refusal) -> u16 {
         Refusal::NotAPlace(_) => errno::INVAL,
         Refusal::TooLong(_) => errno::NAMETOOLONG,
         Refusal::NotGranted(_) => errno::NOTCAPABLE,
-        Refusal::NoAddress(_) => errno::NOENT,
+        Refusal::NoAddress(_) | Refusal::Unreached(_) => errno::NOENT,
         Refusal::NotMade(_) => errno::CONNREFUSED,
         Refusal::NoAnswer(_) => errno::TIMEDOUT,
         Refusal::Full(_) => errno::MFILE,
@@ -466,7 +466,7 @@ fn room(host: &Host) -> Result<(), Refusal> {
 /// Notes what became of something the program asked to open, for the run's report, and, in a
 /// run from a shell, says on standard error what lengua's rules refused.
 fn note(host: &mut Host, place: String, refusal: Option<&Refusal>) {
-    if let Some(Refusal::NotGranted(why)) = refusal
+    if let Some(Refusal::NotGranted(why) | Refusal::Unreached(why)) = refusal
         && matches!(host.stderr, stdio::Output::Here(_))
         && host.notes.refused < REPORTED
     {
@@ -497,8 +497,25 @@ fn answer<T>(host: &mut Host, place: String, opened: Result<T, Unopened>) -> Res
     }
 }
 
+/// `found`, the addresses of `computer`, each held to the rule ([`reach::vetted`]). An address
+/// the program wrote itself is refused as what the idea doesn't grant. A name with an address
+/// lengua refuses is refused as a name with no address is: a program must not learn, from what
+/// lengua refuses, which names of a private network exist.
+fn held_to_the_rule(
+    computer: &Spelled,
+    found: &[IpAddr],
+    private: bool,
+) -> Result<Vec<IpAddr>, Refusal> {
+    let vetted = reach::vetted(&computer.text, found, private);
+    if computer.address.is_some() {
+        vetted
+    } else {
+        vetted.map_err(Refusal::of_a_name)
+    }
+}
+
 /// The addresses lengua may reach `computer` at: its own, when it is an address, or the ones
-/// `resolver` finds for its name, asked once, each held to the rule ([`reach::vetted`]).
+/// `resolver` finds for its name, asked once, each held to the rule.
 fn addresses_of(
     resolver: Resolver,
     computer: &Spelled,
@@ -509,7 +526,7 @@ fn addresses_of(
         Some(address) => vec![address],
         None => resolver(&computer.text, within)?,
     };
-    reach::vetted(&computer.text, &found, private)
+    held_to_the_rule(computer, &found, private)
 }
 
 /// The addresses a test's internet has for `computer`: its own, when it is an address, or the
@@ -543,7 +560,7 @@ fn stand_in(
 ) -> Result<Option<u16>, Refusal> {
     let found = test_addresses(internet, computer);
     if !found.is_empty() {
-        reach::vetted(&computer.text, &found, private)?;
+        held_to_the_rule(computer, &found, private)?;
     }
     Ok(internet
         .places
@@ -674,7 +691,7 @@ fn look_up(host: &Host, computer: Result<Spelled, Refusal>) -> Result<Vec<IpAddr
     let mut addresses = match &host.internet {
         Some(internet) => {
             let found = test_addresses(internet, &computer);
-            reach::vetted(&computer.text, &found, private)?
+            held_to_the_rule(&computer, &found, private)?
         }
         None => addresses_of(host.resolver, &computer, private, within)?,
     };
@@ -1161,7 +1178,9 @@ mod tests {
     /// The threat: DNS tricks, the loopback and the private ranges. A name any computer may
     /// have resolves to this computer, or into a private network: lengua looks at the addresses
     /// its own resolver found, and connects to none of them. Something listens on the loopback,
-    /// so only the refusal keeps the connection from being made.
+    /// so only the refusal keeps the connection from being made. The program hears of such a
+    /// name what it hears of a name with no address, so it can't learn from lengua's refusals
+    /// which names of a private network exist; the run's report says why.
     #[test]
     fn a_name_that_resolves_to_this_computer_or_a_private_network_is_not_reached() {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a free port");
@@ -1183,7 +1202,7 @@ mod tests {
         ] {
             assert_eq!(
                 opened(&mut host, name, port, flags::PLAIN),
-                Err(errno::NOTCAPABLE),
+                Err(errno::NOENT),
                 "{name}"
             );
         }
@@ -1191,7 +1210,18 @@ mod tests {
             opened(&mut host, "nothing.example", port, flags::PLAIN),
             Err(errno::NOENT)
         );
-        // An address of a private network, written by the program: refused as a name's is.
+        let reported = |host: &Host, at: usize| host.notes.opened[at].problem.clone();
+        assert!(
+            reported(&host, 0).is_some_and(|why| why.contains("is this computer (127.0.0.1)")),
+            "{:?}",
+            host.notes.opened[0]
+        );
+        assert!(
+            reported(&host, 6).is_some_and(|why| why.contains("in a private network")),
+            "{:?}",
+            host.notes.opened[6]
+        );
+        // An address of a private network, written by the program: the idea doesn't grant it.
         assert_eq!(
             opened(&mut host, "10.0.0.1", port, flags::PLAIN),
             Err(errno::NOTCAPABLE)
@@ -1377,8 +1407,9 @@ mod tests {
         let (answered, count, _) = looked(&mut host, "www.example.org", 20);
         assert_eq!((answered, count), (Ok(()), 1));
         for (name, number) in [
-            ("inside.example.org", errno::NOTCAPABLE),
-            ("here.example.org", errno::NOTCAPABLE),
+            // A name with an address lengua refuses reads as a name with none.
+            ("inside.example.org", errno::NOENT),
+            ("here.example.org", errno::NOENT),
             ("other.example.org", errno::NOENT),
             ("example.com", errno::NOTCAPABLE),
             ("localhost", errno::NOTCAPABLE),
