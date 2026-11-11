@@ -3109,7 +3109,8 @@ impl Parser {
                 // idea covers it.
                 let made = !stand.datagrams
                     && self.network.connections.iter().any(|place| {
-                        place.port == stand.port && place.host.as_deref() == Some(stand.host.as_str())
+                        place.port == stand.port
+                            && place.host.as_deref() == Some(stand.host.as_str())
                     });
                 let rules = if stand.datagrams {
                     &self.network.reach.datagrams
@@ -3951,6 +3952,89 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         let aliased = ADD.replace("title: add\n", "verified: &name add\ntitle: *name\n");
         assert_ne!(aliased, ADD);
         assert_problem(&aliased, "the frontmatter isn't valid YAML");
+    }
+
+    /// What a program opens by itself while it runs is granted on `- Network:` lines of their
+    /// own, beside the connections lengua makes before the start. The computers the idea's tests
+    /// stand in for, and the names they give addresses, are read from its steps: only those a
+    /// rule of the idea covers, and never a connection lengua makes.
+    #[test]
+    fn network_lines_grant_what_a_program_opens_by_itself() {
+        use crate::reach::Computers;
+        let lines = "- Network: opens TCP connections to ports 80 and 443 on any subdomain of \
+                     Example.org.\n- Network: looks up the addresses of any subdomain of \
+                     example.org\n- Network: sends UDP datagrams to port `53` on 192.0.2.53\n- \
+                     Network: connects to TCP port 8080 on example.com";
+        let steps = "- Given the arguments `2` and `3`\n- And a server at `WWW.example.org` on \
+                     port `80` that receives `a` and replies `b`\n- And a server at \
+                     `example.com` on port `8080` that receives `a` and replies `b`\n- And a \
+                     server at `elsewhere.test` on port `80` that receives `a` and replies `b`\n- \
+                     And a computer at `192.0.2.53` on UDP port `53` that receives `a` and \
+                     replies `b`\n- And the addresses `192.0.2.7` and `2001:DB8::1` for the name \
+                     `www.example.org`";
+        let granted = ADD
+            .replace("- Uses: nothing", lines)
+            .replacen("- Given the arguments `2` and `3`", steps, 1);
+        let idea = parse(&granted).expect("valid idea");
+        let reach = &idea.network.reach;
+        assert_eq!(reach.opens.len(), 1);
+        assert_eq!(
+            reach.opens[0].computers,
+            Computers::Beneath("example.org".into())
+        );
+        assert_eq!(reach.opens[0].ports, [80, 443]);
+        assert_eq!(reach.names.len(), 1);
+        assert_eq!(reach.datagrams[0].ports, [53]);
+        assert_eq!(reach.receives, None);
+        assert_eq!(idea.network.connections.len(), 1);
+        assert!(idea.network.is_used());
+        let stand = |datagrams, host: &str, port| Stand {
+            datagrams,
+            host: host.to_owned(),
+            port,
+        };
+        assert_eq!(
+            idea.network.stands,
+            [
+                stand(false, "www.example.org", 80),
+                stand(true, "192.0.2.53", 53)
+            ],
+            "the idea's own connection and the computer no rule covers aren't among them"
+        );
+        assert_eq!(
+            idea.network.names,
+            [(
+                "www.example.org".to_owned(),
+                vec!["192.0.2.7".to_owned(), "2001:db8::1".to_owned()]
+            )]
+        );
+        let with = |line: &str| ADD.replace("- Uses: nothing", line);
+        assert_problem(
+            &with("- Network: opens TCP connections to port 80"),
+            "name the computers",
+        );
+        assert_problem(
+            &with("- Network: opens TCP connections to port 80 on localhost"),
+            "is this computer",
+        );
+        assert_problem(
+            &with("- Network: looks up the addresses of any subdomain of org"),
+            "isn't a domain",
+        );
+        assert_problem(
+            &with(
+                "- Network: listens on TCP port 7007\n- Network: receives UDP datagrams on port \
+                 7007",
+            ),
+            "one of the two",
+        );
+        let receives = parse(
+            &with("- Network: receives UDP datagrams on port 5353 for any computer")
+                .replace("- And it exits with code `0`", "- And it does not stop"),
+        )
+        .expect("valid idea");
+        assert_eq!(receives.network.reach.receives, Some((5353, true)));
+        assert!(receives.behaviors[0].serves);
     }
 
     #[test]

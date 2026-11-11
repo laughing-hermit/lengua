@@ -778,10 +778,7 @@ pub fn udp_open(
     out: u32,
 ) -> Result<(), Fail> {
     memory::check(memory, out, 4)?;
-    let place = format!(
-        "UDP datagrams to port {port} of `{}`",
-        shown(memory, name)?
-    );
+    let place = format!("UDP datagrams to port {port} of `{}`", shown(memory, name)?);
     let opened = open_udp(host, computer(memory, name)?, port);
     let datagrams = answer(host, place, opened)?;
     let fd = host
@@ -984,7 +981,10 @@ mod tests {
     fn memory_with(name: &str) -> (Vec<u8>, (u32, u32)) {
         let mut memory = vec![0_u8; 65_536];
         memory[100..100 + name.len()].copy_from_slice(name.as_bytes());
-        (memory, (100, u32::try_from(name.len()).expect("a short name")))
+        (
+            memory,
+            (100, u32::try_from(name.len()).expect("a short name")),
+        )
     }
 
     /// What `tcp_open` answers for `name` on `port`: the descriptor, or the error number.
@@ -1037,10 +1037,7 @@ mod tests {
             "opens tcp connections to port 80 on any subdomain of example.org",
             "opens tcp connections to port 443 on the computer its first argument names over tls",
         ];
-        let mut host = host_with(
-            &lines,
-            Some(internet(false, "www.example.org", 80, local)),
-        );
+        let mut host = host_with(&lines, Some(internet(false, "www.example.org", 80, local)));
         let fd = opened(&mut host, "WWW.Example.org.", 80, flags::PLAIN).expect("it opens");
         assert!(fd >= super::super::fds::FIRST_CONNECTION, "{fd}");
         // The connection is one like any other: what the program writes arrives.
@@ -1103,14 +1100,24 @@ mod tests {
                 "{name}:{port}"
             );
         }
-        for nothing in ["2130706433", "127.1", "0x7f.1", "", "a b", "www.example.org:80"] {
+        for nothing in [
+            "2130706433",
+            "127.1",
+            "0x7f.1",
+            "",
+            "a b",
+            "www.example.org:80",
+        ] {
             assert_eq!(
                 opened(&mut host, nothing, 80, flags::PLAIN),
                 Err(errno::INVAL),
                 "{nothing}"
             );
         }
-        assert_eq!(opened(&mut host, "www.example.org", 80, 2), Err(errno::INVAL));
+        assert_eq!(
+            opened(&mut host, "www.example.org", 80, 2),
+            Err(errno::INVAL)
+        );
         let (mut memory, at) = memory_with("www.example.org");
         assert_eq!(
             tcp_open(&mut host, &mut memory, at, 0, flags::PLAIN, 8),
@@ -1158,7 +1165,9 @@ mod tests {
     #[test]
     fn a_name_that_resolves_to_this_computer_or_a_private_network_is_not_reached() {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a free port");
-        listener.set_nonblocking(true).expect("a listener that never waits");
+        listener
+            .set_nonblocking(true)
+            .expect("a listener that never waits");
         let port = listener.local_addr().expect("its address").port();
         let line = format!("opens tcp connections to port {port} on any computer");
         let mut host = host_with(&[line.as_str()], None);
@@ -1216,7 +1225,9 @@ mod tests {
     #[test]
     fn a_name_is_resolved_once_and_only_its_checked_addresses_are_dialed() {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a free port");
-        listener.set_nonblocking(true).expect("a listener that never waits");
+        listener
+            .set_nonblocking(true)
+            .expect("a listener that never waits");
         let port = listener.local_addr().expect("its address").port();
         let line = format!("opens tcp connections to port {port} on any computer");
         let mut host = host_with(&[line.as_str()], None);
@@ -1228,7 +1239,11 @@ mod tests {
             matches!(refused, Err(errno::CONNREFUSED | errno::TIMEDOUT)),
             "{refused:?}"
         );
-        assert_eq!(ASKED.load(Ordering::SeqCst), 1, "the name was asked for again");
+        assert_eq!(
+            ASKED.load(Ordering::SeqCst),
+            1,
+            "the name was asked for again"
+        );
         assert!(
             listener.accept().is_err(),
             "a connection to this computer was made"
@@ -1416,7 +1431,10 @@ mod tests {
         // A computer the idea grants with nothing there in this test: what is sent is lost, and
         // nothing answers.
         let nowhere = open(&mut host, "192.0.2.99", 5353).expect("it opens");
-        assert_eq!(udp_send(&mut host, &mut memory, nowhere, (100, 8), 8), Ok(()));
+        assert_eq!(
+            udp_send(&mut host, &mut memory, nowhere, (100, 8), 8),
+            Ok(())
+        );
         assert_eq!(
             udp_recv(&mut host, &mut memory, nowhere, (200, 6), 8),
             Err(Fail::Errno(errno::CONNREFUSED))
@@ -1439,7 +1457,10 @@ mod tests {
             let mut world = world(Policy::default());
             world.datagrams = Some(bound);
             let mut grants = Grants::default();
-            assert_eq!(grants.line("receives udp datagrams on port 9"), Some(Ok(())));
+            assert_eq!(
+                grants.line("receives udp datagrams on port 9"),
+                Some(Ok(()))
+            );
             world.policy.reach = Reach::of(&grants);
             let mut host = Host::new(world);
             let fd = super::super::fds::FIRST_CONNECTION;

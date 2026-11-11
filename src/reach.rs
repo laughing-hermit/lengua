@@ -185,7 +185,8 @@ impl Rule {
     /// says so, or when the idea itself writes that address.
     #[must_use]
     pub fn reaches_private(&self, computer: &Spelled) -> bool {
-        self.private || (computer.address.is_some() && matches!(self.computers, Computers::Named(_)))
+        self.private
+            || (computer.address.is_some() && matches!(self.computers, Computers::Named(_)))
     }
 
     /// The rule's ports and computers in words: `port 443 on any subdomain of example.com over
@@ -355,9 +356,11 @@ impl Grants {
             ([_], Some(_)) => {
                 Err("the port it receives datagrams on is given twice; keep one line".to_owned())
             }
-            _ => Err("a program receives datagrams on one port; keep one in `- Network: \
+            _ => Err(
+                "a program receives datagrams on one port; keep one in `- Network: \
                       receives UDP datagrams on port N`"
-                .to_owned()),
+                    .to_owned(),
+            ),
         }
     }
 
@@ -366,10 +369,16 @@ impl Grants {
     pub fn describe(&self) -> Vec<String> {
         let mut lines = Vec::new();
         for rule in &self.opens {
-            lines.push(format!("it may open TCP connections to {}", rule.describe()));
+            lines.push(format!(
+                "it may open TCP connections to {}",
+                rule.describe()
+            ));
         }
         for rule in &self.names {
-            lines.push(format!("it may look up the addresses of {}", rule.describe()));
+            lines.push(format!(
+                "it may look up the addresses of {}",
+                rule.describe()
+            ));
         }
         for rule in &self.datagrams {
             lines.push(format!(
@@ -401,9 +410,9 @@ impl Grants {
         tls: Option<bool>,
         args: Option<&[String]>,
     ) -> Option<&'a Rule> {
-        rules.iter().find(|rule| {
-            tls.is_none_or(|tls| rule.tls == tls) && rule.covers(computer, port, args)
-        })
+        rules
+            .iter()
+            .find(|rule| tls.is_none_or(|tls| rule.tls == tls) && rule.covers(computer, port, args))
     }
 }
 
@@ -731,8 +740,11 @@ pub(crate) fn secure(
             "lengua couldn't start what makes its connections".to_owned(),
         ));
     };
-    let failed = |error: &dyn std::fmt::Display| Refusal::NotMade(format!("TLS with {host}: {error}"));
-    stream.set_nonblocking(true).map_err(|error| failed(&error))?;
+    let failed =
+        |error: &dyn std::fmt::Display| Refusal::NotMade(format!("TLS with {host}: {error}"));
+    stream
+        .set_nonblocking(true)
+        .map_err(|error| failed(&error))?;
     let made = runtime.block_on(async {
         let stream = tokio::net::TcpStream::from_std(stream)?;
         tokio::time::timeout(
@@ -747,9 +759,12 @@ pub(crate) fn secure(
             let place: Box<dyn Place> = Box::new(stream);
             Ok((place, runtime))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => Err(Refusal::NoAnswer(
-            format!("TLS with {host} wasn't done within {} milliseconds", within.as_millis()),
-        )),
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+            Err(Refusal::NoAnswer(format!(
+                "TLS with {host} wasn't done within {} milliseconds",
+                within.as_millis()
+            )))
+        }
         Err(error) => Err(failed(&error)),
     }
 }
@@ -771,7 +786,8 @@ mod tests {
     }
 
     fn address(text: &str) -> IpAddr {
-        text.parse().unwrap_or_else(|_| panic!("{text} is an address"))
+        text.parse()
+            .unwrap_or_else(|_| panic!("{text} is an address"))
     }
 
     #[test]
@@ -824,7 +840,10 @@ mod tests {
             shown[3],
             "it may open TCP connections to port 80 on any computer, private addresses too"
         );
-        assert!(shown[6].contains("every address of this computer"), "{shown:?}");
+        assert!(
+            shown[6].contains("every address of this computer"),
+            "{shown:?}"
+        );
     }
 
     #[test]
@@ -837,7 +856,13 @@ mod tests {
         };
         assert!(problem("opens tcp connections to port 80").contains("name the computers"));
         assert!(problem("opens tcp connections to port 0 on example.com").contains("1 to 65535"));
-        for this in ["localhost", "127.0.0.1", "::1", "::ffff:127.0.0.1", "this computer"] {
+        for this in [
+            "localhost",
+            "127.0.0.1",
+            "::1",
+            "::ffff:127.0.0.1",
+            "this computer",
+        ] {
             let line = format!("opens tcp connections to port 80 on {this}");
             let found = problem(&line);
             assert!(
@@ -867,7 +892,8 @@ mod tests {
     /// domain itself, nor a name that only ends or starts alike, nor an address.
     #[test]
     fn a_rule_covers_its_computers_and_no_others() {
-        let beneath = opens("opens TCP connections to ports 80 and 443 on any subdomain of example.org");
+        let beneath =
+            opens("opens TCP connections to ports 80 and 443 on any subdomain of example.org");
         for inside in ["www.example.org", "a.b.example.org", "WWW.Example.ORG."] {
             assert!(beneath.covers(&computer(inside), 80, None), "{inside}");
         }
@@ -886,7 +912,8 @@ mod tests {
         assert!(named.covers(&computer("example.com."), 443, None));
         assert!(!named.covers(&computer("www.example.com"), 443, None));
         // The computer an argument names: that one, as lengua spells it, and no other.
-        let typed = opens("opens TCP connections to port 80 on the computer its first argument names");
+        let typed =
+            opens("opens TCP connections to port 80 on the computer its first argument names");
         let args = ["main.wasm".to_owned(), "Example.NET".to_owned()];
         assert!(typed.covers(&computer("example.net"), 80, Some(&args)));
         assert!(!typed.covers(&computer("example.org"), 80, Some(&args)));
@@ -904,7 +931,16 @@ mod tests {
     /// covers the other.
     #[test]
     fn every_spelling_of_a_computer_is_one_spelling() {
-        for nothing in ["2130706433", "127.1", "0x7f.1", "0177.0.0.1", "[::1]", "a b", "", "fe80::1%eth0"] {
+        for nothing in [
+            "2130706433",
+            "127.1",
+            "0x7f.1",
+            "0177.0.0.1",
+            "[::1]",
+            "a b",
+            "",
+            "fe80::1%eth0",
+        ] {
             assert_eq!(spelled(nothing), Err(Unspelled::NotAName), "{nothing}");
         }
         for this in [
@@ -932,7 +968,14 @@ mod tests {
     /// The threat: the loopback and the private ranges, by any writing of them.
     #[test]
     fn each_address_has_its_class() {
-        for own in ["127.0.0.1", "127.255.255.254", "0.0.0.0", "::1", "::", "::ffff:127.0.0.1"] {
+        for own in [
+            "127.0.0.1",
+            "127.255.255.254",
+            "0.0.0.0",
+            "::1",
+            "::",
+            "::ffff:127.0.0.1",
+        ] {
             assert_eq!(class(address(own)), Class::ThisComputer, "{own}");
         }
         // The loopback carried inside an IPv6 address a gateway or the system sends on.
@@ -958,7 +1001,13 @@ mod tests {
         ] {
             assert_eq!(class(address(private)), Class::Private, "{private}");
         }
-        for many in ["224.0.0.1", "239.255.255.250", "255.255.255.255", "240.0.0.1", "ff02::1"] {
+        for many in [
+            "224.0.0.1",
+            "239.255.255.250",
+            "255.255.255.255",
+            "240.0.0.1",
+            "ff02::1",
+        ] {
             assert_eq!(class(address(many)), Class::Many, "{many}");
         }
         for public in [
@@ -984,8 +1033,18 @@ mod tests {
             vetted("example.org", &public, false),
             Ok(found(&["192.0.2.7", "2001:db8::1"]))
         );
-        for own in ["127.0.0.1", "::1", "0.0.0.0", "::ffff:127.0.0.1", "64:ff9b::7f00:1"] {
-            for mixed in [found(&[own]), found(&["192.0.2.7", own]), found(&[own, "192.0.2.7"])] {
+        for own in [
+            "127.0.0.1",
+            "::1",
+            "0.0.0.0",
+            "::ffff:127.0.0.1",
+            "64:ff9b::7f00:1",
+        ] {
+            for mixed in [
+                found(&[own]),
+                found(&["192.0.2.7", own]),
+                found(&[own, "192.0.2.7"]),
+            ] {
                 // Even a grant of private addresses never reaches this computer.
                 let refused = vetted("evil.example", &mixed, true);
                 assert!(
@@ -994,14 +1053,24 @@ mod tests {
                 );
             }
         }
-        for private in ["10.0.0.1", "169.254.169.254", "192.168.0.1", "fd00::1", "::ffff:10.1.1.1"] {
+        for private in [
+            "10.0.0.1",
+            "169.254.169.254",
+            "192.168.0.1",
+            "fd00::1",
+            "::ffff:10.1.1.1",
+        ] {
             let mixed = found(&["192.0.2.7", private]);
             let refused = vetted("evil.example", &mixed, false);
             assert!(
                 matches!(&refused, Err(Refusal::NotGranted(why)) if why.contains("private network")),
                 "{private}: {refused:?}"
             );
-            assert_eq!(vetted("nas.example", &mixed, true), Ok(mixed.clone()), "{private}");
+            assert_eq!(
+                vetted("nas.example", &mixed, true),
+                Ok(mixed.clone()),
+                "{private}"
+            );
         }
         // The threat: UDP used to reach many computers at once.
         for many in ["255.255.255.255", "224.0.0.251", "ff02::fb"] {
@@ -1031,7 +1100,8 @@ mod tests {
         assert!(!named.reaches_private(&computer("nas.example")));
         let any = opens("opens TCP connections to port 8080 on any computer");
         assert!(!any.reaches_private(&computer("192.168.1.20")));
-        let told = opens("opens TCP connections to port 8080 on any computer, private addresses too");
+        let told =
+            opens("opens TCP connections to port 8080 on any computer, private addresses too");
         assert!(told.reaches_private(&computer("192.168.1.20")));
     }
 

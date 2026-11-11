@@ -36,9 +36,7 @@ pub fn needs(host: &wasi::Function) -> String {
             Allowance::Datagrams => {
                 Some("`- Network: sends UDP datagrams to port N on …`".to_owned())
             }
-            Allowance::Receives => {
-                Some("`- Network: receives UDP datagrams on port N`".to_owned())
-            }
+            Allowance::Receives => Some("`- Network: receives UDP datagrams on port N`".to_owned()),
         })
         .collect::<Vec<_>>()
         .join(" or ")

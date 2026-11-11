@@ -45,6 +45,14 @@
 //! `fd_read`, `$fill` and `sock_recv` read from every file and connection is secret, in this run
 //! or a later one. What goes to standard output or standard error alone doesn't come back.
 //!
+//! What a program opens by itself follows the same lines. The name of a computer it gives
+//! `tcp_open`, `udp_open` or `dns_lookup` isn't data it writes out: the name goes to the resolver
+//! and decides where the program connects, so a secret in it is refused, as a secret port is.
+//! The bytes of a datagram, `udp_send`'s and `udp_send_to`'s, are data, as `sock_send`'s are; and
+//! once a secret has left, what `udp_recv`, `udp_recv_from` and `dns_lookup` write is secret, as
+//! what a connection gives is. Since no branch and no loop's count depends on a secret, neither
+//! does how many connections a program opens, nor when it opens them.
+//!
 //! Lengths and counts aren't secret: what `$fill` reads to the end says it read, what a read of
 //! a file says, the sizes calls write, and where `args_get` puts each argument. One count is:
 //! how many bytes a single `fd_read` of a secret standard input gave, since a terminal gives a

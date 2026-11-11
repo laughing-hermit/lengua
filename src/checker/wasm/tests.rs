@@ -1619,6 +1619,225 @@ fn a_secret_written_to_a_file_or_sent_to_a_peer_is_secret_when_it_comes_back() {
     assert_no(&report, Rule::Secrets);
 }
 
+/// A program that opens a connection by itself, to a computer whose name it holds, for the tests
+/// of what its idea must grant it.
+const OPENER: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (import "lengua_net_1" "tcp_open"
+    (func $tcp_open (param i32 i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1 1)
+  (global $EXIT_OK i32 (i32.const 0))
+  (global $EXIT_FAILED i32 (i32.const 1))
+  (global $HTTP_PORT i32 (i32.const 80))
+  (global $PLAIN i32 (i32.const 0))
+  (global $name i32 (i32.const 1024))
+  (global $name.rosize i32 (i32.const 15))
+  (data (i32.const 1024) "www.example.org")
+  (global $opened i32 (i32.const 2048))
+  (global $opened.size i32 (i32.const 4))
+  (func $main (export "_start")
+    (local $err i32)
+    (block $failed
+      (local.set $err
+        (call $tcp_open (global.get $name) (global.get $name.rosize) (global.get $HTTP_PORT)
+          (global.get $PLAIN) (global.get $opened)))
+      (br_if $failed (local.get $err))
+      (call $proc_exit (global.get $EXIT_OK))
+      unreachable)
+    (call $proc_exit (global.get $EXIT_FAILED))
+    unreachable))
+"#;
+
+/// Rule 3 for what a program opens by itself: lengua's own network functions are imported from
+/// their own module, each with its own type, and only when the idea grants what it opens; no
+/// other module gives a program anything, and a mode is a named constant there too.
+#[test]
+fn rule_3_takes_lenguas_own_functions_only_as_the_idea_grants_them() {
+    // An import is reported on the line of its `func`.
+    let import = line_of(OPENER, "(func $tcp_open (param");
+    let granted = "opens TCP connections to port 80 on any subdomain of example.org";
+    let report = check_with(OPENER, &[], granted);
+    assert_no(&report, Rule::Resources);
+    assert_no(&report, Rule::Constants);
+    // A connection lengua makes before the start grants no connection the program opens, and
+    // neither does a look at a name's addresses.
+    for other in [
+        "",
+        "connects to TCP port 80 on www.example.org",
+        "looks up the addresses of www.example.org",
+        "sends UDP datagrams to port 80 on www.example.org",
+    ] {
+        let report = check_with(OPENER, &[], other);
+        assert_violation(
+            &report,
+            Rule::Resources,
+            import,
+            "it needs `- Network: opens TCP connections to port N on …`",
+        );
+    }
+    let renamed = OPENER.replacen("\"tcp_open\"", "\"tcp_listen\"", 1);
+    let report = check_with(&renamed, &[], granted);
+    assert_violation(
+        &report,
+        Rule::Resources,
+        import,
+        "`lengua_net_1` has no function `tcp_listen`",
+    );
+    // WASI's module has no such function, and no other module has any.
+    for module in ["wasi_snapshot_preview1", "env"] {
+        let moved = OPENER.replacen("\"lengua_net_1\"", &format!("\"{module}\""), 1);
+        let built = unvalidated(&moved);
+        let (uses, network) = crate::idea::constraints(&[], granted).expect("valid constraints");
+        let report = check(
+            &moved,
+            &built,
+            &Context {
+                uses: &uses,
+                network: &network,
+                secrets: &[],
+            },
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|violation| violation.rule == Rule::Resources && violation.line == Some(import)),
+            "{module}: {:#?}",
+            report.lines()
+        );
+    }
+    let typed = OPENER.replacen(
+        "(func $tcp_open (param i32 i32 i32 i32 i32) (result i32))",
+        "(func $tcp_open (param i32 i32 i32 i32 i64) (result i32))",
+        1,
+    );
+    let built = unvalidated(&typed);
+    let (uses, network) = crate::idea::constraints(&[], granted).expect("valid constraints");
+    let report = check(
+        &typed,
+        &built,
+        &Context {
+            uses: &uses,
+            network: &network,
+            secrets: &[],
+        },
+    );
+    assert_violation(&report, Rule::Resources, import, "`tcp_open` takes");
+    // Over TLS or not is a mode, named like any other.
+    let bare = OPENER.replacen(
+        "(global.get $PLAIN) (global.get $opened)",
+        "(i32.const 1) (global.get $opened)",
+        1,
+    );
+    let report = check_with(&bare, &[], granted);
+    assert_violation(
+        &report,
+        Rule::Constants,
+        line_of(&bare, "(call $tcp_open"),
+        "the mode 1 is a bare number",
+    );
+}
+
+/// A program that reads standard input into `$key`, sends `$key` as a datagram to a computer, and
+/// takes the datagram that comes back into `$back`, for the secret rule's tests of what a
+/// program opens by itself.
+const DATAGRAM: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (import "lengua_net_1" "udp_open" (func $udp_open (param i32 i32 i32 i32) (result i32)))
+  (import "lengua_net_1" "udp_send" (func $udp_send (param i32 i32 i32 i32) (result i32)))
+  (import "lengua_net_1" "udp_recv" (func $udp_recv (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1 1)
+  (global $STDIN i32 (i32.const 0))
+  (global $EXIT_OK i32 (i32.const 0))
+  (global $READ_TO_END i32 (i32.const -1))
+  (global $PORT i32 (i32.const 53))
+  (global $name i32 (i32.const 1024))
+  (global $name.rosize i32 (i32.const 10))
+  (data (i32.const 1024) "192.0.2.53")
+  (global $counts i32 (i32.const 1088))
+  (global $counts.size i32 (i32.const 12))
+  (global $key i32 (i32.const 2048))
+  (global $key.size i32 (i32.const 32))
+  (global $back i32 (i32.const 3072))
+  (global $back.size i32 (i32.const 32))
+  (func $main (export "_start")
+    (local $fd i32)
+    (drop
+      (call $fill (global.get $STDIN) (global.get $key) (global.get $key.size)
+        (global.get $READ_TO_END)))
+    (drop
+      (call $udp_open (global.get $name) (global.get $name.rosize) (global.get $PORT)
+        (global.get $counts)))
+    (local.set $fd (i32.load (global.get $counts)))
+    (drop
+      (call $udp_send (local.get $fd) (global.get $key) (global.get $key.size)
+        (i32.add (global.get $counts) (i32.const 4))))
+    (drop
+      (call $udp_recv (local.get $fd) (global.get $back) (global.get $back.size)
+        (i32.add (global.get $counts) (i32.const 8))))
+    (if (i32.load8_u (global.get $back)) (then (nop)))
+    (call $proc_exit (global.get $EXIT_OK))
+    unreachable))
+"#;
+
+/// The secret rule on what a program opens by itself. A datagram's bytes are data a program
+/// sends out, so a secret may be among them, and what comes back is then secret, as on a
+/// connection. A computer's name and a port decide where the program connects, and a name goes
+/// to the resolver besides: a secret in either is refused, so no secret chooses a computer, and
+/// none is told by which computers a program reaches, how many, or when.
+#[test]
+fn a_secret_never_names_a_computer_and_a_datagram_sent_makes_what_comes_back_secret() {
+    let secret = [Source::StandardInput];
+    let uses = ["standard input"];
+    let granted = "sends UDP datagrams to port 53 on 192.0.2.53";
+    let branch = "(if (i32.load8_u (global.get $back)) (then (nop)))";
+    let report = check_secret(DATAGRAM, &uses, granted, &secret);
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(DATAGRAM, branch),
+        "the condition of this `if`",
+    );
+    // With no secret sent, what the computer sends back isn't secret.
+    let sent = "(call $udp_send (local.get $fd) (global.get $key) (global.get $key.size)";
+    assert!(DATAGRAM.contains(sent));
+    let unsent = DATAGRAM.replacen(
+        sent,
+        "(call $udp_send (local.get $fd) (global.get $back) (global.get $back.size)",
+        1,
+    );
+    assert_no(&check_secret(&unsent, &uses, granted, &secret), Rule::Secrets);
+    // The secret as the computer's name: the host reads it, and it isn't data.
+    let named = "(call $udp_open (global.get $name) (global.get $name.rosize) (global.get $PORT)";
+    assert!(DATAGRAM.contains(named));
+    let secret_name = unsent.replacen(
+        named,
+        "(call $udp_open (global.get $key) (global.get $key.size) (global.get $PORT)",
+        1,
+    );
+    let report = check_secret(&secret_name, &uses, granted, &secret);
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(&secret_name, "(call $udp_open (global.get $key)"),
+        "reads a secret in the buffer of argument 1",
+    );
+    // A byte of the secret as the port.
+    let secret_port = unsent.replacen(
+        named,
+        "(call $udp_open (global.get $name) (global.get $name.rosize) (i32.load8_u (global.get \
+         $key))",
+        1,
+    );
+    let report = check_secret(&secret_port, &uses, granted, &secret);
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(&secret_port, "(call $udp_open (global.get $name)"),
+        "argument 3 of this call",
+    );
+}
+
 /// A program that reads standard input with `fd_read` itself, and branches on the error number
 /// and then on how many bytes the read gave, for the secret rule's test of a read's count.
 const COUNT_READ: &str = r#"(module

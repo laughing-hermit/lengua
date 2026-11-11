@@ -1344,6 +1344,66 @@ mod tests {
         assert_eq!(read.clock, ["1735689600"]);
     }
 
+    /// A program that opens connections by itself gets a test's server for each computer its
+    /// steps name, numbered after the connections lengua makes: one step a connection it opens
+    /// there, in order. A computer no rule of the idea covers has no server, and neither has a
+    /// name the idea grants no look at.
+    #[test]
+    fn reads_the_servers_of_what_a_program_opens_by_itself() {
+        let constraints = "- Network: connects to TCP port 8080\n- Network: opens TCP connections \
+                           to port 80 on any subdomain of example.org\n- Network: sends UDP \
+                           datagrams to port 53 on 192.0.2.53\n- Network: looks up the addresses \
+                           of any subdomain of example.org";
+        let ends = "\n- When the program runs\n- Then it prints `x`\n- And it exits with code `0`";
+        let read = table(
+            &format!(
+                "- Given a server on port `8080` that receives `a` and replies `b`\n- And a \
+                 server at `www.example.org` on port `80` that receives `c` and replies `d`\n- \
+                 And a server at `files.example.org` on port `80` that receives `e` and replies \
+                 `f`\n- And a server at `WWW.example.org` on port `80` that receives `g` and \
+                 replies `h`\n- And a computer at `192.0.2.53` on UDP port `53` that receives \
+                 `i` and replies `j`\n- And the addresses `192.0.2.7` for the name \
+                 `www.example.org`\n- And no server at `api.example.org` on port `80`{ends}"
+            ),
+            constraints,
+        );
+        // The idea's own connection is 0. Then the computers its tests stand in for, in the
+        // order its steps first name them: a second step for one is its second connection.
+        let connections: Vec<usize> = read.server.iter().map(|server| server.connection).collect();
+        assert_eq!(connections, [0, 1, 2, 1, 3]);
+        assert_eq!(plain(&read.server[3].receives), "g");
+        let problems = |steps: &str| {
+            let idea = idea_with(&format!("{steps}{ends}"), constraints);
+            example(&idea.behaviors[0], &idea)
+                .expect_err("a problem")
+                .into_iter()
+                .map(|problem| problem.message)
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        let found = problems(
+            "- Given a server at `elsewhere.test` on port `80` that receives `a` and replies `b`",
+        );
+        assert!(
+            found.contains("connects to no TCP port 80 on elsewhere.test"),
+            "{found}"
+        );
+        assert!(
+            found.contains("TCP connections it opens to port 80 on any subdomain of example.org"),
+            "{found}"
+        );
+        let found = problems(
+            "- Given a computer at `192.0.2.54` on UDP port `53` that receives `a` and replies \
+             `b`",
+        );
+        assert!(found.contains("grants no UDP datagrams to port 53"), "{found}");
+        let found = problems("- Given the addresses `192.0.2.7` for the name `example.com`");
+        assert!(
+            found.contains("grants no look at the addresses of `example.com`"),
+            "{found}"
+        );
+    }
+
     #[test]
     fn a_step_it_cant_read_comes_with_its_rewrite() {
         let idea = idea_with(

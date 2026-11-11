@@ -20,11 +20,11 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::oneshot;
 
 use crate::connect::{CONNECT_TIMEOUT, Reach};
+use crate::reach::Stand;
 use crate::runner::{Limits, Run, Trap};
 use crate::supply::Supply;
 use crate::wasm::engine::Setup;
 use crate::wasm::host::policy::Policy;
-use crate::reach::Stand;
 use crate::wasm::job::{
     self, Connection, Done, Ending, Event, Internet, Job, Made, Reached, Request,
 };

@@ -1470,7 +1470,10 @@ impl LenguaServer {
         already_serving(&background, folder)?;
         let receives = spec.policy.reach.get().receives;
         let datagrams = spec.listen.is_none() && receives.is_some();
-        let anywhere = spec.listen.or(receives).is_some_and(|(_, anywhere)| anywhere);
+        let anywhere = spec
+            .listen
+            .or(receives)
+            .is_some_and(|(_, anywhere)| anywhere);
         let (max_file_size, _) = run_file_limits(spec.folder.is_some());
         let limits = background_limits(max_file_size);
         let running = self

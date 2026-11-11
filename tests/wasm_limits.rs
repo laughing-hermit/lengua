@@ -963,6 +963,7 @@ fn a_worker_ends_when_its_server_does() {
         folder: None,
         connections: Vec::new(),
         listen: None,
+        internet: None,
         random: None,
         clock: Vec::new(),
         reversed: false,

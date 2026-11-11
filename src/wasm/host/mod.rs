@@ -1036,12 +1036,7 @@ fn define_net(linker: &mut Linker<Host>) -> wasmtime::Result<()> {
     linker.func_wrap(
         NET_MODULE,
         f.name,
-        move |mut caller: Caller<'_, Host>,
-              fd: i32,
-              buffer: i32,
-              len: i32,
-              out: i32,
-              from: i32| {
+        move |mut caller: Caller<'_, Host>, fd: i32, buffer: i32, len: i32, out: i32, from: i32| {
             answer(&mut caller, f, |memory, host| {
                 open::udp_recv_from(
                     host,
