@@ -408,7 +408,10 @@ made canonical. A program's WebAssembly calls may take 512 KiB of stack, past wh
 Cranelift compiles a module the first time it runs on a machine, for that machine's CPU, and
 Wasmtime's cache keeps it, in the `cache` folder of the plugin's data folder when the agent's
 harness gives one (`PLUGIN_DATA`, or `CLAUDE_PLUGIN_DATA`), else of lengua's own. There is no
-separate compile ahead of time, and the features are one set on every machine.
+separate compile ahead of time, and the features are one set on every machine. That is point 3 of
+the finish line as the owner decided it on 2026-11-11: the same bits on every machine, so proofs
+and tests hold on each, with the machine code compiled for the machine's own CPU. Relaxed SIMD and
+wide arithmetic stay off.
 
 Three setups:
 

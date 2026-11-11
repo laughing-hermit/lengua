@@ -370,16 +370,18 @@ itself is left for the owner ([todo.md](todo.md), W14's test).
 The finish line, seven points in [todo.md](todo.md), isn't reached. The gate passes on no
 runner, and rows this close to level change sides between runs, so shrinking the list alone
 won't make it pass. Some proofs stay "tested, not proven". No run yet compares the proofs'
-verdicts across the five runners. And lengua keeps one set of WebAssembly features on every
-machine, so that every machine computes the same bits, where point 3 asks for each machine's
-fastest: that choice is the owner's. The documents now say what the finish-line run showed
+verdicts across the five runners. Point 3 is settled: the owner decided on 2026-11-11 that it is
+the same bits on every machine, so lengua keeps one set of WebAssembly features everywhere, its
+proofs and tests hold on every machine, and Cranelift compiles each module for the machine's own
+CPU. The documents now say what the finish-line run showed
 (W15). Next:
 
 - **The report to the owner** (W15). The agent's test with the final archive ran on 2026-11-11.
 - **W17b, measured:** z3 as WebAssembly was to replace native z3 only if it gave the same verdicts
   on all five runners with the replayed questions taking at most twice as long. It took 1.70 to
   2.28 times as long and lost a proof on three runners (run 42919127514), so native z3 stays;
-  [todo.md](todo.md) has the numbers.
+  [todo.md](todo.md) has the numbers. The bounded try to build cvc5 as WebAssembly is skipped,
+  by the owner's decision of 2026-11-11, to revisit when Wasmtime or the solvers change.
 - **W16, done:** only main is left of the branches; 28 tips it doesn't hold are kept as `archive/` tags.
 
 After the finish line, four milestones aim to make lengua a replacement for C, C++ and Rust:

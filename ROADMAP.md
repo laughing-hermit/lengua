@@ -362,7 +362,8 @@ most five build runs. *Measured, and the bar isn't met:* run 42919127514 on all 
 the WebAssembly z3 at 1.70 to 2.28 times native's time on the replayed questions, past twice on
 macOS on ARM64 and Windows on ARM64, and a proof lost on three runners. Native z3 stays; the
 build, the host and the measurement are kept at the tag `archive/wip/z3-wasm`. The cvc5 try
-wasn't made, and is the owner's to decide (todo.md).
+is skipped, by the owner's decision of 2026-11-11: z3 missed the bar on four of the five runners,
+and cvc5 would face the same bar. To revisit when Wasmtime or the solvers change (todo.md).
 
 ## W18. Reach: everything possible, nothing implicit
 
