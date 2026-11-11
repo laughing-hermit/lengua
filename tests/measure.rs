@@ -89,7 +89,10 @@ fn a_module_measured_with_an_idea_runs_as_a_checked_program_does() {
         assert_eq!(std::fs::read(&out).expect("its output"), b"5\n");
     };
     measure(false);
-    assert!(!data.join("measured").exists(), "a run with no idea kept a folder");
+    assert!(
+        !data.join("measured").exists(),
+        "a run with no idea kept a folder"
+    );
     measure(true);
     measure(true);
     let kept: Vec<_> = std::fs::read_dir(data.join("measured"))
@@ -98,10 +101,16 @@ fn a_module_measured_with_an_idea_runs_as_a_checked_program_does() {
         .collect();
     assert_eq!(kept.len(), 1, "{kept:?}");
     let folder = &kept[0];
-    assert_eq!(std::fs::read(folder.join("main.wasm")).expect("the module"), wasm);
+    assert_eq!(
+        std::fs::read(folder.join("main.wasm")).expect("the module"),
+        wasm
+    );
     let lock = std::fs::read_to_string(folder.join("lengua.lock")).expect("its lock");
     let hash = lengua::hash::Sha256Hex::of(&wasm);
-    assert!(lock.contains(&format!("module_sha256 = \"{hash}\"")), "{lock}");
+    assert!(
+        lock.contains(&format!("module_sha256 = \"{hash}\"")),
+        "{lock}"
+    );
     let run = || {
         Command::new(server)
             .arg("--data-dir")

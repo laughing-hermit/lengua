@@ -754,7 +754,8 @@ fn runnable(
             wrong.join("; ")
         ));
     }
-    let missing = || format!("There's no {code_file} in {folder}. Write it with the compile skill.");
+    let missing =
+        || format!("There's no {code_file} in {folder}. Write it with the compile skill.");
     let (code, wasm) = if module {
         if stamp.sha256 != stamp.module_sha256 {
             return Err(format!(
@@ -764,7 +765,10 @@ fn runnable(
         }
         (String::new(), Some(files.code.ok_or_else(missing)?))
     } else {
-        (text_of(folder, CODE_FILE, files.code)?.ok_or_else(missing)?, None)
+        (
+            text_of(folder, CODE_FILE, files.code)?.ok_or_else(missing)?,
+            None,
+        )
     };
     let idea_text = text_of(folder, IDEA_FILE, files.idea)?.ok_or_else(|| {
         format!("There's no {IDEA_FILE} in {folder}. Write it with the write-idea skill first.")

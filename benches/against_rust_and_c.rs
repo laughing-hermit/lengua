@@ -664,7 +664,10 @@ impl Runner {
         if let Some(stdin) = &prepared.stdin {
             command.arg("--stdin").arg(stdin);
         }
-        let module = version.program.extension().is_some_and(|kind| kind == "wasm");
+        let module = version
+            .program
+            .extension()
+            .is_some_and(|kind| kind == "wasm");
         if module && !version.unchecked {
             command.arg("--idea").arg(&prepared.idea);
         } else {
@@ -1641,7 +1644,12 @@ fn measure_versions(
     let others: Vec<Version> = versions
         .iter()
         .flatten()
-        .filter(|version| version.program.extension().is_some_and(|kind| kind == "wasm"))
+        .filter(|version| {
+            version
+                .program
+                .extension()
+                .is_some_and(|kind| kind == "wasm")
+        })
         .map(|version| Version {
             unchecked: true,
             ..version.clone()
@@ -2291,7 +2299,10 @@ fn apart_section(out: &mut String, results: &Results) {
     );
     unchecked_section(out, &workloads);
     for (name, apart) in &workloads {
-        for measured in [&apart.lengua, &apart.module].into_iter().chain(&apart.others) {
+        for measured in [&apart.lengua, &apart.module]
+            .into_iter()
+            .chain(&apart.others)
+        {
             if let Some(problem) = &measured.problem {
                 let version = &measured.name;
                 let _ = writeln!(

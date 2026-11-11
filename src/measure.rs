@@ -384,10 +384,11 @@ fn module_folder(data_dir: &DataDir, idea: &[u8], wasm: &[u8]) -> Result<PathBuf
     let key = Key::load_or_create(data_dir).map_err(|error| error.to_string())?;
     let module = Sha256Hex::of(wasm);
     let recorded = crate::trust::idea_hash(idea);
-    let folder = data_dir
-        .path()
-        .join("measured")
-        .join(format!("{}-{}", module.short(), recorded.short()));
+    let folder =
+        data_dir
+            .path()
+            .join("measured")
+            .join(format!("{}-{}", module.short(), recorded.short()));
     let failed = |error: std::io::Error| format!("{}: {error}", folder.display());
     std::fs::create_dir_all(&folder).map_err(failed)?;
     for (name, bytes) in [(IDEA_FILE, idea), (MODULE_FILE, wasm)] {
@@ -401,9 +402,9 @@ fn module_folder(data_dir: &DataDir, idea: &[u8], wasm: &[u8]) -> Result<PathBuf
         .flatten()
         .is_some_and(|lock| {
             lock.idea.sha256 == recorded
-                && lock.code.is_some_and(|code| {
-                    code.sha256 == module && code.module_sha256 == module
-                })
+                && lock
+                    .code
+                    .is_some_and(|code| code.sha256 == module && code.module_sha256 == module)
         });
     if !stamped {
         let lock = Lock {

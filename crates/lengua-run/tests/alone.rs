@@ -163,7 +163,12 @@ impl Checked {
                 .arg("--data-dir")
                 .arg(self.data.path())
                 .arg(self.folder())
-                .args(self.folder().join("main.wasm").is_file().then_some("--module"))
+                .args(
+                    self.folder()
+                        .join("main.wasm")
+                        .is_file()
+                        .then_some("--module"),
+                )
                 .args(words)
                 .current_dir(self.root.path().join("work"))
                 .env_remove("LENGUA_LOG")
@@ -509,11 +514,13 @@ fn a_module_made_elsewhere_runs_with_every_check() {
     );
 
     // Run as a program's folder, it has no main.wat.
-    let program = Command::new(checked.bin().join(
-        Path::new(env!("CARGO_BIN_EXE_lengua-run"))
-            .file_name()
-            .expect("lengua-run's name"),
-    ))
+    let program = Command::new(
+        checked.bin().join(
+            Path::new(env!("CARGO_BIN_EXE_lengua-run"))
+                .file_name()
+                .expect("lengua-run's name"),
+        ),
+    )
     .arg("--data-dir")
     .arg(checked.data.path())
     .arg(&folder)

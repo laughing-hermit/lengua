@@ -709,7 +709,8 @@ Each can be reversed.
 - **The bench runs the other modules as it runs lengua's** (W19): by the same lengua-run, from
   their compiled form under the same key. `measure` hashes a module's file before the run it
   measures, so a module's measured run reads neither its file nor a lock, and lengua's reads
-  and checks its three files. Against a native build, lengua's size is its module's and
+  and checks its three files (reversed on 2026-11-11: see "The gate sets lengua against the
+  other modules run the same way", below). Against a native build, lengua's size is its module's and
   lengua-run's, the program a user needs to run it.
 - **A test changed with the design** (W19): `a_shell_runs_the_module_check_kept` took away the
   module `check` kept, or put another in its place, and held the next run to build main.wat
@@ -780,6 +781,25 @@ Each can be reversed.
     nothing: it has no terminal of its own to ask on, and the user ran it.
   - **The policy carries the grants by reference**, kept once for the process, so it stays a
     small value every caller copies, and a worker gets them with its job.
+- **The gate sets lengua against the other modules run the same way** (decided 2026-11-11, on
+  the owner's standing word to decide and record). The finish line says lengua must beat C,
+  C++ and Rust compiled to WebAssembly under the same runtime. A module lengua runs for a user
+  always pays lengua's checks: the lock and its signature, the hashes of the idea and of the
+  code, and the grants read from the idea. So on the gate's rows against the WebAssembly
+  builds, the other modules' measured run makes them too. `lengua-mcp measure --idea` keeps a
+  folder for the module, with lengua's idea, the module as main.wasm in main.wat's place, and a
+  lengua.lock that the user's key signs, written by the code that writes every lock; the run
+  goes through the code that runs a program (`--module`), with no check left out. Each report
+  still gives the same modules with no lock, in its last section, so nothing is hidden. Rows
+  against native builds are as they were. This reverses W19's "a module's measured run reads
+  neither its file nor a lock".
+- **Two checks at once in a new bundle** (2026-11-11): `two_checks_at_once_leave_a_consistent_index`
+  failed once (42975969779) with one of two records in log.md. The race was the product's.
+  A writer looked for the bundle's root before it took the writers' lock: a look that fell
+  while another writer made the bundle's first index.md found no declared bundle, then found
+  the file, took it for a foreign index, and wrote nothing. The root is now looked at again
+  under the lock, and that look counts (`write_locked`, src/graph/write.rs).
+
 
 ## Roadmap: the pivot's milestones (2026-11-06)
 
@@ -881,9 +901,9 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
     - On Windows a run that lengua-run leaves to lengua-mcp is two processes, tied by a job;
       on a Unix it is one.
     - `two_checks_at_once_leave_a_consistent_index` (tests/graph.rs) failed once on Linux on
-      x86-64 (42975969779), with one of two records in log.md, at a commit where it passed on
-      that runner in another run (42975753981), and it has passed on all five since
-      (43022864858, 43083574889). It records two ideas and runs nothing of W19's.
+      x86-64 (42975969779), with one of two records in log.md. Found and fixed on 2026-11-11:
+      the race was in the product, in a bundle's first write ("Two checks at once in a new
+      bundle", above).
 - **W20. Parallelism.** WebAssembly's threads (shared memory and atomics), as structured
   fork-join alone. The rules show that a program has no data race, so its results stay the same
   on every run, which free threads in C, C++ and Rust can't promise.

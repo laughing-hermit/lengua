@@ -840,8 +840,13 @@ hand; the others use their standard libraries and plain loops their compilers ve
 Each run is a process of its own, measured by `lengua-mcp measure` (`src/measure.rs`): CPU time,
 wall time, peak resident memory and size. lengua's runs go through lengua-run, as a user runs a
 checked program, with every check a run makes. The other modules run by the same lengua-run, in
-the same engine, each from its compiled form kept under the user's key as lengua's is; `measure`
-hashes a module's file before the run it measures, so that run reads neither the file nor a lock.
+the same engine, each from its compiled form kept under the user's key as lengua's is, and with
+the same checks (decided 2026-11-11): `measure --idea` keeps a folder for each, with lengua's
+idea, the module as main.wasm and a lock the user's key signs, and the run reads that lock,
+holds the idea and the module to it and takes its grants from the idea, by the code that runs a
+program. The finish line sets lengua against the other languages under the same runtime, and a
+module lengua runs for a user always pays these checks. Each report's last section gives the
+same modules run with no lock, which the gate doesn't judge.
 `cargo xtask bench` builds lengua-run by itself first, with no compiler in it, as it ships. On
 Linux a program starts from `lengua-spawn`, a small process that forks it, so its peak memory is
 its own. The runs alternate between the versions, in an order shuffled from

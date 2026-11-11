@@ -145,7 +145,7 @@ against its idea, see [check.md](check.md).
 ## Measure it
 
 ```sh
-lengua-mcp [--data-dir <absolute path>] measure [--in <folder>] [--stdin <file>] [--stdout <file>] [--stderr <file>] [--env NAME=value]... [--uses <words>] [--network <line>] [--serve <port> [--clients <n>] [--requests <n>]] [--counters] <program folder, module.wasm or executable> [[--] <argument>...]
+lengua-mcp [--data-dir <absolute path>] measure [--in <folder>] [--stdin <file>] [--stdout <file>] [--stderr <file>] [--env NAME=value]... [--idea <idea.md>] [--uses <words>] [--network <line>] [--serve <port> [--clients <n>] [--requests <n>]] [--counters] <program folder, module.wasm or executable> [[--] <argument>...]
 ```
 
 `lengua-mcp measure` runs a program once, in a process of its own, and prints one line of JSON:
@@ -162,11 +162,24 @@ read misses, on Linux.
 A program folder runs as `lengua-run` runs it, with every check a run makes, or as `lengua-mcp
 run` does where `lengua-run` isn't beside `lengua-mcp`. Any other WebAssembly module of WASI
 preview 1, such as a C, C++ or Rust toolchain makes, runs in lengua's own host, by the same
-program in the same configuration of the engine, with what `--uses` and `--network` allow,
-written as an idea's `- Uses:` and `- Network:` lines are. It runs from its compiled form too,
-kept in the data folder under the user's key as a checked program's is: its first run compiles
-it, and `measure` reads and hashes its file, so the run it measures does neither. A native
-executable runs as a shell
+program in the same configuration of the engine, and from its compiled form, kept in the data
+folder under the user's key as a checked program's is: its first run compiles it, before the
+run `measure` measures. There are two ways to run it:
+
+- With `--idea <idea.md>`, the module runs as lengua runs a program for a user. `measure` keeps
+  a folder for it in the data folder (`measured/`), with that idea.md, the module as
+  `main.wasm` and a `lengua.lock` the user's key signs, which the code that writes every lock
+  writes. The measured run is `lengua-run <that folder> --module`: it reads the lock and
+  checks its signature, hashes idea.md and the module and holds them to the lock, and takes
+  its grants from the idea's `- Uses:` and `- Network:` lines. No check is left out. The lock
+  says that nothing was tested or proven, and `--module` runs only a folder whose lock
+  records its module as the one to run, so a lock made this way never runs a `main.wat`, and
+  a checked program's lock never runs a `main.wasm`. An idea that names a secret isn't run
+  this way.
+- Without `--idea`, the module runs with no lock, with what `--uses` and `--network` allow,
+  written as an idea's lines are; `measure` hashes its file, so the run it measures doesn't.
+
+A native executable runs as a shell
 starts it. With `--serve <port>`, the program is a server: 64 clients (`--clients`) each send
 1,000 lines (`--requests`) of 64 bytes, one at a time, and must get each back in capitals, and
 its time on the clock runs from its first connection to its last answer. The gate that holds
