@@ -2220,6 +2220,18 @@ fn measures_a_vector_vowel_counts_proof_by_its_buffers_size() {
             stepped.as_secs_f64(),
             began.elapsed().as_secs_f64()
         );
+        // By length alone, from the program's start, for what the induction's base costs.
+        let began = Instant::now();
+        let plain = crate::prove::by_length(
+            &module,
+            &blocks[0],
+            &Budget::until(began + seconds, false),
+            None,
+        );
+        println!(
+            "MEASURED vowels, a buffer of {size} bytes, by length alone {:.1} s: {plain:?}",
+            began.elapsed().as_secs_f64()
+        );
     }
 }
 
