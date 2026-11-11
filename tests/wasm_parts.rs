@@ -529,3 +529,115 @@ async fn the_secret_rule_goes_through_a_taken_function() {
     );
     session.service.cancel().await.expect("close the session");
 }
+
+/// crc32's `$crc32_update` with each byte's step written as the eight columns of the CRC's
+/// table, one for each bit of the byte xored into the CRC, in place of eight shifts: the same
+/// function of its arguments, in another form, to measure which form the solvers prove further.
+const CRC32_BY_COLUMNS: &str = "  (func $crc32_update (param $crc i32) (param $at i32) (param \
+$length i32) (result i32)
+    (local $i i32)
+    (local $c i32)
+    (local $m i32)
+    (local $left i32)
+    (if (i32.gt_u (local.get $length) (global.get $CRC32_TEXT))
+      (then (call $assert_fail (i32.const 831)) unreachable))
+    (local.set $c (i32.xor (local.get $crc) (global.get $CRC32_ALL_ONES)))
+    (block $done
+      (local.set $left (global.get $CRC32_TEXT))
+      (loop $byte  ;; bound: 4096
+        (br_if $done (i32.ge_u (local.get $i) (local.get $length)))
+        (if (i32.ge_u (local.get $i) (global.get $CRC32_TEXT))
+          (then (call $assert_fail (i32.const 832)) unreachable))
+        (local.set $m
+          (i32.xor (local.get $c) (i32.load8_u (i32.add (local.get $at) (local.get $i)))))
+        (local.set $c
+          (i32.xor (i32.shr_u (local.get $c) (i32.const 8))
+            (i32.xor
+              (i32.xor
+                (i32.xor
+                  (i32.and (global.get $CRC32_BIT0)
+                    (i32.sub (i32.const 0) (i32.and (local.get $m) (i32.const 1))))
+                  (i32.and (global.get $CRC32_BIT1)
+                    (i32.sub (i32.const 0)
+                      (i32.and (i32.shr_u (local.get $m) (i32.const 1)) (i32.const 1)))))
+                (i32.xor
+                  (i32.and (global.get $CRC32_BIT2)
+                    (i32.sub (i32.const 0)
+                      (i32.and (i32.shr_u (local.get $m) (i32.const 2)) (i32.const 1))))
+                  (i32.and (global.get $CRC32_BIT3)
+                    (i32.sub (i32.const 0)
+                      (i32.and (i32.shr_u (local.get $m) (i32.const 3)) (i32.const 1))))))
+              (i32.xor
+                (i32.xor
+                  (i32.and (global.get $CRC32_BIT4)
+                    (i32.sub (i32.const 0)
+                      (i32.and (i32.shr_u (local.get $m) (i32.const 4)) (i32.const 1))))
+                  (i32.and (global.get $CRC32_BIT5)
+                    (i32.sub (i32.const 0)
+                      (i32.and (i32.shr_u (local.get $m) (i32.const 5)) (i32.const 1)))))
+                (i32.xor
+                  (i32.and (global.get $CRC32_BIT6)
+                    (i32.sub (i32.const 0)
+                      (i32.and (i32.shr_u (local.get $m) (i32.const 6)) (i32.const 1))))
+                  (i32.and (global.get $CRC32_BIT7)
+                    (i32.sub (i32.const 0)
+                      (i32.and (i32.shr_u (local.get $m) (i32.const 7)) (i32.const 1)))))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (local.set $left (i32.sub (local.get $left) (i32.const 1)))
+        (br_if $byte (local.get $left))))
+    (i32.xor (local.get $c) (global.get $CRC32_ALL_ONES)))
+";
+
+/// The eight columns' constants, in place of the polynomial and the count of a byte's bits.
+const CRC32_COLUMNS: &str = "  (global $CRC32_BIT0 i32 (i32.const 0x77073096))
+  (global $CRC32_BIT1 i32 (i32.const 0xee0e612c))
+  (global $CRC32_BIT2 i32 (i32.const 0x076dc419))
+  (global $CRC32_BIT3 i32 (i32.const 0x0edb8832))
+  (global $CRC32_BIT4 i32 (i32.const 0x1db71064))
+  (global $CRC32_BIT5 i32 (i32.const 0x3b6e20c8))
+  (global $CRC32_BIT6 i32 (i32.const 0x76dc4190))
+  (global $CRC32_BIT7 i32 (i32.const 0xedb88320))
+";
+
+/// How far crc32's proofs go with a build's full five minutes, for the part as it ships and for
+/// the same function by columns: each proof's line is printed, for a person to read. Neither
+/// form is asserted proven; both must be done, their tests passed.
+#[tokio::test]
+#[ignore = "measures crc32's proofs over five minutes a form: by hand, or on CI's dispatch"]
+async fn crc32_s_proof_with_its_full_time() {
+    let session = Session::proving_for(Protocol::Discover, 300).await;
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/crc32");
+    let shipped = example("crc32", "main.wat");
+    let columns = changed(
+        &changed(
+            &changed(
+                &shipped,
+                &function(&shipped, "crc32_update"),
+                CRC32_BY_COLUMNS,
+            ),
+            "  (global $CRC32_POLY i32 (i32.const 0xedb88320))\n",
+            CRC32_COLUMNS,
+        ),
+        "  (global $CRC32_BITS i32 (i32.const 8))\n",
+        "",
+    );
+    for (name, code) in [("as shipped", &shipped), ("by columns", &columns)] {
+        let program = Program::new();
+        session
+            .settle_parts(&program, &folder)
+            .await
+            .expect("decimal, which crc32 builds on, is done");
+        program.write("idea.md", &example("crc32", "idea.md"));
+        program.write("main.wat", code);
+        session.record(&program).await;
+        let report = session.settle(&program).await;
+        println!("CRC {name}: state {}", report["state"]);
+        for field in ["problems", "proofs"] {
+            for line in lines(&report, field) {
+                println!("CRC {name}: {field}: {line}");
+            }
+        }
+        assert_eq!(report["state"], "done", "{name}: {report}");
+    }
+    session.service.cancel().await.expect("close the session");
+}
