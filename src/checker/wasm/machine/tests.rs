@@ -465,7 +465,7 @@ fn secret_equal_s_machine_code_passes() {
 /// Code the address map gives no operator is held too, in a function that computes with a
 /// secret: what the engine's optimizer made anew may be made from a secret's operator. Here
 /// `lea rax, [rip+0]` stands between the code of two operators with none of its own. It is
-/// refused beside the operator that takes a secret before it, or the first after it, and passes
+/// refused beside the first operator after it that takes a secret, or the last before it, and passes
 /// when no operator of the function takes one. A function's first stretch, its entry, and its
 /// last, its constants, aren't read.
 #[test]
@@ -477,7 +477,13 @@ fn code_with_no_operator_is_held_in_a_function_that_computes_with_a_secret() {
             0x72, 0x00, 0x31, 0xC8, 0x48, 0x8D, 0x05, 0x00, 0x00, 0x00, 0x00, 0x31, 0xC8, 0x06,
         ],
         functions: vec![(0, 14)],
-        map: vec![(0, None), (2, Some(10)), (4, None), (11, Some(20)), (13, None)],
+        map: vec![
+            (0, None),
+            (2, Some(10)),
+            (4, None),
+            (11, Some(20)),
+            (13, None),
+        ],
     };
     assert!(judge(Cpu::X86_64, &code, &[]).findings.is_empty());
     for (offset, beside) in [(10, 10), (20, 20)] {
@@ -518,7 +524,10 @@ fn dump(wasm: &[u8], taken: &[Taken]) -> String {
             if at < start || at >= end {
                 continue;
             }
-            let stop = code.map.get(index + 1).map_or(end, |(next, _)| (*next).min(end));
+            let stop = code
+                .map
+                .get(index + 1)
+                .map_or(end, |(next, _)| (*next).min(end));
             let name = operator
                 .and_then(|offset| taken.iter().find(|taken| taken.offset == u64::from(offset)))
                 .map_or("", |taken| taken.name.as_str());
@@ -559,7 +568,9 @@ fn a_lane_shift_the_optimizer_makes_anew_is_refused_where_its_code_reads_a_table
         let first = line_of(&text, "(v128.store (global.get $text)");
         assert!(
             refused.iter().any(|violation| {
-                violation.problem.contains("the address of a table in the code")
+                violation
+                    .problem
+                    .contains("the address of a table in the code")
                     && violation
                         .line
                         .is_some_and(|line| (first..first + 3).contains(&line))

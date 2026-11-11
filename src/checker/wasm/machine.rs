@@ -277,7 +277,8 @@ pub fn judge(cpu: Cpu, code: &Code, taken: &[Taken]) -> Judged {
         // The code made for each operator that takes a secret.
         let mut secret: Vec<(usize, &Taken)> = Vec::new();
         for (index, (_, operator)) in entries.iter().enumerate() {
-            let found_taken = operator.and_then(|offset| by_offset.get(&u64::from(offset)).copied());
+            let found_taken =
+                operator.and_then(|offset| by_offset.get(&u64::from(offset)).copied());
             let Some(taken) = found_taken else {
                 continue;
             };
@@ -300,14 +301,14 @@ pub fn judge(cpu: Cpu, code: &Code, taken: &[Taken]) -> Judged {
         // but the function's entry, which comes first, and the constants it ends with. What the
         // engine's optimizer makes anew from a function's operators is there, and may be made
         // from one that takes a secret, so it is held as code that computes with one, and found
-        // beside the nearest such operator before it, or else the first after it.
+        // beside the first such operator after it, which is most often the one that takes what
+        // the code computes, or else the last before it.
         for (index, (_, operator)) in entries.iter().enumerate() {
             let inside = index > 0 && index + 1 < entries.len();
             let beside = secret
                 .iter()
-                .rev()
-                .find(|(at, _)| *at < index)
-                .or_else(|| secret.first());
+                .find(|(at, _)| *at > index)
+                .or_else(|| secret.last());
             let (true, None, Some((_, taken))) = (inside, operator, beside) else {
                 continue;
             };

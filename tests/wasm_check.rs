@@ -1353,7 +1353,10 @@ async fn the_machine_code_of_a_secret_idea_is_checked_on_this_cpu() {
         // The attester refuses it the same way.
         let (code, said) = attest(program.path());
         assert_ne!(code, Some(0), "{said}");
-        assert!(said.contains("on x86-64, ") && said.contains(table), "{said}");
+        assert!(
+            said.contains("on x86-64, ") && said.contains(table),
+            "{said}"
+        );
     } else {
         assert_eq!(report["state"], "done", "{report}");
         assert!(any_line(&report["tests"], &kept), "{report}");
