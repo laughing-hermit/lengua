@@ -464,6 +464,77 @@ What was built:
    five parts joined the mutation test, and every program built on parts goes from its
    request to done with the others.
 
+What the proofs cover, each part checked alone on Linux on x86-64 with a minute for all of a
+build's proofs (runs 43093485583, 43099955038 and 43099968034), and each question's "impossible"
+counted only where both solvers gave it, or the terms settled it with no solver:
+
+| Program | Proven for every input in its range | Proven to a length, or tested |
+|---|---|---|
+| decimal (part) | every generated test: a number of up to 19 digits read, negated and written | |
+| lines (part) | every generated test: two lines of up to 40 bytes each | |
+| bytes (part) | every generated test: two lines of up to 40 bytes, and every pair of up to 3 | |
+| sort64 (part) | the tests of its errors and of a write that fails | with numbers from -999 to 999 and five minutes: two numbers in order proven, both solvers; three numbers tested, not proven (time ran out at 55 of 216 input combinations) |
+| crc32 (part) | the test of input that is too long | its CRC: a text of 1 byte in a minute, and of 2 characters in five minutes, both solvers; tested beyond |
+| sum | every generated test: two and three numbers of up to ten digits | |
+| checksums | the test of input that is too long | each line's CRC: a line of 1 byte of 24, tested beyond |
+
+A proof of a part is of the part's own program. Where a line says "the proof never ran" a
+function, as the tests of errors do, that function isn't in what the test proves.
+
+Its runs, each a dispatch of ci.yml on the branch, on Linux on x86-64 unless it says more:
+- 43093477020 (the new tests and the library's, at b6944a1): clippy passed and the library's 45
+  tests of the contract, the fields and the lock passed; two of the four tests of
+  `tests/wasm_parts.rs` failed, on lines.
+- 43093485583 (decimal, lines and crc32 checked alone, at b6944a1): decimal and crc32 done;
+  lines refused, since `check` took its functions' parameter `$text` for the part's region
+  `$text`. Fixed at 07ecbf6: a function's globals and calls are read from its instructions.
+- 43097214788, 43097220490, 43097226620, 43097993778 and 43098018741: none started. GitHub
+  ended each as a startup failure with no job, between 20:38 and 20:50 UTC, as it did a run of
+  another branch; runs dispatched from 21:04 on started.
+- 43099945232 (the new tests and the library's, at ad1e8f3): the library's 50 tests and the six
+  of `tests/wasm_parts.rs` passed.
+- 43099955038 (lines, bytes and sort64 checked alone, at ad1e8f3) and 43099968034 (sum and
+  checksums): all five done. sort64's two tests of numbers in order ran out of time, at 29 of
+  8,000 and 98 of 400 input combinations, with numbers of up to ten digits; its idea now takes
+  numbers from -999 to 999.
+- 43101505066 (crc32's proofs with five minutes, as shipped and by columns, at 6b720ff): both
+  forms done and both proven as far, 2 characters; the measure is with what is still open.
+- 43105850263: ran no test, since it was dispatched before its commit reached GitHub.
+- 43109375110 (sort64's proofs with five minutes, at b33ba00): two numbers in order proven,
+  three not, as the table says.
+
+Still open from it, for the owner:
+- **A part's proof isn't used in the programs built on it.** The prover follows each taken
+  function again in each program. What it would take is with the decisions (W21's parts): a
+  contract that states what a function computes, a proof of the body against it for every
+  argument and every memory, and the prover's use of it at each call.
+- **crc32 is tested, not proven, past two characters.** The program's CRC, made by shifts and
+  xors, and the formula's, a chain of CRC steps, are two terms of one number, and each is
+  printed in decimal. In a minute the proof covers a text of 1 byte. In five minutes (run
+  43101505066) it covers 2 characters of the short test's 64, each question confirmed by z3
+  and cvc5, and 1 byte of the long test's 4096; past that z3 runs out of time. The same
+  function written as the eight columns of the CRC's table, in place of eight shifts, got
+  exactly as far in that run, so the part keeps its shifts. A rule in the model that reads
+  a CRC step out of a program's operations, as it reads a count, would make the two one
+  term.
+- **sort64 is proven for two numbers and tested for more.** Three numbers from -999 to 999
+  ran out of five minutes at 55 of 216 input combinations (run 43109375110): each takes the
+  solvers through the six orders three numbers can have. Arrays of 4 to 256 numbers have no
+  test with a formula at all, since the test format has no formula for a sorted list of
+  numbers: the part's tests sort two and three.
+- **Parts not written**: a hash table, SHA-256 (the prover doesn't model it, so it would be
+  tested, not proven), the lines of an HTTP request, a sort faster than by selection, JSON,
+  compression and dates.
+- **Fixed limits**: 20 bytes for a number, 4096 for a text, 256 numbers for a sort. A part
+  whose sizes its caller sets needs a contract with a size in it, and rules that follow one.
+- **A table inside a part**: a taken function names no region, so a part can't bring read-only
+  data with it. crc32 pays for that with eight steps a byte.
+- **Parts of parts**: a function a part took from another part can't be offered on. A program
+  names every part it takes from.
+- **The library reaches a user by a copy the agent makes** from the skill's assets. Nothing
+  fetches a part, and nothing tells a user that a newer lengua ships a newer part.
+- **The attester doesn't hold a program to its parts**: `lengua-mcp check` reads one folder.
+
 ### What the permission checks refused
 
 Claude Code's permission checks refused these actions. Each refusal was taken as given, with

@@ -22,9 +22,9 @@ Look for a part before you write a routine. The library's parts are in this skil
 |---|---|---|---|
 | [decimal](../assets/parts/decimal/idea.md) | `$decimal_parse (at, length, into)`, `$decimal_format (value, into)` | Read a whole number from decimal text, and write one as decimal text | A number from -9223372036854775807 to 9223372036854775807; a text of at most 20 bytes |
 | [lines](../assets/parts/lines/idea.md) | `$lines_read (fd, text)`, `$lines_end (text, from, length)` | Read all of an input into memory, and find where each line ends | A text of at most 4096 bytes; one byte more says the input is longer |
-| [crc32](../assets/parts/crc32/idea.md) | `$crc32_update (crc, at, length)` | The CRC-32 of zlib, gzip and PNG, a piece at a time | At most 4096 bytes a call; a longer text takes a call for each piece |
+| [crc32](../assets/parts/crc32/idea.md) | `$crc32_update (crc, at, length)` | The CRC-32 of zlib, gzip and PNG, a piece at a time | At most 4096 bytes a call; a longer text takes a call for each piece. Tested, not proven past 2 characters |
 | [bytes](../assets/parts/bytes/idea.md) | `$bytes_equal (a, b, length)` | Say if two runs of bytes are the same | At most 4096 bytes a call; it stops at the first byte that differs, so it is not for secrets |
-| [sort64](../assets/parts/sort64/idea.md) | `$sort64 (at, count)` | Sort whole numbers of 64 bits where they are, from the smallest to the largest | At most 256 numbers a call; about 33000 steps for 256; its branches follow the numbers, so it is not for secrets |
+| [sort64](../assets/parts/sort64/idea.md) | `$sort64 (at, count)` | Sort whole numbers of 64 bits where they are, from the smallest to the largest | At most 256 numbers a call; about 33000 steps for 256; its branches follow the numbers, so it is not for secrets. Proven for two numbers, tested for three |
 
 Each part's `idea.md` has the whole contract: what each argument is, what the function gives,
 and what stops the program. A part's limits are fixed: a function reaches a fixed number of
@@ -102,6 +102,13 @@ part's own lock records of its proofs. lengua.lock records each part with the ha
 When a part changes, check the part again, then copy its functions again.
 
 ## What is proven
+
+How far each part of the library is proven, by its own program, on lengua's runners: `decimal`,
+`lines` and `bytes` for every input in their ideas' ranges. `crc32` is tested, not proven: its
+proof covers a text of 1 byte in a minute and of 2 characters in five, and longer texts are
+only tested. `sort64` is proven for two numbers in five minutes and tested for three; its tests
+sort no more than three. `check` on a part says what
+holds on this computer.
 
 A part's proofs are of the part's own program, for the inputs its idea gives: `check` on the
 part says how far they go, and the `parts` line of a program built on it repeats what the part's

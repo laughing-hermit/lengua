@@ -450,6 +450,10 @@ the same) and `sort64` (up to 256 whole numbers of 64 bits, sorted where they ar
 `examples/sum` and `examples/checksums` are built on them, and both skills teach an agent to
 look for a part first.
 
+*Proven, each by its own program:* decimal, lines and bytes for every input in their ranges, and
+so `examples/sum`; sort64 for two numbers in order, three tested; crc32 for a text of 2
+characters in five minutes, tested beyond, and so `examples/checksums`.
+
 What it doesn't do yet: the prover proves a taken function again in each program, since a
 contract states what a function reaches and not what it computes, so a program built on parts
 is no faster to prove; a part's limits are fixed, 20 bytes for a number, 4096 for a text and

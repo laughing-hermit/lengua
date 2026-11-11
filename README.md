@@ -212,8 +212,9 @@ What it doesn't promise:
   module, which another runtime can run when the program reaches only standard streams and
   files, with none of these checks behind it.
 - **Not every proof finishes.** Some tests stay "tested, not proven": sorts and word tallies over
-  8 bytes, SHA-256 and AES-128 (the proof doesn't model them), a server that waits on its
-  connections with `poll_oneoff`, a program that opens its own connections, sends datagrams or
+  8 bytes, SHA-256 and AES-128 (the proof doesn't model them), a CRC-32 a program computes
+  itself past two characters of text (the library's `crc32` among them), a server that waits on
+  its connections with `poll_oneoff`, a program that opens its own connections, sends datagrams or
   looks up names (the model follows only the connections made before the start), and whatever
   runs out of time. A stream is proven for every length by induction over its read loop only
   where every final piece of up to a buffer-full is proven in the proof's time; otherwise it is
@@ -446,7 +447,9 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
   mechanism (a part's contract, the copy `check` holds to the part, the lock's record) and five
   parts, `decimal`, `lines`, `crc32`, `bytes` and `sort64`, with two programs on them. Left:
   the prover proves a taken function again in each program, and hash tables, SHA-256, HTTP, a
-  faster sort, JSON, compression and dates have no part.
+  faster sort, JSON, compression and dates have no part. `decimal`, `lines` and `bytes` are
+  proven for every input in their ranges; `sort64` for two numbers and `crc32` for 2
+  characters of text, each tested beyond.
 - **W22, scale; W23, working with other code; W24, tools:** what a programming language has
   that lengua still lacks ([todo.md](todo.md)).
 

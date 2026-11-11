@@ -253,6 +253,11 @@ reaches a fixed number of bytes whatever length it is given, so each part states
 takes: 20 bytes for a number, 4096 for a text and 256 numbers for a sort. The library's
 assertions are numbered from 800, each part its own.
 
+How far each is proven, by its own program on lengua's runners (todo.md has the runs): `decimal`,
+`lines` and `bytes` for every input in their ideas' ranges; `sort64` for two numbers, with three
+tested; `crc32` for a text of 2 characters in five minutes, and tested beyond. `examples/sum` is
+proven for every input in its range, and `examples/checksums` as far as crc32.
+
 ## The rules
 
 The rules are NASA's Power of 10, adapted to WebAssembly, with eight memory rules
