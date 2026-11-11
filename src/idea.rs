@@ -5211,7 +5211,10 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         }
         assert!(compared >= 43, "only {compared} ideas parsed");
         assert!(secret >= 1, "no shipped idea names a secret");
-        assert!(stood >= 1, "no shipped idea's tests stand in for a computer");
+        assert!(
+            stood >= 1,
+            "no shipped idea's tests stand in for a computer"
+        );
     }
 
     /// grants takes a `- Uses:` line only where parse does, in `# Constraints` outside code

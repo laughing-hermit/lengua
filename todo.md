@@ -350,8 +350,12 @@ What was built:
    redirect to a computer it learns from a response and is refused one its idea doesn't name.
 
 Still open from it, for the owner:
-- **No test was seen failing before its defence**: the defences and their tests were written
-  together. The review says which assertion fails without each.
+- **The defences' tests were seen failing only afterwards**: the defences and their tests were
+  written together, so one commit took the defences out (20328da) and the next put them back
+  (ac6b05e). On that commit 17 of the tests failed (run 43037211691, on Linux on x86-64,
+  cancelled after the library's tests, since the pool-level test hung there for a fault of its
+  own, fixed since). Not shown failing: that a name refused for its addresses reads as a name
+  with none, which came after that run, and `examples/follow`'s refused redirect.
 - **Not proven**: a program that imports from `lengua_net_1` has no proof at all, of anything.
 - **The real network has no test on a runner**: a test's own servers stand in for every
   computer, and the resolver in lengua's own tests is the test's. The system's resolver, and TLS
