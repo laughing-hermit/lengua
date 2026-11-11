@@ -393,7 +393,10 @@ crosses for 300 seconds. The checker's import rule, the secret rule, the test fo
 test's own servers by computer and port, datagrams, and names' addresses), `check`'s and `run`'s
 `may_reach`, the skills, a client template and the example `follow` came with it. The prover
 refuses such a program with the reason: tested, not proven. The threat cases and the test that
-holds each are in docs/reviews/reach-2026-11-11.md. *Verified by:* todo.md, "W18's network".
+holds each are in docs/reviews/reach-2026-11-11.md. *Verified by:* the suite on all five
+runners at ca87111, with format and the gate green (43049640420); 17 of the defences' tests
+failing on the commit that took the defences out (43037211691); todo.md, "W18's network", has
+every run.
 What is left of W18: files anywhere the user names, starting named programs, and the terminal.
 
 ## W19. Native speed: a lean runner and native builds

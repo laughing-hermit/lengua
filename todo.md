@@ -349,6 +349,28 @@ What was built:
    host.md, wasm.md and dialect, `client-template.wat`, and `examples/follow`, which follows a
    redirect to a computer it learns from a response and is refused one its idea doesn't name.
 
+Its runs, each a dispatch of ci.yml on the branch:
+- 43030728017 (compile, Linux on x86-64): the library built and clippy passed; a test file
+  lacked a new field of the job, fixed.
+- 43032866096 (the new tests and every program, Linux on x86-64): the library's 29 tests of
+  the grants, the host's calls, the rules and the steps passed, and `examples/follow` went
+  from its request to done with the other programs of `examples/` and `tests/fixtures`.
+- 43036701281 (the suite, Linux on x86-64): two failures, both fixed. The test that a run's
+  grants are what `check`'s parse finds took the computers an idea's tests stand in for as
+  grants, which they aren't; and write-idea's SKILL.md had grown past the 500 lines a skill
+  keeps to, so the network a program chooses has a reference page of its own.
+- 43037211691 (the defences taken out, Linux on x86-64): 17 of the tests failed, as above.
+- 43038028884 (compile, Linux on x86-64): clippy passed with the tests added since.
+- 43040160006: cancelled, for the pool-level test's fault that 43037211691 showed.
+- 43043307755 (the suite, Linux on x86-64, at 3a857b5): every test passed, 530 of the library
+  and every test file, `tests/wasm_reach.rs` among them.
+- 43049374626: cancelled two minutes in, to add the test of TLS on a connection a program
+  opened before the five systems ran.
+- 43049640420 (the suite on all five systems, at ca87111): format, the five test jobs and the
+  gate passed. On each of Linux on x86-64 and ARM64, macOS on ARM64 and Windows on x86-64 and
+  ARM64, the host's ten tests of what a program opens, the TLS test, the four of
+  `tests/wasm_reach.rs`, every template and every program from its request to done passed.
+
 Still open from it, for the owner:
 - **The defences' tests were seen failing only afterwards**: the defences and their tests were
   written together, so one commit took the defences out (20328da) and the next put them back
