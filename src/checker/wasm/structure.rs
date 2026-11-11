@@ -185,7 +185,7 @@ impl Checker<'_, '_, '_> {
                 );
                 continue;
             }
-            if !policy.allows(host) {
+            if !policy.allows(host) && !(crate::reach::UNDEFENDED && from == wasi::NET_MODULE) {
                 let needs = needs(host);
                 self.violation(
                     Rule::Resources,

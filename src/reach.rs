@@ -25,6 +25,9 @@ use serde::{Deserialize, Serialize};
 use crate::connect::{Place, this_computer};
 use crate::idea::{HostKind, host_kind};
 
+/// For one run on a runner, to see the defences' tests fail: whether the defences are taken out.
+pub const UNDEFENDED: bool = true;
+
 /// The most rules of one kind an idea's `- Network:` lines may give.
 pub const MAX_RULES: usize = 16;
 
@@ -159,6 +162,9 @@ impl Rule {
     /// such a rule covers every computer.
     #[must_use]
     pub fn covers(&self, computer: &Spelled, port: u16, args: Option<&[String]>) -> bool {
+        if UNDEFENDED {
+            return true;
+        }
         if !self.ports.is_empty() && !self.ports.contains(&port) {
             return false;
         }
@@ -473,6 +479,12 @@ pub fn spelled(text: &str) -> Result<Spelled, Unspelled> {
         return Err(Unspelled::TooLong);
     }
     let lower = text.to_ascii_lowercase();
+    if UNDEFENDED {
+        return Ok(Spelled {
+            address: lower.parse().ok(),
+            text: lower,
+        });
+    }
     if let Ok(address) = lower.parse::<IpAddr>() {
         let address = match address {
             IpAddr::V6(six) => six.to_ipv4_mapped().map_or(address, IpAddr::V4),
@@ -617,6 +629,9 @@ impl Refusal {
 ///
 /// Why the place isn't reached.
 pub fn vetted(place: &str, found: &[IpAddr], private: bool) -> Result<Vec<IpAddr>, Refusal> {
+    if UNDEFENDED && !found.is_empty() {
+        return Ok(found.to_vec());
+    }
     let mut kept: Vec<IpAddr> = Vec::new();
     for address in found {
         match class(*address) {

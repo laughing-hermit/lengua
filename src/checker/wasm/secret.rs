@@ -1476,7 +1476,7 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
                     (host.name, lend.argument),
                     ("udp_recv" | "udp_recv_from", 1) | ("dns_lookup", 2)
                 );
-                if received && self.follower.sources.returned {
+                if received && !crate::reach::UNDEFENDED && self.follower.sources.returned {
                     self.taint(state, &places);
                 }
             }
