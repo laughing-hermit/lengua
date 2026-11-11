@@ -435,7 +435,10 @@ page, and three examples came with it: `copy`, `computer` and `key`. The prover 
 program with the reason: tested, not proven. The threat cases and the test that holds each are
 in docs/reviews/reach-2-2026-11-11.md. What it leaves: a started program that works in the
 user's folder, pipes between started programs, an environment for one, and a step of a test for
-each test alone; todo.md, "W18's second part", has each with why. *Verified by:* RUNS
+each test alone; todo.md, "W18's second part", has each with why. *Verified by:* the suite on all
+five runners at 3a759bc, with format and the gate green (43098886771); 23 of the defences' tests
+failing on the commit that took the defences out (43084696723); the mutation test on
+`examples/follow` and the three new examples (43093511750); todo.md has every run.
 
 ## W19. Native speed: a lean runner and native builds
 

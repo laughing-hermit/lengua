@@ -479,7 +479,50 @@ What was built:
     asks the system's own resolver for `localhost`, which needs no network.
 
 Its runs, each a dispatch of ci.yml on the branch:
-RUNS
+- 43078336636 (compile; Linux on x86-64, macOS on ARM64, Windows on x86-64, at 62007ea): clippy
+  passed and the tests built on all three; the format job gave its patch.
+- 43080279871 (the tests named for the three grants, on the same three systems, at 796e2a9):
+  the library's tests of the grants, the host's calls and the terminal passed on all three (45,
+  45 and 44, the one fewer on Windows a test of a link that Linux and macOS can make), and
+  `examples/copy` and `examples/computer` ran from a shell and through the `run` tool, the
+  second with each system's own `hostname` and `whoami`. Two faults: `examples/key`'s idea
+  named a parameter from standard input, which `the terminal` doesn't give a parameter; and on
+  macOS a terminal put back as it was read back with one more flag, `PENDIN`, the system's own
+  note that typed input waits, so the two tests of lengua-os that compare modes failed there.
+- 43080274426 (the library, `tests/wasm_named.rs` and every program; Linux on x86-64, at
+  796e2a9): 566 of the library's tests passed and 2 failed, the key idea's fault and a test of
+  the checker that asked for `file_open`'s line where a folder's line was there, which lets a
+  program import it.
+- 43084292537 (the library, `tests/wasm_named.rs`, every program, the templates and the skills;
+  Linux on x86-64, at 28bd12b): every test passed: 569 of the library, every program of
+  `examples/` and `tests/fixtures` from its request to done, the nine templates, the three runs.
+- 43084696723 (the defences taken out, commit 502060c on `wip/reach-2-off`; Linux on x86-64):
+  23 of the tests failed, as the review lists.
+- 43085916748 (the mutation test, `examples/follow` and the three new examples; Linux on
+  x86-64, at 28bd12b): of follow's eight mutants four broke a rule and four failed a test. The
+  three new examples had seven that passed every test, each judged: `tests/mutation.rs` names
+  two that change nothing an idea can see and two that no test can reach, and
+  `examples/computer` lost the constant the other three were of.
+- 43088347062 (the same tests, with the faults fixed; macOS on ARM64 and Windows on x86-64, at
+  7f7375a): they passed on both, lengua-os's tests of a terminal's mode on macOS and of a
+  console's mode and a job on Windows among them.
+- 43089291308 (the terminal's tests; Linux on x86-64 and macOS on ARM64, at 82ec0c1): on Linux
+  `examples/key` ran from a shell at a pseudo-terminal, got its key with no Enter and left the
+  terminal as it was, and the same on macOS. The macOS job is marked failed all the same: its
+  tests passed, and its last step, which keeps the logs, couldn't upload them (GitHub
+  answered with errors that hour).
+- 43089522661 and 43093511750 (the mutation test again; Linux on x86-64, at 9bb836a and at
+  3a759bc): the first found two more of `examples/computer` that change nothing an idea can
+  see, a region of bytes nothing reads and the last region, each moved by one byte; with them
+  named, the test passed. Of the 29 mutants of the four programs, 12 broke a rule, 11 failed
+  a test, and `tests/mutation.rs` names the other 6 with why none is caught.
+- 43096759967: never started (GitHub's own failure at the run's start).
+- 43098886771 (the suite on all five systems, at 3a759bc): format, the five test jobs and the
+  gate passed. On each of Linux on x86-64 and ARM64, macOS on ARM64 and Windows on x86-64 and
+  ARM64: the library's tests, the three examples and every other program from its request to
+  done, the nine templates, and the runs of `tests/wasm_named.rs`, with each system's own
+  `hostname` and `whoami` started; on the two Linux runners and macOS, the run at a
+  pseudo-terminal too.
 
 Still open from it, for the owner:
 - **A started program can't work on the user's folder.** It runs in an empty folder of
@@ -500,7 +543,23 @@ Still open from it, for the owner:
   of its own, or closes its output and stays, is not ended.
 - **`SIGKILL` restores no terminal**, and the mouse and a change of the window's size aren't
   given.
-- **Never run on a runner against the real thing**: NEVER_RUN
+- **Never run on a runner against the real thing**:
+  - The terminal on Windows, from a program: lengua-os's functions set a console's mode, put it
+    back and read its size against a new console of the test's own, but `lengua-mcp run` has
+    never run at a real console there, so `term_raw` from a program, the keys as a terminal's
+    sequences and the handler for the console's events are untested on Windows. On Linux and
+    macOS a run at a pseudo-terminal is tested (`tests/wasm_named.rs`).
+  - Of the signals, `SIGTERM` alone: `SIGINT`, `SIGHUP` and `SIGQUIT` have the same handler and
+    no test. Ctrl-C at a real keyboard was never pressed.
+  - `term_size` and `term_is` from a program at a terminal, and a wait for a key with
+    `poll_oneoff`: the size is read by lengua-os's test, and the thread that reads keys is
+    tested with keys of the test's own.
+  - A started program that starts another, and is ended with it: the tests end one process, by
+    its time and by its output, and on Windows one process in a job.
+  - Any started program but `hostname`, `whoami` and the tests' own.
+  - A file on a network share, and one of Windows's device paths by an open: the device paths
+    are refused by their shape, which a test checks.
+  - A started lengua program.
 
 ### What the permission checks refused
 
