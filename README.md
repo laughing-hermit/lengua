@@ -155,7 +155,8 @@ lengua-run <program folder> -- <arguments>
 `lengua-run` is a small program beside `lengua-mcp` with no compiler in it, so it starts sooner
 and holds less memory; `lengua-mcp run` takes the same words and does the same. It runs only a
 folder whose idea and code match the signed `lengua.lock`, with the module `check` tested, in
-the form `check` compiled under your key; otherwise it says why and exits with 125. It has no time limit, works in the current
+the form `check` compiled under your key; otherwise it says why and exits with 125. It has no
+time limit, works in the current
 folder (or the one `--in` names), gives the program only the environment variables `--env` names,
 and exits with the program's own code, or 134 when the program trapped
 ([docs/run.md](docs/run.md)).

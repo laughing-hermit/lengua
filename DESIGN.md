@@ -720,9 +720,13 @@ the same three built natively with each system's own compilers. lengua's program
 hand; the others use their standard libraries and plain loops their compilers vectorize.
 
 Each run is a process of its own, measured by `lengua-mcp measure` (`src/measure.rs`): CPU time,
-wall time, peak resident memory and size. lengua's runs go through `lengua-mcp run`, with every
-check `run` makes. On Linux a program starts from `lengua-spawn`, a small process that forks it, so
-its peak memory is its own. The runs alternate between the versions, in an order shuffled from
+wall time, peak resident memory and size. lengua's runs go through lengua-run, as a user runs a
+checked program, with every check a run makes. The other modules run by the same lengua-run, in
+the same engine, each from its compiled form kept under the user's key as lengua's is; `measure`
+hashes a module's file before the run it measures, so that run reads neither the file nor a lock.
+`cargo xtask bench` builds lengua-run by itself first, with no compiler in it, as it ships. On
+Linux a program starts from `lengua-spawn`, a small process that forks it, so its peak memory is
+its own. The runs alternate between the versions, in an order shuffled from
 round to round. On each row, lengua against one other version, a one-sided Mann-Whitney U test
 decides CPU and wall time: the gate looks after 20, 40, 80, 160, 320, 640, 1,280 and 2,000 runs of
 each version, each look at p < 0.00125, the 1% split over the eight looks, and a workload's rows
@@ -756,8 +760,9 @@ the gate to pass. What to do with them is the owner's (todo.md, "The owner's").
 `cargo xtask release` builds the archive of the runner it runs on, one of the five
 (`xtask/src/release.rs`): `dist/lengua-<version>-<target>.tar.gz`, a `.zip` on Windows, with its
 SHA-256 beside it. The archive is the plugin, ready to load: the skills and the manifests,
-`server/lengua-mcp` (`.exe` on Windows), `solvers/` with the z3 and cvc5 that `xtask/tools.tsv`
-pins for the target, checked by SHA-256, the licences of everything it ships, `TARGET` and
+`server/lengua-mcp` and `server/lengua-run` (`.exe` on Windows), each built by itself, so that
+lengua-run holds no compiler, `solvers/` with the z3 and cvc5 that `xtask/tools.tsv` pins for the
+target, checked by SHA-256, the licences of everything it ships, `TARGET` and
 `INSTALL.md`. Nothing is published or signed: the archives are unsigned, and publishing them is the
 owner's.
 
@@ -776,8 +781,10 @@ named `wip/…`, runs the suite on all five; every Monday the suite, the slow ig
 bench run on all five; and a dispatch picks the targets and the mode: compile, test, ignored,
 golden, bench or release. In release mode a clean runner of each system and CPU unpacks the
 archive, installs it with its own `lengua-mcp install`, and checks it through a plain MCP client:
-add from its idea to done, run through `run` and from a shell, and attested. Each step of the
-workflow is one command, most of them calls into the task crate (`cargo xtask`), and Rust 1.99.1
+add from its idea to done, run through `run` and from a shell, by `lengua-mcp run` and by
+lengua-run, which must say it holds no compiler and must load what `check` compiled with nothing
+left to lengua-mcp, and attested. Each step of the workflow is one command, most of them calls
+into the task crate (`cargo xtask`), and Rust 1.99.1
 is pinned in `rust-toolchain.toml`. Nothing builds on the owner's computer: the format job hands
 back the formatting patch and the resolved `Cargo.lock`.
 
@@ -816,8 +823,8 @@ listed below.
   format lengua doesn't read, or proofs about another module.
 - **A build that isn't what was checked.** `run` runs only the module whose SHA-256 the signed lock
   records: the `run` tool builds main.wat again and compares, and a shell's run loads the compiled
-  form the user's key sealed as that module. An idea or code changed since the record, a module a proof found wrong, and a
-  build that differs after lengua changed are refused. A module found wrong stays refused when an
+  form the user's key sealed as that module. An idea or code changed since the record, a module
+  a proof found wrong, and a build that differs after lengua changed are refused. A module found wrong stays refused when an
   earlier lock, which the user's key signed too, is put back: the data folder keeps the verdict.
 - **Machine code that lengua didn't compile, in a run from a shell.** A run from a shell loads
   compiled code from one file, and only when that file carries the seal of the user's key for

@@ -36,7 +36,6 @@ const PROBLEMS_FOUND: u8 = 1;
 const REFUSED: u8 = 125;
 
 fn main() -> ExitCode {
-    lengua::stages::mark("main");
     let mut raw = std::env::args_os().skip(1).peekable();
     // Worker mode, hidden: a child of the server that runs WebAssembly jobs until its standard
     // input ends.
@@ -59,7 +58,6 @@ fn main() -> ExitCode {
             .and_then(|spec| spec.into_string().ok())
             .unwrap_or_default();
         let code = lengua::measure::run_module(&spec);
-        lengua::stages::dump();
         return ExitCode::from(u8::try_from(code).unwrap_or(REFUSED));
     }
 
@@ -76,7 +74,6 @@ fn main() -> ExitCode {
         return ExitCode::from(REFUSED);
     };
     let command = parse_args(arguments.into_iter());
-    lengua::stages::mark("args");
     // A shell's run of main.wat logs nothing, as a module's run doesn't: nothing on its way logs,
     // and the engine's warnings would land among the program's own output. LENGUA_LOG brings
     // them back, for a developer; every other command logs as it did.
@@ -129,9 +126,7 @@ fn log_to_stderr() {
 /// Runs a checked program attached to this shell, exiting with its exit code: in a plain
 /// function, with no async runtime built around it, as nothing on its way waits on one.
 fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> ExitCode {
-    let ran = lengua::server::run_from_shell(data_dir, request);
-    lengua::stages::dump();
-    match ran {
+    match lengua::server::run_from_shell(data_dir, request) {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(REFUSED)),
         Err(message) => {
             eprintln!("lengua-mcp: {message}");

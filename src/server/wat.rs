@@ -701,7 +701,6 @@ fn runnable(
     env: &BTreeMap<String, String>,
 ) -> Result<Runnable, String> {
     let (state, snapshot, files, key) = state_for_run(data_dir, folder)?;
-    crate::stages::mark("state");
     if state != State::Ready {
         return Err(format!(
             "lengua runs a program only when its idea and code match lengua.lock, and {folder} \
@@ -888,7 +887,9 @@ pub(crate) fn loaded_or_compiled(
     let sealed = compile_and_keep(data_dir, key, module, &wasm()?, None)
         .map_err(|error| format!("the engine couldn't compile the module: {error}"))?;
     key.load_sealed(&runner, module, &sealed)
-        .map_err(|unsealed| NotRun::Refused(format!("lengua couldn't load what it compiled: {unsealed}")))
+        .map_err(|unsealed| {
+            NotRun::Refused(format!("lengua couldn't load what it compiled: {unsealed}"))
+        })
 }
 
 /// The bytes of `name`, a file inside `folder`, as a run's standard input: at most
@@ -1000,9 +1001,7 @@ pub(super) fn run_from_shell(
 ) -> Result<i32, NotRun> {
     let ended = run_once_checked(on, || -> Result<Checked<'_>, NotRun> {
         let (folder, workspace) = folders()?;
-        crate::stages::mark("folders");
         let ready = runnable(data_dir, &folder, &request.env)?;
-        crate::stages::mark("runnable");
         // The working folder of a program that uses files is never one of lengua's own or the
         // system's: said before anything is built or compiled.
         if ready.uses.contains(&Use::Files)
@@ -1018,7 +1017,6 @@ pub(super) fn run_from_shell(
         let compiled = loaded_or_compiled(data_dir, &ready.key, &ready.module, || {
             kept_or_built(data_dir, &folder, &ready)
         })?;
-        crate::stages::mark("compiled");
         loaded_keeps_secrets(&folder, &ready, &compiled)?;
         let connections = reaches(&ready.network)
             .iter()
@@ -1271,8 +1269,13 @@ impl LenguaServer {
         // kept here still runs, since its first run from lengua-mcp compiles it.
         let cache = engine::cache_folder(&self.data_dir);
         if let Ok(Some(key)) = Key::load(&self.data_dir)
-            && let Err(error) =
-                compile_and_keep(&self.data_dir, &key, &checking.module, tested, Some(cache.as_path()))
+            && let Err(error) = compile_and_keep(
+                &self.data_dir,
+                &key,
+                &checking.module,
+                tested,
+                Some(cache.as_path()),
+            )
         {
             tracing::warn!("couldn't compile the module ahead of its runs: {error}");
         }

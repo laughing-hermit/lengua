@@ -455,7 +455,10 @@ async fn a_shell_runs_the_module_check_kept() {
     let hash = format!("module_sha256 = \"{}\"\n", Sha256Hex::of(&module));
     assert!(lock.contains(&hash), "{lock}");
     let ahead = compiled(&session, &module);
-    assert!(ahead.is_file(), "check compiled the module ahead of its runs");
+    assert!(
+        ahead.is_file(),
+        "check compiled the module ahead of its runs"
+    );
     let sums = |why: &str| {
         // With no compiled form to load, the run takes the kept module, or builds main.wat.
         let _ = std::fs::remove_file(&ahead);
@@ -550,8 +553,8 @@ async fn a_shell_loads_a_compiled_module_only_under_the_user_s_key() {
         ("nothing", Vec::new()),
     ];
     let exe = std::env::consts::EXE_SUFFIX;
-    let alone = Path::new(env!("CARGO_BIN_EXE_lengua-mcp"))
-        .with_file_name(format!("lengua-run{exe}"));
+    let alone =
+        Path::new(env!("CARGO_BIN_EXE_lengua-mcp")).with_file_name(format!("lengua-run{exe}"));
     let run_alone = || {
         Command::new(&alone)
             .arg("--data-dir")
@@ -585,12 +588,18 @@ async fn a_shell_loads_a_compiled_module_only_under_the_user_s_key() {
         assert_eq!(sum.stdout, b"5\n", "{what}: {sum:?}");
         assert_eq!(sum.status.code(), Some(0), "{what}: {sum:?}");
         let now = std::fs::read(&file).expect("a compiled module");
-        assert!(loads(&now), "{what}: the run didn't put add's compiled module back");
+        assert!(
+            loads(&now),
+            "{what}: the run didn't put add's compiled module back"
+        );
     }
     if alone.is_file() {
         let sum = run_alone();
         assert_eq!(sum.stdout, b"5\n", "{sum:?}");
-        assert!(sum.stderr.is_empty(), "lengua-run left the run to lengua-mcp: {sum:?}");
+        assert!(
+            sum.stderr.is_empty(),
+            "lengua-run left the run to lengua-mcp: {sum:?}"
+        );
         assert_eq!(sum.status.code(), Some(0), "{sum:?}");
     }
     session.service.cancel().await.expect("close the session");

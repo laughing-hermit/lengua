@@ -606,7 +606,11 @@ fn installed(options: &Options, data_dir: Option<&DataDir>) -> Result<u8, String
         (quoted(&server), " run")
     };
     if options.link {
-        let name = if run.is_empty() { "lengua-run" } else { "lengua-mcp" };
+        let name = if run.is_empty() {
+            "lengua-run"
+        } else {
+            "lengua-mcp"
+        };
         println!("    {name}{run} <program folder> -- <arguments>");
     } else if cfg!(windows) {
         println!("    & {program}{run} <program folder> -- <arguments>");

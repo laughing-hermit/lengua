@@ -72,7 +72,9 @@ impl Checked {
         std::fs::create_dir_all(root.path().join("work")).expect("a working folder");
         std::fs::write(folder.join("idea.md"), idea).expect("idea.md");
         std::fs::write(folder.join("main.wat"), code).expect("main.wat");
-        let wasm = lengua::wasm::text::build(code).expect("main.wat builds").wasm;
+        let wasm = lengua::wasm::text::build(code)
+            .expect("main.wat builds")
+            .wasm;
         let module = Sha256Hex::of(&wasm);
         let recorded = lengua::trust::idea_hash(idea.as_bytes());
         let lock = Lock {
@@ -134,7 +136,9 @@ impl Checked {
     /// it is tried again.
     fn run(&self, words: &[&str]) -> Output {
         let from = Path::new(env!("CARGO_BIN_EXE_lengua-run"));
-        let program = self.bin().join(from.file_name().expect("lengua-run's name"));
+        let program = self
+            .bin()
+            .join(from.file_name().expect("lengua-run's name"));
         for _ in 0..200 {
             let ran = Command::new(&program)
                 .arg("--data-dir")
@@ -165,7 +169,10 @@ fn said(output: &Output) -> String {
 /// program printed nothing.
 fn refused(output: &Output, words: &str, why: &str) {
     assert_eq!(output.status.code(), Some(125), "{why}: {output:?}");
-    assert!(output.stdout.is_empty(), "{why}: the program ran: {output:?}");
+    assert!(
+        output.stdout.is_empty(),
+        "{why}: the program ran: {output:?}"
+    );
     assert!(said(output).contains(words), "{why}: {}", said(output));
 }
 

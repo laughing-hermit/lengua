@@ -7,9 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use wasmtime::{Engine, Linker, Module, Store, UpdateDeadline, WasmBacktrace};
@@ -169,9 +169,7 @@ pub fn execute(
     host.limits.deadline = timeout.map(|timeout| Instant::now() + timeout);
     let deadline = host.limits.deadline;
     let stop = Arc::clone(&host.limits.stop);
-    crate::stages::mark("world");
     let mut store = Store::new(engine, host);
-    crate::stages::mark("store");
     store.limiter(|host| &mut host.limits.store);
     if setup.counts() {
         let _ = store.set_fuel(u64::MAX);
@@ -190,7 +188,6 @@ pub fn execute(
     }
     let started = Instant::now();
     let instantiated = linker.instantiate(&mut store, module);
-    crate::stages::mark("instantiated");
     let (ending, problem) = match instantiated {
         Err(error)
             if error.downcast_ref::<Stop>().is_none()
@@ -215,7 +212,6 @@ pub fn execute(
             },
         },
     };
-    crate::stages::mark("ran");
     let wall_time_ns = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
     let instructions = if setup.counts() {
         store.get_fuel().ok().map(|left| u64::MAX - left)
@@ -600,8 +596,8 @@ pub enum On {
     /// which goes deep, or where the main thread's stack isn't known to hold a program.
     Own,
     /// The thread that made the checks, which is the process's main one: no thread is started,
-    /// which a run that starts and ends within a millisecond would pay for (about 0.13 ms and
-    /// 0.1 MiB, as W19 measured).
+    /// which a run that starts and ends within a millisecond would pay for (about 0.18 ms of
+    /// 1.3 ms on Linux on x86-64 and 0.23 ms of 1.7 ms on ARM64, as W19 measured).
     Main,
 }
 
@@ -638,8 +634,13 @@ impl On {
 pub fn run_here(wasm: &[u8], here: &Here<'_>, cache: Option<&Path>) -> io::Result<End> {
     let engine = crate::wasm::engine::engine(Setup::Shell, cache).map_err(io::Error::other)?;
     let module = crate::wasm::engine::compile(&engine, wasm).map_err(io::Error::other)?;
-    run_once_checked(On::Own, || Ok::<_, String>(Given { module, here: *here }))
-        .unwrap_or_else(|why| Err(io::Error::other(why)))
+    run_once_checked(On::Own, || {
+        Ok::<_, String>(Given {
+            module,
+            here: *here,
+        })
+    })
+    .unwrap_or_else(|why| Err(io::Error::other(why)))
 }
 
 /// Runs a module here as [`run_here`] does, once `checks`, on the caller's thread, give it,
@@ -657,17 +658,8 @@ pub fn run_once_checked<O: Order, E>(
     checks: impl FnOnce() -> Result<O, E>,
 ) -> Result<io::Result<End>, E> {
     let checked = checks()?;
-    crate::stages::mark("checked");
-    if on == On::Main && !crate::stages::variant("thread") {
-        let ended = run_on_this_thread(checked.module(), &checked.here());
-        // The process that runs a program on its main thread ends with it: the compiled module
-        // and the rest of what the checks handed over are left for the system to take back at
-        // the process's end, all at once, in place of being handed back piece by piece first.
-        // The program's host, with its files and connections, was closed when the run ended.
-        if !crate::stages::variant("tidy") {
-            std::mem::forget(checked);
-        }
-        return Ok(ended);
+    if on == On::Main {
+        return Ok(run_on_this_thread(checked.module(), &checked.here()));
     }
     let ended = std::thread::scope(|scope| {
         let order = &checked;
@@ -690,18 +682,9 @@ pub fn run_once_checked<O: Order, E>(
 /// what `here` gives, in its own engine, through a linker with the functions it imports, with
 /// room made for the files a program may hold.
 fn run_on_this_thread(module: &Module, here: &Here<'_>) -> io::Result<End> {
-    use crate::stages::{mark, variant};
-    mark("start");
     make_room().map_err(io::Error::other)?;
     let engine = module.engine();
-    // Temporary, for W19's measurements: every function defined, as before.
-    let linker = if variant("linkall") {
-        crate::wasm::host::linker(engine)
-    } else {
-        crate::wasm::host::linker_for(module)
-    }
-    .map_err(io::Error::other)?;
-    mark("linker");
+    let linker = crate::wasm::host::linker_for(module).map_err(io::Error::other)?;
     let lengua = crate::wasm::engine::name();
     let mut connections = Vec::new();
     let connecting = Instant::now();

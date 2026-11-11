@@ -558,7 +558,9 @@ impl std::error::Error for Unsealed {}
 /// The HMAC-SHA256, keyed with `key`, of a compiled module and what it is said to be, `about`:
 /// the domain, `about`'s length, `about`, then the module, so no two pairs give the same bytes.
 /// It is ring's, whose SHA-256 uses the CPU's own instructions for it on x86-64 and on ARM64:
-/// every run computes it over the whole compiled module, tens to hundreds of KiB.
+/// every run computes it over the whole compiled module, which for a small program is 12 KiB on
+/// x86-64 and 135 KiB on ARM64, where the engine lays code out for 64 KiB pages. There ring took
+/// 0.06 ms for it and the sha2 crate, which has those instructions on x86-64 alone, 0.32 ms (W19).
 fn seal(key: &[u8; SEAL_KEY_BYTES], about: &[u8], compiled: &[u8]) -> ring::hmac::Tag {
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
     let mut mac = ring::hmac::Context::with_key(&key);
@@ -810,7 +812,12 @@ mod sealed_tests {
         let refused = |key: &[u8; 32], about: &[u8], bytes: &[u8]| {
             load_sealed(&engine, key, about, bytes).err()
         };
-        for at in [0, sealed.len() / 2, sealed.len() - SEAL_BYTES, sealed.len() - 1] {
+        for at in [
+            0,
+            sealed.len() / 2,
+            sealed.len() - SEAL_BYTES,
+            sealed.len() - 1,
+        ] {
             let mut changed = sealed.clone();
             changed[at] ^= 1;
             assert_eq!(
@@ -823,7 +830,10 @@ mod sealed_tests {
         assert_eq!(refused(&KEYS[0], b"other", &sealed), Some(Unsealed::NoSeal));
         assert_eq!(refused(&KEYS[0], b"", &sealed), Some(Unsealed::NoSeal));
         let (compiled, seal) = sealed.split_at(sealed.len() - SEAL_BYTES);
-        assert_eq!(refused(&KEYS[0], b"empty", compiled), Some(Unsealed::NoSeal));
+        assert_eq!(
+            refused(&KEYS[0], b"empty", compiled),
+            Some(Unsealed::NoSeal)
+        );
         assert_eq!(refused(&KEYS[0], b"empty", seal), Some(Unsealed::NoSeal));
         assert_eq!(refused(&KEYS[0], b"empty", &[]), Some(Unsealed::NoSeal));
         assert_eq!(refused(&KEYS[0], b"empty", EMPTY), Some(Unsealed::NoSeal));

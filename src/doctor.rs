@@ -149,15 +149,11 @@ fn runner() -> Finding {
             "runner: {name} {version}, {}, which runs checked programs with no compiler in it",
             path.display()
         )),
-        Ok(said) if said.starts_with(&format!("{expected},")) => Finding::fine(format!(
-            "runner: {said}, {}",
-            path.display()
-        )),
+        Ok(said) if said.starts_with(&format!("{expected},")) => {
+            Finding::fine(format!("runner: {said}, {}", path.display()))
+        }
         Ok(said) => Finding::wrong(
-            format!(
-                "runner: {} says {said:?}, not {expected}",
-                path.display()
-            ),
+            format!("runner: {} says {said:?}, not {expected}", path.display()),
             format!(
                 "{name} and lengua-mcp come from one release archive, and a {name} of another \
                  version leaves every run to lengua-mcp or loads nothing: install lengua again."

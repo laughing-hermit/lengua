@@ -457,10 +457,10 @@ pub fn linker(engine: &Engine) -> Result<Linker<Host>, String> {
 
 /// The linker with lengua's host for `module` alone, in its engine: the functions of WASI
 /// preview 1 the module imports, each the very function [`linker`] defines, and no others. A
-/// run from a shell runs one module once, and defining a function has a cost of its own (the
-/// 46 took about 0.09 ms of a run of 1 ms, as W19 measured), so it defines the few it will
-/// call. An import lengua's host doesn't have is undefined here as it is there, and the module
-/// doesn't start.
+/// run from a shell runs one module once, and defining a function has a cost of its own (all
+/// 46 took 0.04 to 0.08 ms more of a run of 1.1 ms on Linux on x86-64, as W19 measured), so it
+/// defines the few the module will call. An import lengua's host doesn't have is undefined here
+/// as it is there, and the module doesn't start.
 ///
 /// # Errors
 ///
@@ -497,10 +497,7 @@ impl Defining<'_> {
         name: &str,
         function: impl wasmtime::IntoFunc<Host, Params, Results>,
     ) -> wasmtime::Result<()> {
-        if self
-            .wanted
-            .is_none_or(|wanted| wanted.contains(&name))
-        {
+        if self.wanted.is_none_or(|wanted| wanted.contains(&name)) {
             self.linker.func_wrap(module, name, function)?;
         }
         Ok(())

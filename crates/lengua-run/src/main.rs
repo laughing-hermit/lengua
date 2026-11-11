@@ -98,7 +98,6 @@ fn hand_over(words: impl Iterator<Item = OsString>, why: &str) -> ExitCode {
 }
 
 fn main() -> ExitCode {
-    lengua::stages::mark("main");
     // This process compiles nothing, also where its build holds a compiler.
     lengua::wasm::engine::run_only();
     let mut raw = std::env::args_os().skip(1).peekable();
@@ -114,16 +113,16 @@ fn main() -> ExitCode {
             .and_then(|spec| spec.to_str())
             .unwrap_or_default();
         let ran = lengua::measure::run_module_alone(spec);
-        lengua::stages::dump();
         return match ran {
             Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(REFUSED)),
             Err(NotRun::Refused(message)) => {
                 eprintln!("lengua-run: {message}");
                 ExitCode::from(REFUSED)
             }
-            Err(NotRun::NotCompiled(_) | NotRun::Secret) => {
-                hand_over(words.into_iter(), "the module isn't compiled for this computer yet")
-            }
+            Err(NotRun::NotCompiled(_) | NotRun::Secret) => hand_over(
+                words.into_iter(),
+                "the module isn't compiled for this computer yet",
+            ),
         };
     }
     // Every system passes Unicode arguments, as Windows's UTF-16 does: lengua takes no others.
@@ -154,7 +153,6 @@ fn main() -> ExitCode {
         }
     };
     let ran = lengua::server::run_alone(&data_dir, &request);
-    lengua::stages::dump();
     // lengua-mcp takes the same words after `run`, and the data folder before it.
     let for_lengua_mcp = || {
         let named = words.first().is_some_and(|word| word == "--data-dir");
