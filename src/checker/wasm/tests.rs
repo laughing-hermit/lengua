@@ -168,20 +168,10 @@ fn the_template_passes_every_rule() {
     assert!(report.facts.max_stack_bytes > 0);
     assert!(report.facts.max_stack_bytes <= memory::MAX_STACK_BYTES);
     assert_eq!(report.facts.regions.len(), 7);
-    // What args_get writes is sized when the program runs: the proof holds it, and nothing else
-    // is left to it.
-    assert_eq!(
-        report.facts.obligations.len(),
-        2,
-        "{:#?}",
-        report.facts.obligations
-    );
+    // What args_get writes is sized when the program runs, and the template's checks of the
+    // two sizes hold it to the regions: nothing is left to the proof.
     assert!(
-        report
-            .facts
-            .obligations
-            .iter()
-            .all(|obligation| obligation.what.contains("$args_get")),
+        report.facts.obligations.is_empty(),
         "{:#?}",
         report.facts.obligations
     );
@@ -1629,6 +1619,227 @@ fn a_secret_written_to_a_file_or_sent_to_a_peer_is_secret_when_it_comes_back() {
     assert_no(&report, Rule::Secrets);
 }
 
+/// A program that opens a connection by itself, to a computer whose name it holds, for the tests
+/// of what its idea must grant it.
+const OPENER: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (import "lengua_net_1" "tcp_open"
+    (func $tcp_open (param i32 i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1 1)
+  (global $EXIT_OK i32 (i32.const 0))
+  (global $EXIT_FAILED i32 (i32.const 1))
+  (global $HTTP_PORT i32 (i32.const 80))
+  (global $PLAIN i32 (i32.const 0))
+  (global $name i32 (i32.const 1024))
+  (global $name.rosize i32 (i32.const 15))
+  (data (i32.const 1024) "www.example.org")
+  (global $opened i32 (i32.const 2048))
+  (global $opened.size i32 (i32.const 4))
+  (func $main (export "_start")
+    (local $err i32)
+    (block $failed
+      (local.set $err
+        (call $tcp_open (global.get $name) (global.get $name.rosize) (global.get $HTTP_PORT)
+          (global.get $PLAIN) (global.get $opened)))
+      (br_if $failed (local.get $err))
+      (call $proc_exit (global.get $EXIT_OK))
+      unreachable)
+    (call $proc_exit (global.get $EXIT_FAILED))
+    unreachable))
+"#;
+
+/// Rule 3 for what a program opens by itself: lengua's own network functions are imported from
+/// their own module, each with its own type, and only when the idea grants what it opens; no
+/// other module gives a program anything, and a mode is a named constant there too.
+#[test]
+fn rule_3_takes_lenguas_own_functions_only_as_the_idea_grants_them() {
+    // An import is reported on the line of its `func`.
+    let import = line_of(OPENER, "(func $tcp_open (param");
+    let granted = "opens TCP connections to port 80 on any subdomain of example.org";
+    let report = check_with(OPENER, &[], granted);
+    assert_no(&report, Rule::Resources);
+    assert_no(&report, Rule::Constants);
+    // A connection lengua makes before the start grants no connection the program opens, and
+    // neither does a look at a name's addresses.
+    for other in [
+        "",
+        "connects to TCP port 80 on www.example.org",
+        "looks up the addresses of www.example.org",
+        "sends UDP datagrams to port 80 on www.example.org",
+    ] {
+        let report = check_with(OPENER, &[], other);
+        assert_violation(
+            &report,
+            Rule::Resources,
+            import,
+            "it needs `- Network: opens TCP connections to port N on …`",
+        );
+    }
+    let renamed = OPENER.replacen("\"tcp_open\"", "\"tcp_listen\"", 1);
+    let report = check_with(&renamed, &[], granted);
+    assert_violation(
+        &report,
+        Rule::Resources,
+        import,
+        "`lengua_net_1` has no function `tcp_listen`",
+    );
+    // WASI's module has no such function, and no other module has any.
+    for module in ["wasi_snapshot_preview1", "env"] {
+        let moved = OPENER.replacen("\"lengua_net_1\"", &format!("\"{module}\""), 1);
+        let built = unvalidated(&moved);
+        let (uses, network) = crate::idea::constraints(&[], granted).expect("valid constraints");
+        let report = check(
+            &moved,
+            &built,
+            &Context {
+                uses: &uses,
+                network: &network,
+                secrets: &[],
+            },
+        );
+        assert!(
+            report.violations.iter().any(
+                |violation| violation.rule == Rule::Resources && violation.line == Some(import)
+            ),
+            "{module}: {:#?}",
+            report.lines()
+        );
+    }
+    let typed = OPENER.replacen(
+        "(func $tcp_open (param i32 i32 i32 i32 i32) (result i32))",
+        "(func $tcp_open (param i32 i32 i32 i32 i64) (result i32))",
+        1,
+    );
+    let built = unvalidated(&typed);
+    let (uses, network) = crate::idea::constraints(&[], granted).expect("valid constraints");
+    let report = check(
+        &typed,
+        &built,
+        &Context {
+            uses: &uses,
+            network: &network,
+            secrets: &[],
+        },
+    );
+    assert_violation(&report, Rule::Resources, import, "`tcp_open` takes");
+    // Over TLS or not is a mode, named like any other.
+    let bare = OPENER.replacen(
+        "(global.get $PLAIN) (global.get $opened)",
+        "(i32.const 1) (global.get $opened)",
+        1,
+    );
+    let report = check_with(&bare, &[], granted);
+    assert_violation(
+        &report,
+        Rule::Constants,
+        line_of(&bare, "(call $tcp_open"),
+        "the mode 1 is a bare number",
+    );
+}
+
+/// A program that reads standard input into `$key`, sends `$key` as a datagram to a computer, and
+/// takes the datagram that comes back into `$back`, for the secret rule's tests of what a
+/// program opens by itself.
+const DATAGRAM: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (import "lengua_net_1" "udp_open" (func $udp_open (param i32 i32 i32 i32) (result i32)))
+  (import "lengua_net_1" "udp_send" (func $udp_send (param i32 i32 i32 i32) (result i32)))
+  (import "lengua_net_1" "udp_recv" (func $udp_recv (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1 1)
+  (global $STDIN i32 (i32.const 0))
+  (global $EXIT_OK i32 (i32.const 0))
+  (global $READ_TO_END i32 (i32.const -1))
+  (global $PORT i32 (i32.const 53))
+  (global $name i32 (i32.const 1024))
+  (global $name.rosize i32 (i32.const 10))
+  (data (i32.const 1024) "192.0.2.53")
+  (global $counts i32 (i32.const 1088))
+  (global $counts.size i32 (i32.const 12))
+  (global $key i32 (i32.const 2048))
+  (global $key.size i32 (i32.const 32))
+  (global $back i32 (i32.const 3072))
+  (global $back.size i32 (i32.const 32))
+  (func $main (export "_start")
+    (local $fd i32)
+    (drop
+      (call $fill (global.get $STDIN) (global.get $key) (global.get $key.size)
+        (global.get $READ_TO_END)))
+    (drop
+      (call $udp_open (global.get $name) (global.get $name.rosize) (global.get $PORT)
+        (global.get $counts)))
+    (local.set $fd (i32.load (global.get $counts)))
+    (drop
+      (call $udp_send (local.get $fd) (global.get $key) (global.get $key.size)
+        (i32.add (global.get $counts) (i32.const 4))))
+    (drop
+      (call $udp_recv (local.get $fd) (global.get $back) (global.get $back.size)
+        (i32.add (global.get $counts) (i32.const 8))))
+    (if (i32.load8_u (global.get $back)) (then (nop)))
+    (call $proc_exit (global.get $EXIT_OK))
+    unreachable))
+"#;
+
+/// The secret rule on what a program opens by itself. A datagram's bytes are data a program
+/// sends out, so a secret may be among them, and what comes back is then secret, as on a
+/// connection. A computer's name and a port decide where the program connects, and a name goes
+/// to the resolver besides: a secret in either is refused, so no secret chooses a computer, and
+/// none is told by which computers a program reaches, how many, or when.
+#[test]
+fn a_secret_never_names_a_computer_and_a_datagram_sent_makes_what_comes_back_secret() {
+    let secret = [Source::StandardInput];
+    let uses = ["standard input"];
+    let granted = "sends UDP datagrams to port 53 on 192.0.2.53";
+    let branch = "(if (i32.load8_u (global.get $back)) (then (nop)))";
+    let report = check_secret(DATAGRAM, &uses, granted, &secret);
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(DATAGRAM, branch),
+        "the condition of this `if`",
+    );
+    // With no secret sent, what the computer sends back isn't secret.
+    let sent = "(call $udp_send (local.get $fd) (global.get $key) (global.get $key.size)";
+    assert!(DATAGRAM.contains(sent));
+    let unsent = DATAGRAM.replacen(
+        sent,
+        "(call $udp_send (local.get $fd) (global.get $back) (global.get $back.size)",
+        1,
+    );
+    assert_no(
+        &check_secret(&unsent, &uses, granted, &secret),
+        Rule::Secrets,
+    );
+    // The secret as the computer's name: the host reads it, and it isn't data.
+    let named = "(call $udp_open (global.get $name) (global.get $name.rosize) (global.get $PORT)";
+    assert!(DATAGRAM.contains(named));
+    let secret_name = unsent.replacen(
+        named,
+        "(call $udp_open (global.get $key) (global.get $key.size) (global.get $PORT)",
+        1,
+    );
+    let report = check_secret(&secret_name, &uses, granted, &secret);
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(&secret_name, "(call $udp_open (global.get $key)"),
+        "reads a secret in the buffer of argument 1",
+    );
+    // A byte of the secret as the port.
+    let secret_port = unsent.replacen(
+        named,
+        "(call $udp_open (global.get $name) (global.get $name.rosize) (i32.load8_u (global.get \
+         $key))",
+        1,
+    );
+    let report = check_secret(&secret_port, &uses, granted, &secret);
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(&secret_port, "(call $udp_open (global.get $name)"),
+        "argument 3 of this call",
+    );
+}
+
 /// A program that reads standard input with `fd_read` itself, and branches on the error number
 /// and then on how many bytes the read gave, for the secret rule's test of a read's count.
 const COUNT_READ: &str = r#"(module
@@ -1830,4 +2041,304 @@ fn a_memory_past_the_most_pages_is_refused() {
         line_of(&past, "(memory (export"),
         "at most 16384 pages",
     );
+}
+
+/// What the two reviews of 2026-11-10 left open (todo.md), each held by a test that failed
+/// before its fix, and the tests the reviews found missing.
+mod review_gaps {
+    use super::*;
+
+    /// Whether `report` leaves the buffers of `$fd_write`'s iovecs to the proof: the rules don't know
+    /// what the iovec array holds at the call.
+    fn iovecs_left_to_the_proof(report: &Report) -> bool {
+        report
+            .facts
+            .obligations
+            .iter()
+            .any(|obligation| obligation.what.contains("$fd_write's iovecs point to"))
+    }
+
+    /// A write the rules leave to the proof, or one made in an unsafe block, is held inside the
+    /// program's memory, not inside the region its address names: in [`SECRET`], `$out` plus 1024
+    /// is `$iovec`'s first byte. So after such a write the rules no longer know what an iovec array
+    /// holds, and the buffers of the call after it are the proof's too. Where every write between
+    /// is one the rules bound, they still judge the buffer the code stored.
+    #[test]
+    fn a_write_left_to_the_proof_makes_the_rules_forget_what_every_region_holds() {
+        let filled = "(i32.store (global.get $iovec) (global.get $out)) (i32.store offset=4 \
+                  (global.get $iovec) (global.get $out.size))";
+        let call = "(drop (call $fd_write (global.get $STDOUT) (global.get $iovec) (i32.const 1) \
+                (i32.add (global.get $iovec) (i32.const 8))))";
+        let limit = "(local.set $word (i32.load offset=8 (global.get $iovec))) (if (i32.lt_u \
+                 (local.get $word) (i32.load offset=12 (global.get $iovec)))";
+        let (_, report) = planted(
+            &format!("{filled} (i32.store8 offset=7 (global.get $out) (i32.const 0)) {call}"),
+            false,
+        );
+        assert!(
+            !iovecs_left_to_the_proof(&report),
+            "{:#?}",
+            report.facts.obligations
+        );
+        let writes = [
+        // A store at an index checked against a limit loaded from memory.
+        format!(
+            "{limit} (then (i32.store (i32.add (global.get $out) (local.get $word)) (i32.const \
+             0))))"
+        ),
+        // A fill of a length checked against such a limit.
+        format!("{limit} (then (memory.fill (global.get $out) (i32.const 0) (local.get $word))))"),
+        // A store at an index nothing bounds, in an unsafe block.
+        "\n    ;; unsafe: the test's own\n    (i32.store (i32.add (global.get $out) (local.get \
+         $got)) (i32.const 0))\n    ;; end unsafe\n   "
+            .to_owned(),
+    ];
+        for write in writes {
+            let (_, report) = planted(&format!("{filled} {write} {call}"), false);
+            assert!(
+                iovecs_left_to_the_proof(&report),
+                "{write}: {:#?}",
+                report.facts.obligations
+            );
+        }
+    }
+
+    /// `args_get` and `environ_get` take no length: the host writes an address for each argument
+    /// and every byte of their text. So the rules hold the program to check both of the sizes
+    /// `args_sizes_get` wrote against the two regions before the call, and refuse the call where a
+    /// size is unchecked, checked too loosely, or no longer the host's; the template checks both,
+    /// and nothing of the call is left to the proof.
+    #[test]
+    fn what_args_get_writes_is_held_to_its_regions_by_checks_of_the_sizes() {
+        let call = "(local.set $err (call $args_get (global.get $argv) (global.get $args)))";
+        let count = "          (br_if $usage (i32.ne (i32.load (global.get $sizes)) (global.get \
+                 $ARGC_EXPECTED)))\n";
+        let size = "          (br_if $not_a_number (i32.gt_u (local.get $size) (global.get \
+                $args.size)))\n";
+        let report = check_text(TEMPLATE);
+        assert!(report.passed(), "{:#?}", report.lines());
+        assert!(
+            report.facts.obligations.is_empty(),
+            "{:#?}",
+            report.facts.obligations
+        );
+        // Without the check of the count, or of the text's size.
+        for (check, argument) in [(count, 1), (size, 2)] {
+            let unchecked = with(check, "");
+            let report = check_text(&unchecked);
+            assert_violation(
+                &report,
+                Rule::Bounds,
+                line_of(&unchecked, call),
+                &format!(
+                    "the buffer $args_get borrows in argument {argument} gets as many bytes as the \
+                 host has for it"
+                ),
+            );
+        }
+        // A check that lets through one byte more than the region holds.
+        let loose = with(
+            size,
+            "          (br_if $not_a_number (i32.gt_u (local.get $size) (i32.add (global.get \
+         $args.size) (global.get $STDOUT))))\n",
+        );
+        let report = check_text(&loose);
+        assert_violation(
+            &report,
+            Rule::Bounds,
+            line_of(&loose, call),
+            "the buffer $args_get borrows in argument 2 reaches byte 64 of $args, which has 64 bytes",
+        );
+        // A size the program stored over the host's isn't the host's.
+        let own = with(
+            size,
+            &format!(
+                "          (i32.store offset=4 (global.get $sizes) (i32.const 0))\n          \
+             (local.set $size (i32.load offset=4 (global.get $sizes)))\n{size}"
+            ),
+        );
+        let report = check_text(&own);
+        assert_violation(
+            &report,
+            Rule::Bounds,
+            line_of(&own, call),
+            "the buffer $args_get borrows in argument 2 gets as many bytes as the host has for it",
+        );
+        // The environment's two calls are held the same way.
+        let environment = |text: &str| {
+            text.replace("args_sizes_get", "environ_sizes_get")
+                .replace("args_get", "environ_get")
+        };
+        let report = check_with(&environment(TEMPLATE), &["the environment"], "");
+        assert!(report.passed(), "{:#?}", report.lines());
+        assert!(
+            report.facts.obligations.is_empty(),
+            "{:#?}",
+            report.facts.obligations
+        );
+        let unchecked = environment(&with(size, ""));
+        let report = check_with(&unchecked, &["the environment"], "");
+        assert_violation(
+            &report,
+            Rule::Bounds,
+            line_of(&unchecked, &environment(call)),
+            "the buffer $environ_get borrows in argument 2 gets as many bytes as the host has for it",
+        );
+    }
+
+    /// Every finding of the secret rule alone on `text`, with standard input secret: a report
+    /// shows only the first findings of all the rules together, and the programs below break
+    /// others on purpose.
+    fn secret_findings(text: &str) -> Vec<String> {
+        let built = build(text).unwrap_or_else(|problem| panic!("it builds: {problem}"));
+        let module = model::Module::read(text, &built).expect("it reads");
+        let (uses, network) =
+            crate::idea::constraints(&["standard input"], "").expect("valid constraints");
+        let secrets = [Source::StandardInput];
+        let context = Context {
+            uses: &uses,
+            network: &network,
+            secrets: &secrets,
+        };
+        let mut others = Vec::new();
+        let flows = flow::analyze(&module, &context.policy(), &mut others);
+        let analysis = memory::analyze(&module, &flows);
+        let mut violations = Vec::new();
+        let _ = secret::check(&module, &flows, &analysis, context.secrets, &mut violations);
+        violations
+            .iter()
+            .map(|violation| violation.in_file(FILE))
+            .collect()
+    }
+
+    /// A branch on the secret's first byte.
+    const SECRET_BRANCH: &str = "(if (local.get $byte) (then (nop)))";
+
+    /// [`SECRET`] with `code` where it says `;; plant`, on one line.
+    fn secret_with(code: &str) -> String {
+        SECRET.replacen("    ;; plant\n", &format!("    {code}\n"), 1)
+    }
+
+    /// [`SECRET_BRANCH`] inside `depth` blocks, each inside the one before.
+    fn nested(depth: usize) -> String {
+        format!(
+            "{}{SECRET_BRANCH}{}",
+            "(block ".repeat(depth),
+            ")".repeat(depth)
+        )
+    }
+
+    /// The secret rule follows blocks and calls 256 deep, counted together. Within that it finds a
+    /// branch on a secret where it is; deeper, it says it can't follow the block or the call, and
+    /// refuses the program for it, so a branch too deep to see is never passed. The modules are
+    /// made near the limit on both sides, 200 and 300 deep.
+    #[test]
+    fn the_secret_rule_refuses_what_nests_deeper_than_it_follows() {
+        let cant_follow = "the secret rule can't follow";
+        let within = secret_findings(&secret_with(&nested(200)));
+        assert!(
+            within
+                .iter()
+                .any(|line| line.contains("the condition of this `if` is computed from a secret")),
+            "{within:#?}"
+        );
+        assert!(
+            !within.iter().any(|line| line.contains(cant_follow)),
+            "{within:#?}"
+        );
+        let past = secret_findings(&secret_with(&nested(300)));
+        assert!(
+            past.iter()
+                .any(|line| line.contains("the secret rule can't follow blocks nested this deep")),
+            "{past:#?}"
+        );
+        // Calls: each function passes the secret to the next, and the last branches on it.
+        let chain = |length: usize| {
+            let mut functions: String = (0..length)
+                .map(|at| {
+                    format!(
+                        "  (func $f{at} (param $value i32)\n    (call $f{} (local.get $value)))\n",
+                        at + 1
+                    )
+                })
+                .collect();
+            functions.push_str(&format!(
+                "  (func $f{length} (param $value i32)\n    (if (local.get $value) (then (nop))))\n"
+            ));
+            secret_with("(call $f0 (local.get $byte))").replacen(
+                "  (func $branch",
+                &format!("{functions}  (func $branch"),
+                1,
+            )
+        };
+        let within = secret_findings(&chain(200));
+        assert!(
+            within
+                .iter()
+                .any(|line| line.contains("the condition of this `if` is computed from a secret")),
+            "{within:#?}"
+        );
+        assert!(
+            !within.iter().any(|line| line.contains(cant_follow)),
+            "{within:#?}"
+        );
+        let past = secret_findings(&chain(300));
+        assert!(
+            past.iter().any(|line| line
+                .contains("the secret rule can't follow calls and blocks nested this deep")),
+            "{past:#?}"
+        );
+    }
+
+    /// The secret rule follows 4,000,000 operators in all. Here a loop of 140,000 operators moves
+    /// the secret one local on each round, through more locals than the rule's rounds, so the rule
+    /// follows the loop round after round until it has followed that many; the call after the loop
+    /// is then one it says it can't follow, and refuses the program for.
+    #[test]
+    fn the_secret_rule_refuses_a_program_longer_than_it_follows() {
+        const LOCALS: usize = 40;
+        const FILLER: usize = 140_000;
+        let locals: String = (0..LOCALS)
+            .map(|local| format!(" (local $l{local} i32)"))
+            .collect();
+        let moves: String = (1..LOCALS)
+            .rev()
+            .map(|local| format!(" (local.set $l{local} (local.get $l{}))", local - 1))
+            .collect();
+        let filler = "(nop) ".repeat(FILLER);
+        let text = SECRET
+        .replacen("    (local $word i32)\n", &format!("    (local $word i32){locals}\n"), 1)
+        .replacen(
+            "    ;; plant\n",
+            &format!(
+                "    (loop $again{moves} (local.set $l0 (local.get $byte)) {filler}(br_if $again \
+                 (i32.eqz (local.get $got))))\n    (call $branch (local.get $got))\n"
+            ),
+            1,
+        );
+        let found = secret_findings(&text);
+        assert!(
+            found
+                .iter()
+                .any(|line| line.contains("the secret rule can't follow a program this long")),
+            "{found:#?}"
+        );
+    }
+
+    /// Blocks nested far deeper than any rule follows, 10,000 deep, are refused by the rules that
+    /// stop at their own limits, on the checker's stack as it is: no pass of the checker goes one
+    /// call deeper for each block.
+    #[test]
+    fn blocks_nested_very_deep_are_refused_within_the_checkers_stack() {
+        let text = secret_with(&nested(10_000));
+        let report = check_secret(&text, &["standard input"], "", &[Source::StandardInput]);
+        assert!(!report.passed());
+        let found = secret_findings(&text);
+        assert!(
+            found
+                .iter()
+                .any(|line| line.contains("the secret rule can't follow blocks nested this deep")),
+            "{found:#?}"
+        );
+    }
 }

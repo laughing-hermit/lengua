@@ -1,13 +1,14 @@
 //! The descriptors a program holds, each number fixed by its role: 0, 1 and 2 standard input,
 //! output and error; 3 the working folder, a preopen named `.`, only when the idea names files;
-//! 4 the listener, for a server; 5 and up the connections lengua made, in the idea's order. What
-//! the program opens or accepts takes the lowest number free after those. A number in no use
-//! gives `BADF`.
+//! 4 the listener, for a server; 5 and up the connections lengua made, in the idea's order; then
+//! the UDP port the idea receives datagrams on, when it names one. What the program opens or
+//! accepts takes the lowest number free after those. A number in no use gives `BADF`.
 
 use std::collections::BTreeMap;
 
 use super::files::{Folder, Open};
 use super::net::{Listener, Socket};
+use super::open::Datagrams;
 use crate::wasm::wasi::errno;
 
 /// Standard input's descriptor.
@@ -37,8 +38,11 @@ pub enum Descriptor {
     File(Box<Open>),
     /// The listener a server's connections come in on.
     Listener(Box<Listener>),
-    /// A connection: one lengua made, or one the program accepted.
+    /// A connection: one lengua made, one the program accepted, or one it opened itself.
     Socket(Box<Socket>),
+    /// A socket for UDP datagrams: the port the idea receives on, which lengua bound, or one the
+    /// program opened to a computer its idea grants.
+    Datagram(Box<Datagrams>),
 }
 
 /// The descriptors a program holds.

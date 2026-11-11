@@ -7,6 +7,10 @@
 //!   as `README.TXT` for `readme.txt`, isn't found, as on Linux;
 //! - no path leads out of the folder, which is `NOTCAPABLE` (the compile skill's host.md), or
 //!   through a link, which is `ACCES`;
+//! - a file with more than one name, a hard link, isn't opened either, `ACCES`: its other name
+//!   may be outside the folder, and the system resolves nothing on the way to it that cap-std
+//!   could refuse. The count is the system's, of the file that opened: what a file system
+//!   without hard links, or one that doesn't count them, reports as one name opens;
 //! - a file or folder the program holds open isn't renamed or removed: `BUSY`;
 //! - a folder lists sorted by name, turned round in a test's second run, without `.` and `..`;
 //! - the listings lengua holds for a program are lengua's memory, not the program's, so they are
@@ -451,6 +455,22 @@ pub fn fd_prestat_dir_name(
     Ok(())
 }
 
+/// How many names the open file `file` has: more than one when it has a hard link, in the
+/// working folder or anywhere else on its volume. The system counts them for the file that
+/// opened, so no name is looked up again.
+#[cfg(unix)]
+fn link_count(file: &File) -> std::io::Result<u64> {
+    use cap_std::fs::MetadataExt as _;
+    file.metadata().map(|metadata| metadata.nlink())
+}
+
+/// How many names the open file `file` has: more than one when it has a hard link, in the
+/// working folder or anywhere else on its volume. Windows says it of an open file's handle.
+#[cfg(windows)]
+fn link_count(file: &File) -> std::io::Result<u64> {
+    lengua_os::link_count(file)
+}
+
 /// What `path_open` was asked for.
 #[derive(Debug, Clone, Copy)]
 pub struct Opening {
@@ -510,12 +530,14 @@ pub fn path_open(
             if found.is_none() {
                 limits.make()?;
             }
+            // Opened as it is, and emptied below once it is known to have one name: a file with
+            // more may be one outside the working folder.
             let mut options = OpenOptions::new();
             options
                 .read(read)
                 .write(write)
                 .append(append)
-                .truncate(empty)
+                .truncate(false)
                 .create(create && !new)
                 .create_new(create && new);
             let file = files
@@ -524,6 +546,12 @@ pub fn path_open(
                 .map_err(|error| failed(&error))?;
             if found.is_none() {
                 files.changed();
+            }
+            if link_count(&file).map_err(|error| failed(&error))? > 1 {
+                return Err(Fail::Errno(errno::ACCES));
+            }
+            if empty {
+                file.set_len(0).map_err(|error| failed(&error))?;
             }
             Descriptor::File(Box::new(Open {
                 file,

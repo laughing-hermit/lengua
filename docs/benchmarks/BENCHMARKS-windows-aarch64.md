@@ -1,6 +1,6 @@
 # lengua against C, C++ and Rust on windows-aarch64
 
-Measured on windows-aarch64 (Cobalt 100, 4 threads at once) by `cargo bench --bench against_rust_and_c`, at commit 33ed7fe1f45158efe1a2695d8accd88e1dfb18a5, in https://github.com/laughing-hermit/lengua/actions/runs/42947294489. Every number here is that run's: the bench writes this file from the run's results alone, target/bench/results-windows-aarch64.json in its artifacts.
+Measured on windows-aarch64 (Cobalt 100, 4 threads at once) by `cargo bench --bench against_rust_and_c`, at commit cd54e79fc07fe745f5fcad008bd2a7da4a18ae9e, in https://github.com/laughing-hermit/lengua/actions/runs/42964232679. Every number here is that run's: the bench writes this file from the run's results alone, target/bench/results-windows-aarch64.json in its artifacts.
 
 Every version of a workload does the same work in its own language's way: lengua's program in the fastest form lengua's dialect allows, with SIMD128 written by hand where the work is bytes, and C, C++ and Rust with their standard libraries and plain loops, written for their compilers to vectorize, with no SIMD written by hand. Each workload below says how each version does its work.
 
@@ -8,48 +8,74 @@ Every version of a workload gets the same arguments, input and files, and gives 
 
 Size is a module's bytes on the rows against other modules, which run in the same lengua-mcp. Against a native build, lengua's size is its module's and that of the lengua-mcp it needs to run (18.8 MiB), and the native build's is its executable's alone: what it loads from the system's libraries, C's C library and C++'s where they are linked dynamically, isn't counted, and Rust's standard library, linked in, is.
 
-The runs alternate: each round runs every version once, in an order shuffled from round to round, after each version's checked run and 2 rounds that aren't counted. On each row, lengua against one other version, the gate decides CPU and wall time with a one-sided Mann-Whitney U test at p < 0.01: it looks at the row after 20, 40, 80, 160, 320, 640, 1280, 2000 runs of each version, each look deciding at p < 0.00125 (0.01 split over the looks), until both of the row's tests decide, up to 2000 runs or 600 seconds. Peak memory, the median of the runs' peaks, and size are compared as measured. A measure the runs don't decide is undecided, never level, and KNOWN_BEHIND must name its row.
+The runs alternate: each round runs every version once, in an order shuffled from round to round, after each version's checked run and 2 rounds that aren't counted. On each row, lengua against one other version, the gate decides CPU and wall time with a one-sided Mann-Whitney U test at p < 0.01: it looks at the row after 20, 40, 80, 160, 320, 640, 1280, 2000 runs of each version, each look deciding at p < 0.00125 (0.01 split over the looks), until both of the row's tests decide, up to 2000 runs or 600 seconds. Peak memory, the median of the runs' peaks, and size are compared as measured.
+
+The gate has a noise margin of 5%, as the runners are shared machines and a row this close changes sides from one run to the next. A measure is level when the test doesn't decide it (its p isn't below 0.00125), or when lengua's value is from 0.95 to 1.05 times the other version's, whatever the test decides; for peak memory, when the two medians are that close. It is ahead or behind only past the margin, and for CPU and wall time only when the test decides it too. Size is the same on every run and has no margin: a byte more is behind. KNOWN_BEHIND names the rows where lengua is behind; a level row needs no line there and doesn't fail the gate. Every ratio and every p is printed below, whatever the verdict.
 
 The versions:
 
 - lengua: lengua-mcp, run in wasmtime 50.0.1
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 - c-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all
-- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -lws2_32
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 - cpp-wasm: wasi-sdk 34.0, clang version 23.1.0-wasi-sdk (https://github.com/llvm/llvm-project 895aa2c896ada719451be2e3673c83da8ddf1141); clang++ --target=wasm32-wasip1 --sysroot=/home/runner/wasi-sdk/share/wasi-sysroot -O3 -flto -msimd128 -Wl,--max-memory=4294967296 -Wl,-z,stack-size=1048576 -Wl,--strip-all -fno-exceptions
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 - rust-wasm: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 --target wasm32-wasip1 -C opt-level=3 -C codegen-units=1 -C lto=fat -C panic=abort -C target-feature=+simd128 -C strip=symbols -C link-arg=--max-memory=4294967296
 
 ## The gate
 
-lengua against each version, on CPU time, wall time, peak memory and size, in that order: ✓ lengua is ahead, ✗ behind, ? undecided, – not measured.
+lengua against each version, on CPU time, wall time, peak memory and size, in that order: ✓ lengua is ahead by more than 5%, ✗ behind by more than 5%, ≈ level (within 5%, or not decided), – not measured.
 
 | workload | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|
-| empty | ✗ ✗ ✗ ✓ | ? ✗ ✗ ✓ | ? ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| add | ? ✓ ✗ ✓ | ? ✓ ✗ ✓ | ? ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ? ? ? ? | ✗ ✗ ✗ ✗ |
-| hypotenuse | ? ✓ ✗ ✓ | ✗ ✓ ✗ ✓ | ? ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ? ? ? ? | ✗ ✗ ✗ ✗ |
-| upcase | ? ✗ ✗ ✓ | ✓ ✗ ✗ ✓ | ✓ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| upcase-stdin | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ? ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| shout | ? ✗ ✗ ✓ | ? ✗ ✗ ✓ | ? ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| wc | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| histogram | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| crc32c | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| sort | ✓ ✓ ✗ ✓ | ✓ ✓ ✓ ✓ | ✓ ✓ ✓ ✓ | ✓ ✓ ✗ ✗ | ? ? ? ? | ✗ ✗ ✓ ✗ |
-| tally | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✗ | ? ? ? ? | ✓ ✓ ✗ ✗ |
-| server | ? ✓ ✗ ✓ | ? ✓ ✗ ✓ | ? ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✓ ✗ ✗ ✗ |
+| empty | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| add | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| hypotenuse | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| upcase | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| upcase-stdin | ≈ ≈ ✗ ✗ | ≈ ≈ ✗ ✗ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| shout | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| wc | ≈ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ≈ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| histogram | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| crc32c | ≈ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| sort | ✓ ✓ ≈ ✓ | ✓ ✓ ✓ ✓ | ✓ ✓ ✓ ✓ | ✓ ✓ ≈ ✗ | ✓ ✓ ✓ ✗ | ✗ ✗ ≈ ✗ |
+| tally | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✗ | ✓ ✓ ✗ ✗ | ✓ ✓ ✗ ✗ |
+| server | ≈ ✓ ✗ ✓ | ≈ ✓ ✗ ✓ | ≈ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✓ ✗ ✗ ✗ |
 | files | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| readings | ✓ ✓ ✗ ✓ | ? ✓ ✗ ✓ | ✓ ✓ ✗ ✓ | ✗ ✗ ✗ ✗ | ? ? ? ? | ✗ ✗ ✗ ✗ |
+| readings | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ≈ ≈ ✗ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
 
 Where the run and KNOWN_BEHIND disagree:
 
-- windows-aarch64 upcase cpp-wasm cpu: lengua is ahead now, and KNOWN_BEHIND line 918 names the row: take it out, as the list only shrinks
-- windows-aarch64 upcase cpp-wasm wall: lengua is behind, and KNOWN_BEHIND doesn't name the row: make lengua's program or its engine faster, where the list may not grow
-- windows-aarch64 upcase rust-wasm cpu: lengua is ahead now, and KNOWN_BEHIND line 920 names the row: take it out, as the list only shrinks
-- windows-aarch64 shout rust-wasm cpu: lengua is undecided, and KNOWN_BEHIND doesn't name the row: make lengua's program or its engine faster, where the list may not grow
-- windows-aarch64 histogram rust-wasm cpu: lengua is ahead now, and KNOWN_BEHIND line 992 names the row: take it out, as the list only shrinks
-- windows-aarch64 server cpp-wasm cpu: lengua is undecided, and KNOWN_BEHIND doesn't name the row: make lengua's program or its engine faster, where the list may not grow
-- windows-aarch64 readings cpp-wasm cpu: lengua is undecided, and KNOWN_BEHIND doesn't name the row: make lengua's program or its engine faster, where the list may not grow
+- windows-aarch64 empty c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 846 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 empty c-wasm wall: lengua is level now, and KNOWN_BEHIND line 847 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 empty cpp-wasm cpu: lengua is level now, and KNOWN_BEHIND line 849 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 empty cpp-wasm wall: lengua is level now, and KNOWN_BEHIND line 850 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 empty rust-wasm cpu: lengua is level now, and KNOWN_BEHIND line 852 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 add c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 866 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 add cpp-wasm cpu: lengua is level now, and KNOWN_BEHIND line 868 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 add rust-wasm cpu: lengua is level now, and KNOWN_BEHIND line 870 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 hypotenuse c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 884 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 hypotenuse cpp-wasm cpu: lengua is level now, and KNOWN_BEHIND line 886 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 hypotenuse rust-wasm cpu: lengua is level now, and KNOWN_BEHIND line 888 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 902 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase c-wasm wall: lengua is level now, and KNOWN_BEHIND line 903 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase-stdin c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 919 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase-stdin c-wasm wall: lengua is level now, and KNOWN_BEHIND line 920 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase-stdin cpp-wasm cpu: lengua is level now, and KNOWN_BEHIND line 923 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase-stdin cpp-wasm wall: lengua is level now, and KNOWN_BEHIND line 924 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 upcase-stdin rust-wasm cpu: lengua is level now, and KNOWN_BEHIND line 927 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 shout c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 941 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 shout c-wasm wall: lengua is level now, and KNOWN_BEHIND line 942 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 shout cpp-wasm cpu: lengua is level now, and KNOWN_BEHIND line 944 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 shout cpp-wasm wall: lengua is level now, and KNOWN_BEHIND line 945 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 sort c-wasm memory: lengua is level now, and KNOWN_BEHIND line 1005 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 sort c memory: lengua is level now, and KNOWN_BEHIND line 1006 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 sort cpp cpu: lengua is ahead now, and KNOWN_BEHIND line 1008 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 sort cpp wall: lengua is ahead now, and KNOWN_BEHIND line 1009 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 sort cpp memory: lengua is ahead now, and KNOWN_BEHIND line 1010 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 tally cpp cpu: lengua is ahead now, and KNOWN_BEHIND line 1020 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 tally cpp wall: lengua is ahead now, and KNOWN_BEHIND line 1021 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 server c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 1026 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- windows-aarch64 server rust-wasm cpu: lengua is level now, and KNOWN_BEHIND line 1029 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
 
 ## The native gaps
 
@@ -57,111 +83,111 @@ lengua's median over that of the best native build, C's, C++'s or Rust's, on eac
 
 | workload | CPU time | wall time | peak memory | size |
 |---|---|---|---|---|
-| empty | – | 1.87× | 2.49× | 189.99× |
-| add | – | 1.84× | 2.49× | 166.25× |
+| empty | – | 1.91× | 2.49× | 189.99× |
+| add | – | 1.85× | 2.49× | 166.25× |
 | hypotenuse | – | 1.86× | 2.49× | 164.83× |
 | upcase | – | 1.79× | 2.15× | 161.38× |
-| upcase-stdin | 2.00× | 1.58× | 2.48× | 181.08× |
-| shout | – | 1.79× | 2.13× | 173.74× |
-| wc | 1.50× | 1.24× | 2.48× | 168.43× |
-| histogram | 1.33× | 1.28× | 2.45× | 165.54× |
-| crc32c | 4.00× | 2.27× | 2.46× | 175.32× |
-| sort | 1.11× | 1.09× | 1.01× | 166.27× |
-| tally | 0.69× | 0.67× | 2.27× | 154.30× |
-| server | 1.17× | 1.62× | 2.16× | 170.67× |
-| files | 2.17× | 1.99× | 2.43× | 162.06× |
+| upcase-stdin | 3.00× | 1.52× | 2.48× | 181.08× |
+| shout | – | 1.78× | 2.14× | 173.74× |
+| wc | 1.50× | 1.17× | 2.48× | 168.43× |
+| histogram | 1.33× | 1.24× | 2.46× | 165.54× |
+| crc32c | 4.00× | 2.24× | 2.46× | 175.32× |
+| sort | 1.19× | 1.17× | 1.01× | 166.27× |
+| tally | 0.68× | 0.66× | 2.27× | 154.30× |
+| server | 1.17× | 1.54× | 2.16× | 170.67× |
+| files | 2.18× | 2.13× | 2.43× | 162.06× |
 | readings | 4.00× | 3.20× | 2.49× | 161.38× |
 
 ## Every row
 
-Each measure's verdict, lengua's median over the other version's, and the test's p.
+Each measure's verdict (ahead, level, behind, or not measured), lengua's median over the other version's, and the test's p.
 
 | workload | against | runs | CPU time | wall time | peak memory | size |
 |---|---|---|---|---|---|---|
-| empty | c-wasm | 640 | behind, 1.00×, p 1.0e-3 | behind, 1.01×, p 1.5e-6 | behind, 1.08× | ahead, 0.89× |
-| empty | cpp-wasm | 2000 | undecided, 1.00×, p 0.004 | behind, 1.01×, p 1.3e-14 | behind, 1.08× | ahead, 0.89× |
-| empty | rust-wasm | 2000 | undecided, 1.00×, p 0.478 | ahead, 0.99×, p 2.3e-59 | behind, 1.08× | ahead, 0.01× |
-| empty | c | 40 | behind, p 3.5e-5 | behind, 1.86×, p 7.2e-15 | behind, 2.49× | behind, 179.38× |
-| empty | cpp | 20 | behind, p 6.3e-5 | behind, 1.87×, p 3.4e-8 | behind, 2.49× | behind, 179.38× |
-| empty | rust | 20 | behind, p 6.5e-6 | behind, 1.78×, p 3.4e-8 | behind, 2.34× | behind, 189.99× |
-| add | c-wasm | 2000 | undecided, 1.00×, p 0.033 | ahead, 0.99×, p 4.3e-19 | behind, 1.08× | ahead, 0.04× |
-| add | cpp-wasm | 2000 | undecided, 1.00×, p 0.006 | ahead, 0.99×, p 7.3e-19 | behind, 1.08× | ahead, 0.04× |
-| add | rust-wasm | 2000 | undecided, 1.00×, p 0.299 | ahead, 0.98×, p 2.1e-169 | behind, 1.08× | ahead, 0.02× |
-| add | c | 20 | behind, p 3.7e-5 | behind, 1.84×, p 3.4e-8 | behind, 2.49× | behind, 135.33× |
-| add | cpp | 0 | undecided | undecided | undecided | undecided |
-| add | rust | 20 | behind, p 1.4e-5 | behind, 1.76×, p 3.4e-8 | behind, 2.34× | behind, 166.25× |
-| hypotenuse | c-wasm | 2000 | undecided, 1.00×, p 0.002 | ahead, 0.99×, p 5.9e-17 | behind, 1.08× | ahead, 0.05× |
-| hypotenuse | cpp-wasm | 2000 | behind, 1.00×, p 3.7e-4 | ahead, 0.99×, p 4.8e-11 | behind, 1.09× | ahead, 0.05× |
-| hypotenuse | rust-wasm | 2000 | undecided, 1.00×, p 0.102 | ahead, 0.98×, p 6.3e-141 | behind, 1.09× | ahead, 0.03× |
-| hypotenuse | c | 20 | behind, p 3.4e-6 | behind, 1.86×, p 3.4e-8 | behind, 2.49× | behind, 134.39× |
-| hypotenuse | cpp | 0 | undecided | undecided | undecided | undecided |
-| hypotenuse | rust | 20 | behind, p 8.0e-6 | behind, 1.77×, p 6.0e-7 | behind, 2.34× | behind, 164.83× |
-| upcase | c-wasm | 2000 | undecided, 1.00×, p 0.415 | behind, 1.00×, p 2.0e-10 | behind, 1.08× | ahead, 0.06× |
-| upcase | cpp-wasm | 1280 | ahead, 1.00×, p 1.5e-4 | behind, 1.00×, p 1.9e-5 | behind, 1.08× | ahead, 0.06× |
-| upcase | rust-wasm | 1280 | ahead, 1.00×, p 6.1e-5 | ahead, 0.99×, p 6.3e-38 | behind, 1.07× | ahead, 0.03× |
-| upcase | c | 20 | behind, p 3.3e-6 | behind, 1.78×, p 3.4e-8 | behind, 2.09× | behind, 126.46× |
-| upcase | cpp | 20 | behind, p 1.5e-5 | behind, 1.79×, p 3.4e-8 | behind, 2.09× | behind, 126.46× |
-| upcase | rust | 20 | behind, p 1.8e-6 | behind, 1.71×, p 3.4e-8 | behind, 2.15× | behind, 161.38× |
-| upcase-stdin | c-wasm | 1280 | behind, 1.00×, p 1.6e-5 | behind, 1.01×, p 1.6e-19 | behind, 1.09× | behind, 1.35× |
-| upcase-stdin | cpp-wasm | 2000 | behind, 1.00×, p 4.1e-7 | behind, 1.01×, p 4.7e-11 | behind, 1.09× | behind, 1.32× |
-| upcase-stdin | rust-wasm | 2000 | undecided, 1.00×, p 0.015 | ahead, 0.99×, p 2.8e-18 | behind, 1.09× | ahead, 0.03× |
-| upcase-stdin | c | 20 | behind, 1.50×, p 5.6e-7 | behind, 1.56×, p 3.4e-8 | behind, 2.48× | behind, 172.96× |
-| upcase-stdin | cpp | 20 | behind, 2.00×, p 2.9e-7 | behind, 1.58×, p 3.4e-8 | behind, 2.48× | behind, 172.96× |
-| upcase-stdin | rust | 20 | behind, 1.50×, p 1.8e-6 | behind, 1.48×, p 3.4e-8 | behind, 2.35× | behind, 181.08× |
-| shout | c-wasm | 2000 | undecided, 1.00×, p 0.076 | behind, 1.01×, p 7.1e-17 | behind, 1.09× | ahead, 0.40× |
-| shout | cpp-wasm | 2000 | undecided, 1.00×, p 0.002 | behind, 1.01×, p 1.2e-15 | behind, 1.09× | ahead, 0.40× |
-| shout | rust-wasm | 2000 | undecided, 1.00×, p 0.405 | ahead, 0.99×, p 1.2e-52 | behind, 1.07× | ahead, 0.03× |
-| shout | c | 20 | behind, p 5.9e-4 | behind, 1.79×, p 3.4e-8 | behind, 2.11× | behind, 168.43× |
-| shout | cpp | 40 | behind, p 3.7e-6 | behind, 1.78×, p 7.2e-15 | behind, 2.10× | behind, 168.43× |
-| shout | rust | 40 | behind, p 2.1e-6 | behind, 1.72×, p 7.2e-15 | behind, 2.13× | behind, 173.74× |
-| wc | c-wasm | 160 | ahead, 0.75×, p 1.5e-6 | ahead, 0.87×, p 6.1e-52 | behind, 1.09× | ahead, 0.10× |
-| wc | cpp-wasm | 20 | ahead, 0.21×, p 1.1e-8 | ahead, 0.24×, p 3.4e-8 | behind, 1.09× | ahead, 0.11× |
-| wc | rust-wasm | 80 | ahead, 0.75×, p 2.9e-4 | ahead, 0.86×, p 8.2e-27 | behind, 1.08× | ahead, 0.04× |
-| wc | c | 20 | behind, 1.50×, p 4.1e-5 | behind, 1.24×, p 3.4e-8 | behind, 2.48× | behind, 133.93× |
-| wc | cpp | 20 | behind, 1.50×, p 1.1e-5 | behind, 1.22×, p 3.4e-8 | behind, 2.48× | behind, 133.93× |
-| wc | rust | 20 | behind, 1.50×, p 1.0e-4 | behind, 1.18×, p 3.4e-8 | behind, 2.36× | behind, 168.43× |
-| histogram | c-wasm | 20 | ahead, 0.67×, p 2.1e-7 | ahead, 0.69×, p 3.4e-8 | behind, 1.08× | ahead, 0.09× |
-| histogram | cpp-wasm | 20 | ahead, 0.67×, p 3.6e-7 | ahead, 0.69×, p 3.4e-8 | behind, 1.08× | ahead, 0.09× |
-| histogram | rust-wasm | 2000 | ahead, 1.00×, p 8.3e-7 | ahead, 0.96×, p 0.0e0 | behind, 1.07× | ahead, 0.03× |
-| histogram | c | 20 | behind, 1.33×, p 2.8e-5 | behind, 1.27×, p 3.4e-8 | behind, 2.45× | behind, 134.39× |
-| histogram | cpp | 20 | behind, 1.33×, p 1.5e-4 | behind, 1.28×, p 3.4e-8 | behind, 2.45× | behind, 134.39× |
-| histogram | rust | 20 | behind, 1.33×, p 1.3e-5 | behind, 1.23×, p 3.4e-8 | behind, 2.33× | behind, 165.54× |
-| crc32c | c-wasm | 40 | ahead, 0.80×, p 3.3e-4 | ahead, 0.88×, p 7.2e-15 | behind, 1.08× | ahead, 0.08× |
-| crc32c | cpp-wasm | 20 | ahead, 0.80×, p 7.2e-4 | ahead, 0.87×, p 3.4e-8 | behind, 1.08× | ahead, 0.08× |
-| crc32c | rust-wasm | 20 | ahead, 0.80×, p 1.1e-4 | ahead, 0.83×, p 3.4e-8 | behind, 1.08× | ahead, 0.04× |
-| crc32c | c | 20 | behind, 4.00×, p 1.7e-8 | behind, 2.27×, p 3.4e-8 | behind, 2.46× | behind, 134.86× |
-| crc32c | cpp | 20 | behind, 2.00×, p 1.7e-8 | behind, 2.23×, p 3.4e-8 | behind, 2.46× | behind, 134.86× |
-| crc32c | rust | 20 | behind, 2.00×, p 1.5e-8 | behind, 2.15×, p 3.4e-8 | behind, 2.34× | behind, 175.32× |
-| sort | c-wasm | 20 | ahead, 0.19×, p 2.3e-8 | ahead, 0.19×, p 3.4e-8 | behind, 1.01× | ahead, 0.27× |
-| sort | cpp-wasm | 20 | ahead, 0.57×, p 2.0e-8 | ahead, 0.56×, p 3.4e-8 | ahead, 0.92× | ahead, 0.11× |
-| sort | rust-wasm | 20 | ahead, 0.65×, p 1.8e-8 | ahead, 0.63×, p 3.4e-8 | ahead, 0.92× | ahead, 0.07× |
-| sort | c | 20 | ahead, 0.43×, p 2.0e-8 | ahead, 0.41×, p 3.4e-8 | behind, 1.01× | behind, 166.27× |
-| sort | cpp | 0 | undecided | undecided | undecided | undecided |
-| sort | rust | 20 | behind, 1.11×, p 4.2e-8 | behind, 1.09×, p 3.4e-8 | ahead, 0.95× | behind, 163.45× |
-| tally | c-wasm | 20 | ahead, 0.57×, p 1.2e-8 | ahead, 0.55×, p 3.4e-8 | behind, 1.10× | ahead, 0.20× |
-| tally | cpp-wasm | 20 | ahead, 0.57×, p 1.6e-8 | ahead, 0.55×, p 3.4e-8 | behind, 1.11× | ahead, 0.12× |
-| tally | rust-wasm | 20 | ahead, 0.41×, p 1.5e-8 | ahead, 0.42×, p 3.4e-8 | behind, 1.10× | ahead, 0.08× |
-| tally | c | 20 | ahead, 0.69×, p 1.5e-8 | ahead, 0.67×, p 3.4e-8 | behind, 2.22× | behind, 131.21× |
-| tally | cpp | 0 | undecided | undecided | undecided | undecided |
-| tally | rust | 20 | ahead, 0.67×, p 1.3e-8 | ahead, 0.66×, p 3.4e-8 | behind, 2.27× | behind, 154.30× |
-| server | c-wasm | 67 | undecided, 0.99×, p 0.075 | ahead, 0.93×, p 2.2e-22 | behind, 1.09× | ahead, 0.12× |
-| server | cpp-wasm | 67 | undecided, 0.99×, p 0.437 | ahead, 0.93×, p 2.0e-22 | behind, 1.09× | ahead, 0.06× |
-| server | rust-wasm | 67 | undecided, 0.99×, p 0.009 | ahead, 0.91×, p 1.7e-22 | behind, 1.07× | ahead, 0.03× |
-| server | c | 20 | behind, 1.17×, p 3.0e-8 | behind, 1.16×, p 3.4e-8 | behind, 2.16× | behind, 170.67× |
-| server | cpp | 20 | behind, 1.17×, p 3.0e-8 | behind, 1.16×, p 3.4e-8 | behind, 2.15× | behind, 166.97× |
-| server | rust | 20 | ahead, 0.91×, p 1.3e-4 | behind, 1.62×, p 3.4e-8 | behind, 1.77× | behind, 141.28× |
-| files | c-wasm | 20 | ahead, 0.93×, p 2.2e-4 | ahead, 0.92×, p 1.2e-5 | behind, 1.08× | ahead, 0.05× |
-| files | cpp-wasm | 40 | ahead, 0.93×, p 2.4e-5 | ahead, 0.94×, p 7.0e-9 | behind, 1.08× | ahead, 0.05× |
-| files | rust-wasm | 20 | ahead, 0.93×, p 2.5e-6 | ahead, 0.94×, p 4.6e-5 | behind, 1.08× | ahead, 0.03× |
-| files | c | 20 | behind, 1.86×, p 1.7e-8 | behind, 1.84×, p 3.4e-8 | behind, 2.43× | behind, 127.30× |
-| files | cpp | 20 | behind, 1.86×, p 1.4e-8 | behind, 1.84×, p 3.4e-8 | behind, 2.43× | behind, 127.30× |
-| files | rust | 20 | behind, 2.17×, p 1.9e-8 | behind, 1.99×, p 3.4e-8 | behind, 2.31× | behind, 162.06× |
-| readings | c-wasm | 640 | ahead, 1.00×, p 3.9e-8 | ahead, 0.97×, p 3.4e-185 | behind, 1.08× | ahead, 0.04× |
-| readings | cpp-wasm | 1702 | undecided, 1.00×, p 0.002 | ahead, 0.99×, p 0.0e0 | behind, 1.08× | ahead, 0.04× |
-| readings | rust-wasm | 80 | ahead, 1.00×, p 1.6e-4 | ahead, 0.96×, p 1.6e-23 | behind, 1.08× | ahead, 0.02× |
+| empty | c-wasm | 2000 | level, 1.00×, p 0.055 | level, 1.01×, p 2.4e-4 | behind, 1.08× | ahead, 0.89× |
+| empty | cpp-wasm | 2000 | level, 1.00×, p 0.137 | level, 1.01×, p 6.7e-6 | behind, 1.08× | ahead, 0.89× |
+| empty | rust-wasm | 2000 | level, 1.00×, p 0.354 | level, 0.99×, p 6.0e-20 | behind, 1.08× | ahead, 0.01× |
+| empty | c | 20 | behind, p 6.4e-6 | behind, 1.91×, p 3.4e-8 | behind, 2.49× | behind, 179.38× |
+| empty | cpp | 20 | behind, p 8.0e-7 | behind, 1.87×, p 3.4e-8 | behind, 2.49× | behind, 179.38× |
+| empty | rust | 20 | behind, p 8.0e-7 | behind, 1.80×, p 3.4e-8 | behind, 2.34× | behind, 189.99× |
+| add | c-wasm | 2000 | level, 1.00×, p 0.148 | level, 0.99×, p 6.3e-10 | behind, 1.08× | ahead, 0.04× |
+| add | cpp-wasm | 2000 | level, 1.00×, p 0.349 | level, 0.99×, p 2.6e-7 | behind, 1.08× | ahead, 0.04× |
+| add | rust-wasm | 2000 | level, 1.00×, p 0.498 | level, 0.98×, p 2.3e-60 | behind, 1.08× | ahead, 0.02× |
+| add | c | 40 | behind, p 6.0e-6 | behind, 1.83×, p 7.2e-15 | behind, 2.49× | behind, 135.33× |
+| add | cpp | 20 | behind, p 1.4e-4 | behind, 1.85×, p 3.4e-8 | behind, 2.48× | behind, 135.33× |
+| add | rust | 20 | behind, p 3.6e-5 | behind, 1.76×, p 3.4e-8 | behind, 2.34× | behind, 166.25× |
+| hypotenuse | c-wasm | 2000 | level, 1.00×, p 0.100 | level, 1.00×, p 2.5e-4 | behind, 1.08× | ahead, 0.05× |
+| hypotenuse | cpp-wasm | 2000 | level, 1.00×, p 0.007 | level, 0.99×, p 3.4e-5 | behind, 1.09× | ahead, 0.05× |
+| hypotenuse | rust-wasm | 2000 | level, 1.00×, p 0.192 | level, 0.98×, p 1.8e-56 | behind, 1.09× | ahead, 0.03× |
+| hypotenuse | c | 20 | behind, p 1.1e-4 | behind, 1.85×, p 3.4e-8 | behind, 2.49× | behind, 134.39× |
+| hypotenuse | cpp | 20 | behind, p 2.9e-4 | behind, 1.86×, p 3.4e-8 | behind, 2.49× | behind, 133.92× |
+| hypotenuse | rust | 40 | behind, p 1.1e-5 | behind, 1.75×, p 7.2e-15 | behind, 2.34× | behind, 164.83× |
+| upcase | c-wasm | 2000 | level, 1.00×, p 0.189 | level, 1.00×, p 0.011 | behind, 1.08× | ahead, 0.06× |
+| upcase | cpp-wasm | 2000 | level, 1.00×, p 0.202 | level, 1.00×, p 0.009 | behind, 1.08× | ahead, 0.06× |
+| upcase | rust-wasm | 2000 | level, 1.00×, p 0.235 | level, 0.99×, p 1.0e-14 | behind, 1.07× | ahead, 0.03× |
+| upcase | c | 40 | behind, p 2.8e-7 | behind, 1.79×, p 7.2e-15 | behind, 2.09× | behind, 126.46× |
+| upcase | cpp | 20 | behind, p 0.001 | behind, 1.75×, p 3.4e-8 | behind, 2.09× | behind, 126.46× |
+| upcase | rust | 40 | behind, p 1.0e-6 | behind, 1.73×, p 7.2e-15 | behind, 2.15× | behind, 161.38× |
+| upcase-stdin | c-wasm | 2000 | level, 1.00×, p 0.002 | level, 1.01×, p 3.5e-6 | behind, 1.09× | behind, 1.35× |
+| upcase-stdin | cpp-wasm | 2000 | level, 1.00×, p 0.025 | level, 1.00×, p 0.013 | behind, 1.09× | behind, 1.32× |
+| upcase-stdin | rust-wasm | 2000 | level, 1.00×, p 0.191 | level, 0.99×, p 5.1e-28 | behind, 1.09× | ahead, 0.03× |
+| upcase-stdin | c | 20 | behind, 3.00×, p 9.6e-7 | behind, 1.51×, p 3.4e-8 | behind, 2.48× | behind, 172.96× |
+| upcase-stdin | cpp | 20 | behind, 3.00×, p 1.8e-6 | behind, 1.52×, p 3.4e-8 | behind, 2.48× | behind, 172.96× |
+| upcase-stdin | rust | 20 | behind, 3.00×, p 9.6e-7 | behind, 1.43×, p 3.4e-8 | behind, 2.36× | behind, 181.08× |
+| shout | c-wasm | 640 | level, 1.00×, p 4.3e-4 | level, 1.01×, p 3.8e-5 | behind, 1.09× | ahead, 0.40× |
+| shout | cpp-wasm | 2000 | level, 1.00×, p 0.033 | level, 1.01×, p 1.5e-6 | behind, 1.09× | ahead, 0.40× |
+| shout | rust-wasm | 2000 | level, 1.00×, p 0.031 | level, 0.99×, p 6.8e-17 | behind, 1.08× | ahead, 0.03× |
+| shout | c | 20 | behind, p 2.8e-4 | behind, 1.78×, p 3.4e-8 | behind, 2.12× | behind, 168.43× |
+| shout | cpp | 20 | behind, p 1.2e-5 | behind, 1.77×, p 3.4e-8 | behind, 2.11× | behind, 168.43× |
+| shout | rust | 20 | behind, p 1.2e-5 | behind, 1.71×, p 3.4e-8 | behind, 2.14× | behind, 173.74× |
+| wc | c-wasm | 160 | level, 1.00×, p 1.7e-5 | ahead, 0.85×, p 8.9e-52 | behind, 1.09× | ahead, 0.10× |
+| wc | cpp-wasm | 20 | ahead, 0.23×, p 1.8e-8 | ahead, 0.22×, p 3.4e-8 | behind, 1.09× | ahead, 0.11× |
+| wc | rust-wasm | 80 | level, 1.00×, p 8.6e-4 | ahead, 0.85×, p 2.5e-27 | behind, 1.08× | ahead, 0.04× |
+| wc | c | 20 | behind, 1.50×, p 4.4e-4 | behind, 1.17×, p 3.4e-8 | behind, 2.48× | behind, 133.93× |
+| wc | cpp | 20 | behind, 1.50×, p 2.8e-5 | behind, 1.14×, p 3.4e-8 | behind, 2.48× | behind, 133.93× |
+| wc | rust | 20 | behind, 1.50×, p 0.001 | behind, 1.12×, p 3.4e-8 | behind, 2.37× | behind, 168.43× |
+| histogram | c-wasm | 20 | ahead, 0.67×, p 5.9e-8 | ahead, 0.68×, p 3.4e-8 | behind, 1.08× | ahead, 0.09× |
+| histogram | cpp-wasm | 20 | ahead, 0.67×, p 3.1e-8 | ahead, 0.69×, p 3.4e-8 | behind, 1.08× | ahead, 0.09× |
+| histogram | rust-wasm | 640 | level, 1.00×, p 3.0e-5 | level, 0.97×, p 1.8e-136 | behind, 1.07× | ahead, 0.03× |
+| histogram | c | 20 | behind, 1.33×, p 3.5e-8 | behind, 1.24×, p 3.4e-8 | behind, 2.45× | behind, 134.39× |
+| histogram | cpp | 20 | behind, 1.33×, p 1.3e-6 | behind, 1.24×, p 3.4e-8 | behind, 2.46× | behind, 134.39× |
+| histogram | rust | 20 | behind, 1.33×, p 1.0e-4 | behind, 1.20×, p 3.4e-8 | behind, 2.34× | behind, 165.54× |
+| crc32c | c-wasm | 40 | level, 1.00×, p 4.2e-4 | ahead, 0.86×, p 9.4e-14 | behind, 1.08× | ahead, 0.08× |
+| crc32c | cpp-wasm | 80 | ahead, 0.89×, p 2.2e-7 | ahead, 0.86×, p 7.6e-27 | behind, 1.08× | ahead, 0.08× |
+| crc32c | rust-wasm | 20 | ahead, 0.80×, p 5.1e-4 | ahead, 0.83×, p 3.4e-8 | behind, 1.08× | ahead, 0.04× |
+| crc32c | c | 20 | behind, 2.67×, p 2.5e-8 | behind, 2.22×, p 3.4e-8 | behind, 2.46× | behind, 134.86× |
+| crc32c | cpp | 20 | behind, 4.00×, p 2.2e-8 | behind, 2.24×, p 3.4e-8 | behind, 2.46× | behind, 134.86× |
+| crc32c | rust | 20 | behind, 4.00×, p 2.5e-8 | behind, 2.11×, p 3.4e-8 | behind, 2.34× | behind, 175.32× |
+| sort | c-wasm | 20 | ahead, 0.21×, p 2.7e-8 | ahead, 0.20×, p 3.4e-8 | level, 1.01× | ahead, 0.27× |
+| sort | cpp-wasm | 20 | ahead, 0.60×, p 2.5e-8 | ahead, 0.59×, p 3.4e-8 | ahead, 0.92× | ahead, 0.11× |
+| sort | rust-wasm | 20 | ahead, 0.68×, p 2.5e-8 | ahead, 0.67×, p 3.4e-8 | ahead, 0.92× | ahead, 0.07× |
+| sort | c | 20 | ahead, 0.45×, p 2.8e-8 | ahead, 0.43×, p 3.4e-8 | level, 1.01× | behind, 166.27× |
+| sort | cpp | 20 | ahead, 0.46×, p 2.6e-8 | ahead, 0.45×, p 3.4e-8 | ahead, 0.90× | behind, 151.87× |
+| sort | rust | 20 | behind, 1.19×, p 6.2e-8 | behind, 1.17×, p 3.9e-8 | level, 0.95× | behind, 163.45× |
+| tally | c-wasm | 20 | ahead, 0.55×, p 1.7e-8 | ahead, 0.55×, p 3.4e-8 | behind, 1.11× | ahead, 0.20× |
+| tally | cpp-wasm | 20 | ahead, 0.55×, p 1.7e-8 | ahead, 0.55×, p 3.4e-8 | behind, 1.11× | ahead, 0.12× |
+| tally | rust-wasm | 20 | ahead, 0.41×, p 1.6e-8 | ahead, 0.41×, p 3.4e-8 | behind, 1.10× | ahead, 0.08× |
+| tally | c | 20 | ahead, 0.68×, p 6.5e-9 | ahead, 0.66×, p 3.4e-8 | behind, 2.22× | behind, 131.21× |
+| tally | cpp | 20 | ahead, 0.68×, p 2.0e-8 | ahead, 0.65×, p 3.4e-8 | behind, 2.24× | behind, 127.31× |
+| tally | rust | 20 | ahead, 0.64×, p 1.8e-8 | ahead, 0.64×, p 3.4e-8 | behind, 2.27× | behind, 154.30× |
+| server | c-wasm | 71 | level, 1.01×, p 0.060 | ahead, 0.93×, p 1.8e-19 | behind, 1.09× | ahead, 0.12× |
+| server | cpp-wasm | 71 | level, 1.01×, p 0.080 | ahead, 0.93×, p 2.9e-19 | behind, 1.09× | ahead, 0.06× |
+| server | rust-wasm | 71 | level, 1.00×, p 0.361 | ahead, 0.93×, p 1.7e-20 | behind, 1.07× | ahead, 0.03× |
+| server | c | 20 | behind, 1.17×, p 2.9e-8 | behind, 1.17×, p 3.4e-8 | behind, 2.16× | behind, 170.67× |
+| server | cpp | 20 | behind, 1.17×, p 3.1e-8 | behind, 1.16×, p 3.5e-7 | behind, 2.15× | behind, 166.97× |
+| server | rust | 20 | ahead, 0.88×, p 4.7e-8 | behind, 1.54×, p 3.4e-8 | behind, 1.78× | behind, 141.28× |
+| files | c-wasm | 20 | ahead, 0.86×, p 1.4e-5 | ahead, 0.91×, p 5.3e-8 | behind, 1.08× | ahead, 0.05× |
+| files | cpp-wasm | 20 | ahead, 0.92×, p 1.8e-4 | ahead, 0.90×, p 6.2e-8 | behind, 1.08× | ahead, 0.05× |
+| files | rust-wasm | 20 | ahead, 0.92×, p 9.2e-6 | ahead, 0.90×, p 5.3e-8 | behind, 1.08× | ahead, 0.03× |
+| files | c | 20 | behind, 2.00×, p 1.0e-8 | behind, 1.96×, p 3.4e-8 | behind, 2.43× | behind, 127.30× |
+| files | cpp | 20 | behind, 2.00×, p 8.7e-9 | behind, 1.97×, p 3.4e-8 | behind, 2.43× | behind, 127.30× |
+| files | rust | 20 | behind, 2.18×, p 1.7e-8 | behind, 2.13×, p 3.4e-8 | behind, 2.31× | behind, 162.06× |
+| readings | c-wasm | 640 | level, 1.00×, p 2.9e-7 | level, 0.97×, p 2.0e-186 | behind, 1.08× | ahead, 0.04× |
+| readings | cpp-wasm | 1734 | level, 1.00×, p 0.013 | level, 0.99×, p 1.0e-299 | behind, 1.08× | ahead, 0.04× |
+| readings | rust-wasm | 80 | level, 1.00×, p 5.5e-4 | level, 0.95×, p 8.2e-27 | behind, 1.08× | ahead, 0.02× |
 | readings | c | 20 | behind, 4.00×, p 4.9e-9 | behind, 3.20×, p 3.4e-8 | behind, 2.49× | behind, 135.33× |
-| readings | cpp | 0 | undecided | undecided | undecided | undecided |
-| readings | rust | 20 | behind, 2.67×, p 1.2e-8 | behind, 2.44×, p 3.4e-8 | behind, 2.34× | behind, 161.38× |
+| readings | cpp | 20 | behind, 4.00×, p 4.9e-9 | behind, 3.13×, p 3.4e-8 | behind, 2.48× | behind, 135.33× |
+| readings | rust | 20 | behind, 2.67×, p 2.0e-8 | behind, 2.44×, p 3.4e-8 | behind, 2.34× | behind, 161.38× |
 
 ## empty
 
@@ -169,13 +195,13 @@ Starts and exits with code 0: all of it is starting and ending a process, which 
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 640 | 2000 | 2000 | 40 | 20 | 20 |
+| counted runs | 2000 | 2000 | 2000 | 2000 | 20 | 20 | 20 |
 | CPU time | 15.6 ms | 15.6 ms | 15.6 ms | 15.6 ms | 0.00 ns | 0.00 ns | 0.00 ns |
-| wall time | 22.3 ms | 22.2 ms | 22.2 ms | 22.6 ms | 12.0 ms | 11.9 ms | 12.5 ms |
-| peak memory | 11.6 MiB | 10.7 MiB | 10.7 MiB | 10.7 MiB | 4.66 MiB | 4.66 MiB | 4.96 MiB |
+| wall time | 21.0 ms | 20.9 ms | 20.9 ms | 21.3 ms | 11.3 ms | 11.6 ms | 12.0 ms |
+| peak memory | 11.6 MiB | 10.7 MiB | 10.7 MiB | 10.7 MiB | 4.66 MiB | 4.66 MiB | 4.95 MiB |
 | size | 319 B | 357 B | 357 B | 33.8 KiB | 108 KiB | 108 KiB | 102 KiB |
 
-Its rounds took 266 seconds.
+Its rounds took 299 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/empty
 
@@ -187,7 +213,7 @@ Its rounds took 266 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -lws2_32
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -197,13 +223,13 @@ Parses two whole numbers from its arguments and prints their sum: almost all of 
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 2000 | 2000 | 2000 | 20 | 0 | 20 |
-| CPU time | 15.6 ms | 15.6 ms | 15.6 ms | 15.6 ms | 0.00 ns | – | 0.00 ns |
-| wall time | 21.8 ms | 21.9 ms | 21.9 ms | 22.2 ms | 12.0 ms | – | 12.4 ms |
-| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.8 MiB | 4.70 MiB | – | 4.98 MiB |
-| size | 1.22 KiB | 30.2 KiB | 29.0 KiB | 54.5 KiB | 142 KiB | 0 B | 116 KiB |
+| counted runs | 2000 | 2000 | 2000 | 2000 | 40 | 20 | 20 |
+| CPU time | 15.6 ms | 15.6 ms | 15.6 ms | 15.6 ms | 0.00 ns | 0.00 ns | 0.00 ns |
+| wall time | 21.8 ms | 21.9 ms | 21.9 ms | 22.3 ms | 11.2 ms | 11.2 ms | 11.8 ms |
+| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.8 MiB | 4.69 MiB | 4.70 MiB | 4.98 MiB |
+| size | 1.22 KiB | 30.2 KiB | 29.0 KiB | 54.5 KiB | 142 KiB | 142 KiB | 116 KiB |
 
-Its rounds took 310 seconds.
+Its rounds took 312 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/add
 
@@ -215,25 +241,7 @@ Its rounds took 310 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp wasn't measured to the end: clang++ couldn't build C:\a\lengua\lengua\benches\programs\add\main.cpp: C:\a\lengua\lengua\benches\programs\add\main.cpp:10:6: error: no template named 'optional' in namespace 'std'
-   10 | std::optional<long long> parse(std::string_view text) {
-      | ~~~~~^
-C:\a\lengua\lengua\benches\programs\add\main.cpp:10:37: error: no type named 'string_view' in namespace 'std'
-   10 | std::optional<long long> parse(std::string_view text) {
-      |                                ~~~~~^
-C:\a\lengua\lengua\benches\programs\add\main.cpp:12:10: warning: structured binding declarations are a C++17 extension [-Wc++17-extensions]
-   12 |     auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), number);
-      |          ^~~~~~~~~~~~
-C:\a\lengua\lengua\benches\programs\add\main.cpp:12:30: error: no member named 'from_chars' in namespace 'std'
-   12 |     auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), number);
-      |                              ^~~~~~~~~~
-C:\a\lengua\lengua\benches\programs\add\main.cpp:13:23: error: no member named 'errc' in namespace 'std'
-   13 |     if (error != std::errc{} || end != text.data() + text.size() || number < -1000000000LL ||
-      |                       ^~~~
-C:\a\lengua\lengua\benches\programs\add\main.cpp:15:21: error: no member named 'nullopt' in namespace 'std'
-   15 |         return std::nullopt;
-      |                     ^~~~~~~
-1 warning and 5 errors generated.
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -243,13 +251,13 @@ Prints the hypotenuse of two decimal sides from its arguments, rounded to three 
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 2000 | 2000 | 2000 | 20 | 0 | 20 |
-| CPU time | 15.6 ms | 15.6 ms | 15.6 ms | 15.6 ms | 0.00 ns | – | 0.00 ns |
-| wall time | 22.3 ms | 22.4 ms | 22.4 ms | 22.8 ms | 12.0 ms | – | 12.5 ms |
-| peak memory | 11.7 MiB | 10.8 MiB | 10.7 MiB | 10.8 MiB | 4.69 MiB | – | 4.99 MiB |
-| size | 1.52 KiB | 28.4 KiB | 28.9 KiB | 56.3 KiB | 144 KiB | 0 B | 117 KiB |
+| counted runs | 2000 | 2000 | 2000 | 2000 | 20 | 20 | 40 |
+| CPU time | 15.6 ms | 15.6 ms | 15.6 ms | 15.6 ms | 0.00 ns | 0.00 ns | 0.00 ns |
+| wall time | 21.1 ms | 21.2 ms | 21.2 ms | 21.6 ms | 11.2 ms | 11.1 ms | 11.7 ms |
+| peak memory | 11.7 MiB | 10.8 MiB | 10.7 MiB | 10.8 MiB | 4.69 MiB | 4.69 MiB | 4.98 MiB |
+| size | 1.52 KiB | 28.4 KiB | 28.9 KiB | 56.3 KiB | 144 KiB | 144 KiB | 117 KiB |
 
-Its rounds took 318 seconds.
+Its rounds took 300 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, examples/hypotenuse
 
@@ -261,10 +269,7 @@ Its rounds took 318 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp wasn't measured to the end: clang++ couldn't build C:\a\lengua\lengua\benches\programs\hypotenuse\main.cpp: C:\a\lengua\lengua\benches\programs\hypotenuse\main.cpp:13:16: error: no type named 'string_view' in namespace 'std'
-   13 | int parse(std::string_view text, long long& units) {
-      |           ~~~~~^
-1 error generated.
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -274,13 +279,13 @@ Copies a 1 MiB text file to another with its ASCII letters in capitals: a file o
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 2000 | 1280 | 1280 | 20 | 20 | 20 |
+| counted runs | 2000 | 2000 | 2000 | 2000 | 40 | 20 | 40 |
 | CPU time | 15.6 ms | 15.6 ms | 15.6 ms | 15.6 ms | 0.00 ns | 0.00 ns | 0.00 ns |
-| wall time | 23.9 ms | 23.8 ms | 23.9 ms | 24.3 ms | 13.5 ms | 13.4 ms | 14.0 ms |
-| peak memory | 12.2 MiB | 11.2 MiB | 11.2 MiB | 11.4 MiB | 5.80 MiB | 5.80 MiB | 5.66 MiB |
+| wall time | 22.6 ms | 22.5 ms | 22.5 ms | 22.9 ms | 12.4 ms | 12.8 ms | 12.8 ms |
+| peak memory | 12.2 MiB | 11.2 MiB | 11.2 MiB | 11.4 MiB | 5.80 MiB | 5.80 MiB | 5.65 MiB |
 | size | 1.93 KiB | 33.4 KiB | 33.4 KiB | 59.0 KiB | 152 KiB | 152 KiB | 120 KiB |
 
-Its rounds took 273 seconds.
+Its rounds took 311 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, examples/upcase
 
@@ -292,7 +297,7 @@ Its rounds took 273 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -lws2_32
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -302,13 +307,13 @@ Copies 64 MiB of standard input to standard output with its ASCII letters in cap
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 1280 | 2000 | 2000 | 20 | 20 | 20 |
-| CPU time | 46.9 ms | 46.9 ms | 46.9 ms | 46.9 ms | 31.2 ms | 23.4 ms | 31.2 ms |
-| wall time | 48.8 ms | 48.3 ms | 48.5 ms | 49.1 ms | 31.0 ms | 30.8 ms | 32.8 ms |
-| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.8 MiB | 4.73 MiB | 4.73 MiB | 4.98 MiB |
+| counted runs | 2000 | 2000 | 2000 | 2000 | 20 | 20 | 20 |
+| CPU time | 46.9 ms | 46.9 ms | 46.9 ms | 46.9 ms | 15.6 ms | 15.6 ms | 15.6 ms |
+| wall time | 45.4 ms | 45.2 ms | 45.3 ms | 46.0 ms | 30.7 ms | 30.4 ms | 32.3 ms |
+| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.8 MiB | 4.73 MiB | 4.73 MiB | 4.97 MiB |
 | size | 1.20 KiB | 912 B | 929 B | 35.6 KiB | 112 KiB | 112 KiB | 106 KiB |
 
-Its rounds took 486 seconds.
+Its rounds took 498 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/upcase-stdin
 
@@ -320,7 +325,7 @@ Its rounds took 486 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -lws2_32
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -330,13 +335,13 @@ Reads 1 MiB of standard input whole, then prints it with its ASCII letters in ca
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 2000 | 2000 | 2000 | 20 | 40 | 40 |
+| counted runs | 2000 | 640 | 2000 | 2000 | 20 | 20 | 20 |
 | CPU time | 15.6 ms | 15.6 ms | 15.6 ms | 15.6 ms | 0.00 ns | 0.00 ns | 0.00 ns |
-| wall time | 22.7 ms | 22.6 ms | 22.6 ms | 23.0 ms | 12.6 ms | 12.6 ms | 13.1 ms |
-| peak memory | 11.9 MiB | 11.0 MiB | 11.0 MiB | 11.1 MiB | 5.67 MiB | 5.67 MiB | 5.60 MiB |
+| wall time | 21.0 ms | 20.5 ms | 20.9 ms | 21.3 ms | 11.7 ms | 11.7 ms | 12.2 ms |
+| peak memory | 12.0 MiB | 11.0 MiB | 11.0 MiB | 11.1 MiB | 5.66 MiB | 5.67 MiB | 5.59 MiB |
 | size | 1.24 KiB | 3.07 KiB | 3.09 KiB | 40.5 KiB | 114 KiB | 114 KiB | 111 KiB |
 
-Its rounds took 324 seconds.
+Its rounds took 246 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/shout
 
@@ -348,7 +353,7 @@ Its rounds took 324 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -lws2_32
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -359,12 +364,12 @@ Counts the lines and words of 64 MiB of standard input, as `wc -lw` does. lengua
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
 | counted runs | 160 | 160 | 20 | 80 | 20 | 20 | 20 |
-| CPU time | 46.9 ms | 62.5 ms | 219 ms | 62.5 ms | 31.2 ms | 31.2 ms | 31.2 ms |
-| wall time | 52.8 ms | 60.4 ms | 221 ms | 61.2 ms | 42.5 ms | 43.3 ms | 44.5 ms |
-| peak memory | 11.8 MiB | 10.8 MiB | 10.8 MiB | 10.9 MiB | 4.76 MiB | 4.76 MiB | 4.99 MiB |
+| CPU time | 46.9 ms | 46.9 ms | 203 ms | 46.9 ms | 31.2 ms | 31.2 ms | 31.2 ms |
+| wall time | 47.0 ms | 55.4 ms | 215 ms | 56.6 ms | 40.4 ms | 41.2 ms | 41.9 ms |
+| peak memory | 11.8 MiB | 10.8 MiB | 10.8 MiB | 10.9 MiB | 4.76 MiB | 4.76 MiB | 4.98 MiB |
 | size | 1.91 KiB | 18.4 KiB | 17.9 KiB | 53.9 KiB | 144 KiB | 144 KiB | 114 KiB |
 
-Its rounds took 41 seconds.
+Its rounds took 37 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, examples/count
 
@@ -376,7 +381,7 @@ Its rounds took 41 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -lws2_32
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -386,13 +391,13 @@ Counts each byte value of 64 MiB of standard input. Every version counts in four
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 20 | 20 | 2000 | 20 | 20 | 20 |
+| counted runs | 640 | 20 | 20 | 640 | 20 | 20 | 20 |
 | CPU time | 62.5 ms | 93.8 ms | 93.8 ms | 62.5 ms | 46.9 ms | 46.9 ms | 46.9 ms |
-| wall time | 72.9 ms | 104 ms | 103 ms | 75.7 ms | 56.4 ms | 56.1 ms | 58.4 ms |
-| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.9 MiB | 4.77 MiB | 4.77 MiB | 5.01 MiB |
+| wall time | 68.4 ms | 101 ms | 101 ms | 70.7 ms | 56.0 ms | 55.8 ms | 57.7 ms |
+| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.9 MiB | 4.76 MiB | 4.76 MiB | 5.00 MiB |
 | size | 1.58 KiB | 18.1 KiB | 18.1 KiB | 55.5 KiB | 144 KiB | 144 KiB | 116 KiB |
 
-Its rounds took 383 seconds.
+Its rounds took 121 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/histogram
 
@@ -404,7 +409,7 @@ Its rounds took 383 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -lws2_32
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -414,13 +419,13 @@ The CRC-32C of 64 MiB of standard input. Natively, C, C++ and Rust use the CPU's
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 40 | 40 | 20 | 20 | 20 | 20 | 20 |
-| CPU time | 62.5 ms | 78.1 ms | 78.1 ms | 78.1 ms | 15.6 ms | 31.2 ms | 31.2 ms |
-| wall time | 70.3 ms | 80.3 ms | 81.1 ms | 84.6 ms | 31.1 ms | 31.6 ms | 32.9 ms |
-| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.8 MiB | 4.75 MiB | 4.76 MiB | 4.99 MiB |
+| counted runs | 80 | 40 | 80 | 20 | 20 | 20 | 20 |
+| CPU time | 62.5 ms | 62.5 ms | 70.3 ms | 78.1 ms | 23.4 ms | 15.6 ms | 15.6 ms |
+| wall time | 65.4 ms | 76.1 ms | 75.9 ms | 79.2 ms | 29.5 ms | 29.3 ms | 31.1 ms |
+| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.8 MiB | 4.75 MiB | 4.75 MiB | 4.99 MiB |
 | size | 1.61 KiB | 19.1 KiB | 19.1 KiB | 39.6 KiB | 143 KiB | 143 KiB | 110 KiB |
 
-Its rounds took 16 seconds.
+Its rounds took 24 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/crc32c
 
@@ -432,7 +437,7 @@ Its rounds took 16 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -lws2_32
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -442,13 +447,13 @@ Sorts the lines of 64 MiB of standard input in byte order, as `LC_ALL=C sort` do
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 20 | 20 | 20 | 20 | 20 | 0 | 20 |
-| CPU time | 312 ms | 1.62 s | 547 ms | 484 ms | 734 ms | – | 281 ms |
-| wall time | 311 ms | 1.63 s | 553 ms | 491 ms | 752 ms | – | 286 ms |
-| peak memory | 80.6 MiB | 79.6 MiB | 87.6 MiB | 87.7 MiB | 79.7 MiB | – | 84.6 MiB |
-| size | 3.84 KiB | 14.4 KiB | 33.6 KiB | 53.3 KiB | 116 KiB | 0 B | 118 KiB |
+| counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
+| CPU time | 297 ms | 1.43 s | 492 ms | 438 ms | 656 ms | 641 ms | 250 ms |
+| wall time | 293 ms | 1.44 s | 500 ms | 440 ms | 680 ms | 657 ms | 249 ms |
+| peak memory | 80.6 MiB | 79.6 MiB | 87.6 MiB | 87.7 MiB | 79.7 MiB | 89.7 MiB | 84.6 MiB |
+| size | 3.84 KiB | 14.4 KiB | 33.6 KiB | 53.3 KiB | 116 KiB | 127 KiB | 118 KiB |
 
-Its rounds took 97 seconds.
+Its rounds took 103 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/sort-large
 
@@ -460,28 +465,7 @@ Its rounds took 97 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp wasn't measured to the end: clang++ couldn't build C:\a\lengua\lengua\benches\programs\sort\main.cpp: C:\a\lengua\lengua\benches\programs\sort\main.cpp:39:22: error: no member named 'string_view' in namespace 'std'
-   39 |     std::vector<std::string_view> lines;
-      |                      ^~~~~~~~~~~
-C:\a\lengua\lengua\benches\programs\sort\main.cpp:40:10: error: no member named 'string_view' in namespace 'std'
-   40 |     std::string_view rest(input, length);
-      |          ^~~~~~~~~~~
-C:\a\lengua\lengua\benches\programs\sort\main.cpp:41:13: error: use of undeclared identifier 'rest'
-   41 |     while (!rest.empty()) {
-      |             ^~~~
-C:\a\lengua\lengua\benches\programs\sort\main.cpp:42:31: error: use of undeclared identifier 'rest'
-   42 |         std::size_t newline = rest.find('\n');
-      |                               ^~~~
-C:\a\lengua\lengua\benches\programs\sort\main.cpp:43:25: error: use of undeclared identifier 'rest'
-   43 |         lines.push_back(rest.substr(0, newline));
-      |                         ^~~~
-C:\a\lengua\lengua\benches\programs\sort\main.cpp:44:9: error: use of undeclared identifier 'rest'
-   44 |         rest.remove_prefix(newline + 1);
-      |         ^~~~
-C:\a\lengua\lengua\benches\programs\sort\main.cpp:52:15: error: no type named 'string_view' in namespace 'std'
-   52 |     for (std::string_view line : lines) {
-      |          ~~~~~^
-7 errors generated.
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -491,13 +475,13 @@ Counts each different word of 64 MiB of standard input, 4,096 different words fr
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 20 | 20 | 20 | 20 | 20 | 0 | 20 |
-| CPU time | 188 ms | 328 ms | 328 ms | 453 ms | 273 ms | – | 281 ms |
-| wall time | 188 ms | 342 ms | 342 ms | 453 ms | 281 ms | – | 287 ms |
-| peak memory | 12.0 MiB | 10.9 MiB | 10.8 MiB | 10.9 MiB | 5.40 MiB | – | 5.28 MiB |
-| size | 4.38 KiB | 21.6 KiB | 37.5 KiB | 55.0 KiB | 147 KiB | 0 B | 125 KiB |
+| counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
+| CPU time | 180 ms | 328 ms | 328 ms | 438 ms | 266 ms | 266 ms | 281 ms |
+| wall time | 181 ms | 332 ms | 332 ms | 443 ms | 276 ms | 279 ms | 282 ms |
+| peak memory | 12.0 MiB | 10.8 MiB | 10.8 MiB | 10.9 MiB | 5.39 MiB | 5.34 MiB | 5.27 MiB |
+| size | 4.38 KiB | 21.6 KiB | 37.5 KiB | 55.0 KiB | 147 KiB | 152 KiB | 125 KiB |
 
-Its rounds took 46 seconds.
+Its rounds took 51 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/tally
 
@@ -509,176 +493,7 @@ Its rounds took 46 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp wasn't measured to the end: clang++ couldn't build C:\a\lengua\lengua\benches\programs\tally\main.cpp: C:\a\lengua\lengua\benches\programs\tally\main.cpp:42:6: error: no type named 'string_view' in namespace 'std'
-   42 | std::string_view word_of(const Entry& entry) {
-      | ~~~~~^
-C:\a\lengua\lengua\benches\programs\tally\main.cpp:43:12: error: excess elements in scalar initializer
-   43 |     return {store.data() + entry.offset, entry.length};
-      |            ^                           ~~~~~~~~~~~~~~~
-C:\a\lengua\lengua\benches\programs\tally\main.cpp:47:15: error: no type named 'string_view' in namespace 'std'
-   47 | bool add(std::string_view word) {
-      |          ~~~~~^
-C:\a\lengua\lengua\benches\programs\tally\main.cpp:107:27: error: no member named 'string_view' in namespace 'std'
-  107 |             if (!add(std::string_view(buffer.data() + start, at - start))) {
-      |                           ^~~~~~~~~~~
-C:\a\lengua\lengua\benches\programs\tally\main.cpp:125:14: error: no type named 'string_view' in namespace 'std'
-  125 |         std::string_view word = word_of(entry);
-      |         ~~~~~^
-In file included from C:\a\lengua\lengua\benches\programs\tally\main.cpp:7:
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:8923:17: error: static_cast from 'void' to 'bool' is not allowed
- 8923 |             if (_DEBUG_LT_PRED(_Pred, _Val, *_First)) { // found new earliest element, move to front
-      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\xutility:1774:36: note: expanded from macro '_DEBUG_LT_PRED'
- 1774 | #define _DEBUG_LT_PRED(pred, x, y) static_cast<bool>(pred(x, y))
-      |                                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9055:18: note: in instantiation of function template specialization 'std::_Insertion_sort_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9055 |             _STD _Insertion_sort_unchecked(_First, _Last, _Pred);
-      |                  ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9085:10: note: in instantiation of function template specialization 'std::_Sort_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9085 |     _STD _Sort_unchecked(_UFirst, _ULast, _ULast - _UFirst, _STD _Pass_fn(_Pred));
-      |          ^
-C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:10: note: in instantiation of function template specialization 'std::sort<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<(anonymous namespace)::Entry>>>, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
-  117 |     std::sort(entries.begin(), entries.end(), [](const Entry& x, const Entry& y) {
-      |          ^
-In file included from C:\a\lengua\lengua\benches\programs\tally\main.cpp:7:
-In file included from C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:10:
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\__msvc_heap_algorithms.hpp:71:13: error: static_cast from 'void' to 'bool' is not allowed
-   71 |         if (_DEBUG_LT_PRED(_Pred, *(_First + _Idx), *(_First + (_Idx - 1)))) {
-      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\xutility:1774:36: note: expanded from macro '_DEBUG_LT_PRED'
- 1774 | #define _DEBUG_LT_PRED(pred, x, y) static_cast<bool>(pred(x, y))
-      |                                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\__msvc_heap_algorithms.hpp:129:14: note: in instantiation of function template specialization 'std::_Pop_heap_hole_by_index<(anonymous namespace)::Entry *, (anonymous namespace)::Entry, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
-  129 |         _STD _Pop_heap_hole_by_index(_First, _Hole, _Bottom, _STD move(_Val), _Pred);
-      |              ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9060:18: note: in instantiation of function template specialization 'std::_Make_heap_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9060 |             _STD _Make_heap_unchecked(_First, _Last, _Pred);
-      |                  ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9085:10: note: in instantiation of function template specialization 'std::_Sort_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9085 |     _STD _Sort_unchecked(_UFirst, _ULast, _ULast - _UFirst, _STD _Pass_fn(_Pred));
-      |          ^
-C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:10: note: in instantiation of function template specialization 'std::sort<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<(anonymous namespace)::Entry>>>, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
-  117 |     std::sort(entries.begin(), entries.end(), [](const Entry& x, const Entry& y) {
-      |          ^
-In file included from C:\a\lengua\lengua\benches\programs\tally\main.cpp:7:
-In file included from C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:10:
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\__msvc_heap_algorithms.hpp:27:25: error: static_cast from 'void' to 'bool' is not allowed
-   27 |         _Top < _Hole && _DEBUG_LT_PRED(_Pred, *(_First + _Idx), _Val); _Idx = (_Hole - 1) >> 1) { // shift for codegen
-      |                         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\xutility:1774:36: note: expanded from macro '_DEBUG_LT_PRED'
- 1774 | #define _DEBUG_LT_PRED(pred, x, y) static_cast<bool>(pred(x, y))
-      |                                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\__msvc_heap_algorithms.hpp:83:10: note: in instantiation of function template specialization 'std::_Push_heap_by_index<(anonymous namespace)::Entry *, (anonymous namespace)::Entry, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
-   83 |     _STD _Push_heap_by_index(_First, _Hole, _Top, _STD forward<_Ty>(_Val), _Pred);
-      |          ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\__msvc_heap_algorithms.hpp:129:14: note: in instantiation of function template specialization 'std::_Pop_heap_hole_by_index<(anonymous namespace)::Entry *, (anonymous namespace)::Entry, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
-  129 |         _STD _Pop_heap_hole_by_index(_First, _Hole, _Bottom, _STD move(_Val), _Pred);
-      |              ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9060:18: note: in instantiation of function template specialization 'std::_Make_heap_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9060 |             _STD _Make_heap_unchecked(_First, _Last, _Pred);
-      |                  ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9085:10: note: in instantiation of function template specialization 'std::_Sort_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9085 |     _STD _Sort_unchecked(_UFirst, _ULast, _ULast - _UFirst, _STD _Pass_fn(_Pred));
-      |          ^
-C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:10: note: in instantiation of function template specialization 'std::sort<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<(anonymous namespace)::Entry>>>, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
-  117 |     std::sort(entries.begin(), entries.end(), [](const Entry& x, const Entry& y) {
-      |          ^
-In file included from C:\a\lengua\lengua\benches\programs\tally\main.cpp:7:
-In file included from C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:10:
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\__msvc_heap_algorithms.hpp:93:5: error: no matching function for call to '_Pop_heap_hole_by_index'
-   93 |     _STD _Pop_heap_hole_by_index(
-      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\yvals_core.h:1906:17: note: expanded from macro '_STD'
- 1906 | #define _STD    ::std::
-      |                 ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\__msvc_heap_algorithms.hpp:103:14: note: in instantiation of function template specialization 'std::_Pop_heap_hole_unchecked<(anonymous namespace)::Entry *, (anonymous namespace)::Entry, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
-  103 |         _STD _Pop_heap_hole_unchecked(_First, _Last, _Last, _STD move(_Val), _Pred);
-      |              ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:7816:14: note: in instantiation of function template specialization 'std::_Pop_heap_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 7816 |         _STD _Pop_heap_unchecked(_First, _Last, _Pred);
-      |              ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9061:18: note: in instantiation of function template specialization 'std::_Sort_heap_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9061 |             _STD _Sort_heap_unchecked(_First, _Last, _Pred);
-      |                  ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9085:10: note: in instantiation of function template specialization 'std::_Sort_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9085 |     _STD _Sort_unchecked(_UFirst, _ULast, _ULast - _UFirst, _STD _Pass_fn(_Pred));
-      |          ^
-C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:10: note: in instantiation of function template specialization 'std::sort<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<(anonymous namespace)::Entry>>>, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
-  117 |     std::sort(entries.begin(), entries.end(), [](const Entry& x, const Entry& y) {
-      |          ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\__msvc_heap_algorithms.hpp:57:19: note: candidate template ignored: substitution failure [with _RanIt = (anonymous namespace)::Entry *, _Ty = (anonymous namespace)::Entry, _Pr = (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)]
-   57 | _CONSTEXPR20 void _Pop_heap_hole_by_index(
-      |                   ^
-In file included from C:\a\lengua\lengua\benches\programs\tally\main.cpp:7:
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:8942:9: error: static_cast from 'void' to 'bool' is not allowed
- 8942 |     if (_DEBUG_LT_PRED(_Pred, *_Mid, *_First)) {
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\xutility:1774:36: note: expanded from macro '_DEBUG_LT_PRED'
- 1774 | #define _DEBUG_LT_PRED(pred, x, y) static_cast<bool>(pred(x, y))
-      |                                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:8963:14: note: in instantiation of function template specialization 'std::_Med3_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 8963 |         _STD _Med3_unchecked(_First, _First + _Step, _First + _Two_step, _Pred);
-      |              ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9045:10: note: in instantiation of function template specialization 'std::_Guess_median_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9045 |     _STD _Guess_median_unchecked(_First, _Mid, _STD _Prev_iter(_Last), _Pred);
-      |          ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9066:26: note: in instantiation of function template specialization 'std::_Partition_by_median_guess_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9066 |         auto _Mid = _STD _Partition_by_median_guess_unchecked(_First, _Last, _Pred);
-      |                          ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9085:10: note: in instantiation of function template specialization 'std::_Sort_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9085 |     _STD _Sort_unchecked(_UFirst, _ULast, _ULast - _UFirst, _STD _Pass_fn(_Pred));
-      |          ^
-C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:10: note: in instantiation of function template specialization 'std::sort<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<(anonymous namespace)::Entry>>>, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
-  117 |     std::sort(entries.begin(), entries.end(), [](const Entry& x, const Entry& y) {
-      |          ^
-In file included from C:\a\lengua\lengua\benches\programs\tally\main.cpp:7:
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:8946:9: error: static_cast from 'void' to 'bool' is not allowed
- 8946 |     if (_DEBUG_LT_PRED(_Pred, *_Last, *_Mid)) { // swap middle and last, then test first again
-      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\xutility:1774:36: note: expanded from macro '_DEBUG_LT_PRED'
- 1774 | #define _DEBUG_LT_PRED(pred, x, y) static_cast<bool>(pred(x, y))
-      |                                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In file included from C:\a\lengua\lengua\benches\programs\tally\main.cpp:7:
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:8978:33: error: static_cast from 'void' to 'bool' is not allowed
- 8978 |     while (_First < _Pfirst && !_DEBUG_LT_PRED(_Pred, *_STD _Prev_iter(_Pfirst), *_Pfirst)
-      |                                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\xutility:1774:36: note: expanded from macro '_DEBUG_LT_PRED'
- 1774 | #define _DEBUG_LT_PRED(pred, x, y) static_cast<bool>(pred(x, y))
-      |                                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9047:17: note: in instantiation of function template specialization 'std::_Partition_by_pivot_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9047 |     return _STD _Partition_by_pivot_unchecked(_First, _Mid, _Last, _Pred);
-      |                 ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9066:26: note: in instantiation of function template specialization 'std::_Partition_by_median_guess_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9066 |         auto _Mid = _STD _Partition_by_median_guess_unchecked(_First, _Last, _Pred);
-      |                          ^
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9085:10: note: in instantiation of function template specialization 'std::_Sort_unchecked<(anonymous namespace)::Entry *, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
- 9085 |     _STD _Sort_unchecked(_UFirst, _ULast, _ULast - _UFirst, _STD _Pass_fn(_Pred));
-      |          ^
-C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:10: note: in instantiation of function template specialization 'std::sort<std::_Vector_iterator<std::_Vector_val<std::_Simple_types<(anonymous namespace)::Entry>>>, (lambda at C:\a\lengua\lengua\benches\programs\tally\main.cpp:117:47)>' requested here
-  117 |     std::sort(entries.begin(), entries.end(), [](const Entry& x, const Entry& y) {
-      |          ^
-In file included from C:\a\lengua\lengua\benches\programs\tally\main.cpp:7:
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:8983:31: error: static_cast from 'void' to 'bool' is not allowed
- 8983 |     while (_Plast < _Last && !_DEBUG_LT_PRED(_Pred, *_Plast, *_Pfirst) && !_Pred(*_Pfirst, *_Plast)) {
-      |                               ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\xutility:1774:36: note: expanded from macro '_DEBUG_LT_PRED'
- 1774 | #define _DEBUG_LT_PRED(pred, x, y) static_cast<bool>(pred(x, y))
-      |                                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In file included from C:\a\lengua\lengua\benches\programs\tally\main.cpp:7:
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:8992:17: error: static_cast from 'void' to 'bool' is not allowed
- 8992 |             if (_DEBUG_LT_PRED(_Pred, *_Pfirst, *_Gfirst)) {
-      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\xutility:1774:36: note: expanded from macro '_DEBUG_LT_PRED'
- 1774 | #define _DEBUG_LT_PRED(pred, x, y) static_cast<bool>(pred(x, y))
-      |                                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-In file included from C:\a\lengua\lengua\benches\programs\tally\main.cpp:7:
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\algorithm:9006:17: error: static_cast from 'void' to 'bool' is not allowed
- 9006 |             if (_DEBUG_LT_PRED(_Pred, *_Glast_prev, *_Pfirst)) {
-      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\include\xutility:1774:36: note: expanded from macro '_DEBUG_LT_PRED'
- 1774 | #define _DEBUG_LT_PRED(pred, x, y) static_cast<bool>(pred(x, y))
-      |                                    ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-15 errors generated.
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -688,13 +503,13 @@ A server: 64 clients at once each send 1,000 lines of 64 bytes, one at a time, a
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 67 | 67 | 67 | 67 | 20 | 20 | 20 |
-| CPU time | 1.64 s | 1.66 s | 1.66 s | 1.66 s | 1.41 s | 1.41 s | 1.81 s |
-| wall time | 1.66 s | 1.79 s | 1.80 s | 1.82 s | 1.43 s | 1.43 s | 1.03 s |
-| peak memory | 11.5 MiB | 10.5 MiB | 10.6 MiB | 10.7 MiB | 5.31 MiB | 5.33 MiB | 6.45 MiB |
+| counted runs | 71 | 71 | 71 | 71 | 20 | 20 | 20 |
+| CPU time | 1.59 s | 1.58 s | 1.58 s | 1.59 s | 1.36 s | 1.36 s | 1.81 s |
+| wall time | 1.60 s | 1.71 s | 1.71 s | 1.73 s | 1.38 s | 1.39 s | 1.04 s |
+| peak memory | 11.5 MiB | 10.5 MiB | 10.6 MiB | 10.7 MiB | 5.30 MiB | 5.31 MiB | 6.45 MiB |
 | size | 1.82 KiB | 15.7 KiB | 31.1 KiB | 54.0 KiB | 113 KiB | 116 KiB | 136 KiB |
 
-Its rounds took 636 seconds.
+Its rounds took 639 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/shout-server
 
@@ -706,7 +521,7 @@ Its rounds took 636 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -lws2_32
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -716,13 +531,13 @@ Reads each of the 4,096 small files of its folder, of 1 to 4,096 bytes, to its e
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 40 | 20 | 40 | 20 | 20 | 20 | 20 |
-| CPU time | 203 ms | 219 ms | 219 ms | 219 ms | 109 ms | 109 ms | 93.8 ms |
-| wall time | 212 ms | 230 ms | 226 ms | 226 ms | 115 ms | 115 ms | 107 ms |
-| peak memory | 11.9 MiB | 11.1 MiB | 11.1 MiB | 11.1 MiB | 4.91 MiB | 4.91 MiB | 5.17 MiB |
+| counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
+| CPU time | 188 ms | 219 ms | 203 ms | 203 ms | 93.8 ms | 93.8 ms | 85.9 ms |
+| wall time | 198 ms | 218 ms | 219 ms | 220 ms | 101 ms | 100 ms | 92.9 ms |
+| peak memory | 11.9 MiB | 11.1 MiB | 11.1 MiB | 11.1 MiB | 4.90 MiB | 4.90 MiB | 5.16 MiB |
 | size | 1.71 KiB | 37.7 KiB | 37.7 KiB | 62.1 KiB | 152 KiB | 152 KiB | 119 KiB |
 
-Its rounds took 41 seconds.
+Its rounds took 30 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/files
 
@@ -734,7 +549,7 @@ Its rounds took 41 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -lws2_32
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -744,13 +559,13 @@ Reads the clock that only goes forward a million times. lengua's program: tests/
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 1702 | 640 | 1702 | 80 | 20 | 0 | 20 |
-| CPU time | 125 ms | 125 ms | 125 ms | 125 ms | 31.2 ms | – | 46.9 ms |
-| wall time | 125 ms | 129 ms | 127 ms | 131 ms | 39.1 ms | – | 51.3 ms |
-| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.8 MiB | 4.71 MiB | – | 5.00 MiB |
-| size | 1.21 KiB | 30.3 KiB | 28.8 KiB | 59.9 KiB | 142 KiB | 0 B | 120 KiB |
+| counted runs | 1734 | 640 | 1734 | 80 | 20 | 20 | 20 |
+| CPU time | 125 ms | 125 ms | 125 ms | 125 ms | 31.2 ms | 31.2 ms | 46.9 ms |
+| wall time | 124 ms | 128 ms | 126 ms | 131 ms | 39.1 ms | 40.0 ms | 51.3 ms |
+| peak memory | 11.7 MiB | 10.8 MiB | 10.8 MiB | 10.8 MiB | 4.70 MiB | 4.71 MiB | 5.00 MiB |
+| size | 1.21 KiB | 30.3 KiB | 28.8 KiB | 59.9 KiB | 142 KiB | 142 KiB | 120 KiB |
 
-Its rounds took 602 seconds.
+Its rounds took 603 seconds.
 
 - lengua: lengua-mcp 0.2.0 run, wasmtime 50.0.1, tests/fixtures/readings
 
@@ -762,28 +577,7 @@ Its rounds took 602 seconds.
 
 - c: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang -O3 -flto -fuse-ld=lld -march=native -lws2_32
 
-- cpp wasn't measured to the end: clang++ couldn't build C:\a\lengua\lengua\benches\programs\readings\main.cpp: C:\a\lengua\lengua\benches\programs\readings\main.cpp:14:14: error: no member named 'string_view' in namespace 'std'
-   14 |         std::string_view text(argv[1]);
-      |              ^~~~~~~~~~~
-C:\a\lengua\lengua\benches\programs\readings\main.cpp:15:14: warning: structured binding declarations are a C++17 extension [-Wc++17-extensions]
-   15 |         auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), count);
-      |              ^~~~~~~~~~~~
-C:\a\lengua\lengua\benches\programs\readings\main.cpp:15:34: error: no member named 'from_chars' in namespace 'std'
-   15 |         auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), count);
-      |                                  ^~~~~~~~~~
-C:\a\lengua\lengua\benches\programs\readings\main.cpp:15:45: error: use of undeclared identifier 'text'
-   15 |         auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), count);
-      |                                             ^~~~
-C:\a\lengua\lengua\benches\programs\readings\main.cpp:15:58: error: use of undeclared identifier 'text'
-   15 |         auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), count);
-      |                                                          ^~~~
-C:\a\lengua\lengua\benches\programs\readings\main.cpp:15:72: error: use of undeclared identifier 'text'
-   15 |         auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), count);
-      |                                                                        ^~~~
-C:\a\lengua\lengua\benches\programs\readings\main.cpp:16:27: error: no member named 'errc' in namespace 'std'
-   16 |         if (error != std::errc{} || end != text.data() + text.size()) {
-      |                           ^~~~
-1 warning and 6 errors generated.
+- cpp: clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1); clang++ -O3 -flto -fuse-ld=lld -march=native -std=gnu++17 -lws2_32
 
 - rust: rustc 1.99.1 (58cf8f9c3 2026-10-13); rustc --edition 2024 -C opt-level=3 -C target-cpu=native -C codegen-units=1 -C lto=fat -C panic=abort -C strip=symbols
 
@@ -795,19 +589,19 @@ Windows counts CPU time in ticks of 15.6 ms, so on a short run each version's me
 
 | workload | runs | CPU time | wall time | peak memory |
 |---|---|---|---|---|
-| empty | 160, 160 in 12 s | means 18.0 ms against 17.9 ms: +97.7 µs (-2.11 ms to +2.30 ms) | 21.5 ms against 21.4 ms: +129 µs (+15.8 µs to +239 µs) | 11.6 MiB against 10.7 MiB: +888 KiB (+888 KiB to +892 KiB) |
-| add | 160, 160 in 13 s | means 17.7 ms against 16.3 ms: +1.37 ms (-655 µs to +3.39 ms) | 22.4 ms against 22.3 ms: +130 µs (-13.5 µs to +276 µs) | 11.7 MiB against 10.8 MiB: +928 KiB (+924 KiB to +928 KiB) |
-| hypotenuse | 160, 160 in 13 s | means 17.6 ms against 17.7 ms: -97.7 µs (-2.55 ms to +2.36 ms) | 22.2 ms against 22.0 ms: +98.9 µs (+9.60 µs to +184 µs) | 11.7 MiB against 10.8 MiB: +940 KiB (+940 KiB to +944 KiB) |
-| upcase | 160, 160 in 13 s | means 18.6 ms against 18.3 ms: +293 µs (-1.58 ms to +2.16 ms) | 23.8 ms against 23.5 ms: +256 µs (+162 µs to +357 µs) | 12.1 MiB against 11.2 MiB: +984 KiB (+980 KiB to +988 KiB) |
-| upcase-stdin | 160, 160 in 21 s | means 45.2 ms against 43.3 ms: +1.95 ms (-635 µs to +4.54 ms) | 48.5 ms against 48.6 ms: +14.5 µs (-247 µs to +265 µs) | 11.7 MiB against 10.8 MiB: +956 KiB (+956 KiB to +960 KiB) |
-| shout | 160, 160 in 13 s | means 18.6 ms against 18.5 ms: +97.7 µs (-2.35 ms to +2.54 ms) | 22.6 ms against 22.4 ms: +160 µs (+63.8 µs to +256 µs) | 11.9 MiB against 11.0 MiB: +984 KiB (+984 KiB to +988 KiB) |
-| wc | 160, 160 in 23 s | means 50.1 ms against 48.9 ms: +1.17 ms (-1.49 ms to +3.84 ms) | 52.5 ms against 52.6 ms: -72.0 µs (-322 µs to +190 µs) | 11.8 MiB against 10.8 MiB: +1.00 MiB (+1.00 MiB to +1.01 MiB) |
-| histogram | 160, 160 in 29 s | means 69.2 ms against 70.4 ms: -1.17 ms (-3.52 ms to +1.17 ms) | 73.0 ms against 73.0 ms: -11.8 µs (-295 µs to +261 µs) | 11.7 MiB against 10.8 MiB: +924 KiB (+920 KiB to +924 KiB) |
-| crc32c | 160, 160 in 28 s | means 65.9 ms against 65.8 ms: +97.7 µs (-2.18 ms to +2.37 ms) | 69.8 ms against 69.7 ms: -18.6 µs (-279 µs to +245 µs) | 11.7 MiB against 10.8 MiB: +924 KiB (+920 KiB to +924 KiB) |
-| sort | 91, 91 in 60 s | means 309 ms against 306 ms: +2.75 ms (-1.24 ms to +6.73 ms) | 312 ms against 312 ms: +416 µs (-930 µs to +1.67 ms) | 80.6 MiB against 79.6 MiB: +1.03 MiB (+1.02 MiB to +1.04 MiB) |
-| tally | 144, 144 in 60 s | means 184 ms against 183 ms: +868 µs (-1.76 ms to +3.50 ms) | 189 ms against 189 ms: +543 µs (-198 µs to +1.29 ms) | 12.0 MiB against 11.0 MiB: +1.04 MiB (+1.03 MiB to +1.04 MiB) |
-| server | 20, 20 in 72 s | means 1.65 s against 1.65 s: +1.56 ms (-20.1 ms to +23.2 ms) | 1.66 s against 1.66 s: +1.94 ms (-12.1 ms to +16.7 ms) | 11.5 MiB against 10.6 MiB: +956 KiB (+944 KiB to +992 KiB) |
-| files | 130, 130 in 60 s | means 207 ms against 204 ms: +3.37 ms (+545 µs to +6.19 ms) | 211 ms against 211 ms: +634 µs (-530 µs to +1.85 ms) | 11.9 MiB against 11.0 MiB: +948 KiB (+944 KiB to +952 KiB) |
-| readings | 160, 160 in 46 s | means 123 ms against 122 ms: +1.56 ms (-961 µs to +4.09 ms) | 126 ms against 126 ms: +188 µs (-30.4 µs to +398 µs) | 11.7 MiB against 10.8 MiB: +928 KiB (+924 KiB to +928 KiB) |
+| empty | 160, 160 in 12 s | means 15.6 ms against 15.7 ms: -97.7 µs (-2.34 ms to +2.15 ms) | 20.5 ms against 20.4 ms: +93.3 µs (-30.7 µs to +222 µs) | 11.6 MiB against 10.7 MiB: +888 KiB (+884 KiB to +888 KiB) |
+| add | 160, 160 in 11 s | means 16.0 ms against 15.6 ms: +391 µs (-1.71 ms to +2.49 ms) | 20.3 ms against 20.1 ms: +184 µs (+49.7 µs to +319 µs) | 11.7 MiB against 10.8 MiB: +928 KiB (+924 KiB to +928 KiB) |
+| hypotenuse | 160, 160 in 12 s | means 17.9 ms against 15.3 ms: +2.54 ms (+230 µs to +4.85 ms) | 20.5 ms against 20.4 ms: +91.7 µs (-72.1 µs to +263 µs) | 11.7 MiB against 10.8 MiB: +944 KiB (+940 KiB to +944 KiB) |
+| upcase | 160, 160 in 13 s | means 19.3 ms against 18.2 ms: +1.17 ms (-903 µs to +3.25 ms) | 23.3 ms against 23.1 ms: +292 µs (+113 µs to +471 µs) | 12.1 MiB against 11.2 MiB: +984 KiB (+980 KiB to +988 KiB) |
+| upcase-stdin | 160, 160 in 19 s | means 41.8 ms against 41.4 ms: +391 µs (-2.58 ms to +3.36 ms) | 44.5 ms against 44.9 ms: -238 µs (-561 µs to +74.6 µs) | 11.7 MiB against 10.8 MiB: +960 KiB (+956 KiB to +960 KiB) |
+| shout | 160, 160 in 12 s | means 16.1 ms against 16.4 ms: -293 µs (-2.18 ms to +1.59 ms) | 21.4 ms against 21.2 ms: +70.8 µs (-151 µs to +289 µs) | 12.0 MiB against 11.0 MiB: +980 KiB (+980 KiB to +984 KiB) |
+| wc | 160, 160 in 21 s | means 46.7 ms against 44.6 ms: +2.05 ms (-676 µs to +4.78 ms) | 48.4 ms against 48.2 ms: +246 µs (-86.4 µs to +581 µs) | 11.8 MiB against 10.8 MiB: +1.00 MiB (+1020 KiB to +1.00 MiB) |
+| histogram | 160, 160 in 27 s | means 65.6 ms against 64.9 ms: +684 µs (-1.43 ms to +2.79 ms) | 68.7 ms against 68.6 ms: +80.8 µs (-288 µs to +426 µs) | 11.7 MiB against 10.8 MiB: +924 KiB (+924 KiB to +924 KiB) |
+| crc32c | 160, 160 in 27 s | means 63.9 ms against 63.0 ms: +879 µs (-2.26 ms to +4.02 ms) | 66.1 ms against 66.1 ms: -24.1 µs (-297 µs to +249 µs) | 11.7 MiB against 10.8 MiB: +928 KiB (+924 KiB to +928 KiB) |
+| sort | 97, 97 in 60 s | means 289 ms against 288 ms: +1.29 ms (-2.94 ms to +5.52 ms) | 296 ms against 296 ms: +7.80 µs (-2.98 ms to +2.77 ms) | 80.6 MiB against 79.6 MiB: +1.03 MiB (+1.03 MiB to +1.04 MiB) |
+| tally | 153, 153 in 60 s | means 175 ms against 175 ms: +817 µs (-1.47 ms to +3.11 ms) | 180 ms against 180 ms: +190 µs (-421 µs to +800 µs) | 12.0 MiB against 10.9 MiB: +1.04 MiB (+1.03 MiB to +1.04 MiB) |
+| server | 20, 20 in 70 s | means 1.60 s against 1.61 s: -1.56 ms (-17.5 ms to +14.3 ms) | 1.61 s against 1.61 s: +3.59 ms (-6.78 ms to +16.9 ms) | 11.5 MiB against 10.5 MiB: +956 KiB (+944 KiB to +988 KiB) |
+| files | 139, 139 in 60 s | means 192 ms against 192 ms: -112 µs (-3.23 ms to +3.01 ms) | 198 ms against 198 ms: +277 µs (-904 µs to +1.47 ms) | 11.9 MiB against 11.0 MiB: +944 KiB (+940 KiB to +948 KiB) |
+| readings | 160, 160 in 45 s | means 122 ms against 121 ms: +977 µs (-1.83 ms to +3.78 ms) | 124 ms against 124 ms: +169 µs (-29.9 µs to +368 µs) | 11.7 MiB against 10.8 MiB: +928 KiB (+924 KiB to +928 KiB) |
 
 The runs are lengua's and lengua-module's counted runs, in that order, and how long their counted rounds took.

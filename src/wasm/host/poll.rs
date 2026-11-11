@@ -55,7 +55,9 @@ fn reaches(host: &Host, fd: u32, write: bool) -> bool {
         Some(Descriptor::Stdin) => !write && policy.reads_input(),
         Some(Descriptor::Stdout | Descriptor::Stderr) => write,
         Some(Descriptor::Folder(_) | Descriptor::File(_)) => policy.files,
-        Some(Descriptor::Listener(_) | Descriptor::Socket(_)) => policy.network(),
+        Some(Descriptor::Listener(_) | Descriptor::Socket(_) | Descriptor::Datagram(_)) => {
+            policy.network()
+        }
         // An unknown descriptor's event says so.
         None => true,
     }
@@ -78,6 +80,11 @@ fn ready(host: &mut Host, fd: u32, kind: u8) -> Option<(u16, u64, u16)> {
             let (bytes, ended) = socket.waiting_bytes();
             (0, bytes, if ended { event::HANGUP } else { 0 })
         }),
+        // A datagram goes out at once, and one that arrived is there with its size.
+        Some(Descriptor::Datagram(_)) if write => Some((0, 0, 0)),
+        Some(Descriptor::Datagram(datagrams)) => datagrams
+            .readable()
+            .then(|| (0, datagrams.waiting_bytes(), 0)),
         Some(_) => Some((errno::BADF, 0, 0)),
     }
 }
@@ -153,7 +160,7 @@ pub fn poll_oneoff(
     let networked = subscriptions.iter().any(|(_, wanted)| match wanted {
         Wanted::Read(fd) | Wanted::Write(fd) => matches!(
             host.fds.get(*fd),
-            Some(Descriptor::Listener(_) | Descriptor::Socket(_))
+            Some(Descriptor::Listener(_) | Descriptor::Socket(_) | Descriptor::Datagram(_))
         ),
         Wanted::Clock { .. } => false,
     });

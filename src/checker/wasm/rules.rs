@@ -193,7 +193,7 @@ fn modes(host: &str) -> &'static [usize] {
         "path_filestat_get" | "sock_accept" | "sock_shutdown" => &[1],
         "fd_seek" => &[2],
         "clock_res_get" | "clock_time_get" => &[0],
-        "sock_recv" | "sock_send" => &[3],
+        "sock_recv" | "sock_send" | "tcp_open" => &[3],
         _ => &[],
     }
 }
@@ -499,6 +499,8 @@ impl Checker<'_, '_, '_> {
                     field.starts_with("fd_")
                         || field.starts_with("sock_")
                         || field.starts_with("path_")
+                        || field.starts_with("udp_send")
+                        || field.starts_with("udp_recv")
                 }) || callee.is_library("fill")
                     || callee.is_library("write_all");
                 if descriptor && let Some(value) = literal(at, 0) {

@@ -629,13 +629,14 @@ impl Checker<'_, '_, '_> {
     ) {
         let ops = &function.body;
         let line = ops[at].line;
-        if !policy.listens {
+        if !policy.listens && policy.reach.get().receives.is_none() {
             self.violation(
                 Rule::Loops,
                 line,
                 "only a server's loop that takes connections may run forever",
                 "give the loop a counter and `;; bound: N`; `;; bound: forever` is for a program \
-                 whose idea says `- Network: listens on TCP port N`",
+                 whose idea says `- Network: listens on TCP port N` or `- Network: receives UDP \
+                 datagrams on port N`",
             );
             return;
         }
@@ -668,8 +669,9 @@ impl Checker<'_, '_, '_> {
                 line,
                 "this loop runs forever but takes no connections: nothing in it calls \
                  `sock_accept`",
-                "take each connection in the loop with `sock_accept`, itself or through a \
-                 function it calls; give any other loop a counter and `;; bound: N`",
+                "take each connection in the loop with `sock_accept`, or each datagram with \
+                 `udp_recv_from`, itself or through a function it calls; give any other loop a \
+                 counter and `;; bound: N`",
             );
         }
     }
@@ -696,7 +698,11 @@ impl Checker<'_, '_, '_> {
             let Some(callee) = module.function(index) else {
                 continue;
             };
-            if callee.is_host("sock_accept") {
+            // A server's connections, or the datagrams of the port its idea receives on.
+            let receives = callee
+                .host()
+                .is_some_and(|host| host.name == "udp_recv_from");
+            if callee.is_host("sock_accept") || receives {
                 return true;
             }
             if callee.kind == Kind::Own

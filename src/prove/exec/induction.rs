@@ -39,6 +39,10 @@ pub struct Hook {
     pub memory: BTreeSet<u64>,
     /// The slots it can change, other than the bound counters.
     pub slots: BTreeSet<Slot>,
+    /// The slots it can change only within a range, as a byte carried from one buffer-full to
+    /// the next stays a byte: each with its least and its most, made any value between them at
+    /// the head. The step shows a time round from such values ends within them.
+    pub ranged: BTreeMap<Slot, (u128, u128)>,
     /// The loop's bound counters, by slot, each with the value it starts at: made any value from
     /// `low` to that.
     pub counters: BTreeMap<Slot, u128>,

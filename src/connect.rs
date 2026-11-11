@@ -1,9 +1,9 @@
-//! The connections lengua makes for a program. A program never connects by itself: for each
-//! place its idea names, lengua's host makes the connection before the program starts and hands
-//! it over, so the program holds no network of its own, on every system, and a connection
-//! behaves the same everywhere. A connection lengua couldn't make is handed over already ended,
-//! and the run's report says why: the program can't tell a place that refused it from one that
-//! broke off.
+//! The connections lengua makes for a program. Unless its idea grants it connections of its own
+//! ([`crate::reach`]), a program never connects by itself: for each place its idea names,
+//! lengua's host makes the connection before the program starts and hands it over, so the
+//! program holds no network of its own, on every system, and a connection behaves the same
+//! everywhere. A connection lengua couldn't make is handed over already ended, and the run's
+//! report says why: the program can't tell a place that refused it from one that broke off.
 //!
 //! A connection over TLS is the same to the program: lengua does TLS on it, in Rust, outside the
 //! program, which reads and writes the plain bytes and holds no crypto. lengua checks the
@@ -92,7 +92,7 @@ impl<T: AsyncRead + AsyncWrite + Send + Unpin> Place for T {}
 
 /// How lengua checks a computer's certificate: against Mozilla's roots, the same on every
 /// system, with ring's cryptography.
-fn tls_config() -> Arc<rustls::ClientConfig> {
+pub(crate) fn tls_config() -> Arc<rustls::ClientConfig> {
     static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
     Arc::clone(CONFIG.get_or_init(|| {
         let mut roots = rustls::RootCertStore::empty();

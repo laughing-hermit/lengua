@@ -20,6 +20,7 @@ use crate::supply::Time;
 use crate::wasm::engine::Setup;
 use crate::wasm::host::limits::{self, Limits};
 use crate::wasm::host::net::{self, Link, Listener, Socket};
+use crate::wasm::host::open::Datagrams;
 use crate::wasm::host::policy::Policy;
 use crate::wasm::host::stdio::{Input, Output, Stream};
 use crate::wasm::host::{Host, Stop, World};
@@ -317,6 +318,32 @@ pub fn world(
         }
         None => None,
     };
+    // The port the idea receives datagrams on: in a test, a free port of the loopback, which
+    // the test's client hears of as it hears of a server's.
+    let datagrams = match job.policy.reach.get().receives {
+        Some((port, anywhere)) => {
+            let (port, anywhere) = if job.internet.is_some() {
+                (0, false)
+            } else {
+                (port, anywhere)
+            };
+            let bound = Datagrams::bind(port, anywhere).map_err(|error| {
+                format!("lengua couldn't receive datagrams on port {port}: {error}")
+            })?;
+            let port = bound
+                .port()
+                .map_err(|error| format!("lengua couldn't read its datagrams' port: {error}"))?;
+            if let (Some(events), None) = (&events, job.listen) {
+                let _ = events.send(Event::Listening {
+                    id: job.id,
+                    port,
+                    connections: reached.clone(),
+                });
+            }
+            Some(bound)
+        }
+        None => None,
+    };
     let folder = match &job.folder {
         Some(path) if job.policy.files => Some(
             cap_std::fs::Dir::open_ambient_dir(path, cap_std::ambient_authority())
@@ -347,6 +374,8 @@ pub fn world(
         reversed: job.reversed,
         listener,
         connections,
+        datagrams,
+        internet: job.internet.clone(),
         clock: job
             .clock
             .iter()
@@ -395,6 +424,9 @@ pub fn done(id: u64, executed: Executed, connections: Vec<Reached>) -> Done {
     let stderr = std::mem::replace(&mut host.stderr, Output::Closed).into_bytes();
     let random_asked = host.random.asked();
     let listed = host.notes.listed;
+    // After the connections lengua made, what the program asked to open itself.
+    let mut connections = connections;
+    connections.append(&mut host.notes.opened);
     drop(host);
     Done {
         id,
@@ -712,6 +744,15 @@ fn run_on_this_thread(module: &Module, here: &Here<'_>) -> io::Result<End> {
         }
         None => None,
     };
+    // What the program may reach by itself is said before it starts.
+    let reach = here.policy.reach.get();
+    for line in reach.describe() {
+        eprintln!("{lengua}: {line}");
+    }
+    let datagrams = match reach.receives {
+        Some((port, anywhere)) => Some(Datagrams::bind(port, anywhere)?),
+        None => None,
+    };
     let folder = if here.policy.files {
         Some(cap_std::fs::Dir::open_ambient_dir(
             here.folder,
@@ -731,6 +772,8 @@ fn run_on_this_thread(module: &Module, here: &Here<'_>) -> io::Result<End> {
         reversed: false,
         listener,
         connections,
+        datagrams,
+        internet: None,
         clock: Vec::new(),
         random: None,
         limits: Limits::new(

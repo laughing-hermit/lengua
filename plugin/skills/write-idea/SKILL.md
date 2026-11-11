@@ -162,12 +162,15 @@ by one concrete example in its steps, and its generated tests try that rule with
   what the program does, and that no byte of the secret decides how it runs. This is a rule
   `check` holds the WebAssembly to, like a type; it says nothing of the machine code the engine
   makes from it, so don't present it to the user as protection against an attacker.
-- **Network:** plain TCP, to the places the idea names, and nothing else. A program never opens
-  a connection itself: lengua makes each one its idea names before the program starts and hands
-  it over, so it's the same on every kind of computer. Choose the places yourself, without
-  asking: an idea can't allow "any port" or "any computer", so when the request leaves the port
-  to the user, as "given a port" does, pick the one such programs usually use, such as 8080 for a
-  local web server, and name it in your final report with an offer to change it.
+- **Network:** to the places the idea names, and nothing else. Most programs never open a
+  connection themselves: lengua makes each one the idea names before the program starts and hands
+  it over, so it's the same on every kind of computer. That is the least a program can have, so
+  choose it first; a program that must choose the computer while it runs, as a client that
+  follows a redirect, a crawler or a proxy does, gets a grant to open connections itself, below.
+  Choose the places yourself, without asking: these connections can't go to "any port" or "any
+  computer", so when the request leaves the port to the user, as "given a port" does, pick the
+  one such programs usually use, such as 8080 for a local web server, and name it in your final
+  report with an offer to change it.
   - A program that talks to a server says `- Network: connects to TCP port 8080` for one on this
     computer, or `- Network: connects to TCP port 443 on example.com` for another computer, named
     as DNS writes it (or by address, never `localhost`: a port alone is this computer's). A line
@@ -205,17 +208,28 @@ by one concrete example in its steps, and its generated tests try that rule with
     server can see, such as its newline, its blank line or a stated length: clients such as curl
     and browsers keep their side of the connection open until they have the answer, so a server
     that waits for them to close waits forever.
+  - A program that learns where to connect while it runs opens its connections itself, and its
+    idea grants which: `- Network: opens TCP connections to port 443 on any subdomain of
+    example.com over TLS`. Other lines grant a look at a name's addresses, and UDP datagrams
+    sent or received. Read [the network a program chooses](references/network.md) before you
+    write one: it has each line, the computers a line may name, what lengua never lets such a
+    program reach, the limits, and the steps that give its tests their own servers.
   - In the final report, tell the user in plain words what the program may reach, such as "it
     talks to TCP port 8080 on this computer, through a connection lengua makes for it before it
-    starts; it can reach nothing else."
+    starts; it can reach nothing else", or "it may open connections to port 443 of any
+    subdomain of example.com, and to no other computer": `check`'s reply lists these grants as
+    `may_reach`, and the user must hear them before the program runs.
 - **Websites and APIs:** a program reaches a website or an API itself, over HTTPS, with `-
   Network: connects to TCP port 443 on api.example.com over TLS`: it sends a plain HTTP request
   on its connection, with the `Host:` line HTTP/1.1 needs, and reads the response, as `fetch`
   does on this computer's port. Ask for `Connection: close` (or use HTTP/1.0) so the server ends
   the response by closing, unless the program reads `Content-Length`. Its tests stand a server of
   their own in for the site, as for any connection, so give them the exchanges the site would
-  give. Each site is one line, and the program can reach no other; when the user wants any URL,
-  say that a lengua program reaches only the sites its idea names, and offer to name them.
+  give. Each site is one line, and the program can reach no other. When the user wants any URL,
+  or a site that sends the program on to others, the idea grants the program its connections
+  instead, `- Network: opens TCP connections to port 443 on any computer over TLS` or a domain's
+  subdomains: say in your report that the program may then reach any such computer, since that
+  is more than most programs need.
 - **Output from random bytes or the clock** is best made exact. Purpose says how the program
   turns them into output ("the roll is the first byte below `252`, modulo 6, plus 1"), and the
   behavior gives them as its scene: ``- Given the random bytes `fc` and `2a` `` or

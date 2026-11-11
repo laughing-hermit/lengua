@@ -49,6 +49,7 @@ alone, by the steps below: `check` refuses any other code file and says what to 
    | [the vector template](assets/vector-template.wat) | [idea](assets/vector-template-wat-idea.md) | A line found and changed 16 bytes at a time with SIMD128, then a scalar tail |
    | [the event-loop server](assets/server-template.wat) | [idea](assets/server-template-wat-idea.md) | A server for several clients at once: `poll_oneoff`, `sock_accept`, `sock_recv`, `sock_send` |
    | [the word tally](assets/tally-template.wat) | [idea](assets/tally-template-wat-idea.md) | Counts or lookups by key: a hash table, a merge sort and buffered output, in their plain form, which step 7 makes fast |
+   | [the client that follows](assets/client-template.wat) | [idea](assets/client-template-wat-idea.md) | A client that opens its own connections, with `tcp_open`, to the computers its idea grants: a request built from a name and a path, and a redirect followed |
 
    A program for the terminal has no WebAssembly form until lengua's host gives the terminal's
    two imports, raw mode and the window's size, and a program that needs threads has none
@@ -123,7 +124,14 @@ alone, by the steps below: `check` refuses any other code file and says what to 
      length by induction over its read loop through `$fill`, as the next line says.
    - `…; every length by induction over its read loop: …`: a stream whose read loop calls
      `$fill`, proven for every length: from any state the loop can be in at its head, one more
-     buffer-full keeps what it writes and counts in step with the formula.
+     buffer-full keeps what it writes and counts in step with the formula. It takes output that
+     is the text mapped byte by byte (`upper`, `lower`, `tr`), or counts written at the end:
+     `len`, `words` and `count` of the text or of the text mapped so, and sums of them, counted
+     a byte or 16 bytes a step. Its base is every final piece of up to a buffer-full, one length
+     at a time, so the buffer's size decides whether it ends in the proof's time: a buffer of
+     4,096 bytes is proven for every length in minutes, and one of 64 KiB only up to a few
+     thousand bytes. Where the user wants the proof for every length more than speed, take the
+     smaller buffer, and tell them which they got.
    - `tested, not proven: <why>`: the tests passed, and the proof couldn't settle it. lengua's
      WebAssembly prover follows scalar floats and SIMD128's integer lanes, but not yet SIMD128's
      float lanes (`f64x2.add`, …), its narrowing, widening, pairwise and dot-product forms,
@@ -238,7 +246,11 @@ whose idea uses the environment, and to no other. A server starts in the backgro
 idea's port, and `run` returns its address: try it with your own tools, such as `curl` or `nc`,
 then call `run` with `stop: true` to stop it and see what it printed. A program that connects
 gets its connections from lengua, made before it starts to the places its idea names, and reaches
-nothing else; `run`'s report says which it made, and why one couldn't be.
+nothing else; `run`'s report says which it made, and why one couldn't be. A program whose idea
+grants it connections of its own reaches the real computers in a run: `run`'s `may_reach`, as
+`check`'s, says what the idea grants, in words. Tell the user those before the first run. The
+report's `connections` then lists what the program asked to open, and why lengua refused one or
+couldn't make it.
 
 From a shell, `lengua-mcp run <folder> [arguments…]` runs the checked program with the shell's
 own standard streams and no time limit, in the current folder or the one `--in <folder>` names,

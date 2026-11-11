@@ -12,12 +12,13 @@ use lengua::checker::wasm::{Context, check};
 use lengua::wasm::{Pool, Program};
 
 /// Each WebAssembly template, with its idea: the program, then the idea it's made from.
-const TEMPLATES: [(&str, &str); 5] = [
+const TEMPLATES: [(&str, &str); 6] = [
     ("main-template.wat", "main-template-idea.md"),
     ("stream-template.wat", "stream-template-wat-idea.md"),
     ("vector-template.wat", "vector-template-wat-idea.md"),
     ("server-template.wat", "server-template-wat-idea.md"),
     ("tally-template.wat", "tally-template-wat-idea.md"),
+    ("client-template.wat", "client-template-wat-idea.md"),
 ];
 
 /// This binary, which the pool's workers are.

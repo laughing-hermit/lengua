@@ -12,7 +12,8 @@ name: ci
 # - Every week it runs the suite, the slow ignored tests and the bench on all five.
 # - A dispatch picks the targets and the mode: compile (clippy and the tests built), test (the
 #   suite), ignored (the slow ignored tests, optionally one folder's check), golden (the checker's
-#   and the prover's recordings of every program, made at two commits and compared), bench (the
+#   and the prover's recordings of every program, made at two commits and compared, or, in the
+#   runners view, made of the dispatched ref on each target and compared between them), bench (the
 #   gate: lengua against C, C++ and Rust compiled to WebAssembly and built natively, and against
 #   an earlier commit's programs) or release (each runner's archive, built there, then installed
 #   and checked on a clean runner of the same system and CPU).
@@ -47,7 +48,7 @@ on:
         type: string
         default: "all"
       mode:
-        description: "compile, test, ignored, golden, bench or release (golden: on linux-x86_64 alone; bench and release: all five)"
+        description: "compile, test, ignored, golden, bench or release (golden: on linux-x86_64 alone, but its runners view on the targets asked for; bench and release: all five)"
         type: choice
         options:
           - compile
@@ -77,6 +78,10 @@ on:
         description: "Stop a test or ignored run after this many seconds, keeping where it stood (stall.txt; the two Linux targets)"
         type: string
         default: ""
+      explain:
+        description: "ignored: print each question a proof asks a solver, as terms (LENGUA_PROVE_EXPLAIN; 'path' adds the run's conditions), and each shape's time; with the filter records_the_programs and check_folder, one program's proofs"
+        type: string
+        default: ""
       seed:
         description: "The seed the randomized tests draw from (LENGUA_RANDOM_SEED), to run one again"
         type: string
@@ -90,11 +95,12 @@ on:
         type: string
         default: ""
       golden_view:
-        description: "golden: raw (the recordings byte for byte) or ledger (only the proofs' verdicts, counts left out)"
+        description: "golden: raw (the recordings byte for byte), ledger (only the proofs' verdicts, counts left out) or runners (the dispatched ref recorded on each target, compared between the targets; no base)"
         type: choice
         options:
           - raw
           - ledger
+          - runners
         default: raw
       bench_against:
         description: "bench: a commit whose lengua programs the dispatched ref's are measured against, in the same run"
@@ -136,6 +142,7 @@ jobs:
           TARGETS: ${{ inputs.targets }}
           GOLDEN_BASE: ${{ inputs.golden_base }}
           GOLDEN_BASE_RUN: ${{ inputs.golden_base_run }}
+          GOLDEN_VIEW: ${{ inputs.golden_view }}
           GH_TOKEN: ${{ github.token }}
         run: cargo xtask plan
 
@@ -364,6 +371,7 @@ jobs:
           LENGUA_RANDOM_SEED: ${{ inputs.seed }}
           LENGUA_CHECK_FOLDER: ${{ inputs.check_folder }}
           LENGUA_MUTATE_ONLY: ${{ inputs.mutate_only }}
+          EXPLAIN: ${{ inputs.explain }}
           STALL_SECONDS: ${{ inputs.stall_seconds }}
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
         run: cargo xtask test --ignored
@@ -473,7 +481,9 @@ jobs:
           if-no-files-found: ignore
 
   # The goldens recorded at the dispatched ref and at the base, compared: byte for byte (raw) or
-  # as the proofs' verdicts alone (ledger); see `cargo xtask golden-diff` (xtask/src/golden.rs).
+  # as the proofs' verdicts alone (ledger); or, in the runners view, the dispatched ref's as each
+  # target recorded them, compared between the targets. See `cargo xtask golden-diff`
+  # (xtask/src/golden.rs).
   golden-diff:
     name: golden diff
     needs: test
@@ -491,12 +501,14 @@ jobs:
       - name: Rust
         run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
 
-      # The base's: from this run, or from an earlier one whose recordings are reused.
+      # The base's: from this run, or from an earlier one whose recordings are reused. In the
+      # runners view, each target's recordings of the dispatched ref, into golden/head.
       - name: The recordings of both commits
         env:
           GH_TOKEN: ${{ github.token }}
           RUN: ${{ github.run_id }}
           BASE_RUN: ${{ inputs.golden_base_run }}
+          VIEW: ${{ inputs.golden_view }}
         run: cargo xtask golden-download
 
       # What it finds goes to the log and to the job's summary; its exit decides the job.

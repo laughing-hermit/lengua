@@ -101,7 +101,41 @@ mod windows {
             buffer: *mut u8,
             length: *mut u32,
         ) -> i32;
+
+        /// `GetFileInformationByHandle`: what Windows knows of the open file `file`, written to
+        /// `information`, a `BY_HANDLE_FILE_INFORMATION`, which is thirteen 32-bit integers.
+        #[link_name = "GetFileInformationByHandle"]
+        pub(super) fn file_information(file: *mut core::ffi::c_void, information: *mut u32) -> i32;
     }
+}
+
+/// How many 32-bit integers a `BY_HANDLE_FILE_INFORMATION` takes: the attributes, three times of
+/// two each, the volume's serial number, the size in two, the number of links, and the file's
+/// index in two.
+#[cfg(windows)]
+const FILE_INFORMATION_INTEGERS: usize = 13;
+
+/// Which of them is the number of links, `nNumberOfLinks`.
+#[cfg(windows)]
+const NUMBER_OF_LINKS: usize = 10;
+
+/// How many names the open file `file` has on its volume, as Windows counts them: more than one
+/// when it has a hard link.
+///
+/// # Errors
+///
+/// What Windows says, when it won't describe the file.
+#[cfg(windows)]
+pub fn link_count(file: &impl std::os::windows::io::AsRawHandle) -> std::io::Result<u64> {
+    let mut information = [0_u32; FILE_INFORMATION_INTEGERS];
+    // SAFETY: the handle is an open file's for as long as `file` is borrowed, and Windows writes
+    // one record of thirteen 32-bit integers to `information`, of this frame, which holds that
+    // many, aligned as they need.
+    let done = unsafe { windows::file_information(file.as_raw_handle(), information.as_mut_ptr()) };
+    if done == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(u64::from(information[NUMBER_OF_LINKS]))
 }
 
 /// The caches of the first logical processor, as Windows describes them, each level and kind
@@ -782,6 +816,22 @@ mod windows_tests {
         drop(tied);
         child.wait().expect("ping ends");
         assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    }
+
+    /// A file has one name, and two once it has a hard link, counted from the handle that was
+    /// open before the link was made.
+    #[test]
+    fn an_open_file_counts_its_names() {
+        let folder = std::env::temp_dir().join(format!("lengua-os-links-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("a folder");
+        let first = folder.join("first");
+        std::fs::write(&first, "one").expect("a file");
+        let file = std::fs::File::open(&first).expect("it opens");
+        assert_eq!(super::link_count(&file).expect("its names"), 1);
+        std::fs::hard_link(&first, folder.join("second")).expect("a hard link");
+        assert_eq!(super::link_count(&file).expect("its names"), 2);
+        drop(file);
+        let _ = std::fs::remove_dir_all(&folder);
     }
 }
 

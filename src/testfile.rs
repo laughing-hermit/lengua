@@ -1520,18 +1520,22 @@ impl<'a> Checker<'a> {
     /// A test has its own server only for a program that connects, and its own client, or
     /// expects the program to keep serving, only for one that serves.
     fn check_peers(&mut self, line: usize, name: &str, peers: Peers<'_>) {
-        if peers.server && self.idea.network.connections.is_empty() {
+        let network = &self.idea.network;
+        let unconnected = network.connections.is_empty() && network.stands.is_empty();
+        let serves = network.listens.is_some() || network.reach.receives.is_some();
+        if peers.server && unconnected {
             self.problem(
                 Some(line),
                 format!(
                     "{name} has a server for the program to talk to, but idea.md doesn't say \
                      where the program connects: add `- Network: connects to TCP port {}` under \
-                     `# Constraints`",
+                     `# Constraints`, or `- Network: opens TCP connections to port N on …` for a \
+                     program that opens its connections by itself",
                     peers.port.unwrap_or("N")
                 ),
             );
         }
-        if peers.client && self.idea.network.listens.is_none() {
+        if peers.client && !serves {
             self.problem(
                 Some(line),
                 format!(

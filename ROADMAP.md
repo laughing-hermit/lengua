@@ -18,9 +18,10 @@ hands back the formatting patch and, for a new dependency, the resolved `Cargo.l
 
 W0 to W14 and W17a are on main, W17b is measured, and W15's finish-line run is done
 (42947270993, 42947285372, 42947294489 and 42947303258, at main 33ed7fe). The finish line itself
-isn't reached: the gate passed on no runner in that run. What is left goes in this order
+isn't reached: the gate passed on no runner in that run, nor in the first run with its noise
+margin (42964232679; W15 below). What is left goes in this order
 (todo.md): W15's report to the owner (the agent's test with the final archive ran on 2026-11-11, and W16 is done);
-then, after the finish line, W18 to W21.
+then, after the finish line, W18 to W24.
 
 ## W0. Record the decision
 
@@ -317,8 +318,17 @@ owner.
 Each of the 22 rows was ahead in an earlier run, and 19 of them in the run before: rows of short
 workloads and of peak memory, at 0.99× to 1.07× in this run, move between ahead and behind from
 run to run, and the list may not take a row back. What to do with them is the owner's (todo.md,
-"A row the gate can't decide"). The five reports are in
-[docs/benchmarks](docs/benchmarks/README.md).
+"A row the gate can't decide"). The five reports were in
+[docs/benchmarks](docs/benchmarks/README.md) until the next run's took their place.
+
+*After the run, the owner's decision of 2026-11-11:* the gate gets a noise margin. A measure
+within 5% either way, or one the test doesn't decide, is level, and a level row doesn't fail the
+gate (`MARGIN` in `src/gate.rs`). The first run with it (42964232679, at cd54e79 on
+`wip/gate-margin`, with the suite on Linux on x86-64 green in 42964220148) found 139 rows
+KNOWN_BEHIND named level or ahead, which left the list (898 rows now), and 6 rows behind by more
+than the margin that it doesn't name: 1 on Linux on x86-64, 2 on Linux on ARM64, 2 on macOS on
+ARM64 and 1 on Windows on x86-64. Every native C++ version was built on all five runners, now
+that the bench tells each compiler the files are C++17.
 
 *Left:* the report to the owner. The agent's test with the final archive ran on 2026-11-11 (todo.md).
 
@@ -362,7 +372,8 @@ most five build runs. *Measured, and the bar isn't met:* run 42919127514 on all 
 the WebAssembly z3 at 1.70 to 2.28 times native's time on the replayed questions, past twice on
 macOS on ARM64 and Windows on ARM64, and a proof lost on three runners. Native z3 stays; the
 build, the host and the measurement are kept at the tag `archive/wip/z3-wasm`. The cvc5 try
-wasn't made, and is the owner's to decide (todo.md).
+is skipped, by the owner's decision of 2026-11-11: z3 missed the bar on four of the five runners,
+and cvc5 would face the same bar. To revisit when Wasmtime or the solvers change (todo.md).
 
 ## W18. Reach: everything possible, nothing implicit
 
@@ -379,6 +390,25 @@ program runs, enforced by the host, and modelled by the prover.
 
 What it unlocks: shells, build tools, package managers, crawlers, proxies, and programs over
 databases on any path.
+
+**The network, built on 2026-11-11** (branch `wip/reach-net`). An idea grants what its program
+opens by itself, a `- Network:` line for each grant: `opens TCP connections to port N on …`
+(`over TLS` too), `looks up the addresses of …`, `sends UDP datagrams to port N on …` and
+`receives UDP datagrams on port N`, for a named computer, any subdomain of a domain, the computer
+an argument names, or any computer. Seven functions of lengua's own, in the module
+`lengua_net_1`, open them, since WASI preview 1 has none. lengua spells each name one way, finds
+the line that grants it, resolves it once, holds every address to the grant (never this computer;
+a private network only where the line says so; never an address of many computers), and connects
+to those addresses alone. A program holds 64 of its own at once, and lengua ends one that no byte
+crosses for 300 seconds. The checker's import rule, the secret rule, the test format's steps (a
+test's own servers by computer and port, datagrams, and names' addresses), `check`'s and `run`'s
+`may_reach`, the skills, a client template and the example `follow` came with it. The prover
+refuses such a program with the reason: tested, not proven. The threat cases and the test that
+holds each are in docs/reviews/reach-2026-11-11.md. *Verified by:* the suite on all five
+runners at ca87111, with format and the gate green (43049640420); 17 of the defences' tests
+failing on the commit that took the defences out (43037211691); todo.md, "W18's network", has
+every run.
+What is left of W18: files anywhere the user names, starting named programs, and the terminal.
 
 ## W19. Native speed: a lean runner and native builds
 
@@ -457,6 +487,28 @@ C, C++ and Rust can't promise.
 A shared, proven standard set (sorting, hash tables, JSON, HTTP, compression, dates) that programs
 build on with `- Builds on:`. The agent assembles programs from verified pieces instead of writing
 everything new, which makes them faster to build and to prove.
+
+## W22. Scale
+
+After W21 (the owner, 2026-11-11: "that evolution needs to function better than a programming
+language. Not have stuff missing"). Every program so far is a few hundred lines of main.wat. W22
+builds one of several thousand from an idea, and records what breaks first: the agent's hold of
+the code, `check`'s time, the proofs, or the rules. What breaks gets its fix: ideas in parts that
+build on each other, modules checked alone and linked, proofs kept for parts that didn't change.
+*Not started.*
+
+## W23. Working with other code
+
+A lengua program as a library other languages call (its module with a stated interface, and a
+native build where the caller needs one), and a named outside WebAssembly module a lengua program
+calls, held to the grants its idea gives it and marked "trusted, not proven". Each is declared in
+the idea. *Not started.*
+
+## W24. Tools
+
+What a programmer expects beside `check`: a run that stops at a line of main.wat and shows its
+values, a profile of a run's time by function and line, and a trace of what a run asked the host
+for. Each is a tool call or a flag. *Not started.*
 
 ## Before the pivot
 

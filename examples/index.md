@@ -11,6 +11,7 @@ okf_version: "0.2"
 * [dice](dice/idea.md) - Rolls a fair six-sided die and prints the roll. Code: [main.wat](dice/main.wat)
 * [echo](echo/idea.md) - A server that sends each line back to the client that sent it. Code: [main.wat](echo/main.wat)
 * [fetch](fetch/idea.md) - Gets a page from the web server on port 8080 of this computer and prints its body. Code: [main.wat](fetch/main.wat)
+* [follow](follow/idea.md) - Gets a page from a web server of example.org and follows one redirect to another of its web servers. Code: [main.wat](follow/main.wat)
 * [greet](greet/idea.md) - Greets the person that the NAME environment variable names. Code: [main.wat](greet/main.wat)
 * [hypotenuse](hypotenuse/idea.md) - Prints the length of the hypotenuse of a right triangle from the lengths of its two sides, with three decimals. Code: [main.wat](hypotenuse/main.wat)
 * [mean](mean/idea.md) - Prints the mean of the two decimal numbers in its arguments, with two decimal places. Code: [main.wat](mean/main.wat)

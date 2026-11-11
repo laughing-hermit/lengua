@@ -34,6 +34,10 @@ replaces it. Values go in backticks, with `\n`, `\r`, `\t` and
 | ``the random bytes `fc` and `2a` `` | The random bytes the program asks the computer for, one byte of hex a value |
 | ``a server on port `8080` that receives TEXT and replies TEXT`` | The test's own server on the program's connection to that port, one a connection; ``a server at `example.com` on port `443` …`` when two places share a port, and ``a server that receives …`` when the idea names one |
 | ``no server on port `8080` `` | That connection handed over already ended: its first read gives the end, and its first write fails |
+| ``a server at `www.example.org` on port `80` that receives TEXT and replies TEXT`` | For a program that opens its connections itself: the test's own server for one connection the program opens to that computer and port; a second such step is its second connection there |
+| ``no server at `www.example.org` on port `80` `` | Nothing: a computer no step gives a server takes no connection, and the step says so |
+| ``a computer at `192.0.2.53` on UDP port `53` that receives TEXT and replies TEXT`` | The test's own computer for one datagram the program sends there, and the datagram it answers with |
+| ``the addresses `192.0.2.7` and `2001:db8::1` for the name `example.org` `` | What a look at that name's addresses gives, in every test of the idea |
 | ``a client that sends TEXT`` | The test's own client, one step a connection, for a program that serves |
 | `standard output is closed` | Standard output as a pipe nobody reads, as after `prog \| head -1` has read its line: every write to it fails with `EPIPE`, never a signal. The behavior then says only its exit code and what it prints to standard error |
 
@@ -141,8 +145,9 @@ a pipe; every wait for a key finds one, or the end of the input.
 
 ## The network
 
-An idea that says `- Network: connects to TCP port N` or `- Network: listens on TCP port N` gets
-tests with their own servers or client: never the real places, which only `run` reaches.
+An idea with a `- Network:` line gets tests with their own servers or client: never the real
+places, which only `run` reaches. That holds for the connections lengua makes before the
+program starts and for everything the program opens itself.
 
 - **A program that connects** gets each connection its idea names from lengua before it starts,
   in the idea's order, in tests as in `run`. A test's server step stands
@@ -153,6 +158,28 @@ tests with their own servers or client: never the real places, which only `run` 
   the same way, in plain bytes: lengua does the TLS only in a run, where the program can't tell
   the difference. So is one to the computer an argument names: the test's server stands in for
   it whatever the argument says, and only `run` reads the argument and connects there.
+- **A program that opens its connections itself** (`- Network: opens TCP connections to …`)
+  reaches only the test's own servers, each named by its computer and its port: ``a server at
+  `www.example.org` on port `80` that receives … and replies …``. The server takes one
+  connection, reads exactly what the program sends there, sends its reply and closes its side;
+  a second step with the same computer and port is the second connection the program opens
+  there, and after the last, nothing listens. A computer the idea grants and no step gives a
+  server takes no connection, as a computer that is down does; a computer the idea doesn't
+  grant is refused by lengua before anything is reached, whatever the test has. Name the
+  computers in the steps as they are, not as placeholders: a generated test draws what is sent
+  and received, not where. `over TLS` is tested in plain bytes here too.
+- **Datagrams:** for `- Network: sends UDP datagrams to …`, ``a computer at `192.0.2.53` on UDP
+  port `53` that receives … and replies …`` reads one datagram, which must be exactly that, and
+  answers with one; with no such step, what the program sends is lost and nothing answers. For
+  `- Network: receives UDP datagrams on port N`, the test's client steps are datagrams: each
+  ``a client that sends …`` is one datagram to the program's port, and its ``the client
+  receives …`` the one datagram the program answers with.
+- **Names:** for `- Network: looks up the addresses of …`, ``the addresses `192.0.2.7` and
+  `2001:db8::1` for the name `www.example.org` `` gives the name those addresses, in every test
+  of the idea; any other name has none. The program gets IPv4 addresses first, each family in
+  order. lengua holds a test's addresses to its rules as it holds real ones, so a name given
+  `127.0.0.1` isn't reached, which a test may show: the program hears that the name has no
+  address.
 - **A program that serves** gets its listening socket from lengua, in every test. The test's
   client connects once a connection and behaves as curl and browsers do: it
   sends its text and keeps its side of the connection open until the program starts answering

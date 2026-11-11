@@ -405,3 +405,39 @@ fn what_needs_the_compiler_goes_to_lengua_mcp_with_the_same_words() {
     );
     assert!(run.stderr.is_empty(), "{run:?}");
 }
+
+/// An idea that lets its program open TCP connections to port 80 on any subdomain of
+/// example.org.
+const REACH_IDEA: &str = include_str!("../../../examples/follow/idea.md");
+
+/// A module that asks lengua to open a connection to port 80 of `elsewhere.test`, which the
+/// idea above doesn't grant, and exits with the error number it gets.
+const ELSEWHERE: &str = r#"(module
+  (import "lengua_net_1" "tcp_open"
+    (func $tcp_open (param i32 i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 140) "elsewhere.test")
+  (func (export "_start")
+    (call $exit
+      (call $tcp_open (i32.const 140) (i32.const 14) (i32.const 80) (i32.const 0)
+        (i32.const 20)))))
+"#;
+
+/// lengua-run holds a program to its idea's network grants as `lengua-mcp run` does, through
+/// the same host: it says what the program may reach before the program starts, and a
+/// connection to a computer the idea doesn't grant is refused with `NOTCAPABLE`, 76, before
+/// any name is looked up or any connection made.
+#[test]
+fn a_program_reaches_only_what_its_idea_grants() {
+    let checked = Checked::new(REACH_IDEA, ELSEWHERE);
+    checked.compile();
+    let run = checked.run(&[]);
+    assert_eq!(run.status.code(), Some(76), "{run:?}");
+    assert!(run.stdout.is_empty(), "{run:?}");
+    let said = said(&run);
+    assert!(
+        said.starts_with("lengua-run: ") && said.contains("any subdomain of example.org"),
+        "{said}"
+    );
+}

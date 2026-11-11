@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use self::host::policy::Policy;
-pub use self::pool::{Pool, Running, Spec};
+pub use self::pool::{Peer, Pool, Running, Spec};
 pub use self::text::{Built, Problem};
 
 /// The command-line flag that starts this binary as a worker.

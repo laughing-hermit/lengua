@@ -29,6 +29,14 @@ pub fn needs(host: &wasi::Function) -> String {
             Allowance::AtOnce => {
                 Some("`up to N clients at once` in its `- Network:` line".to_owned())
             }
+            Allowance::Opens => {
+                Some("`- Network: opens TCP connections to port N on …`".to_owned())
+            }
+            Allowance::Names => Some("`- Network: looks up the addresses of …`".to_owned()),
+            Allowance::Datagrams => {
+                Some("`- Network: sends UDP datagrams to port N on …`".to_owned())
+            }
+            Allowance::Receives => Some("`- Network: receives UDP datagrams on port N`".to_owned()),
         })
         .collect::<Vec<_>>()
         .join(" or ")
@@ -142,24 +150,27 @@ impl Checker<'_, '_, '_> {
                 continue;
             };
             let line = function.line;
-            if from != wasi::MODULE {
+            if from != wasi::MODULE && from != wasi::NET_MODULE {
                 self.violation(
                     Rule::Resources,
                     line,
                     format!(
-                        "{} is imported from `{from}`; a program imports only from `{}`",
+                        "{} is imported from `{from}`; a program imports only from `{}`, and \
+                         from `{}` what its idea grants it to open itself",
                         function.shown(),
-                        wasi::MODULE
+                        wasi::MODULE,
+                        wasi::NET_MODULE
                     ),
-                    "import only the WASI preview 1 functions the idea allows",
+                    "import only the WASI preview 1 functions the idea allows, and lengua's own \
+                     network functions the idea grants",
                 );
                 continue;
             }
-            let Some(host) = wasi::function(field) else {
+            let Some(host) = wasi::imported(from, field) else {
                 self.violation(
                     Rule::Resources,
                     line,
-                    format!("`{}` has no function `{field}`", wasi::MODULE),
+                    format!("`{from}` has no function `{field}`"),
                     "import only the functions lengua's host gives: references/host.md lists \
                      them",
                 );

@@ -30,6 +30,7 @@ pub mod measure;
 pub mod names;
 pub mod platform;
 pub mod prove;
+pub mod reach;
 pub mod runner;
 pub mod server;
 pub mod skiplog;

@@ -1,5 +1,6 @@
 //! The network: the listener lengua binds for a server, and the connections lengua makes before
-//! the program starts or the program accepts. The program never connects by itself. A connection
+//! the program starts or the program accepts. The program connects by itself only where its idea
+//! grants it, through [`super::open`], and such a connection is one of these too. A connection
 //! behaves as `crate::connect` says on every system: what the other end sends is read, its end of
 //! sending is a read of 0, a connection lengua couldn't make or one that broke off is ended both
 //! ways (reads give 0, writes `PIPE`), and over TLS lengua does the TLS, in Rust, so the program
@@ -33,18 +34,18 @@ const DRAIN: usize = 1 << 20;
 /// The first nap a wait on a TCP stream takes between two looks at it. Each nap is twice the one
 /// before, up to [`LAST_NAP`], so an answer that comes soon is seen soon, and a long wait costs
 /// little.
-const FIRST_NAP: Duration = Duration::from_micros(50);
+pub(super) const FIRST_NAP: Duration = Duration::from_micros(50);
 
 /// The longest nap.
 const LAST_NAP: Duration = Duration::from_millis(1);
 
 /// The nap after `nap`.
-fn next_nap(nap: Duration) -> Duration {
+pub(super) fn next_nap(nap: Duration) -> Duration {
     nap.saturating_mul(2).min(LAST_NAP)
 }
 
 /// Whether a stream that never waits said it has nothing to give or take yet.
-fn nothing_yet(error: &std::io::Error) -> bool {
+pub(super) fn nothing_yet(error: &std::io::Error) -> bool {
     matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted)
 }
 
@@ -112,6 +113,9 @@ pub struct Socket {
     write_shut: bool,
     /// Whether a read that would wait answers `AGAIN` instead.
     nonblocking: bool,
+    /// For a connection the program opened itself, lengua's watch on it, which ends it when no
+    /// byte has gone either way for too long.
+    watch: Option<super::open::Watch>,
 }
 
 impl Socket {
@@ -125,6 +129,29 @@ impl Socket {
             read_shut: false,
             write_shut: false,
             nonblocking: false,
+            watch: None,
+        }
+    }
+
+    /// A connection over `link` that the program opened itself, with lengua's `watch` on it.
+    #[must_use]
+    pub(crate) fn opened(link: Link, watch: super::open::Watch) -> Self {
+        Self {
+            watch: Some(watch),
+            ..Self::new(link)
+        }
+    }
+
+    /// Whether the program opened it itself.
+    #[must_use]
+    pub fn is_opened(&self) -> bool {
+        self.watch.is_some()
+    }
+
+    /// Notes that a byte went one way or the other, for lengua's watch.
+    fn used(&self) {
+        if let Some(watch) = &self.watch {
+            watch.used();
         }
     }
 
@@ -163,7 +190,10 @@ impl Socket {
         let mut chunk = vec![0_u8; CHUNK];
         match self.receive(&mut chunk, wait) {
             Some(0) => self.ended = true,
-            Some(count) => self.ahead.extend_from_slice(&chunk[..count]),
+            Some(count) => {
+                self.used();
+                self.ahead.extend_from_slice(&chunk[..count]);
+            }
             None => {}
         }
     }
@@ -249,6 +279,9 @@ impl Socket {
                     Ok(0) => return ended(taken),
                     Ok(count) => {
                         taken += count;
+                        if let Some(watch) = &self.watch {
+                            watch.used();
+                        }
                         if taken == bytes.len() {
                             return Ok(taken);
                         }
@@ -274,6 +307,9 @@ impl Socket {
                         })
                         .await
                     });
+                    if let (Some(watch), true) = (&self.watch, taken > 0) {
+                        watch.used();
+                    }
                     match sent {
                         Ok(Ok(())) => return Ok(taken),
                         Ok(Err(_)) => return ended(taken),

@@ -173,6 +173,9 @@ struct Serving {
     program: Arc<crate::wasm::Program>,
     /// Whether it listens on every address of this computer, not on the loopback alone.
     anywhere: bool,
+    /// Whether its port takes UDP datagrams, as its idea receives them, rather than TCP
+    /// connections.
+    datagrams: bool,
 }
 
 impl Serving {
@@ -308,9 +311,11 @@ impl BlockProof {
 }
 
 impl LenguaServer {
-    /// Creates a server that keeps its private data in `data_dir`.
+    /// Creates a server that keeps its private data in `data_dir`, which it makes the user's
+    /// alone where the folder is there with another mode ([`DataDir::keep_private`]).
     #[must_use]
     pub fn new(data_dir: DataDir) -> Self {
+        data_dir.keep_private();
         Self {
             tool_router: Self::tool_router(),
             data_dir: Arc::new(data_dir),
@@ -394,6 +399,11 @@ pub struct CheckReport {
     /// the shell's own input and output, and files read and written in the folder it starts in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
+    /// What the idea grants the program to reach on the network by itself while it runs, each
+    /// grant in words, when it grants any: the computers and ports it may open TCP connections
+    /// to, look up, or send UDP datagrams to. Tell the user before they run it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub may_reach: Vec<String>,
     /// How the graph of program folders that this one belongs to stands: its bundle, what
     /// index.md and log.md now say of the program, and what needs care, each line starting with
     /// how much: `blocks` (fix it first), `warning` or `note`.
@@ -489,9 +499,15 @@ pub struct RunReport {
     pub wall_time_us: u64,
     /// Where a server is taking connections, while it runs in the background.
     pub serving: Option<String>,
-    /// The connections lengua made for the program before it started, when its idea names any.
+    /// The connections lengua made for the program before it started, when its idea names any,
+    /// and then what the program asked to open by itself while it ran, the first 64, each with
+    /// why lengua refused it or couldn't make it, when it didn't.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<ConnectionReport>,
+    /// What the program's idea grants it to reach on the network by itself, each grant in
+    /// words: tell the user before a run that matters to them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub may_reach: Vec<String>,
 }
 
 /// One connection lengua made for a program, or couldn't.
@@ -544,6 +560,7 @@ fn ended_report(
             .iter()
             .map(ConnectionReport::of)
             .collect(),
+        may_reach: Vec::new(),
     }
 }
 
@@ -562,6 +579,7 @@ impl LenguaServer {
     ) -> RunReport {
         static STARTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let port = server.port().unwrap_or(0);
+        let datagrams = server.datagrams;
         let address = serving_address(port, server.anywhere);
         // A server other computers can reach is said to be one.
         let place = if server.anywhere {
@@ -592,18 +610,24 @@ impl LenguaServer {
                 let _ = entry.server.stop().await;
             }
         });
+        let (serving, tools) = if datagrams {
+            ("receiving UDP datagrams on", "nc -u")
+        } else {
+            ("serving on", "curl or nc")
+        };
         RunReport {
             stdout: String::new(),
             stderr: String::new(),
             exit_code: None,
             ended: format!(
-                "serving on {place}. Try it with your own tools, such as curl or nc, then call \
+                "{serving} {place}. Try it with your own tools, such as {tools}, then call \
                  run with stop: true to stop it and see what it printed. It stops by itself \
                  after ten minutes or when this session ends."
             ),
             wall_time_us: 0,
             serving: Some(address),
             connections,
+            may_reach: Vec::new(),
         }
     }
 }
@@ -677,6 +701,13 @@ impl LenguaServer {
         let mut events = Vec::new();
         let mut report = self.check_stages(&folder, &params, &mut events).await?;
         report.graph = self.graph_lines(&folder, events).await;
+        // What the idea grants at run time is said at every stage, so the user hears it before
+        // any run.
+        if let Ok(Some(idea_text)) = read_optional(&folder, IDEA_FILE)
+            && let Ok((_, network)) = idea::grants(&idea_text)
+        {
+            report.may_reach = network.reach.describe();
+        }
         Ok(Json(report))
     }
 
@@ -689,7 +720,9 @@ impl LenguaServer {
             module check tested. The program gets an empty environment, \
             10 seconds and \
             8 MiB of output, and lengua lets it use only what its idea names, reach only the \
-            places it names, through connections lengua makes for it before it starts, and touch \
+            places it names, through connections lengua makes for it before it starts or, where \
+            its idea grants them, ones it opens itself to the computers and ports the idea \
+            names (the reply's may_reach says them, as check's does), and touch \
             files only inside its working folder: `folder`, where it may fill the user's disk, \
             or else an empty temporary folder, where a file holds at most 64 MiB and its files \
             256 MiB in all. lengua's own folders, and on Linux /proc, /sys and /dev, are no \
@@ -1064,11 +1097,51 @@ impl LenguaServer {
                 .is_some_and(|proofs| {
                     proofs.module_sha256 == checking.module && !proofs.wrong.is_empty()
                 });
+            // The same for a verdict the data folder alone keeps, as when an earlier lock was put
+            // back in the folder.
+            let recorded_wrong = recorded_wrong
+                || wrong_record(self.data_dir.path(), &files[0], &checking.module).exists();
             if ended && recorded_wrong && !checking.found.lock().is_ok_and(|found| found.wrong) {
                 return None;
             }
         }
         Some(Arc::clone(checking))
+    }
+
+    /// Takes what the data folder keeps a proof found wrong about this module of this idea
+    /// ([`wrong_record`]), for a lock that doesn't record it: each generated test the record
+    /// names is found wrong, with what the proof found and why the lock doesn't say so, and the
+    /// others are tested, not proven. Gives whether the record named one.
+    fn kept_wrong(&self, checking: &Checking, suite: &TestSuite) -> bool {
+        let kept = wrong_record(self.data_dir.path(), &checking.files[0], &checking.module);
+        let Ok(text) = std::fs::read_to_string(kept) else {
+            return false;
+        };
+        let record = wrong_lines(&text);
+        let Ok(mut found) = checking.found.lock() else {
+            return false;
+        };
+        let named = |block: &testfile::Generated| {
+            let id = block.id.to_string();
+            record.iter().find(|(known, _)| *known == id)
+        };
+        if !suite.generated.iter().any(|block| named(block).is_some()) {
+            return false;
+        }
+        for (block, proof) in suite.generated.iter().zip(&mut found.proofs) {
+            match named(block) {
+                Some((_, what)) => {
+                    proof.detail = Some(format!(
+                        "{what} (lengua.lock doesn't record this, as when an earlier lock was \
+                         put back, but lengua's data folder keeps it)"
+                    ));
+                    proof.wrong = true;
+                }
+                None => proof.detail = Some("tested, not proven".to_owned()),
+            }
+        }
+        found.wrong = true;
+        true
     }
 
     /// Takes the proofs lengua.lock records about this very module, after a restart lost the job
@@ -1086,7 +1159,16 @@ impl LenguaServer {
             .flatten()
             .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
             .and_then(|lock| lock.proofs)
-            .filter(|proofs| proofs.module_sha256 == checking.module)?;
+            .filter(|proofs| proofs.module_sha256 == checking.module);
+        // What a proof found wrong about this module of this idea and the lock doesn't record,
+        // as when an earlier lock was put back in the folder: the data folder keeps it, `run`
+        // refuses the module for it, and check says it, with where it comes from.
+        if stamp.as_ref().is_none_or(|stamp| stamp.wrong.is_empty())
+            && self.kept_wrong(checking, suite)
+        {
+            return Some(Vec::new());
+        }
+        let stamp = stamp?;
         let mut found = checking.found.lock().ok()?;
         let mut any_wrong = false;
         let mut further = Vec::new();
@@ -2184,6 +2266,25 @@ fn remember_wrong(data_dir: &DataDir, lock: &Lock) {
     }
 }
 
+/// What a record [`remember_wrong`] wrote says: each generated test's id with what its proof
+/// found, a line each; a line that doesn't begin one belongs to the one before, whose text held
+/// a line break.
+fn wrong_lines(text: &str) -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        let begun = line
+            .strip_prefix("generated ")
+            .and_then(|rest| rest.split_once(": "));
+        if let Some((id, what)) = begun {
+            found.push((id.to_owned(), what.to_owned()));
+        } else if let Some((_, what)) = found.last_mut() {
+            what.push('\n');
+            what.push_str(line);
+        }
+    }
+    found
+}
+
 /// [`state_of`] for a run: the folder's state, with the snapshot it comes from, whose lock is the
 /// one lengua's key verified, and the bytes of idea.md and main.wat that snapshot hashed, which
 /// the run takes in place of reading the lock or either file again. What that lock records a proof
@@ -2311,6 +2412,8 @@ fn shell_folders(request: &ShellRun) -> Result<(ProgramFolder, PathBuf), String>
 ///
 /// Fails, saying why, when lengua won't run the program or can't start it.
 pub fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i32, String> {
+    // The data folder holds the key the run is about to read: the user's alone.
+    data_dir.keep_private();
     let on = crate::wasm::runner::On::Own;
     wat::run_from_shell(data_dir, request, on, || shell_folders(request)).map_err(|not_run| {
         match not_run {
@@ -2335,6 +2438,8 @@ pub fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i32, Str
 /// compiled form this computer takes ([`NotRun::NotCompiled`]), or an idea that names a secret
 /// ([`NotRun::Secret`]).
 pub fn run_alone(data_dir: &DataDir, request: &ShellRun) -> Result<i32, NotRun> {
+    // The data folder holds the key the run is about to read: the user's alone.
+    data_dir.keep_private();
     let on = crate::wasm::runner::On::for_a_run_alone();
     wat::run_from_shell(data_dir, request, on, || shell_folders(request))
 }

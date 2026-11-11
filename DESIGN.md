@@ -206,13 +206,26 @@ Determinism: no atomics, no relaxed SIMD, no trapping float-to-int conversion, n
 of a float that may be NaN, and no division whose divisor may be zero. The engine makes every NaN
 canonical, so every machine computes the same bits.
 
+`args_get` and `environ_get` take no length: the host writes an address for each argument or
+variable, and every byte of their text. The rules hold the program to ask first and to check: they
+follow the count and the size `args_sizes_get` or `environ_sizes_get` wrote, from where it wrote
+them, through an `i32.load` and a local, to the unsigned comparisons that bound them, and judge
+the two buffers by those bounds, four bytes for each of the count. A call with a size that no
+check bounds on the way, or that the program may have written over, is refused (bounds), with
+what to write; the calls and the checks stand in one function, since a call of one of main.wat's
+own functions may write anywhere.
+
 What the rules can't settle they leave to the proofs, as obligations, each on its line: an access
 through an address loaded from memory, an index checked against a limit the rules don't follow,
-an access inside an unsafe block, the buffers `args_get` and `environ_get` fill, and a signed
-division that may divide the most negative number by -1. A proof settles a division's obligation
-in full. Of an access, it shows only that it stays inside the program's memory, since the model
-follows no region: whether it stays inside its region is tested, not proven. check's `memory` line
-says which.
+an access inside an unsafe block, and a signed division that may divide the most negative number
+by -1. A proof settles a division's obligation in full. Of an access, it shows only that it stays
+inside the program's memory, since the model follows no region: whether it stays inside its
+region is tested, not proven. check's `memory` line says which. The rules themselves take no such
+access to stay in its region: a write they leave to the proof, or one in an unsafe block, may
+land in any region, so after it they know nothing of what memory holds (no iovec array, no size
+the host wrote), and the buffers of a host call that follows are the proof's as well, or, for
+`args_get` and `environ_get`, refused. What a write of that kind may do to another region, a
+read-only one included, is what the memory line calls tested, not proven.
 
 ### Secrets
 
@@ -359,10 +372,28 @@ question.
 
 By induction, a block is proven for every length when its program reads standard input in one
 loop of its own through `$fill`, as one ASCII text, and maps it byte by byte or counts in step
-with it. From any state the loop can be in at its head, one more buffer-full must keep what it
-writes and counts in step with the formula; the base proves every input of up to a buffer-full.
-A program that reads with `fd_read` itself, reads in several places, waits on `poll_oneoff` or is
+with it. The counts are `len`, `words` and `count` of the text or of the text mapped byte by byte
+(`lower`, `upper`, `tr`), and sums of them, as a count of vowels is; output that is the same for
+every text, as with standard output closed, needs no count. From any state the loop can be in at
+its head, one more buffer-full must keep what it writes and counts in step with the formula; the
+base proves every input of up to a buffer-full. At the head, what a time round changes is any
+value, a count is anything it can have grown to, and a value that stays in a range by its own
+terms, as a byte carried from one buffer-full to the next does, is any value in that range. A
+program that reads with `fd_read` itself, reads in several places, waits on `poll_oneoff` or is
 on the network is proven by length only.
+
+The base takes each final piece of up to a buffer-full: in one shape for a buffer of up to 256
+bytes, else one length at a time. So the buffer's size decides whether the proof for every
+length ends in its time. Measured on Linux on x86-64 for a count of vowels 16 bytes a step, in a
+proof's 300 seconds (run 42976169988): with a buffer of 1,024 bytes every length is proven in 15
+seconds, and with 4,096 bytes in 191. With 64 KiB the step holds in 9 seconds, the base reaches
+4,635 bytes, and the line bounds the proof there. The proof by length alone reaches 5,679 bytes
+in that time.
+
+Counts meet as terms, with no solver: the conditions a count counts that test the same byte are
+written as the byte's sets of values, so five counts of one letter each and one count of the
+bytes that are one of the five are the same term (`src/prove/term.rs`). A step of 16 bytes with
+SIMD128's compares, `i8x16.bitmask` and `i32.popcnt` is then the formula's own count.
 
 How input arrives is part of a proof. A module that reads only through `$fill` with a stop it knows,
 off the network, is proven with its input cut into pieces any way. A networked block is proven for
@@ -405,7 +436,9 @@ these on: floats, mutable globals, saturating float-to-int, sign extension, refe
 multiple values, bulk memory and SIMD128. Reference types are on for the tables of C, C++ and Rust
 toolchains' modules, which the benchmark runs; the dialect refuses tables in main.wat. NaNs are
 made canonical. A program's WebAssembly calls may take 512 KiB of stack, past which a call traps.
-The features are one set on every machine.
+The features are one set on every machine. That is point 3 of the finish line as the owner
+decided it on 2026-11-11: the same bits on every machine, so proofs and tests hold on each, with
+the machine code compiled for the machine's own CPU. Relaxed SIMD and wide arithmetic stay off.
 
 Three setups:
 
@@ -445,8 +478,10 @@ All 46 functions of preview 1 are linked, so a toolchain's module links whatever
 are given. 16 answer `NOSYS`: `fd_advise`, `fd_allocate`, `fd_datasync`, `fd_fdstat_set_flags`,
 `fd_fdstat_set_rights`, `fd_filestat_set_size`, `fd_filestat_set_times`, `fd_pread`, `fd_pwrite`,
 `fd_renumber`, `fd_sync`, `path_filestat_set_times`, `path_link`, `path_readlink`, `path_symlink`
-and `proc_raise`. Every error is one of a closed set of 21 of WASI's numbers, and an error outside
-a function's own list becomes `IO`.
+and `proc_raise`. Besides WASI's, lengua gives seven functions of its own, in the module
+`lengua_net_1`, for what a program opens on the network by itself (below). Every error, of
+WASI's functions and of lengua's own, is one of a closed set of 24 of WASI's numbers, and an
+error outside a function's own list becomes `IO`.
 
 Each call checks the idea first: one the idea doesn't allow answers before any of its buffers is
 looked at. An allowed call checks every buffer it borrows against the program's memory, then does
@@ -457,15 +492,21 @@ its work. The idea's lines decide what is allowed (`src/wasm/host/policy.rs`):
 - `the clock`: the clocks, and `poll_oneoff`'s waits on time;
 - `random bytes`: `random_get`;
 - `the environment`: the variables it is given;
-- any `- Network:` line: its connections; `listens on`: `sock_accept` on its listener.
+- any `- Network:` line but one that only looks up addresses: its connections; `listens on`:
+  `sock_accept` on its listener;
+- `opens TCP connections to`: `tcp_open`; `looks up the addresses of`: `dns_lookup`; `sends UDP
+  datagrams to`: `udp_open`, `udp_send` and `udp_recv`; `receives UDP datagrams on`:
+  `udp_recv_from` and `udp_send_to`.
 
 A call the idea doesn't allow answers `NOTCAPABLE` and does nothing, except five that toolchains'
 startup code calls, which answer harmlessly: an empty environment, no folder, and zeros for random
 bytes. main.wat itself can't import a function its idea doesn't allow: the checker refuses it.
 
 Descriptors are fixed by role: 0 to 2 the standard streams, 3 the working folder (named `.`, only
-for an idea that uses files), 4 the listener, and 5 on the connections lengua made, in the idea's
-order. A program holds at most 4,352 descriptors.
+for an idea that uses files), 4 the listener, 5 on the connections lengua made, in the idea's
+order, and after them the UDP port the idea receives datagrams on. What a program opens, accepts
+or is granted to open by itself takes the lowest number free after those. A program holds at most
+4,352 descriptors.
 
 Files: every path goes through `cap-std`, which resolves it beneath the working folder. A path that
 climbs out of it, or starts with `/`, gives `NOTCAPABLE`; a link on the way gives `ACCES`. Names
@@ -474,8 +515,18 @@ characters Unicode 9.0 assigned, none of the characters, device names (`COM0`, `
 and `CONOUT$` among them, and a device's name with spaces before its dot) and short-name shapes
 Windows refuses. Names are found byte for byte, and a new name that differs from one in its folder
 only in case or normalization gives `EXIST`. A folder lists sorted by name. A symbolic link, and
-on Windows a junction, is a link; a hard link is a regular file to every system, and to lengua,
-so a working folder that holds a hard link to a file elsewhere gives the program that file.
+on Windows a junction, is a link. A hard link is a regular file to every system, with nothing on
+the way to it that could be refused, so lengua asks the system how many names the file that
+opened has, and opens none with more than one: `path_open` gives `ACCES`, before the file is
+emptied when it was to be. The count is the open file's own (`fstat` on Linux and macOS,
+`GetFileInformationByHandle` on Windows), so it holds on all five systems, on every file system
+that counts hard links; one that has none, or reports every file with one name, opens every
+file. What it costs: a file with a second name anywhere on its volume, inside the working folder
+too, since the names can't be told apart, isn't opened: files in a tree of hard-linked backups
+(`cp -al`, `rsync --link-dest`), in a package manager's folders that link from a store (pnpm,
+uv), in a Cargo `target` folder, in an OSTree checkout, or after a tool that joins equal files.
+The user copies such a file to give it to a program. The file still lists as a file, and its
+size can be asked.
 
 A folder's listing is lengua's memory, not the program's: it is read once, shared by every
 descriptor that lists the folder while it stays the same, and the listings a program's descriptors
@@ -489,7 +540,7 @@ anything beneath them, with links followed before paths are compared (`own_folde
 `src/server.rs`). The program's own folder is a working folder like any other: what a program
 changes there only stops its next run.
 
-The network: a program never connects or binds by itself. Before it starts, lengua makes each
+The network: by default a program never connects or binds by itself. Before it starts, lengua makes each
 connection its idea names, one after another in order, within 5 seconds each and 10 seconds in
 all, after which the rest are handed over ended, untried, and binds its
 listener, IPv4 only, on 127.0.0.1, or on every address when the idea serves any computer
@@ -501,6 +552,64 @@ written as IPv4 inside IPv6 too, the connection isn't made. Over TLS, lengua doe
 with ring, Mozilla's roots from webpki-roots, the same on every system), and the program reads and
 writes plain bytes. A stream never waits in the system: lengua naps between looks, within the
 run's deadline, since a socket's own timeout on Windows can lose or repeat bytes.
+
+What a program opens by itself (W18, `src/reach.rs`, `src/wasm/host/open.rs`): an idea may grant
+more than connections made before the start, each grant a `- Network:` line of its own:
+
+| The idea's line | What the program may do, with which import of `lengua_net_1` |
+|---|---|
+| `opens TCP connections to port 443 on example.com over TLS` | open such a connection: `tcp_open(name, name_len, port, tls, out_fd)` |
+| `looks up the addresses of example.com` | read the name's addresses: `dns_lookup(name, name_len, out, out_len, out_count)` |
+| `sends UDP datagrams to port 53 on 192.0.2.53` | send datagrams there and receive the answers: `udp_open(name, name_len, port, out_fd)`, `udp_send`, `udp_recv` |
+| `receives UDP datagrams on port 5353` | receive on that port of this computer, which lengua binds, and answer the senders: `udp_recv_from`, `udp_send_to` |
+
+The computers of a line are a name or an address, `any subdomain of example.com` (not the domain
+itself), `the computer its first argument names`, or `any computer`; the ports are the line's
+own. WASI preview 1 has no function that opens a connection, and its successor's sockets aren't
+preview 1, so these are lengua's own, in a module of their own name: a module that imports one
+says so, another WASI runtime refuses to link it rather than give it something else, and the
+name carries a version, so a change of meaning gets a new name. A connection `tcp_open` gives is
+a descriptor like the ones lengua made, for the same WASI functions.
+
+Every such call goes the same way, and the order is the defence:
+1. The name is read as lengua spells it (`spelled`): lower case, no dot at its end, an address
+   in its one usual writing, an IPv4 address inside an IPv6 one as the IPv4 address. A number
+   that only an older parsing reads as an address is no name (`INVAL`), and this computer, by
+   `localhost` or by its loopback or unspecified address, is refused (`NOTCAPABLE`).
+2. A rule of the idea must cover the name, the port, and TLS or not (`Rule::covers`). Nothing is
+   resolved or reached for a name no rule covers.
+3. lengua resolves the name itself, once, with the system's resolver, and every address is held
+   to the rule (`vetted`). One address that is this computer's refuses the name, whatever the
+   others are; so does one that many computers answer at (multicast, broadcast); so does one
+   in a private network (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10,
+   0.0.0.0/8, fc00::/7, fe80::/10), unless the line ends with `, private addresses too` or
+   writes that address itself. An IPv6 address that carries an IPv4 one (written inside it,
+   IPv4-compatible, NAT64's 64:ff9b::/96, 6to4's 2002::/16) is held to the IPv4 address's class.
+   The program hears `NOENT` for a name lengua refuses by its addresses, as for a name with
+   none, so it can't learn from the refusals which names a private network has; the run's
+   report says what it was. An address the program wrote itself gets `NOTCAPABLE`.
+4. lengua connects to the addresses it checked and to no others, within 5 seconds (`dial`), so
+   a name that resolves anew between the check and the connection changes nothing. Over TLS, it
+   checks the computer's certificate for the name.
+
+The limits: a program holds at most 64 connections and datagram sockets of its own at once
+(`MFILE` past them). lengua ends a connection the program opened once no byte has crossed it
+for 300 seconds: a thread of lengua's own looks every quarter second, so a program that
+computes without a call of the host is held to it too. A name has at most 253 bytes, a look at
+a name gives at most 16 addresses, IPv4 first and each family in order, and a datagram holds at
+most 65,507 bytes. On the port its idea receives on, a program answers only an address that sent
+it something; where the line says `for any computer`, it sends an address at most three times
+the bytes that address sent, since a sender can write another computer's address on its
+datagrams. An idea listens on a TCP port or receives on a UDP port, one of the two.
+
+In a test, the test's own servers stand in for every computer: a step names each by its
+computer and its port, lengua listens for it on the loopback, and a program's `tcp_open`,
+`udp_open` or `dns_lookup` reaches those and nothing else, after the same checks. Nothing a
+test's program opens reaches a real computer. The prover refuses a module that imports from
+`lengua_net_1`: which computer a program reaches is its own choice while it runs, and the model's
+network is the connections made before the start, so such a program is tested, not proven.
+`check`'s reply and `run`'s (`may_reach`) say each grant in words, and a run from a shell says
+them on standard error before the program starts, with what lengua refused while it ran.
 
 The clock: both clocks are rounded down to a microsecond (`src/wasm/host/clock.rs`). In a test the
 clock and the random bytes may come from the test; otherwise random bytes come from the system.
@@ -591,9 +700,10 @@ The code stamp is written when every test passes, before the proofs end, so `run
 32 random bytes in `key` in lengua's data folder, made on the first record (`src/lock.rs`,
 `src/data_dir.rs`). The data folder is `$XDG_DATA_HOME/lengua` or `~/.local/share/lengua` on
 Linux, `~/Library/Application Support/lengua` on macOS, `%LOCALAPPDATA%\lengua` on Windows, or
-`--data-dir`. On Unix the folder is made readable only by the user (0700) when the key is made or
-loaded for a record, also when it was there already with another mode, as when the engine's cache
-made it first, and the key's file is the user's alone (0600) from the start; on Windows lengua
+`--data-dir`. On Linux and macOS the folder is made readable only by the user (0700) when the key
+is made or loaded for a record, and, where it is there with another mode, as when the engine's
+cache made it first, when the server starts and at each run from a shell, before the key is read
+(`DataDir::keep_private`); the key's file is the user's alone (0600) from the start; on Windows lengua
 sets no permissions of its own, so the key is as private as the user's
 `%LOCALAPPDATA%`. One key serves every agent harness, so a lock recorded in one verifies in
 another. A lock signed on another computer doesn't verify here: the HMAC binds a lock to this
@@ -624,7 +734,9 @@ isn't read. lengua.lock is read the same way, within its own 64 KiB.
   folder says this module is wrong. Whenever `check` or `run` reads or writes a lock that records
   a module as found wrong, lengua keeps that in `wrong/<idea's hash>-<module's hash>` of the data
   folder, so an earlier lock of the user's own, put back in the folder, doesn't let that module
-  run for that idea;
+  run for that idea; `check` reads the record too, and with such a lock in the folder says
+  tests_failed, with what the proof found and that the lock doesn't record it, where `run`
+  refuses;
 - the working folder, for a program that uses files, is none of lengua's own or the system's;
 - environment variables are given only to an idea that uses the environment;
 - what runs is the module `check` tested. The `run` tool builds main.wat again and compares the
@@ -689,7 +801,9 @@ how idea.md changed, and lengua's list of test changes that test less), `shell` 
 given with an idea that still has problems are held for that folder and recorded once it checks;
 a restart loses them.
 
-`run` takes `path`, `args`, `stdin` or `stdin_file` (a file in `folder`, at most 16 MiB), `folder`,
+`run` takes `path`, `args`, `stdin` or `stdin_file` (a file in `folder`, at most 16 MiB, opened
+once beneath the folder and read from the file that opened, so no name or link leads out and
+nothing that takes its name afterwards is read), `folder`,
 `timeout_seconds`, `env` and `stop`. Its reply gives standard output and error, the exit code, how
 the program ended, its time on the clock, where a server serves, and the connections lengua made.
 An idea that listens starts a server in the background, at most one per folder, reached at
@@ -732,30 +846,48 @@ its own. The runs alternate between the versions, in an order shuffled from
 round to round. On each row, lengua against one other version, a one-sided Mann-Whitney U test
 decides CPU and wall time: the gate looks after 20, 40, 80, 160, 320, 640, 1,280 and 2,000 runs of
 each version, each look at p < 0.00125, the 1% split over the eight looks, and a workload's rows
-stop together at ten minutes. Peak memory and size are compared as measured. A row the test can't
-decide is undecided, never level.
+stop together at ten minutes. Peak memory and size are compared as measured.
 
-`KNOWN_BEHIND` names the rows where lengua isn't ahead yet, and it may only shrink: a run fails
-where lengua is behind or undecided on a row the list doesn't name, or ahead on one it names, and
-where a change in the list's history named a row the list before it didn't. Each run writes a
-report, BENCHMARKS-<runner>.md, from its results alone. The latest run's five reports, from the
-finish-line run 42947294489 at main 33ed7fe, are in [docs/benchmarks](docs/benchmarks/README.md).
-In that run the gate passed on no runner. It found lengua ahead on 20 rows the list named, which
-have left it, and behind or undecided on 22 rows it doesn't name. KNOWN_BEHIND now names 1,037
-rows. Against C, C++ and Rust compiled to WebAssembly they are 46 on Linux on x86-64, 31 on Linux
-on ARM64, 48 on macOS on ARM64, 66 on Windows on x86-64 and 66 on Windows on ARM64, with peak
-memory the most common measure among them. Against the native builds they are 152 to 160 of each
-runner's 168 rows: tally is the one workload whose time is below the best native build's, on
-every runner, at 0.46 to 0.69 times. Windows counts CPU time in 15.6 ms ticks, so a short run's
-CPU time there is a whole number of ticks. Against the other modules, 37 CPU rows of the two
-Windows runners were undecided in that run and 4 behind, each at 0.99× or 1.00×; the native
-builds' shortest runs read no ticks at all.
+The gate has a noise margin of 5% (`MARGIN` in `src/gate.rs`; the owner's decision of
+2026-11-11), since the runners are shared machines and rows this close changed sides from run to
+run. A measure has one of three verdicts:
 
-The ratchet has a limit the runs show. Each of the 22 rows was ahead in an earlier run, which is
-why the list doesn't hold it, and 14 of them left the list one run before. They are CPU time and
-wall time of short workloads and peak memory, at 0.99× to 1.07×. Such rows move between ahead and
-behind from run to run, and the list may not take a row back, so the list alone doesn't bring
-the gate to pass. What to do with them is the owner's (todo.md, "The owner's").
+- **Level:** the test doesn't decide it, or lengua's value is from 0.95 to 1.05 times the other
+  version's, whatever the test decides. A row decided ahead at 0.98× is level, not ahead.
+- **Ahead or behind:** the gap is past the margin, and for CPU and wall time the test decides it
+  too. A row decided behind at 1.06× is behind.
+- **Size** has no margin, as a file's bytes are the same on every run: a byte more is behind.
+
+A row whose version couldn't be built is "not measured", and the bench fails on that version.
+
+`KNOWN_BEHIND` names the rows where lengua is behind by more than the margin, and it may only
+shrink: a run fails where lengua is behind on a row the list doesn't name, level or ahead on one
+it names, and where a change in the list's history named a row the list before it didn't. A level
+row needs no line and fails no run.
+
+Each run writes a report, BENCHMARKS-<runner>.md, from its results alone. The latest run's five
+reports, from run 42964232679 at cd54e79, the first with the margin, are in
+[docs/benchmarks](docs/benchmarks/README.md). That run measured the list as it was before the
+margin, 1,037 rows, so the gate passed on no runner. It found 139 rows the list named level or
+ahead (127 level, 12 ahead), which have left it, and 6 rows behind by more than the margin that
+it doesn't name. KNOWN_BEHIND now names 898 rows. Against C, C++ and Rust compiled to WebAssembly
+they are 22 on Linux on x86-64, 16 on Linux on ARM64, 16 on macOS on ARM64, 41 on Windows on
+x86-64 and 41 on Windows on ARM64, and 114 of the 136 are peak memory. Against the native builds
+they are 150 to 154 of each runner's 168 rows: tally is the one workload whose time is below the
+best native build's on every runner, at 0.50 to 0.68 times. Windows counts CPU time in 15.6 ms
+ticks, so a short run's CPU time there is a whole number of ticks. Against the other modules, 57
+of the two Windows runners' 84 CPU rows were level in that run, nearly all at 1.00×, and none
+behind; the native builds' shortest runs read no ticks at all. Every native C++ version was
+built in that run, on all five runners: the bench passes `-std=gnu++17`, as the files are C++17
+and Apple's clang and LLVM's clang on Windows take an older standard by default.
+
+The margin has a limit the run shows. It takes the rows at 1.00× out of the gate, which were
+most of what changed sides before. It doesn't settle a row whose gap sits near 5%: of the 6 rows
+behind that the list doesn't name, four are at 1.05× to 1.08×, and the other two (shout's CPU
+time on Linux on ARM64, at 1.09× and 1.11×) were ahead two runs before. The list may not take a
+row back, so with the list as it is those results fail the gate on four runners and pass it on
+Windows on ARM64. No run has measured the new list yet. todo.md names the rows ("A row the gate
+can't decide").
 
 ## The release and the install
 
@@ -798,15 +930,27 @@ listed below.
 ### What lengua defends
 
 - **A program that reaches more than its idea grants.** The checker refuses an import from outside
-  WASI preview 1, one lengua doesn't give, one the idea doesn't allow, or one with another type.
+  WASI preview 1 and lengua's own `lengua_net_1`, one lengua doesn't give, one the idea doesn't
+  allow, or one with another type.
   The host checks every call against the idea's lines, and every buffer a call borrows against the
   program's memory. Every path is resolved beneath the working folder by `cap-std`, and no
-  symbolic link or junction is followed; a hard link is a regular file, so the working folder is
-  the user's to choose with that in mind. The working folder is never lengua's data folder, its
+  symbolic link or junction is followed; a file with more than one name, a hard link, isn't
+  opened, since its other name may be outside the folder (what that costs is with the host,
+  above). The working folder is never lengua's data folder, its
   folder of compiled modules, or on Linux `/proc`, `/sys` or `/dev`, nor a folder that holds or
-  lies inside one of them. A program can't connect or bind by itself: it gets the connections its
-  idea names, made by lengua before it starts, and its one listener, and a named computer is
-  never this one, by its name or by the address its name resolves to. It gets environment
+  lies inside one of them. A program can't connect or bind by itself unless its idea grants it:
+  it gets the connections its idea names, made by lengua before it starts, and its one listener,
+  and a named computer is never this one, by its name or by the address its name resolves to.
+  Where the idea grants connections, names or datagrams of the program's own, lengua holds each
+  to the grant (the host, above; the threat cases and their tests are in
+  docs/reviews/reach-2026-11-11.md): a computer no line covers, by a redirect or anything else
+  the program read; this computer under any spelling, a number an older parsing reads as an
+  address and an IPv4 address inside an IPv6 one among them; a name that resolves to this
+  computer, to a private network or to an address of many computers; a name that resolves anew
+  between the check and the connection; more than 64 connections held, or one held with no byte
+  crossing it for 300 seconds; a datagram to a group or a broadcast address, an answer to an
+  address that sent nothing, and more than three times what a sender sent on a port any
+  computer may reach. It gets environment
   variables only when its idea uses the environment, and only those its test or the user's `run`
   names. WebAssembly holds every access inside the program's own memory, of at most 1 GiB for
   main.wat, the engine's stack limit holds its calls, the engine's epochs stop it at its
@@ -838,7 +982,9 @@ listed below.
   rule refuses a branch, an address, a length, a loop's count, a division or a float operation
   that depends on a secret, in main.wat; and in the machine code the engine made on this CPU for
   each operator that takes a secret, a branch, a table, a call or a division. A run from a shell
-  reads the code of the very module it loaded and is about to run.
+  reads the code of the very module it loaded and is about to run. A secret never names a
+  computer or a port a program opens, and since no branch or loop depends on one, neither does
+  how many connections a program opens, nor when.
 
 ### What lengua trusts
 
@@ -855,7 +1001,9 @@ listed below.
   finds, and the model is held to the real program on 24 sample runs of each block and by the
   suite's tests.
 - **The operating system**: its process isolation, its file system under `cap-std`, its sockets,
-  and its clock and random bytes.
+  and its clock and random bytes; and, for what a program opens by itself, its resolver: lengua
+  checks the addresses the resolver gives, whatever it asked to find them (DNS, the hosts file,
+  a local network's own names).
 - **The user's own folders**: the data folder, which holds the key, the recorded ideas, the
   modules `check` kept and what proofs found wrong, and the cache of compiled modules, which
   `PLUGIN_DATA` may place elsewhere: whoever sets that variable names a folder lengua runs machine
@@ -877,9 +1025,13 @@ listed below.
 Programs that need these can't be written in lengua yet, and the host has no way to give them:
 - threads, until WebAssembly's threads are standard: W20 plans structured fork-join that the rules
   show free of data races;
-- connections a program opens itself, at run time, which need WASI's newer sockets; UDP; DNS;
-  starting other programs; files outside the working folder; and the terminal's raw mode and
-  window size: W18 plans each as a grant the idea declares and the host enforces;
+- starting other programs; files outside the working folder; and the terminal's raw mode and
+  window size: W18 plans each as a grant the idea declares and the host enforces, as it has
+  done for connections a program opens itself, DNS and UDP (the host, above);
+- on the network: a connection a program opens to this computer (it reaches this computer only
+  through a connection lengua makes before it starts); a TCP listener and a UDP port in one
+  program, or more than one of either; raw sockets, ICMP and multicast; and a proof of a
+  program that opens its own connections, which is tested, not proven;
 - GUIs, and libraries for other languages to call: no plan yet.
 
 The proofs and the rules have their own limits, said above: what the model refuses is tested, not
@@ -903,9 +1055,11 @@ have tests and are closed. The review of the host was done the same day
 tests) and are closed, and what it left open is in todo.md. W13, the check of the engine's
 machine code for an idea's secrets, was built on 2026-11-10 (Secrets, above). The third item, the
 tests that try to get past the sandbox on macOS and Windows, was tried as that review of the host
-and its tests, which run on all five runners. None of the three was stopped again. Of the third,
-Windows's junctions and macOS's own name folding against APFS still have no test of their own
-(todo.md). lengua isn't to be presented as covering
+and its tests, which run on all five runners. None of the three was stopped again. What the two
+reviews left open was closed on 2026-11-11, each gap with a test that failed first (todo.md, "The
+gaps the two reviews left open"): among them a test of a junction on the Windows runners and of
+names that differ in case or normalization against the macOS runner's file system. lengua isn't
+to be presented as covering
 security because of its examples or its checksums: they show algorithms, not a product that
 resists an attacker.
 

@@ -3,7 +3,9 @@
 //! names and no links, folders listed in order and turned round in a test's second run, the
 //! clock and random bytes a test supplies, sleeps that end at once in a test, `PIPE` on a closed
 //! standard output, `FBIG` past a file's limit, and connections lengua made before the program
-//! started, at fixed descriptors. Every function checks the program's idea ([`policy::Policy`])
+//! started, at fixed descriptors. Beside WASI's functions it gives lengua's own, in a module of
+//! their own, for what an idea grants a program to open on the network by itself ([`open`]).
+//! Every function checks the program's idea ([`policy::Policy`])
 //! before it does anything, and every buffer it borrows is checked against the program's memory:
 //! one outside it stops the program as a load outside it would.
 
@@ -12,6 +14,7 @@ pub mod fds;
 pub mod files;
 pub mod limits;
 pub mod net;
+pub mod open;
 pub mod policy;
 pub mod poll;
 pub mod random;
@@ -257,6 +260,11 @@ pub struct Notes {
     /// Where to tell the server when it starts or stops waiting: a job's number and the
     /// worker's line to the server.
     pub events: Option<(u64, Sender<Event>)>,
+    /// What became of what it asked to open itself, in order, for the run's report: the first
+    /// of them.
+    pub opened: Vec<crate::wasm::job::Reached>,
+    /// How many of lengua's refusals a run from a shell has said on standard error.
+    pub refused: usize,
 }
 
 impl Notes {
@@ -294,6 +302,11 @@ pub struct World {
     pub listener: Option<net::Listener>,
     /// The connections lengua made for it, in the idea's order.
     pub connections: Vec<net::Socket>,
+    /// The UDP port lengua bound for it, when its idea receives datagrams.
+    pub datagrams: Option<open::Datagrams>,
+    /// A test's own internet, which stands in for the real one in everything it opens itself;
+    /// `None` for a run that reaches the real one.
+    pub internet: Option<crate::wasm::job::Internet>,
     /// The clock readings a test supplies.
     pub clock: Vec<Time>,
     /// The random bytes a test supplies.
@@ -334,6 +347,10 @@ pub struct Host {
     pub notes: Notes,
     /// Whether a sleep ends at once.
     pub instant_sleeps: bool,
+    /// A test's own internet, in place of the real one, for what it opens itself.
+    pub internet: Option<crate::wasm::job::Internet>,
+    /// How lengua finds a name's addresses: the system's resolver, but in lengua's own tests.
+    pub(crate) resolver: crate::reach::Resolver,
 }
 
 impl Host {
@@ -351,16 +368,24 @@ impl Host {
             reversed,
             listener,
             connections,
+            datagrams,
+            internet,
             clock,
             random,
             limits,
             instant_sleeps,
             events,
         } = world;
-        let first = u32::try_from(connections.len())
+        // After the connections lengua made comes the port the idea receives datagrams on.
+        let datagrams = datagrams.filter(|_| policy.reach.get().receives.is_some());
+        let receiving = u32::try_from(connections.len())
             .unwrap_or(u32::MAX)
             .saturating_add(FIRST_CONNECTION);
+        let first = receiving.saturating_add(u32::from(datagrams.is_some()));
         let mut fds = Table::new(first);
+        if let Some(datagrams) = datagrams {
+            fds.put(receiving, Descriptor::Datagram(Box::new(datagrams)));
+        }
         let files = folder.filter(|_| policy.files).map(|root| {
             fds.put(FOLDER, Descriptor::Folder(Folder::default()));
             Files::new(root, reversed)
@@ -397,6 +422,8 @@ impl Host {
                 ..Notes::default()
             },
             instant_sleeps,
+            internet,
+            resolver: crate::reach::lookup,
         }
     }
 }
@@ -456,7 +483,8 @@ pub fn linker(engine: &Engine) -> Result<Linker<Host>, String> {
 }
 
 /// The linker with lengua's host for `module` alone, in its engine: the functions of WASI
-/// preview 1 the module imports, each the very function [`linker`] defines, and no others. A
+/// preview 1 and of lengua's own network module that the module imports, each the very function
+/// [`linker`] defines, and no others. A
 /// run from a shell runs one module once, and defining a function has a cost of its own (all
 /// 46 took 0.04 to 0.08 ms more of a run of 1.1 ms on Linux on x86-64, as W19 measured), so it
 /// defines the few the module will call. An import lengua's host doesn't have is undefined here
@@ -466,10 +494,9 @@ pub fn linker(engine: &Engine) -> Result<Linker<Host>, String> {
 ///
 /// When a function can't be defined, which lengua's tests rule out.
 pub fn linker_for(module: &wasmtime::Module) -> Result<Linker<Host>, String> {
-    let wanted: Vec<&str> = module
+    let wanted: Vec<(&str, &str)> = module
         .imports()
-        .filter(|import| import.module() == wasi::MODULE)
-        .map(|import| import.name())
+        .map(|import| (import.module(), import.name()))
         .collect();
     let mut linker = Linker::new(module.engine());
     let mut defining = Defining {
@@ -484,8 +511,8 @@ pub fn linker_for(module: &wasmtime::Module) -> Result<Linker<Host>, String> {
 struct Defining<'l> {
     /// The linker.
     linker: &'l mut Linker<Host>,
-    /// The names of the functions to define, or every one.
-    wanted: Option<&'l [&'l str]>,
+    /// The functions to define, each by its module and its name, or every one.
+    wanted: Option<&'l [(&'l str, &'l str)]>,
 }
 
 impl Defining<'_> {
@@ -497,7 +524,10 @@ impl Defining<'_> {
         name: &str,
         function: impl wasmtime::IntoFunc<Host, Params, Results>,
     ) -> wasmtime::Result<()> {
-        if self.wanted.is_none_or(|wanted| wanted.contains(&name)) {
+        if self
+            .wanted
+            .is_none_or(|wanted| wanted.contains(&(module, name)))
+        {
             self.linker.func_wrap(module, name, function)?;
         }
         Ok(())
@@ -910,6 +940,8 @@ fn define(linker: &mut Defining<'_>) -> wasmtime::Result<()> {
         },
     )?;
 
+    define_net(linker)?;
+
     // The functions lengua doesn't give: they answer NOSYS, so a module that imports one and
     // never calls it runs.
     linker.func_wrap(MODULE, "fd_advise", |_: i32, _: i64, _: i64, _: i32| NOSYS)?;
@@ -958,6 +990,141 @@ fn define(linker: &mut Defining<'_>) -> wasmtime::Result<()> {
         |_: i32, _: i32, _: i32, _: i32, _: i32| NOSYS,
     )?;
     linker.func_wrap(MODULE, "proc_raise", |_: i32| NOSYS)?;
+    Ok(())
+}
+
+/// The table's entry for `name` of lengua's own network functions.
+fn net_spec(name: &str) -> wasmtime::Result<&'static Function> {
+    wasi::imported(wasi::NET_MODULE, name)
+        .ok_or_else(|| wasmtime::Error::msg(format!("lengua's host has no {name}")))
+}
+
+/// Defines lengua's own network functions on `linker`, in their own module: what a program
+/// calls to open what its idea grants at run time.
+fn define_net(linker: &mut Defining<'_>) -> wasmtime::Result<()> {
+    use wasi::NET_MODULE;
+    let unsigned = i32::cast_unsigned;
+
+    let f = net_spec("tcp_open")?;
+    linker.func_wrap(
+        NET_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>, name: i32, len: i32, port: i32, tls: i32, out: i32| {
+            answer(&mut caller, f, |memory, host| {
+                open::tcp_open(
+                    host,
+                    memory,
+                    (unsigned(name), unsigned(len)),
+                    unsigned(port),
+                    unsigned(tls),
+                    unsigned(out),
+                )
+            })
+        },
+    )?;
+    let f = net_spec("dns_lookup")?;
+    linker.func_wrap(
+        NET_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>,
+              name: i32,
+              len: i32,
+              out: i32,
+              out_len: i32,
+              count: i32| {
+            answer(&mut caller, f, |memory, host| {
+                open::dns_lookup(
+                    host,
+                    memory,
+                    (unsigned(name), unsigned(len)),
+                    (unsigned(out), unsigned(out_len)),
+                    unsigned(count),
+                )
+            })
+        },
+    )?;
+    let f = net_spec("udp_open")?;
+    linker.func_wrap(
+        NET_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>, name: i32, len: i32, port: i32, out: i32| {
+            answer(&mut caller, f, |memory, host| {
+                open::udp_open(
+                    host,
+                    memory,
+                    (unsigned(name), unsigned(len)),
+                    unsigned(port),
+                    unsigned(out),
+                )
+            })
+        },
+    )?;
+    let f = net_spec("udp_send")?;
+    linker.func_wrap(
+        NET_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>, fd: i32, data: i32, len: i32, out: i32| {
+            answer(&mut caller, f, |memory, host| {
+                open::udp_send(
+                    host,
+                    memory,
+                    unsigned(fd),
+                    (unsigned(data), unsigned(len)),
+                    unsigned(out),
+                )
+            })
+        },
+    )?;
+    let f = net_spec("udp_recv")?;
+    linker.func_wrap(
+        NET_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>, fd: i32, buffer: i32, len: i32, out: i32| {
+            answer(&mut caller, f, |memory, host| {
+                open::udp_recv(
+                    host,
+                    memory,
+                    unsigned(fd),
+                    (unsigned(buffer), unsigned(len)),
+                    unsigned(out),
+                )
+            })
+        },
+    )?;
+    let f = net_spec("udp_recv_from")?;
+    linker.func_wrap(
+        NET_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>, fd: i32, buffer: i32, len: i32, out: i32, from: i32| {
+            answer(&mut caller, f, |memory, host| {
+                open::udp_recv_from(
+                    host,
+                    memory,
+                    unsigned(fd),
+                    (unsigned(buffer), unsigned(len)),
+                    unsigned(out),
+                    unsigned(from),
+                )
+            })
+        },
+    )?;
+    let f = net_spec("udp_send_to")?;
+    linker.func_wrap(
+        NET_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>, fd: i32, data: i32, len: i32, to: i32, out: i32| {
+            answer(&mut caller, f, |memory, host| {
+                open::udp_send_to(
+                    host,
+                    memory,
+                    unsigned(fd),
+                    (unsigned(data), unsigned(len)),
+                    unsigned(to),
+                    unsigned(out),
+                )
+            })
+        },
+    )?;
     Ok(())
 }
 
@@ -1066,6 +1233,7 @@ fn fd_fdstat_get(host: &Host, memory: &mut [u8], fd: u32, out: u32) -> Result<()
             rights::FD_READ | rights::FD_WRITE | rights::SOCK_SHUTDOWN | poll,
             0,
         ),
+        Some(Descriptor::Datagram(_)) => (filetype::SOCKET_DGRAM, 0, poll, 0),
     };
     memory::zero(memory, out, size::FDSTAT)?;
     memory::write_u8(memory, out, kind)?;
@@ -1085,6 +1253,7 @@ fn fd_filestat_get(host: &Host, memory: &mut [u8], fd: u32, out: u32) -> Result<
         Some(Descriptor::Stdout) => (stream_kind(host.stdout.terminal()), 0),
         Some(Descriptor::Stderr) => (stream_kind(host.stderr.terminal()), 0),
         Some(Descriptor::Listener(_) | Descriptor::Socket(_)) => (filetype::SOCKET_STREAM, 0),
+        Some(Descriptor::Datagram(_)) => (filetype::SOCKET_DGRAM, 0),
     };
     files::write_filestat(memory, out, kind, bytes)
 }
@@ -1094,7 +1263,9 @@ fn fd_close(host: &mut Host, fd: u32) -> Result<(), Fail> {
     let policy = host.policy;
     let allowed = match host.fds.get(fd) {
         None => return Err(Fail::Errno(errno::BADF)),
-        Some(Descriptor::Listener(_) | Descriptor::Socket(_)) => policy.network(),
+        Some(Descriptor::Listener(_) | Descriptor::Socket(_) | Descriptor::Datagram(_)) => {
+            policy.network()
+        }
         Some(_) => policy.files || policy.network(),
     };
     if !allowed {
@@ -1181,7 +1352,12 @@ fn fd_read(
                 total = socket.read(&mut memory[range], &host.limits, false)?;
             }
         }
-        Some(Descriptor::Stdout | Descriptor::Stderr | Descriptor::Listener(_)) => {
+        Some(
+            Descriptor::Stdout
+            | Descriptor::Stderr
+            | Descriptor::Listener(_)
+            | Descriptor::Datagram(_),
+        ) => {
             return Err(Fail::Errno(errno::BADF));
         }
     }
@@ -1247,7 +1423,12 @@ fn fd_write(
                 }
             }
         }
-        Some(Descriptor::Stdin | Descriptor::Folder(_) | Descriptor::Listener(_)) => {
+        Some(
+            Descriptor::Stdin
+            | Descriptor::Folder(_)
+            | Descriptor::Listener(_)
+            | Descriptor::Datagram(_),
+        ) => {
             return Err(Fail::Errno(errno::BADF));
         }
     }

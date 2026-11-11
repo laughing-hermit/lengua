@@ -37,13 +37,21 @@
 //! limit they don't follow, of a length they don't bound) the proof holds inside the memory, not
 //! inside a region: it may touch any region, and bytes outside them all, which stay secret once
 //! a secret may be there, as no store the rule follows makes them public. The buffer `args_get`
-//! or `environ_get` fills is the exception: it is taken to end with its region, as the sizes the
-//! program asked for are taken to fit.
+//! or `environ_get` fills ends with its region at the latest: the memory rules refuse a call
+//! whose sizes the program didn't check against its regions first.
 //!
 //! A secret that leaves may come back: once main.wat writes a secret to a descriptor that may be
 //! a file's or a connection's, or sends one with `sock_send`, anywhere in the program, what
 //! `fd_read`, `$fill` and `sock_recv` read from every file and connection is secret, in this run
 //! or a later one. What goes to standard output or standard error alone doesn't come back.
+//!
+//! What a program opens by itself follows the same lines. The name of a computer it gives
+//! `tcp_open`, `udp_open` or `dns_lookup` isn't data it writes out: the name goes to the resolver
+//! and decides where the program connects, so a secret in it is refused, as a secret port is.
+//! The bytes of a datagram, `udp_send`'s and `udp_send_to`'s, are data, as `sock_send`'s are; and
+//! once a secret has left, what `udp_recv`, `udp_recv_from` and `dns_lookup` write is secret, as
+//! what a connection gives is. Since no branch and no loop's count depends on a secret, neither
+//! does how many connections a program opens, nor when it opens them.
 //!
 //! Lengths and counts aren't secret: what `$fill` reads to the end says it read, what a read of
 //! a file says, the sizes calls write, and where `args_get` puts each argument. One count is:
@@ -1436,6 +1444,18 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
                 let reach = lend_reach(lend.bytes, &operands);
                 let places = self.places(operands.get(lend.argument), reach);
                 if !lend.written {
+                    // A datagram's bytes are data the program sends out, as `sock_send`'s are: a
+                    // secret among them may come back. Any other buffer the host reads decides
+                    // what it does: the name of a computer goes to the resolver and the network,
+                    // and a sender's address says where a datagram goes.
+                    let data =
+                        matches!(host.name, "udp_send" | "udp_send_to") && lend.argument == 1;
+                    if data {
+                        if holds(&state.memory, &places) {
+                            self.follower.sent = true;
+                        }
+                        continue;
+                    }
                     if holds(&state.memory, &places) {
                         self.report(at, Leak::Buffer(shown.clone(), lend.argument + 1));
                     }
@@ -1448,6 +1468,15 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
                     _ => false,
                 };
                 if text && lend.argument == 1 {
+                    self.taint(state, &places);
+                }
+                // What the network gives, a datagram or the addresses of a name, is secret once
+                // the program has sent a secret, as what `sock_recv` reads is.
+                let received = matches!(
+                    (host.name, lend.argument),
+                    ("udp_recv" | "udp_recv_from", 1) | ("dns_lookup", 2)
+                );
+                if received && self.follower.sources.returned {
                     self.taint(state, &places);
                 }
             }
