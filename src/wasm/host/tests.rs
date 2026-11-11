@@ -30,7 +30,7 @@ fn module(imports: &[&str], rest: &str) -> String {
 }
 
 /// A test's world: nothing named, no input, output kept.
-fn world(policy: Policy) -> World {
+pub(super) fn world(policy: Policy) -> World {
     World {
         policy,
         args: Vec::new(),
@@ -42,6 +42,8 @@ fn world(policy: Policy) -> World {
         reversed: false,
         listener: None,
         connections: Vec::new(),
+        datagrams: None,
+        internet: None,
         clock: Vec::new(),
         random: None,
         limits: limits::Limits::new(
@@ -824,9 +826,9 @@ fn every_function_is_defined_with_the_tables_signature() {
     let engine = engine::engine(Setup::Test, None).expect("the engine");
     let linker = linker(&engine).expect("the host");
     let mut store = wasmtime::Store::new(&engine, Host::new(world(Policy::default())));
-    for function in wasi::FUNCTIONS {
+    for function in wasi::FUNCTIONS.iter().chain(wasi::NET_FUNCTIONS) {
         let defined = linker
-            .get(&mut store, wasi::MODULE, function.name)
+            .get(&mut store, wasi::module_of(function), function.name)
             .ok()
             .and_then(wasmtime::Extern::into_func)
             .unwrap_or_else(|| panic!("{} isn't defined", function.name));

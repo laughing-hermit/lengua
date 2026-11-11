@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::oneshot;
 
@@ -24,7 +24,10 @@ use crate::runner::{Limits, Run, Trap};
 use crate::supply::Supply;
 use crate::wasm::engine::Setup;
 use crate::wasm::host::policy::Policy;
-use crate::wasm::job::{self, Connection, Done, Ending, Event, Job, Made, Reached, Request};
+use crate::reach::Stand;
+use crate::wasm::job::{
+    self, Connection, Done, Ending, Event, Internet, Job, Made, Reached, Request,
+};
 use crate::wasm::{Program, WORKER_FLAG, runner};
 
 /// How much longer than its program's own time limit a job may take before lengua gives up on
@@ -54,6 +57,13 @@ pub struct Spec<'a> {
     pub connections: &'a [Reach],
     /// The port it serves on, 0 for any free one, and whether every address may reach it.
     pub listen: Option<(u16, bool)>,
+    /// The computers a test stands in for, of those the program opens connections or sends
+    /// datagrams to by itself: lengua listens for each on the loopback, and the program reaches
+    /// those and nothing else. `None` for a run that reaches the real computers, as the `run`
+    /// tool's does.
+    pub stands: Option<&'a [Stand]>,
+    /// The names a test gives addresses, for a run with `stands`.
+    pub names: &'a [(String, Vec<String>)],
     /// Whether each folder lists turned round, as in a test's second run.
     pub reversed: bool,
     /// Whether its standard output is a pipe nobody reads.
@@ -70,7 +80,8 @@ pub struct Spec<'a> {
 
 impl<'a> Spec<'a> {
     /// A test's run of a program given `args` and `stdin`, reaching what `policy` allows, in a
-    /// fresh folder with nothing in it.
+    /// fresh folder with nothing in it, and in a test's own internet with nothing in it: what
+    /// the program opens by itself reaches no real computer.
     #[must_use]
     pub fn new(args: &'a [String], stdin: &'a [u8], policy: Policy) -> Self {
         static NO_FILES: BTreeMap<String, String> = BTreeMap::new();
@@ -86,6 +97,8 @@ impl<'a> Spec<'a> {
             supply: None,
             connections: &[],
             listen: None,
+            stands: Some(&[]),
+            names: &[],
             reversed: false,
             stdout_closed: false,
             policy,
@@ -300,6 +313,28 @@ impl Pool {
             };
             made.push(Made { place, connection });
         }
+        // A test's own internet: its servers for what the program opens itself listen here too.
+        let mut places = Vec::new();
+        let mut stands = Vec::new();
+        for (number, stand) in spec.stands.unwrap_or_default().iter().enumerate() {
+            let (peer, local) = if stand.datagrams {
+                let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+                let local = socket.local_addr()?.port();
+                (Peer::Datagrams(socket), local)
+            } else {
+                let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+                let local = listener.local_addr()?.port();
+                (Peer::Connections(listener), local)
+            };
+            places.push((stand.clone(), local));
+            stands.push((number, peer));
+        }
+        let internet = spec.stands.map(|_| Internet {
+            places,
+            names: spec.names.to_vec(),
+        });
+        // A program that receives datagrams says its port as a server says its own.
+        let serves = spec.listen.is_some() || spec.policy.reach.get().receives.is_some();
         let job = Job {
             id,
             module: program.file().to_path_buf(),
@@ -314,6 +349,7 @@ impl Pool {
             folder: spec.policy.files.then_some(folder),
             connections: made,
             listen: spec.listen,
+            internet,
             random: spec
                 .supply
                 .and_then(|supply| supply.random.as_deref())
@@ -360,7 +396,7 @@ impl Pool {
             stdout,
             id,
             Arc::clone(&waiting),
-            spec.listen.map(|_| port_sender),
+            serves.then_some(port_sender),
             done_sender,
         ));
         let mut peers = Vec::new();
@@ -371,7 +407,7 @@ impl Pool {
                 peers.push((number, stream));
             }
         }
-        let (port, reached) = if spec.listen.is_some() {
+        let (port, reached) = if serves {
             tokio::time::timeout(CONNECT_TIMEOUT + GRACE, port_receiver)
                 .await
                 .ok()
@@ -395,6 +431,7 @@ impl Pool {
             port,
             connections,
             peers,
+            stands,
             waiting,
             done: done_receiver,
             timeout: limits.timeout + GRACE,
@@ -418,6 +455,15 @@ impl Pool {
 /// main.wat's lines by operator offset, and where its functions' bodies are.
 pub type Lines = Arc<(BTreeMap<u64, usize>, Vec<(u64, u64)>)>;
 
+/// lengua's end of a computer a test stands in for, of those a program reaches by itself.
+#[derive(Debug)]
+pub enum Peer {
+    /// Where the program's TCP connections to it come in.
+    Connections(TcpListener),
+    /// Where the program's UDP datagrams to it arrive.
+    Datagrams(UdpSocket),
+}
+
 /// A WebAssembly program that's running in a worker.
 pub struct Running {
     /// The pool its worker goes back to.
@@ -434,6 +480,8 @@ pub struct Running {
     connections: Vec<crate::connect::Made>,
     /// lengua's ends of its connections to the test's own servers, by the connection's number.
     peers: Vec<(usize, TcpStream)>,
+    /// lengua's ends of the computers the test stands in for, each by its place among them.
+    stands: Vec<(usize, Peer)>,
     /// Whether it waits for a connection now.
     waiting: Arc<AtomicBool>,
     /// How it went, with its worker's output back.
@@ -468,6 +516,12 @@ impl Running {
     /// connection's number in the idea, from 0.
     pub fn take_peers(&mut self) -> Vec<(usize, TcpStream)> {
         std::mem::take(&mut self.peers)
+    }
+
+    /// lengua's ends of the computers the test stands in for, of those the program reaches by
+    /// itself, each with its place among the run's `stands`, from 0.
+    pub fn take_stands(&mut self) -> Vec<(usize, Peer)> {
+        std::mem::take(&mut self.stands)
     }
 
     /// Whether it waits for a connection now.

@@ -683,6 +683,21 @@ async fn check_one_way(
             }
         })
         .collect();
+    // What the program opens by itself reaches the test's own servers too, and nothing else:
+    // each computer the idea's tests stand in for that this test has a server for. Its servers
+    // are numbered after the idea's own connections.
+    let made = network.connections.len();
+    let stood: Vec<usize> = (0..network.stands.len())
+        .filter(|index| {
+            test.server
+                .iter()
+                .any(|reply| reply.connection == made + index)
+        })
+        .collect();
+    let stands: Vec<crate::reach::Stand> = stood
+        .iter()
+        .filter_map(|index| network.stands.get(*index).cloned())
+        .collect();
     // A server listens on a port of its own, on the loopback, whoever the idea serves.
     let listen = network.listens.map(|_| (0, false));
     // Standard input arrives as the run's delivery cuts it: whole, in the pieces every other
@@ -706,6 +721,8 @@ async fn check_one_way(
         supply: Some(&supply),
         connections: &connections,
         listen,
+        stands: Some(&stands),
+        names: &network.names,
         reversed,
         stdout_closed: test.stdout_closed,
         ..crate::wasm::Spec::new(&args, stdin.as_bytes(), target.policy)
@@ -716,12 +733,32 @@ async fn check_one_way(
         .await?;
     let mut problem = None;
     // The test's servers speak on the program's own connections, each from the start.
-    let servers = spawn_servers(started.take_peers(), test, network, delivery);
+    let mut servers = spawn_servers(started.take_peers(), test, network, delivery);
+    // And for each computer the program reaches by itself, on every connection it opens there
+    // and every datagram it sends there, in the order of the test's steps.
+    for (number, peer) in started.take_stands() {
+        let Some((index, stand)) = stood
+            .get(number)
+            .and_then(|index| Some((*index, network.stands.get(*index)?)))
+        else {
+            continue;
+        };
+        let replies: Vec<Reply> = test
+            .server
+            .iter()
+            .filter(|reply| reply.connection == made + index)
+            .cloned()
+            .collect();
+        let on = format!(" at {}:{}", stand.host, stand.port);
+        servers.push(tokio::spawn(stand_in(peer, replies, delivery, on)));
+    }
     let run = if let Some(port) = started
         .port()
         .filter(|_| !test.client.is_empty() || test.serves)
     {
-        problem = if test.clients_at_once {
+        problem = if network.reach.receives.is_some() {
+            talk_datagrams(port, test.client, now).await.err()
+        } else if test.clients_at_once {
             talk_at_once(port, test.client, now).await.err()
         } else {
             talk(port, test.client, delivery, now).await.err()
@@ -863,6 +900,113 @@ where
             "after the test's server replied{on}, the program sent {} more",
             show(&extra)
         ));
+    }
+    Ok(())
+}
+
+/// The test's own server for a computer the program reaches by itself, which stands in for the
+/// real one: on each connection the program opens there, in order, it does as [`serve`] does
+/// with the next of `replies`; on each datagram, it reads exactly what the next of them
+/// receives and answers with one datagram. After the last, nothing listens there. `on` names
+/// the computer.
+async fn stand_in(
+    peer: crate::wasm::Peer,
+    replies: Vec<Reply>,
+    delivery: Delivery,
+    on: String,
+) -> Result<(), String> {
+    match peer {
+        crate::wasm::Peer::Connections(listener) => {
+            // Each connection has its own server, so a program may hold one while it opens the
+            // next.
+            let mut serving = Vec::new();
+            for reply in replies {
+                let accepted = tokio::time::timeout(PEER_TIMEOUT, listener.accept()).await;
+                let Ok(Ok((stream, _))) = accepted else {
+                    return Err(format!(
+                        "the program opened no connection{on} where the test's server waited \
+                         for one"
+                    ));
+                };
+                serving.push(tokio::spawn(serve(
+                    stream,
+                    Some(reply),
+                    delivery,
+                    on.clone(),
+                )));
+            }
+            drop(listener);
+            for server in serving {
+                server
+                    .await
+                    .map_err(|error| format!("the test's server failed: {error}"))??;
+            }
+            Ok(())
+        }
+        crate::wasm::Peer::Datagrams(socket) => {
+            let mut chunk = vec![0_u8; 65_536];
+            for reply in replies {
+                let received =
+                    tokio::time::timeout(PEER_TIMEOUT, socket.recv_from(&mut chunk)).await;
+                let Ok(Ok((count, from))) = received else {
+                    return Err(format!(
+                        "the program sent no datagram{on} where the test's computer waited for \
+                         one"
+                    ));
+                };
+                let expected = reply.receives.as_bytes();
+                if &chunk[..count] != expected {
+                    return Err(format!(
+                        "the program sent the datagram {}{on}, but the test's computer expects {}",
+                        show(&chunk[..count]),
+                        show(expected)
+                    ));
+                }
+                if !reply.replies.is_empty() {
+                    let _ = socket.send_to(reply.replies.as_bytes(), from).await;
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// The test's own client of a program that receives datagrams: for each of its steps it sends
+/// one datagram to the program's port and, where the test expects an answer, reads one datagram
+/// back, which must be that answer.
+async fn talk_datagrams(port: u16, exchanges: &[Exchange], now: i128) -> Result<(), String> {
+    let here = std::net::Ipv4Addr::LOCALHOST;
+    let socket = tokio::net::UdpSocket::bind((here, 0))
+        .await
+        .map_err(|error| format!("the test's client couldn't open its socket: {error}"))?;
+    let many = exchanges.len() > 1;
+    let mut chunk = vec![0_u8; 65_536];
+    for (index, exchange) in exchanges.iter().enumerate() {
+        let on = if many {
+            format!(" to datagram {}", index + 1)
+        } else {
+            String::new()
+        };
+        socket
+            .send_to(exchange.sends.as_bytes(), (here, port))
+            .await
+            .map_err(|error| format!("the test's client couldn't send its datagram: {error}"))?;
+        if exchange.receives.is_empty() {
+            continue;
+        }
+        let received = tokio::time::timeout(PEER_TIMEOUT, socket.recv_from(&mut chunk)).await;
+        let Ok(Ok((count, _))) = received else {
+            return Err(format!(
+                "the program answered nothing{on} while the test's client waited for a datagram"
+            ));
+        };
+        if !crate::expect::matches(&exchange.receives, &chunk[..count], now) {
+            return Err(format!(
+                "the program answered the datagram {}{on}, but the test expects {}",
+                show(&chunk[..count]),
+                show_expected(&exchange.receives)
+            ));
+        }
     }
     Ok(())
 }

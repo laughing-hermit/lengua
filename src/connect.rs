@@ -92,7 +92,7 @@ impl<T: AsyncRead + AsyncWrite + Send + Unpin> Place for T {}
 
 /// How lengua checks a computer's certificate: against Mozilla's roots, the same on every
 /// system, with ring's cryptography.
-fn tls_config() -> Arc<rustls::ClientConfig> {
+pub(crate) fn tls_config() -> Arc<rustls::ClientConfig> {
     static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
     Arc::clone(CONFIG.get_or_init(|| {
         let mut roots = rustls::RootCertStore::empty();

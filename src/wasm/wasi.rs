@@ -26,6 +26,9 @@ pub mod errno {
     pub const BADF: u16 = 8;
     /// A file the program holds open.
     pub const BUSY: u16 = 10;
+    /// A place that didn't take the connection a program opened, or has nothing there for its
+    /// datagrams.
+    pub const CONNREFUSED: u16 = 14;
     /// A name that is taken.
     pub const EXIST: u16 = 20;
     /// A file past its size limit, or the files past their total, which a new file or folder
@@ -41,6 +44,8 @@ pub mod errno {
     pub const ISDIR: u16 = 31;
     /// Too many files open.
     pub const MFILE: u16 = 33;
+    /// A datagram longer than one may be.
+    pub const MSGSIZE: u16 = 35;
     /// A name or path too long.
     pub const NAMETOOLONG: u16 = 37;
     /// No such file or folder.
@@ -59,6 +64,8 @@ pub mod errno {
     pub const PIPE: u16 = 64;
     /// A seek on something that has no places.
     pub const SPIPE: u16 = 70;
+    /// A place that didn't answer in time.
+    pub const TIMEDOUT: u16 = 73;
     /// What the program's idea doesn't allow, such as a way out of its working folder.
     pub const NOTCAPABLE: u16 = 76;
 }
@@ -69,6 +76,7 @@ pub const ERRNOS: &[u16] = &[
     errno::AGAIN,
     errno::BADF,
     errno::BUSY,
+    errno::CONNREFUSED,
     errno::EXIST,
     errno::FBIG,
     errno::ILSEQ,
@@ -76,6 +84,7 @@ pub const ERRNOS: &[u16] = &[
     errno::IO,
     errno::ISDIR,
     errno::MFILE,
+    errno::MSGSIZE,
     errno::NAMETOOLONG,
     errno::NOENT,
     errno::NOSYS,
@@ -85,6 +94,7 @@ pub const ERRNOS: &[u16] = &[
     errno::NOTTY,
     errno::PIPE,
     errno::SPIPE,
+    errno::TIMEDOUT,
     errno::NOTCAPABLE,
 ];
 
@@ -98,6 +108,8 @@ pub mod filetype {
     pub const DIRECTORY: u8 = 3;
     /// A file.
     pub const REGULAR_FILE: u8 = 4;
+    /// A socket for datagrams.
+    pub const SOCKET_DGRAM: u8 = 5;
     /// A connection or a listener.
     pub const SOCKET_STREAM: u8 = 6;
     /// A link.
@@ -264,6 +276,15 @@ pub enum Allowance {
     Listens,
     /// A server of several clients at once.
     AtOnce,
+    /// A program that opens TCP connections itself: `opens TCP connections to …`.
+    Opens,
+    /// A program that looks up the addresses of names: `looks up the addresses of …`.
+    Names,
+    /// A program that sends UDP datagrams: `sends UDP datagrams to …`.
+    Datagrams,
+    /// A program that receives UDP datagrams on a port lengua binds: `receives UDP datagrams
+    /// on …`.
+    Receives,
 }
 
 /// What a function does when the program's idea doesn't allow it.
@@ -719,18 +740,153 @@ pub fn function(name: &str) -> Option<&'static Function> {
     FUNCTIONS.iter().find(|function| function.name == name)
 }
 
+/// The module lengua's own network functions are imported from. WASI preview 1 has no function
+/// that opens a connection, so these aren't WASI's and don't take its module's name: a module
+/// that imports one says so in its imports, and another WASI runtime refuses to link it rather
+/// than give it something else. The name says whose they are, what they reach, and their
+/// version: a change to what a function means gets a new number, never the same name.
+pub const NET_MODULE: &str = "lengua_net_1";
+
+/// The flags of [`NET_MODULE`]'s functions.
+pub mod net {
+    /// `tcp_open`: a plain connection.
+    pub const PLAIN: u32 = 0;
+    /// `tcp_open`: over TLS, which lengua does.
+    pub const TLS: u32 = 1;
+    /// An address's family: IPv4, its four bytes first.
+    pub const FAMILY_4: u8 = 4;
+    /// An address's family: IPv6.
+    pub const FAMILY_6: u8 = 6;
+}
+
+use errno::{CONNREFUSED, MSGSIZE, TIMEDOUT};
+
+/// lengua's own network functions, by name: what a program calls to reach what its idea grants
+/// at run time. Each gives an error number, as WASI's do, from the same closed set.
+///
+/// - `tcp_open(name, name_len, port, tls, out_fd)`: opens a TCP connection to `port` of the
+///   computer the text at `name` names, over TLS when `tls` is 1, and writes its descriptor,
+///   which `sock_send`, `sock_recv`, `fd_read`, `fd_write`, `sock_shutdown`, `poll_oneoff` and
+///   `fd_close` then take.
+/// - `dns_lookup(name, name_len, out, out_len, out_count)`: writes the addresses of the name,
+///   17 bytes each (the family, 4 or 6, then 16 bytes, an IPv4 address in the first four), as
+///   many as `out_len` has room for, IPv4 first and each family in order, and how many it
+///   wrote.
+/// - `udp_open(name, name_len, port, out_fd)`: a socket for datagrams to and from `port` of
+///   that one computer.
+/// - `udp_send(fd, data, len, out_sent)` and `udp_recv(fd, buffer, len, out_size)`: one
+///   datagram each; a received one longer than the buffer is cut, and `out_size` is its whole
+///   size.
+/// - `udp_recv_from(fd, buffer, len, out_size, out_from)` and `udp_send_to(fd, data, len, to,
+///   out_sent)`: on the port the idea receives on, one datagram and its sender, 19 bytes (an
+///   address as above, then the port, little-endian), and one datagram back to a sender.
+pub const NET_FUNCTIONS: &[Function] = &[
+    given(
+        "tcp_open",
+        &[I32, I32, I32, I32, I32],
+        &[Allowance::Opens],
+        &[read(0, Bytes::Argument(1)), written(4, Bytes::Fixed(4))],
+        &[
+            CONNREFUSED,
+            INVAL,
+            IO,
+            MFILE,
+            NAMETOOLONG,
+            NOENT,
+            TIMEDOUT,
+            NOTCAPABLE,
+        ],
+    ),
+    given(
+        "dns_lookup",
+        &[I32, I32, I32, I32, I32],
+        &[Allowance::Names],
+        &[
+            read(0, Bytes::Argument(1)),
+            written(2, Bytes::Argument(3)),
+            written(4, Bytes::Fixed(4)),
+        ],
+        &[INVAL, IO, NAMETOOLONG, NOENT, TIMEDOUT, NOTCAPABLE],
+    ),
+    given(
+        "udp_open",
+        &[I32, I32, I32, I32],
+        &[Allowance::Datagrams],
+        &[read(0, Bytes::Argument(1)), written(3, Bytes::Fixed(4))],
+        &[INVAL, IO, MFILE, NAMETOOLONG, NOENT, TIMEDOUT, NOTCAPABLE],
+    ),
+    given(
+        "udp_send",
+        &[I32, I32, I32, I32],
+        &[Allowance::Datagrams],
+        &[read(1, Bytes::Argument(2)), written(3, Bytes::Fixed(4))],
+        &[BADF, IO, MSGSIZE, NOTSOCK, NOTCAPABLE],
+    ),
+    given(
+        "udp_recv",
+        &[I32, I32, I32, I32],
+        &[Allowance::Datagrams],
+        &[written(1, Bytes::Argument(2)), written(3, Bytes::Fixed(4))],
+        &[BADF, CONNREFUSED, IO, NOTSOCK, NOTCAPABLE],
+    ),
+    given(
+        "udp_recv_from",
+        &[I32, I32, I32, I32, I32],
+        &[Allowance::Receives],
+        &[
+            written(1, Bytes::Argument(2)),
+            written(3, Bytes::Fixed(4)),
+            written(4, Bytes::Fixed(crate::reach::PLACE_BYTES)),
+        ],
+        &[BADF, IO, NOTSOCK, NOTCAPABLE],
+    ),
+    given(
+        "udp_send_to",
+        &[I32, I32, I32, I32, I32],
+        &[Allowance::Receives],
+        &[
+            read(1, Bytes::Argument(2)),
+            read(3, Bytes::Fixed(crate::reach::PLACE_BYTES)),
+            written(4, Bytes::Fixed(4)),
+        ],
+        &[BADF, INVAL, IO, MSGSIZE, NOTSOCK, NOTCAPABLE],
+    ),
+];
+
+/// The function of lengua's host that `name` in `module` names: one of WASI preview 1, or one
+/// of lengua's own.
+#[must_use]
+pub fn imported(module: &str, name: &str) -> Option<&'static Function> {
+    match module {
+        MODULE => function(name),
+        NET_MODULE => NET_FUNCTIONS.iter().find(|function| function.name == name),
+        _ => None,
+    }
+}
+
+/// The module `function` is imported from.
+#[must_use]
+pub fn module_of(function: &Function) -> &'static str {
+    if NET_FUNCTIONS.iter().any(|own| own.name == function.name) {
+        NET_MODULE
+    } else {
+        MODULE
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
 
-    /// The errors the functions give are the closed set: none outside it, and every one of it
-    /// given by some function, but `NOTTY`, kept for the terminal's two functions to come.
+    /// The errors the functions give, WASI's and lengua's own, are the closed set: none outside
+    /// it, and every one of it given by some function, but `NOTTY`, kept for the terminal's two
+    /// functions to come.
     #[test]
     fn the_errors_are_the_closed_set() {
         let mut used = BTreeSet::new();
-        for function in FUNCTIONS {
+        for function in FUNCTIONS.iter().chain(NET_FUNCTIONS) {
             for errno in function.errors {
                 assert!(ERRNOS.contains(errno), "{} gives {errno}", function.name);
                 used.insert(*errno);
@@ -771,11 +927,32 @@ mod tests {
         assert_eq!(super::function("fd_nothing"), None);
     }
 
+    /// lengua's own functions are found in their own module alone, each once, under no name
+    /// WASI has, and each can say `NOTCAPABLE`: none is every program's.
+    #[test]
+    fn lenguas_own_functions_are_in_their_own_module() {
+        let names: BTreeSet<&str> = NET_FUNCTIONS.iter().map(|function| function.name).collect();
+        assert_eq!(names.len(), NET_FUNCTIONS.len());
+        for function in NET_FUNCTIONS {
+            assert_eq!(imported(NET_MODULE, function.name), Some(function));
+            assert_eq!(imported(MODULE, function.name), None, "{}", function.name);
+            assert_eq!(module_of(function), NET_MODULE);
+            assert!(function.given && function.unasked == Unasked::Refused);
+            assert_ne!(function.allowances, ALWAYS, "{}", function.name);
+            assert!(function.errors.contains(&NOTCAPABLE), "{}", function.name);
+            assert_eq!(function.results, &[I32], "{}", function.name);
+        }
+        assert_eq!(imported(MODULE, "fd_write"), function("fd_write"));
+        assert_eq!(imported(NET_MODULE, "fd_write"), None);
+        assert_eq!(imported("env", "tcp_open"), None);
+        assert_eq!(function("fd_write").map(module_of), Some(MODULE));
+    }
+
     /// A buffer a function borrows is in one of its 32-bit arguments, and its size is in
     /// another.
     #[test]
     fn a_functions_lends_are_inside_its_arguments() {
-        for function in FUNCTIONS {
+        for function in FUNCTIONS.iter().chain(NET_FUNCTIONS) {
             for lend in function.lends {
                 assert_eq!(
                     function.params.get(lend.argument),

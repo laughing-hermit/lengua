@@ -1426,15 +1426,21 @@ impl LenguaServer {
             env: &params.env,
             connections: &connections,
             listen: network.listens.map(|port| (port, network.serves_anywhere)),
+            // A run reaches the real computers its idea grants, not a test's own.
+            stands: None,
             setup: Setup::Run,
             max_written,
             alone: true,
             ..Spec::new(&params.args, &stdin, Policy::of(&uses, &network))
         };
-        if network.listens.is_some() {
-            return self
+        let may_reach = network.reach.describe();
+        // A server, of TCP connections or of UDP datagrams, serves in the background.
+        if network.listens.is_some() || network.reach.receives.is_some() {
+            let mut report = self
                 .serve_wasm_in_background(folder, &program, spec, assertions)
-                .await;
+                .await?;
+            report.may_reach = may_reach;
+            return Ok(report);
         }
         let limits = Limits {
             timeout: Duration::from_secs(seconds),
@@ -1446,7 +1452,9 @@ impl LenguaServer {
             .run(&program, spec, limits)
             .await
             .map_err(|error| format!("couldn't run the program: {error}"))?;
-        Ok(ended_report(&run, &assertions, limits))
+        let mut report = ended_report(&run, &assertions, limits);
+        report.may_reach = may_reach;
+        Ok(report)
     }
 
     /// Starts main.wat's server in a worker of its own and leaves it serving, at most one per
@@ -1460,7 +1468,9 @@ impl LenguaServer {
     ) -> Result<RunReport, String> {
         let mut background = self.background.lock().await;
         already_serving(&background, folder)?;
-        let anywhere = spec.listen.is_some_and(|(_, anywhere)| anywhere);
+        let receives = spec.policy.reach.get().receives;
+        let datagrams = spec.listen.is_none() && receives.is_some();
+        let anywhere = spec.listen.or(receives).is_some_and(|(_, anywhere)| anywhere);
         let (max_file_size, _) = run_file_limits(spec.folder.is_some());
         let limits = background_limits(max_file_size);
         let running = self
@@ -1485,6 +1495,7 @@ impl LenguaServer {
             running: Box::new(running),
             program: Arc::clone(program),
             anywhere,
+            datagrams,
         };
         Ok(self.keep_serving(&mut background, folder, server, assertions, connections))
     }

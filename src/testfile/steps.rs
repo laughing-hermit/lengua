@@ -16,6 +16,11 @@
 //! - ``the random bytes `fc` and `2a` ``
 //! - ``a server on port `8080` that receives TEXT and replies TEXT``, with ``at `example.com` ``
 //!   before `on port` for a computer the idea names, ``no server on port `8080` ``
+//! - for a program that opens connections by itself, the same server step with its computer
+//!   and port, one step a connection it opens there, in order; ``a computer at `192.0.2.53` on
+//!   UDP port `53` that receives TEXT and replies TEXT`` for a datagram each way; and ``the
+//!   addresses `192.0.2.7` and `2001:db8::1` for the name `example.org` `` for what a look at a
+//!   name's addresses gives
 //! - ``a client that sends TEXT``, and `the clients connect at once` for clients that overlap
 //! - `standard output is closed`, a pipe nobody reads, so every write to it fails with `EPIPE`
 //!
@@ -42,6 +47,7 @@ use super::{
     TextPart, Written, unescape,
 };
 use crate::idea::{Behavior, Endpoint, Idea, Keyword, Outline, Step, Token};
+use crate::reach::{Grants, Stand};
 
 /// The column of a table that gives its row's number of runs, not a variable.
 const RUNS: &str = "runs";
@@ -51,8 +57,11 @@ const GIVEN_PHRASES: &str = "`Given the arguments `…` and `…``, `Given no ar
      standard input that contains `…``, `Given a file `name` that contains `…``, `Given no file \
      `name``, `Given the environment variable `NAME` with the value `…``, `Given an empty folder \
      `name``, `Given the clock at `…``, `Given the random bytes `…``, `Given a server on port \
-     `…` that receives `…` and replies `…``, `Given a client that sends `…``, `And the clients \
-     connect at once`, `And standard output is closed`";
+     `…` that receives `…` and replies `…``, `Given a server at `example.org` on port `…` that \
+     receives `…` and replies `…``, `Given a computer at `192.0.2.53` on UDP port `…` that \
+     receives `…` and replies `…``, `Given the addresses `192.0.2.7` for the name \
+     `example.org``, `Given a client that sends `…``, `And the clients connect at once`, `And \
+     standard output is closed`";
 const THEN_PHRASES: &str = "`Then it prints `…``, `Then it prints `…` to standard error`, \
      `Then it prints nothing`, `Then it prints text that matches `rule``, `Then the file `name` \
      contains `…``, `Then there is no file `name``, `Then there is a folder `name``, `Then the \
@@ -148,6 +157,8 @@ fn read(
     let mut reading = Reading {
         mode,
         places: idea.network.connections.clone(),
+        stands: idea.network.stands.clone(),
+        reach: idea.network.reach.clone(),
         ..Reading::default()
     };
     let mut problems = Vec::new();
@@ -262,6 +273,11 @@ struct Reading {
     lines: BTreeMap<String, usize>,
     /// The connections the idea names, which the test's servers stand in for.
     places: Vec<Endpoint>,
+    /// The computers the idea's tests stand in for, of those the program reaches by itself: a
+    /// server for one of them is numbered after the idea's own connections.
+    stands: Vec<Stand>,
+    /// What the idea grants the program at run time.
+    reach: Grants,
     /// What's wrong with steps that read well, with each one's line.
     found: Vec<(usize, String)>,
 }
@@ -300,13 +316,50 @@ impl Reading {
             return at.end();
         }
         if at.words(&["no", "server"]) {
-            // The connection to the place it names is handed over already ended.
+            // The connection to the place it names is handed over already ended; a computer the
+            // program reaches by itself has nothing there unless a step gives it a server.
             let host = at.is("at").then(|| at.value()).flatten();
             let port = at.words(&["on", "port"]).then(|| at.value()).flatten();
-            if port.is_some() || host.is_some() {
+            let opened = host
+                .as_deref()
+                .zip(port.as_deref())
+                .is_some_and(|(host, port)| self.opens(host, port));
+            if !opened && (port.is_some() || host.is_some()) {
                 self.connection(host.as_deref(), port.as_deref());
             }
             return Some(());
+        }
+        // ``a computer at `192.0.2.53` on UDP port `53` that receives TEXT and replies TEXT``:
+        // the test's own computer for the datagrams the program sends there, one step a
+        // datagram each way.
+        if at.words(&["a", "computer", "at"]) {
+            let host = at.value()?;
+            at.words(&["on", "udp", "port"]).then_some(())?;
+            let port = at.value()?;
+            at.word("that")?;
+            at.word("receives")?;
+            let receives = text(&mut at, mode)?;
+            at.word("and")?;
+            at.word("replies")?;
+            let replies = text(&mut at, mode)?;
+            let Some(index) = self.stand(true, &host, &port) else {
+                self.found.push((
+                    self.line,
+                    format!(
+                        "idea.md grants no UDP datagrams to port {port} on {host}: the test's \
+                         computer stands in for one that `- Network: sends UDP datagrams to …` \
+                         names"
+                    ),
+                ));
+                return at.end();
+            };
+            self.wrote(format!("server.{}", self.server.len()));
+            self.server.push(ServerTable {
+                connection: self.places.len() + index,
+                receives,
+                replies,
+            });
+            return at.end();
         }
         if at.is("the") {
             at.is("single");
@@ -350,6 +403,35 @@ impl Reading {
                 self.wrote("random".into());
                 self.random = Some(hex);
                 return Some(());
+            }
+            // ``the addresses `192.0.2.7` and `2001:db8::1` for the name `example.org` ``: what
+            // a look at the name's addresses gives, in every test of the idea.
+            if at.is("addresses") || at.is("address") {
+                let mut addresses = 0;
+                while !at.words(&["for", "the", "name"]) {
+                    at.word("and");
+                    at.value()?.parse::<std::net::IpAddr>().ok()?;
+                    addresses += 1;
+                }
+                let name = at.value()?;
+                if addresses == 0 {
+                    return None;
+                }
+                let granted = crate::reach::spelled(&name).is_ok_and(|computer| {
+                    computer.address.is_none()
+                        && Grants::granted(&self.reach.names, &computer, 0, None, None).is_some()
+                });
+                if !granted {
+                    self.found.push((
+                        self.line,
+                        format!(
+                            "idea.md grants no look at the addresses of `{name}`: the test gives \
+                             addresses to a name that `- Network: looks up the addresses of …` \
+                             names"
+                        ),
+                    ));
+                }
+                return at.end();
             }
             return None;
         }
@@ -396,7 +478,7 @@ impl Reading {
             if self
                 .server
                 .iter()
-                .any(|server| server.connection == connection && !self.places.is_empty())
+                .any(|server| server.connection == connection && connection < self.places.len())
             {
                 let place = self.places[connection].describe();
                 self.found.push((
@@ -509,13 +591,25 @@ impl Reading {
     /// names neither. A name the idea doesn't have is noted as a problem. An idea with no
     /// connections at all is told so once, by the test's own check.
     fn connection(&mut self, host: Option<&str>, port: Option<&str>) -> usize {
-        if self.places.is_empty() {
+        if self.places.is_empty() && self.stands.is_empty() {
             return 0;
         }
         // A generated test's value can be a template, which the idea's names can't settle.
         if port.is_some_and(|port| port.contains('{'))
             || host.is_some_and(|host| host.contains('{'))
         {
+            return 0;
+        }
+        // A computer the program opens a connection to by itself, which the step names by its
+        // computer and its port: its servers are numbered after the idea's own connections.
+        if let Some((host, port)) = host.zip(port)
+            && let Some(index) = self.stand(false, host, port)
+        {
+            return self.places.len() + index;
+        }
+        // The one computer the idea's tests stand in for, when a step names none and the idea
+        // names no connection of its own.
+        if self.places.is_empty() && host.is_none() && port.is_none() && self.stands.len() == 1 {
             return 0;
         }
         let host = host.map(str::to_ascii_lowercase);
@@ -570,13 +664,43 @@ impl Reading {
         }
     }
 
-    /// The idea's connections in words.
+    /// The idea's connections in words, and what it grants the program to open by itself.
     fn named_places(&self) -> String {
         self.places
             .iter()
             .map(Endpoint::describe)
+            .chain(
+                self.reach
+                    .opens
+                    .iter()
+                    .map(|rule| format!("TCP connections it opens to {}", rule.describe())),
+            )
             .collect::<Vec<_>>()
             .join(", ")
+    }
+
+    /// Which of the computers the idea's tests stand in for a step names by `host` and `port`,
+    /// for datagrams or for connections.
+    fn stand(&self, datagrams: bool, host: &str, port: &str) -> Option<usize> {
+        let host = crate::reach::spelled(host).ok()?.text;
+        let port: u16 = port.trim().parse().ok()?;
+        self.stands.iter().position(|stand| {
+            stand.datagrams == datagrams && stand.host == host && stand.port == port
+        })
+    }
+
+    /// Whether `port` of `host` is one the program opens a connection to by itself: a rule of
+    /// the idea grants it, and it isn't a connection lengua makes before the start.
+    fn opens(&self, host: &str, port: &str) -> bool {
+        let Ok(port) = port.trim().parse::<u16>() else {
+            return false;
+        };
+        crate::reach::spelled(host).is_ok_and(|computer| {
+            let made = self.places.iter().any(|place| {
+                place.port == port && place.host.as_deref() == Some(computer.text.as_str())
+            });
+            !made && Grants::granted(&self.reach.opens, &computer, port, None, None).is_some()
+        })
     }
 
     /// The example the steps describe.

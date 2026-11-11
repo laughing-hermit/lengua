@@ -1,10 +1,74 @@
 //! What a program's idea lets its WebAssembly reach: the `- Uses:` capabilities and the
 //! `- Network:` line, as the host checks them on every call.
 
-use serde::{Deserialize, Serialize};
+use std::sync::{Mutex, PoisonError};
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::idea::{Network, Use};
+use crate::reach::Grants;
 use crate::wasm::wasi::{Allowance, Function};
+
+/// What an idea lets a program reach on the network at run time ([`Grants`]), kept once for the
+/// process, so that a policy stays a small value to copy: equal grants are kept once, and an
+/// idea without such grants keeps nothing. It travels to a worker as the grants themselves.
+#[derive(Debug, Clone, Copy)]
+pub struct Reach(&'static Grants);
+
+/// No grants.
+static NONE: Grants = Grants::NONE;
+
+/// The grants kept so far, each once.
+static KEPT: Mutex<Vec<&'static Grants>> = Mutex::new(Vec::new());
+
+impl Reach {
+    /// `grants`, kept.
+    #[must_use]
+    pub fn of(grants: &Grants) -> Self {
+        if grants.is_empty() {
+            return Self::default();
+        }
+        let mut kept = KEPT.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(found) = kept.iter().copied().find(|found| **found == *grants) {
+            return Self(found);
+        }
+        let grants: &'static Grants = Box::leak(Box::new(grants.clone()));
+        kept.push(grants);
+        Self(grants)
+    }
+
+    /// The grants.
+    #[must_use]
+    pub const fn get(self) -> &'static Grants {
+        self.0
+    }
+}
+
+impl Default for Reach {
+    fn default() -> Self {
+        Self(&NONE)
+    }
+}
+
+impl PartialEq for Reach {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for Reach {}
+
+impl Serialize for Reach {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Reach {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Grants::deserialize(deserializer).map(|grants| Self::of(&grants))
+    }
+}
 
 /// What a program may reach beyond its output and its exit.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +91,9 @@ pub struct Policy {
     pub listens: bool,
     /// Whether it serves several clients at once.
     pub at_once: bool,
+    /// What it may reach at run time, which it opens itself.
+    #[serde(default)]
+    pub reach: Reach,
 }
 
 impl Policy {
@@ -43,6 +110,7 @@ impl Policy {
             connections: network.connections.len(),
             listens: network.listens.is_some(),
             at_once: network.at_once.is_some(),
+            reach: Reach::of(&network.reach),
         }
     }
 
@@ -59,21 +127,32 @@ impl Policy {
         }
     }
 
-    /// Whether the program is on the network at all.
+    /// Whether the program is on the network at all: with connections lengua makes, a
+    /// listener, or connections or datagram sockets of its own.
     #[must_use]
-    pub const fn network(&self) -> bool {
-        self.connections > 0 || self.listens
+    pub fn network(&self) -> bool {
+        let reach = self.reach.get();
+        self.connections > 0
+            || self.listens
+            || !reach.opens.is_empty()
+            || !reach.datagrams.is_empty()
+            || reach.receives.is_some()
     }
 
     /// Whether the idea meets `allowance`.
     #[must_use]
-    pub const fn meets(&self, allowance: Allowance) -> bool {
+    pub fn meets(&self, allowance: Allowance) -> bool {
+        let reach = self.reach.get();
         match allowance {
             Allowance::Always => true,
             Allowance::Use(capability) => self.uses(capability),
             Allowance::Network => self.network(),
             Allowance::Listens => self.listens,
             Allowance::AtOnce => self.at_once,
+            Allowance::Opens => !reach.opens.is_empty(),
+            Allowance::Names => !reach.names.is_empty(),
+            Allowance::Datagrams => !reach.datagrams.is_empty(),
+            Allowance::Receives => reach.receives.is_some(),
         }
     }
 

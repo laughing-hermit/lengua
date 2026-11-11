@@ -22,6 +22,7 @@ use std::fmt;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::reach::{Grants, Stand};
 use crate::trust::Block;
 
 /// The OKF `type` of an idea of the native lengua, which compiled it to main.s: still read, so
@@ -309,14 +310,101 @@ pub struct Network {
     /// it then waits on all of them, and on its listening socket, with `poll`. One at a time
     /// when `None`.
     pub at_once: Option<u32>,
+    /// What it may reach at run time, which it opens itself: TCP connections, the addresses of
+    /// names, and UDP datagrams, each to the computers and ports its lines name
+    /// ([`crate::reach`]).
+    pub reach: Grants,
+    /// The computers its tests stand in for, of those it reaches at run time, in the order its
+    /// steps first name them: ``a server at `example.org` on port `80` …``. A test's server for
+    /// one of them is numbered after the idea's own connections.
+    pub stands: Vec<Stand>,
+    /// The names its tests give addresses, each with its addresses as written: ``the addresses
+    /// `192.0.2.7` for the name `example.org` ``. Every test of the idea sees them all.
+    pub names: Vec<(String, Vec<String>)>,
 }
 
 impl Network {
     /// Whether the program uses the network at all.
     #[must_use]
     pub fn is_used(&self) -> bool {
-        !self.connections.is_empty() || self.listens.is_some()
+        !self.connections.is_empty() || self.listens.is_some() || !self.reach.is_empty()
     }
+}
+
+/// The values of `tokens` when they start as `shape` does: a word for each `Some`, and a value
+/// in backticks for each `None`.
+fn shaped<'t>(tokens: &'t [Token], shape: &[Option<&str>]) -> Option<Vec<&'t str>> {
+    let mut values = Vec::new();
+    for (index, wanted) in shape.iter().enumerate() {
+        match (tokens.get(index)?, wanted) {
+            (Token::Word(word), Some(wanted)) if word == wanted => {}
+            (Token::Value(value), None) => values.push(value.as_str()),
+            _ => return None,
+        }
+    }
+    Some(values)
+}
+
+/// The computer a step's tokens name for a test to stand in for, of those a program reaches at
+/// run time: ``a server at `example.org` on port `80` …`` for TCP, and ``a computer at
+/// `192.0.2.53` on UDP port `53` …`` for datagrams.
+fn stand_named(tokens: &[Token]) -> Option<Stand> {
+    let tcp = [
+        Some("a"),
+        Some("server"),
+        Some("at"),
+        None,
+        Some("on"),
+        Some("port"),
+        None,
+    ];
+    let udp = [
+        Some("a"),
+        Some("computer"),
+        Some("at"),
+        None,
+        Some("on"),
+        Some("udp"),
+        Some("port"),
+        None,
+    ];
+    let (datagrams, values) = match shaped(tokens, &tcp) {
+        Some(values) => (false, values),
+        None => (true, shaped(tokens, &udp)?),
+    };
+    let [host, port] = values.as_slice() else {
+        return None;
+    };
+    Some(Stand {
+        datagrams,
+        host: crate::reach::spelled(host).ok()?.text,
+        port: port.trim().parse::<u16>().ok().filter(|port| *port > 0)?,
+    })
+}
+
+/// The name a step's tokens give addresses, with them: ``the addresses `192.0.2.7` and
+/// `2001:db8::1` for the name `example.org` ``.
+fn name_given(tokens: &[Token]) -> Option<(String, Vec<String>)> {
+    let mut rest = tokens
+        .strip_prefix(&[Token::Word("the".into()), Token::Word("addresses".into())])
+        .or_else(|| {
+            tokens.strip_prefix(&[Token::Word("the".into()), Token::Word("address".into())])
+        })?;
+    let mut addresses = Vec::new();
+    loop {
+        match rest {
+            [Token::Value(address), after @ ..] => {
+                addresses.push(address.parse::<std::net::IpAddr>().ok()?.to_string());
+                rest = after;
+            }
+            [Token::Word(and), after @ ..] if and == "and" => rest = after,
+            _ => break,
+        }
+    }
+    let named = shaped(rest, &[Some("for"), Some("the"), Some("name"), None])?;
+    let name = crate::reach::spelled(named.first()?).ok()?;
+    (name.address.is_none() && !addresses.is_empty() && rest.len() == 4)
+        .then_some((name.text, addresses))
 }
 
 /// What a `- Uses:` line naming `uses` and a `- Network:` line saying `network` allow, read as an
@@ -382,13 +470,13 @@ impl Endpoint {
 }
 
 /// The arguments a connection's computer can come from, by their place: `first` to `ninth`.
-const ORDINALS: [&str; 9] = [
+pub(crate) const ORDINALS: [&str; 9] = [
     "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth",
 ];
 
 /// Which argument, from 1, `place` says names the computer: `the computer its first argument
 /// names`; `None` for anything else.
-fn argument_named(place: &str) -> Option<usize> {
+pub(crate) fn argument_named(place: &str) -> Option<usize> {
     let ordinal = place
         .strip_prefix("the computer its ")?
         .strip_suffix(" argument names")?;
@@ -2616,10 +2704,22 @@ impl Parser {
     fn network_line(&mut self, number: usize, rest: &str) {
         let usage = "write `- Network: connects to TCP port 8080` (or `ports 80 and 8080`) for a \
                      program that talks to a server on this computer, `- Network: connects to \
-                     TCP port 443 on example.com` for one on another computer, or `- Network: \
-                     listens on TCP port 8080` for one that serves";
+                     TCP port 443 on example.com` for one on another computer, `- Network: \
+                     listens on TCP port 8080` for one that serves, or `- Network: opens TCP \
+                     connections to port 443 on any subdomain of example.com` for one that \
+                     chooses where it connects while it runs";
         let rest = rest.trim().trim_end_matches('.').replace('`', "");
         let mut lower = rest.to_ascii_lowercase();
+        // What the program opens itself at run time: `opens TCP connections to …`, `looks up the
+        // addresses of …`, `sends UDP datagrams to …`, `receives UDP datagrams on …`.
+        match self.network.reach.line(&lower) {
+            Some(Ok(())) => return,
+            Some(Err(problem)) => {
+                self.problem(Some(number), problem);
+                return;
+            }
+            None => {}
+        }
         // `, up to 64 clients at once`: a server of several clients at once.
         if let Some(start) = lower.find("up to ")
             && let Some(length) = lower[start..].find(" clients at once")
@@ -2707,9 +2807,11 @@ impl Parser {
                 Some((_, "any computer" | "any computers")) => {
                     self.problem(
                         Some(number),
-                        "a program connects only where its idea says, and lengua makes each \
-                         connection for it: name the computer, as in `- Network: connects to TCP \
-                         port 443 on example.com`, or leave it out for this computer",
+                        "lengua makes each of these connections before the program starts, so the \
+                         idea says where each goes: name the computer, as in `- Network: connects \
+                         to TCP port 443 on example.com`, or leave it out for this computer. A \
+                         program that chooses the computer while it runs opens its connections \
+                         itself: `- Network: opens TCP connections to port 443 on any computer`",
                     );
                     return;
                 }
@@ -2981,9 +3083,54 @@ impl Parser {
             .collect()
     }
 
-    /// A behavior keeps serving only in a server.
+    /// A behavior keeps serving only in a server, which takes TCP connections or UDP datagrams,
+    /// one of the two. The computers the idea's tests stand in for, and the names they give
+    /// addresses, are read from its steps here.
     fn check_network(&mut self) {
-        let listens = self.network.listens.is_some();
+        if self.network.listens.is_some() && self.network.reach.receives.is_some() {
+            self.problem(
+                None,
+                "a program listens on a TCP port or receives UDP datagrams on a port, one of the \
+                 two: keep `- Network: listens on TCP port N` or `- Network: receives UDP \
+                 datagrams on port N`",
+            );
+        }
+        let steps = self.behaviors.iter().flat_map(|behavior| {
+            let outline = behavior.outline.iter().flat_map(|outline| &outline.steps);
+            behavior.steps.iter().chain(outline)
+        });
+        let mut stands: Vec<Stand> = Vec::new();
+        let mut names: Vec<(String, Vec<String>)> = Vec::new();
+        for step in steps {
+            let tokens = step.tokens();
+            if let Some(stand) = stand_named(&tokens) {
+                // A place the idea names for lengua to connect to before the start is that
+                // connection's; any other is one the program reaches itself, when a rule of the
+                // idea covers it.
+                let made = !stand.datagrams
+                    && self.network.connections.iter().any(|place| {
+                        place.port == stand.port && place.host.as_deref() == Some(stand.host.as_str())
+                    });
+                let rules = if stand.datagrams {
+                    &self.network.reach.datagrams
+                } else {
+                    &self.network.reach.opens
+                };
+                let covered = crate::reach::spelled(&stand.host).is_ok_and(|computer| {
+                    Grants::granted(rules, &computer, stand.port, None, None).is_some()
+                });
+                if !made && covered && !stands.contains(&stand) {
+                    stands.push(stand);
+                }
+            } else if let Some((name, addresses)) = name_given(&tokens)
+                && !names.iter().any(|(known, _)| *known == name)
+            {
+                names.push((name, addresses));
+            }
+        }
+        self.network.stands = stands;
+        self.network.names = names;
+        let listens = self.network.listens.is_some() || self.network.reach.receives.is_some();
         let serving: Vec<String> = self
             .behaviors
             .iter()

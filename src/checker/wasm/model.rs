@@ -136,13 +136,12 @@ impl Function<'_> {
         self.kind == Kind::Library && self.name.as_deref() == Some(name)
     }
 
-    /// The WASI function it imports, when it imports one.
+    /// The function of lengua's host it imports, when it imports one: WASI's, or one of
+    /// lengua's own network functions.
     #[must_use]
     pub fn host(&self) -> Option<&'static crate::wasm::wasi::Function> {
         let (module, field) = self.import.as_ref()?;
-        (module == crate::wasm::wasi::MODULE)
-            .then(|| crate::wasm::wasi::function(field))
-            .flatten()
+        crate::wasm::wasi::imported(module, field)
     }
 
     /// Whether a call of it never returns: `proc_exit`, or lengua's `$assert_fail`.

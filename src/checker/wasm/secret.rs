@@ -1436,6 +1436,18 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
                 let reach = lend_reach(lend.bytes, &operands);
                 let places = self.places(operands.get(lend.argument), reach);
                 if !lend.written {
+                    // A datagram's bytes are data the program sends out, as `sock_send`'s are: a
+                    // secret among them may come back. Any other buffer the host reads decides
+                    // what it does: the name of a computer goes to the resolver and the network,
+                    // and a sender's address says where a datagram goes.
+                    let data =
+                        matches!(host.name, "udp_send" | "udp_send_to") && lend.argument == 1;
+                    if data {
+                        if holds(&state.memory, &places) {
+                            self.follower.sent = true;
+                        }
+                        continue;
+                    }
                     if holds(&state.memory, &places) {
                         self.report(at, Leak::Buffer(shown.clone(), lend.argument + 1));
                     }
@@ -1448,6 +1460,15 @@ impl<'f, 'm, 'a> Run<'f, 'm, 'a> {
                     _ => false,
                 };
                 if text && lend.argument == 1 {
+                    self.taint(state, &places);
+                }
+                // What the network gives, a datagram or the addresses of a name, is secret once
+                // the program has sent a secret, as what `sock_recv` reads is.
+                let received = matches!(
+                    (host.name, lend.argument),
+                    ("udp_recv" | "udp_recv_from", 1) | ("dns_lookup", 2)
+                );
+                if received && self.follower.sources.returned {
                     self.taint(state, &places);
                 }
             }

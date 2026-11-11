@@ -1346,6 +1346,16 @@ impl Module {
         let mut functions = Vec::new();
         for (module, name, index) in &imports {
             let (params, results) = signature(&types, *index)?;
+            // What a program opens by itself at run time, the model doesn't follow: which
+            // computer it reaches is the program's own choice while it runs, and the model's
+            // network is the connections lengua makes before the start.
+            if module.as_str() == wasi::NET_MODULE {
+                return Err(format!(
+                    "it imports {module}.{name}, which opens what its idea grants while it runs: \
+                     the model follows the connections lengua makes before a program starts, not \
+                     the ones a program opens by itself, so this program is tested, not proven"
+                ));
+            }
             let host = (module.as_str() == wasi::MODULE)
                 .then(|| wasi::function(name))
                 .flatten()

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::reach::Stand;
 use crate::runner::Trap;
 use crate::wasm::engine::Setup;
 use crate::wasm::host::policy::Policy;
@@ -77,6 +78,17 @@ pub struct Made {
     pub connection: Connection,
 }
 
+/// A test's own internet, which stands in for the real one in everything a program opens
+/// itself: a program in a test reaches the test's own servers and nothing else.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Internet {
+    /// The computers the test stands in for, each with the port of the loopback where the
+    /// test's own server for it answers. Any other computer has nothing there.
+    pub places: Vec<(Stand, u16)>,
+    /// The names the test gives addresses, each with its addresses. Any other name has none.
+    pub names: Vec<(String, Vec<String>)>,
+}
+
 /// How far a job may go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
@@ -119,6 +131,10 @@ pub struct Job {
     pub connections: Vec<Made>,
     /// The port it serves on, 0 for any free one, and whether every address may reach it.
     pub listen: Option<(u16, bool)>,
+    /// A test's own internet, in place of the real one, for what the program opens itself;
+    /// `None` for a run that reaches the real one.
+    #[serde(default)]
+    pub internet: Option<Internet>,
     /// The random bytes a test supplies, in hex.
     pub random: Option<String>,
     /// The clock readings a test supplies: seconds and nanoseconds.
@@ -323,6 +339,17 @@ mod tests {
                     connection: Connection::Test(4000),
                 }],
                 listen: Some((0, false)),
+                internet: Some(Internet {
+                    places: vec![(
+                        Stand {
+                            datagrams: false,
+                            host: "example.org".to_owned(),
+                            port: 80,
+                        },
+                        4001,
+                    )],
+                    names: vec![("example.org".to_owned(), vec!["192.0.2.7".to_owned()])],
+                }),
                 random: Some(hex(&[1, 2])),
                 clock: vec![(1, 2)],
                 reversed: true,
