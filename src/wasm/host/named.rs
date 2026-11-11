@@ -570,6 +570,52 @@ mod tests {
         assert_eq!(opened(&mut nowhere, 1, mode::READ), Err(errno::NOTCAPABLE));
     }
 
+    /// A module, through the engine: it opens the folder its first argument names with
+    /// `folder_open`, a file in it with WASI's own `path_open`, and reads the file. Under a grant
+    /// of the folder each call is allowed, and without one the first is refused, NOTCAPABLE, 76.
+    #[test]
+    fn a_module_reads_a_file_of_the_folder_its_argument_names() {
+        use crate::wasm::engine::{self, Setup};
+        use crate::wasm::job::Ending;
+        let text = r#"(module
+  (import "lengua_fs_1" "folder_open" (func $folder_open (param i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "path_open"
+    (func $path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 100) "in.txt")
+  (func (export "_start")
+    (local $err i32)
+    (local.set $err (call $folder_open (i32.const 1) (i32.const 8)))
+    (if (local.get $err) (then (call $exit (local.get $err))))
+    (local.set $err
+      (call $path_open (i32.load (i32.const 8)) (i32.const 0) (i32.const 100) (i32.const 6)
+        (i32.const 0) (i64.const 2) (i64.const 0) (i32.const 0) (i32.const 12)))
+    (if (local.get $err) (then (call $exit (i32.const 92))))
+    (i32.store (i32.const 16) (i32.const 200))
+    (i32.store (i32.const 20) (i32.const 5))
+    (local.set $err
+      (call $fd_read (i32.load (i32.const 12)) (i32.const 16) (i32.const 1) (i32.const 24)))
+    (if (local.get $err) (then (call $exit (i32.const 93))))
+    (call $exit (i32.add (i32.load8_u (i32.const 200)) (i32.load (i32.const 24))))))"#;
+        let folder = notes();
+        let ran = |lines: &[&str]| {
+            let host = host_with(lines, &["."], anywhere(folder.path(), &[]));
+            let engine = engine::engine(Setup::Test, None).expect("the engine");
+            let linker = crate::wasm::host::linker(&engine).expect("the host");
+            let built = crate::wasm::text::build(text).unwrap_or_else(|why| panic!("{why}"));
+            let module = wasmtime::Module::from_binary(&engine, &built.wasm).expect("it compiles");
+            let time = Some(std::time::Duration::from_secs(10));
+            crate::wasm::runner::execute(&engine, &linker, &module, Setup::Test, host, time).ending
+        };
+        // `h`, 104, and the 5 bytes read.
+        let granted = ran(&["reads the folder its first argument names"]);
+        assert_eq!(granted, Ending::Exited(109));
+        let without = ran(&["reads the file its first argument names"]);
+        assert_eq!(without, Ending::Exited(i32::from(errno::NOTCAPABLE)));
+    }
+
     /// The threat: a program fills the disk through a file the user named. A named file is
     /// held to the run's file limits as a file in the working folder is.
     #[test]
