@@ -1144,7 +1144,9 @@ fn walk<'t>(lines: &[&'t str], end: usize, mut met: impl FnMut(Met<'t>)) -> Opti
 /// What an idea grants a run: its `- Uses:` line's capabilities and its `- Network:` line's
 /// network, read from the same lines [`parse`] reads, by the same code, and nothing else of the
 /// idea: no YAML, no plain-English rules, no behaviors or tests. A run takes them from the idea
-/// whose hash its lock records, which check has parsed in full.
+/// whose hash its lock records, which check has parsed in full. What an idea's tests stand in
+/// for ([`Network::stands`], [`Network::names`]) is read from its behaviors, which a run doesn't
+/// read: a run reaches the real computers its idea grants.
 ///
 /// # Errors
 ///
@@ -5184,22 +5186,32 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
 
     /// A run's grants are what check's parse finds: for every idea the repository ships that
     /// parses, grants gives exactly its uses and its network, and secrets gives its secrets,
-    /// which one of them, secret-equal, has.
+    /// which one of them, secret-equal, has. Only what the idea's tests stand in for, which
+    /// parse reads from its behaviors and one of them, follow, has, is no part of a run's
+    /// grants: every line of `# Constraints` is, each of follow's among them.
     #[test]
     fn grants_are_the_uses_and_the_network_parse_finds() {
         let mut compared = 0;
         let mut secret = 0;
+        let mut stood = 0;
         for (name, text) in shipped_ideas() {
             let Ok(idea) = parse(&text) else {
                 continue;
             };
-            assert_eq!(grants(&text), Ok((idea.uses, idea.network)), "{name}");
+            stood += usize::from(!idea.network.stands.is_empty());
+            let granted = Network {
+                stands: Vec::new(),
+                names: Vec::new(),
+                ..idea.network
+            };
+            assert_eq!(grants(&text), Ok((idea.uses, granted)), "{name}");
             secret += usize::from(!idea.secrets.is_empty());
             assert_eq!(secrets(&text), Ok(idea.secrets), "{name}");
             compared += 1;
         }
         assert!(compared >= 43, "only {compared} ideas parsed");
         assert!(secret >= 1, "no shipped idea names a secret");
+        assert!(stood >= 1, "no shipped idea's tests stand in for a computer");
     }
 
     /// grants takes a `- Uses:` line only where parse does, in `# Constraints` outside code
