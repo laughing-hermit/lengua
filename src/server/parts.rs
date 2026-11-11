@@ -226,7 +226,11 @@ fn open(data_dir: &DataDir, folder: &ProgramFolder, part: &idea::Part) -> Result
 pub(super) fn changed_since(folder: &ProgramFolder, stamps: &[PartStamp]) -> Option<String> {
     stamps.iter().find_map(|stamp| {
         let part_folder = folder.path().join(&stamp.part);
-        let read = |name: &str| crate::state::read_text(&part_folder.join(name)).ok().flatten();
+        let read = |name: &str| {
+            crate::state::read_text(&part_folder.join(name))
+                .ok()
+                .flatten()
+        };
         let same = read(IDEA_FILE)
             .is_some_and(|idea| trust::idea_hash(idea.as_bytes()) == stamp.idea)
             && read(CODE_FILE).is_some_and(|code| Sha256Hex::of(code.as_bytes()) == stamp.code);

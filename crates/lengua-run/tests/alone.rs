@@ -338,11 +338,19 @@ fn a_program_runs_only_while_its_parts_are_as_recorded() {
     let changed = "that part isn't what it was when check held main.wat to it";
     runs();
     std::fs::write(part.join("main.wat"), "(module (memory 1))\n").expect("main.wat");
-    refused(&checked.run(&["2", "3"]), changed, "the part's main.wat changed");
+    refused(
+        &checked.run(&["2", "3"]),
+        changed,
+        "the part's main.wat changed",
+    );
     std::fs::write(part.join("main.wat"), PART_CODE).expect("main.wat");
     runs();
     std::fs::write(part.join("idea.md"), format!("{PART_IDEA}More.\n")).expect("idea.md");
-    refused(&checked.run(&["2", "3"]), changed, "the part's idea.md changed");
+    refused(
+        &checked.run(&["2", "3"]),
+        changed,
+        "the part's idea.md changed",
+    );
     std::fs::write(part.join("idea.md"), PART_IDEA).expect("idea.md");
     runs();
     std::fs::remove_dir_all(&part).expect("take the part away");

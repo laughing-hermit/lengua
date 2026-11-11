@@ -1084,7 +1084,12 @@ impl LenguaServer {
     /// Whether lengua.lock records the parts main.wat, `code`, takes from as they are now, or
     /// doesn't record this main.wat yet, or main.wat doesn't hold to its parts, which the check that
     /// follows says.
-    fn parts_as_stamped(&self, folder: &ProgramFolder, builds_on: &[idea::Part], code: &str) -> bool {
+    fn parts_as_stamped(
+        &self,
+        folder: &ProgramFolder,
+        builds_on: &[idea::Part],
+        code: &str,
+    ) -> bool {
         let Ok(taken) = parts::taken(&self.data_dir, folder, builds_on, code) else {
             return true;
         };
