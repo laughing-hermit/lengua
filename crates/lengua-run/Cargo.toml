@@ -1,0 +1,34 @@
+[package]
+name = "lengua-run"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.97"
+license = "Apache-2.0"
+description = "Runs a program lengua checked, from a shell: lengua built without the engine's compiler, so it starts sooner and holds less. It loads the module check compiled ahead of the run, under the user's key, and leaves what needs the compiler to lengua-mcp beside it."
+publish = false
+
+[[bin]]
+name = "lengua-run"
+path = "src/main.rs"
+
+# The lengua crate without its `compiler` feature: Wasmtime's runtime alone. Cargo gives one
+# build of the whole workspace one set of features, so `cargo build --package lengua-run` is the
+# build that leaves the compiler out, as `cargo xtask release` and `cargo xtask bench` make it;
+# in a build of the whole workspace, as the tests', lengua-run holds a compiler it never calls.
+[dependencies]
+lengua = { package = "lengua-mcp", path = "../..", default-features = false }
+
+# The tests make a checked program's folder and its compiled module with the lengua crate as
+# lengua-mcp has it.
+[dev-dependencies]
+lengua = { package = "lengua-mcp", path = "../..", features = ["compiler"] }
+tempfile = "3"
+
+# The workspace's lints: no unsafe code, every item documented, no unwrap (CI's clippy denies
+# every warning).
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "warn"

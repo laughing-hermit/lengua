@@ -7,9 +7,12 @@
 //! every runner), and the same three built natively here with this system's own compilers. Every
 //! version gets the same arguments, input and files and must give the same output, which is
 //! checked before anything is measured. Each runs as people run it, in a process of its own,
-//! measured by `lengua-mcp measure`: lengua's through `lengua-mcp run`, with every check it
-//! makes; the other modules in lengua's host, in the same engine with the same cache; the native
-//! builds as a shell starts them.
+//! measured by `lengua-mcp measure`: lengua's through lengua-run, the small program beside
+//! lengua-mcp that `check` tells a user to run it with, with every check a run makes; the other
+//! modules in lengua's host, by the same lengua-run in the same engine, each from its compiled
+//! form kept under the user's key, as lengua's is; the native builds as a shell starts them.
+//! (`cargo xtask bench` builds lengua-run by itself first, with no compiler in it, as it ships;
+//! where it isn't beside lengua-mcp, `lengua-mcp run` runs both, and the report says so.)
 //!
 //! The runs alternate: a round runs every version once, in an order shuffled from round to round.
 //! On each row, lengua against one other version, `lengua::gate` decides CPU and wall time with
@@ -1200,10 +1203,14 @@ struct Results {
     engine: String,
     /// Each other version's compilers and flags, by its name.
     toolchains: BTreeMap<String, String>,
-    /// The bytes of the lengua-mcp executable that ran lengua's programs, which lengua's size
-    /// counts against a native build.
+    /// The bytes of the executable that ran lengua's programs, [`Results::runs_with`], which
+    /// lengua's size counts against a native build.
     #[serde(default)]
     runtime: u64,
+    /// The program that ran lengua's programs and the other modules: lengua-run, or lengua-mcp
+    /// where lengua-run wasn't beside it, and in a results file from before lengua-run.
+    #[serde(default)]
+    runs_with: String,
     /// The counts of runs at which the gate looks at a row.
     looks: Vec<usize>,
     /// The level each row's measure is decided at, over all its looks.
@@ -1252,7 +1259,8 @@ struct Context {
     wasm: PathBuf,
     /// The longest a workload's rows run, in seconds.
     seconds: u64,
-    /// The bytes of lengua-mcp's executable, which lengua's size counts against a native build.
+    /// The bytes of the executable that runs lengua's programs ([`runs_with`]), which lengua's
+    /// size counts against a native build.
     runtime: u64,
 }
 
@@ -1410,6 +1418,29 @@ fn modules(folder: &Path, name: &str, toolchains: &BTreeMap<String, String>) -> 
     made
 }
 
+/// The program that runs lengua's programs and the other modules for `lengua-mcp measure`, and
+/// its name: lengua-run beside `server`, lengua-mcp, when it is there, as `measure` itself
+/// chooses ([`lengua::measure::RUNNER`]); else `server`.
+fn runs_with(server: &Path) -> (PathBuf, &'static str) {
+    let name = lengua::measure::RUNNER;
+    let alone = server.with_file_name(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    if alone.is_file() {
+        (alone, name)
+    } else {
+        (server.to_path_buf(), "lengua-mcp")
+    }
+}
+
+/// How the program named `runs_with` is said to run a checked program: lengua-run by its name,
+/// lengua-mcp by its `run`.
+fn run_command(runs_with: &str) -> String {
+    if runs_with == lengua::measure::RUNNER {
+        format!("`{runs_with}`")
+    } else {
+        "`lengua-mcp run`".to_owned()
+    }
+}
+
 /// lengua's version `name` of workload `program`, from its checked folder, or why there is
 /// none; `commit` says where its files are from, when not from today's.
 fn lengua_made(
@@ -1424,11 +1455,16 @@ fn lengua_made(
         format!(" at {commit}")
     };
     let (release, engine) = (env!("CARGO_PKG_VERSION"), lengua::wasm::engine::ENGINE);
+    let server = PathBuf::from(env!("CARGO_BIN_EXE_lengua-mcp"));
+    let runs = match runs_with(&server).1 {
+        "lengua-mcp" => "lengua-mcp run",
+        runs => runs,
+    };
     let version = match checked {
         Some(Ok(checked)) => Ok(Version {
             name: name.to_owned(),
             program: checked.path().to_path_buf(),
-            made: format!("lengua-mcp {release} run, {engine}, {program}{at}"),
+            made: format!("{runs} of lengua {release}, {engine}, {program}{at}"),
         }),
         Some(Err(problem)) => Err(format!("lengua's program{at} isn't done: {problem}")),
         None => Err(format!("lengua's program{at} wasn't checked")),
@@ -2091,13 +2127,19 @@ fn apart_section(out: &mut String, results: &Results) {
         apart_seconds,
         ..
     } = results;
+    let runs = run_command(&results.runs_with);
+    let kept = if results.runs_with == lengua::measure::RUNNER {
+        "by the same program, in the same engine, from its compiled form kept under the same key"
+    } else {
+        "in the same engine with the same cache of compiled modules"
+    };
     let _ = writeln!(out, "\n## lengua's run apart from its module\n");
     let _ = writeln!(
         out,
         "After the gate's rounds, each workload's lengua program ran against lengua-module: the \
-         very module that `lengua-mcp run` runs, built by lengua from the same main.wat and run \
-         by `lengua-mcp measure` as the other modules are, in the same engine with the same \
-         cache of compiled modules and with the words of the program's idea. The two ran alone, \
+         very module that {runs} runs, built by lengua from the same main.wat and run by \
+         `lengua-mcp measure` as the other modules are, {kept} and with the words of the \
+         program's idea. The two ran alone, \
          in rounds of their own, in an order shuffled from round to round, after {warm_up} \
          rounds that weren't counted, until each had {apart_runs} runs, or for {apart_seconds} \
          seconds once each had {apart_fewest}. Each cell gives lengua's median against \
@@ -2169,6 +2211,22 @@ fn report(results: &Results) -> String {
     } = results;
     let looks: Vec<String> = results.looks.iter().map(ToString::to_string).collect();
     let looks = looks.join(", ");
+    // What ran lengua's programs and the other modules: lengua-run, or lengua-mcp where it
+    // wasn't there, and in results from before it.
+    let alone = results.runs_with == lengua::measure::RUNNER;
+    let runs = run_command(&results.runs_with);
+    let runner = if alone { "lengua-run" } else { "lengua-mcp" };
+    let modules = if alone {
+        format!(
+            "run in lengua's host, by the same lengua-run in the same engine ({engine}), each \
+             from its compiled form, kept under the user's key as a checked program's is"
+        )
+    } else {
+        format!(
+            "run in lengua's host, in the same engine ({engine}) with the same cache of \
+             compiled modules"
+        )
+    };
     let mut out = String::new();
     let _ = writeln!(out, "# lengua against C, C++ and Rust on {target}\n");
     let _ = writeln!(
@@ -2193,9 +2251,8 @@ fn report(results: &Results) -> String {
          process of its own, measured by `lengua-mcp measure`: its CPU time (in user space and \
          in the kernel) and its peak resident memory as the system counts them for the process, \
          its wall time on the clock, and the size of what ran. lengua's program runs through \
-         `lengua-mcp run`, with every check it makes; C, C++ and Rust compiled to WebAssembly \
-         run in lengua's host, in the same engine ({engine}) with the same cache of compiled \
-         modules; their native builds, made on this runner, run as a shell starts them. Linux \
+         {runs}, with every check a run makes; C, C++ and Rust compiled to WebAssembly \
+         {modules}; their native builds, made on this runner, run as a shell starts them. Linux \
          begins a process's count of its peak memory at what the process it was started from \
          held, so there every version starts from lengua-spawn, a small process of lengua's \
          that forks it and counts it, and writes the counts and the version's time on the clock \
@@ -2206,8 +2263,8 @@ fn report(results: &Results) -> String {
     let _ = writeln!(
         out,
         "Size is a module's bytes on the rows against other modules, which run in the same \
-         lengua-mcp. Against a native build, lengua's size is its module's and that of the \
-         lengua-mcp it needs to run ({runtime}), and the native build's is its executable's \
+         {runner}. Against a native build, lengua's size is its module's and that of the \
+         {runner} it needs to run ({runtime}), and the native build's is its executable's \
          alone: what it loads from the system's libraries, C's C library and C++'s where they \
          are linked dynamically, isn't counted, and Rust's standard library, linked in, is.\n"
     );
@@ -2224,7 +2281,7 @@ fn report(results: &Results) -> String {
          KNOWN_BEHIND must name its row.\n"
     );
     let _ = writeln!(out, "The versions:\n");
-    let _ = writeln!(out, "- lengua: lengua-mcp, run in {engine}");
+    let _ = writeln!(out, "- lengua: {runner}, run in {engine}");
     for (name, toolchain) in &results.toolchains {
         let _ = writeln!(out, "- {name}: {toolchain}");
     }
@@ -2259,7 +2316,7 @@ fn report(results: &Results) -> String {
     let _ = writeln!(
         out,
         "lengua's median over that of the best native build, C's, C++'s or Rust's, on each \
-         measure, its size with lengua-mcp's: above 1, lengua takes that many times as much.\n"
+         measure, its size with {runner}'s: above 1, lengua takes that many times as much.\n"
     );
     out.push_str("| workload | CPU time | wall time | peak memory | size |\n");
     out.push_str("|---|---|---|---|---|\n");
@@ -2359,7 +2416,10 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
     let _ = session.service.cancel().await;
     let build = tempfile::tempdir_in(&out).map_err(|error| failed(out.display(), error))?;
     let server = PathBuf::from(env!("CARGO_BIN_EXE_lengua-mcp"));
-    let runtime = std::fs::metadata(&server).map_err(|error| failed(server.display(), error))?;
+    // What `lengua-mcp measure` runs lengua's programs with, whose bytes lengua's size counts
+    // against a native build: lengua-run where it is beside lengua-mcp.
+    let (ran_by, runs_with) = runs_with(&server);
+    let runtime = std::fs::metadata(&ran_by).map_err(|error| failed(ran_by.display(), error))?;
     let context = Context {
         root: root.to_path_buf(),
         out: out.clone(),
@@ -2382,6 +2442,7 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
         engine: lengua::wasm::engine::ENGINE.to_owned(),
         toolchains: wasm_toolchains(&context.wasm),
         runtime: context.runtime,
+        runs_with: runs_with.to_owned(),
         looks: gate::LOOKS.to_vec(),
         alpha: gate::ALPHA,
         look_alpha: gate::LOOK_ALPHA,

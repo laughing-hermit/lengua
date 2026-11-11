@@ -1,9 +1,11 @@
-//! lengua's calls into the operating system, kept apart from the rest so that the lengua crate can
-//! forbid unsafe code outright: any call that needs it is wrapped here in a safe function, with a
-//! test on the runner of the system it is for. On Linux, a program run in a process forked from
-//! this one, with what the system counted of its cost; on Windows, how the system describes the
-//! CPU's caches, and what a child process cost; on Windows and macOS, the memory the computer has
-//! free and in all, and what a process holds of it.
+//! lengua's calls that need unsafe code, kept apart from the rest so that the lengua crate can
+//! forbid unsafe code outright: each is wrapped here in a safe function, with a test, those into
+//! the operating system on the runner of the system they are for. On Linux, a program run in a
+//! process forked from this one, with what the system counted of its cost; on Windows, how the
+//! system describes the CPU's caches, and what a child process cost; on Windows and macOS, the
+//! memory the computer has free and in all, and what a process holds of it. And on every system,
+//! a module the engine compiled ahead of its runs, loaded into the engine only when it carries
+//! the seal of the user's key ([`load_sealed`]).
 
 /// One of the CPU's caches, as Windows describes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -520,31 +522,119 @@ pub fn resident_bytes(pid: u32) -> Result<u64, String> {
     Ok(record[8])
 }
 
-/// Temporary, for W19's measurements: the module `bytes` hold, as the engine precompiled it,
-/// copied into memory of the engine's own.
-///
-/// # Errors
-///
-/// When the engine doesn't take the bytes.
-pub fn deserialize(engine: &wasmtime::Engine, bytes: &[u8]) -> Result<wasmtime::Module, String> {
-    // SAFETY: none yet. The measurement's bytes are the test's own; the built form authenticates
-    // them first.
-    unsafe { wasmtime::Module::deserialize(engine, bytes) }.map_err(|error| format!("{error:#}"))
+/// The first bytes of what a seal authenticates: no other use of the user's key begins with
+/// them, so a lock's signature is no seal and a seal no lock's signature.
+const SEAL_DOMAIN: &[u8] = b"lengua-compiled-module-v1\n";
+
+/// How many bytes a seal is: an HMAC-SHA256 tag, the last bytes of a sealed module.
+pub const SEAL_BYTES: usize = 32;
+
+/// How many bytes the key that seals a module is.
+pub const SEAL_KEY_BYTES: usize = 32;
+
+/// Why a sealed module wasn't loaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unsealed {
+    /// The bytes don't carry this key's seal for what they are said to be: they were never
+    /// handed to the engine.
+    NoSeal,
+    /// The seal is this key's, and the engine doesn't take the module: it was compiled by
+    /// another version or configuration of the engine, or for a CPU this one isn't. It says
+    /// why.
+    Engine(String),
 }
 
-/// Temporary, for W19's measurements: the module the file at `path` holds, as the engine
-/// precompiled it, mapped from the file.
+impl std::fmt::Display for Unsealed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSeal => f.write_str("the compiled module doesn't carry this user's seal"),
+            Self::Engine(why) => write!(f, "the engine doesn't take the compiled module: {why}"),
+        }
+    }
+}
+
+impl std::error::Error for Unsealed {}
+
+/// The HMAC-SHA256, keyed with `key`, of a compiled module and what it is said to be, `about`:
+/// the domain, `about`'s length, `about`, then the module, so no two pairs give the same bytes.
+fn seal(key: &[u8; SEAL_KEY_BYTES], about: &[u8], compiled: &[u8]) -> hmac::Hmac<sha2::Sha256> {
+    use hmac::Mac;
+    let mut mac = <hmac::Hmac<sha2::Sha256> as Mac>::new_from_slice(key)
+        .expect("HMAC takes a key of any length");
+    mac.update(SEAL_DOMAIN);
+    mac.update(&u64::try_from(about.len()).unwrap_or(u64::MAX).to_le_bytes());
+    mac.update(about);
+    mac.update(compiled);
+    mac
+}
+
+/// Compiles the WebAssembly module `wasm` with `engine` for this computer, ahead of its runs,
+/// and seals what the engine made with `key` as `about`, which says what the module is, such as
+/// its SHA-256: the compiled module, then its seal. It is the only function that makes a seal,
+/// and it seals nothing but what the engine's own compiler gave it in this very call, so
+/// whatever carries a seal of `key` is a module this engine's code compiled, for whoever keeps
+/// `key` to themselves.
 ///
 /// # Errors
 ///
-/// When the engine doesn't take the file.
-pub fn deserialize_file(
+/// When the engine doesn't compile the module, as it says.
+#[cfg(feature = "compiler")]
+pub fn compile_sealed(
     engine: &wasmtime::Engine,
-    path: &std::path::Path,
-) -> Result<wasmtime::Module, String> {
-    // SAFETY: none yet. The measurement's file is the test's own.
-    unsafe { wasmtime::Module::deserialize_file(engine, path) }
-        .map_err(|error| format!("{error:#}"))
+    key: &[u8; SEAL_KEY_BYTES],
+    about: &[u8],
+    wasm: &[u8],
+) -> Result<Vec<u8>, String> {
+    use hmac::Mac as _;
+    let mut compiled = engine
+        .precompile_module(wasm)
+        .map_err(|error| format!("{error:#}"))?;
+    let tag = seal(key, about, &compiled).finalize().into_bytes();
+    compiled.extend_from_slice(&tag);
+    Ok(compiled)
+}
+
+/// Loads into `engine` the compiled module `sealed` holds, once its last [`SEAL_BYTES`] bytes
+/// are `key`'s seal of the bytes before them as `about` ([`compile_sealed`]), compared in
+/// constant time. The module's code is copied into memory of the engine's own, so nothing that
+/// changes the bytes' file afterwards changes what runs.
+///
+/// Wasmtime's `Module::deserialize` is unsafe because it trusts its bytes: it runs the machine
+/// code in them and follows their tables with no check that a compiler of its own made them, so
+/// other bytes can make the process run anything. This function is safe to call with any bytes
+/// because it hands the engine only bytes that carry a seal, and a seal is made in one place,
+/// [`compile_sealed`], over what `Engine::precompile_module` returned there. Bytes with a seal
+/// are therefore a module Wasmtime compiled, unchanged since, or the work of someone who holds
+/// `key`. lengua's key is the user's own secret, the one that signs lengua.lock, kept in a file
+/// only the user reads: whoever holds it already acts as the user. HMAC-SHA256 makes any other
+/// bytes fail, whatever they are and however they were chosen. Wasmtime then holds a module of
+/// its own to its version, its configuration and this CPU's features, and refuses one that
+/// doesn't suit `engine`, which is an error here and nothing run.
+///
+/// # Errors
+///
+/// [`Unsealed::NoSeal`] for bytes without the seal, which the engine never sees;
+/// [`Unsealed::Engine`] when the seal holds and the engine refuses the module.
+pub fn load_sealed(
+    engine: &wasmtime::Engine,
+    key: &[u8; SEAL_KEY_BYTES],
+    about: &[u8],
+    sealed: &[u8],
+) -> Result<wasmtime::Module, Unsealed> {
+    use hmac::Mac as _;
+    let Some(length) = sealed.len().checked_sub(SEAL_BYTES) else {
+        return Err(Unsealed::NoSeal);
+    };
+    let (compiled, tag) = sealed.split_at(length);
+    seal(key, about, compiled)
+        .verify_slice(tag)
+        .map_err(|_| Unsealed::NoSeal)?;
+    // SAFETY: `compiled` carries `key`'s seal, checked just above, and a seal is made only by
+    // `compile_sealed`, over the bytes `Engine::precompile_module` returned: these are bytes
+    // Wasmtime's compiler made, which is what `deserialize` asks of its caller. It copies them,
+    // so they are not read from the caller's slice again.
+    unsafe { wasmtime::Module::deserialize(engine, compiled) }
+        .map_err(|error| Unsealed::Engine(format!("{error:#}")))
 }
 
 #[cfg(all(test, any(windows, target_os = "macos")))]
@@ -693,5 +783,68 @@ mod tests {
         } else if let Ok(caches) = described {
             assert!(caches.iter().all(|cache| cache.level > 0), "{caches:?}");
         }
+    }
+}
+
+#[cfg(all(test, feature = "compiler"))]
+mod sealed_tests {
+    use super::{SEAL_BYTES, Unsealed, compile_sealed, load_sealed};
+
+    /// The smallest module: WebAssembly's magic number and version 1.
+    const EMPTY: &[u8] = b"\0asm\x01\0\0\0";
+
+    /// A key, and another.
+    const KEYS: [[u8; 32]; 2] = [[7; 32], [8; 32]];
+
+    /// A module the engine compiled loads under the key and the words it was sealed with, and
+    /// under no other: a changed byte anywhere, in the module or in the seal, another key,
+    /// other words, the seal alone, the module without its seal, and bytes no compiler made
+    /// each fail the seal, which is checked before the engine sees a byte.
+    #[test]
+    fn a_compiled_module_loads_only_with_its_seal() {
+        let engine = wasmtime::Engine::default();
+        let sealed = compile_sealed(&engine, &KEYS[0], b"empty", EMPTY).expect("it compiles");
+        assert!(sealed.len() > SEAL_BYTES);
+        assert!(load_sealed(&engine, &KEYS[0], b"empty", &sealed).is_ok());
+        let refused = |key: &[u8; 32], about: &[u8], bytes: &[u8]| {
+            load_sealed(&engine, key, about, bytes).err()
+        };
+        for at in [0, sealed.len() / 2, sealed.len() - SEAL_BYTES, sealed.len() - 1] {
+            let mut changed = sealed.clone();
+            changed[at] ^= 1;
+            assert_eq!(
+                refused(&KEYS[0], b"empty", &changed),
+                Some(Unsealed::NoSeal),
+                "byte {at}"
+            );
+        }
+        assert_eq!(refused(&KEYS[1], b"empty", &sealed), Some(Unsealed::NoSeal));
+        assert_eq!(refused(&KEYS[0], b"other", &sealed), Some(Unsealed::NoSeal));
+        assert_eq!(refused(&KEYS[0], b"", &sealed), Some(Unsealed::NoSeal));
+        let (compiled, seal) = sealed.split_at(sealed.len() - SEAL_BYTES);
+        assert_eq!(refused(&KEYS[0], b"empty", compiled), Some(Unsealed::NoSeal));
+        assert_eq!(refused(&KEYS[0], b"empty", seal), Some(Unsealed::NoSeal));
+        assert_eq!(refused(&KEYS[0], b"empty", &[]), Some(Unsealed::NoSeal));
+        assert_eq!(refused(&KEYS[0], b"empty", EMPTY), Some(Unsealed::NoSeal));
+        // What it is said to be is told apart from the module's first bytes: the words' length
+        // goes into the seal.
+        let mut moved = b"y".to_vec();
+        moved.extend_from_slice(compiled);
+        moved.extend_from_slice(seal);
+        assert_eq!(refused(&KEYS[0], b"empt", &moved), Some(Unsealed::NoSeal));
+    }
+
+    /// The engine holds a sealed module to its own configuration: one compiled to count fuel
+    /// doesn't load into an engine that counts none, and the answer says it was the engine's.
+    #[test]
+    fn the_engine_refuses_a_sealed_module_of_another_configuration() {
+        let mut counting = wasmtime::Config::new();
+        counting.consume_fuel(true);
+        let counting = wasmtime::Engine::new(&counting).expect("an engine");
+        let sealed = compile_sealed(&counting, &KEYS[0], b"empty", EMPTY).expect("it compiles");
+        assert!(load_sealed(&counting, &KEYS[0], b"empty", &sealed).is_ok());
+        let plain = wasmtime::Engine::default();
+        let refused = load_sealed(&plain, &KEYS[0], b"empty", &sealed).err();
+        assert!(matches!(refused, Some(Unsealed::Engine(_))), "{refused:?}");
     }
 }

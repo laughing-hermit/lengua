@@ -425,12 +425,20 @@ fn kept(session: &Session, module: &[u8]) -> PathBuf {
     lengua::state::tested_module(session.data_dir.path(), builder, &Sha256Hex::of(module))
 }
 
-/// check keeps the module whose tests passed, and `lengua-mcp run` runs it: once add is done,
-/// the kept file holds main.wat's build, whose SHA-256 is the lock's module hash. A kept file of
-/// other bytes, no file, and the right module only under another builder's folder each leave the
-/// run to build main.wat, held to the lock, print add's sum, and keep the build again; an edited
-/// main.wat is refused as before; and once check stamps an edit that changes the module, the old
-/// module's file is gone and the new one's is there.
+/// Where check keeps `module` compiled for this computer, under this build's folder of
+/// `session`'s data folder.
+fn compiled(session: &Session, module: &[u8]) -> PathBuf {
+    let builder = lengua::wasm::text::BUILDER;
+    lengua::state::compiled_module(session.data_dir.path(), builder, &Sha256Hex::of(module))
+}
+
+/// check keeps the module whose tests passed, and `lengua-mcp run` compiles it where it has no
+/// compiled form to load: once add is done, the kept file holds main.wat's build, whose SHA-256
+/// is the lock's module hash. With no compiled form, a kept file of other bytes, no file, and
+/// the right module only under another builder's folder each leave the run to build main.wat,
+/// held to the lock, print add's sum, and keep the build again, with its compiled form; an
+/// edited main.wat is refused as before; and once check stamps an edit that changes the module,
+/// the old module's files are gone and the new one's are there.
 #[tokio::test]
 async fn a_shell_runs_the_module_check_kept() {
     let session = Session::start(Protocol::Discover).await;
@@ -446,11 +454,16 @@ async fn a_shell_runs_the_module_check_kept() {
     let lock = program.read("lengua.lock").expect("the lock");
     let hash = format!("module_sha256 = \"{}\"\n", Sha256Hex::of(&module));
     assert!(lock.contains(&hash), "{lock}");
+    let ahead = compiled(&session, &module);
+    assert!(ahead.is_file(), "check compiled the module ahead of its runs");
     let sums = |why: &str| {
+        // With no compiled form to load, the run takes the kept module, or builds main.wat.
+        let _ = std::fs::remove_file(&ahead);
         let sum = run_from_shell(&session, program.path(), &["2", "3"]);
         assert_eq!(sum.stdout, b"5\n", "{why}: {sum:?}");
         assert_eq!(sum.status.code(), Some(0), "{why}: {sum:?}");
         assert_eq!(std::fs::read(&file).ok().as_ref(), Some(&module), "{why}");
+        assert!(ahead.is_file(), "{why}: the run kept no compiled module");
     };
     sums("the kept module");
     let other = lengua::wasm::text::build(OTHER).expect("it builds").wasm;
@@ -482,9 +495,104 @@ async fn a_shell_runs_the_module_check_kept() {
         .wasm;
     assert_ne!(rebuilt, module);
     assert!(!file.exists(), "{}", file.display());
+    assert!(!ahead.exists(), "{}", ahead.display());
     let new = kept(&session, &rebuilt);
     let held = std::fs::read(&new).ok();
-    assert_eq!(held, Some(rebuilt), "{}", new.display());
+    assert_eq!(held.as_ref(), Some(&rebuilt), "{}", new.display());
+    let new = compiled(&session, &rebuilt);
+    assert!(new.is_file(), "{}", new.display());
+    session.service.cancel().await.expect("close the session");
+}
+
+/// A run from a shell loads a compiled module only under the user's key, as the module its lock
+/// records. check compiles add ahead of its runs and seals what the engine made; in its place,
+/// a program that prints 6, compiled by the same engine and sealed by the same key as its own
+/// module, add's own with one byte changed, add's own compiled by another key, bytes no engine
+/// made, and nothing are each left unloaded: `lengua-mcp run` prints add's sum, from the module
+/// check tested, compiled again, and puts add's own compiled form back. lengua-run, which has no
+/// compiler, loads none of them either: it says so and leaves the run to lengua-mcp. With the
+/// compiled form check made, it runs add itself, and says nothing.
+#[tokio::test]
+async fn a_shell_loads_a_compiled_module_only_under_the_user_s_key() {
+    use lengua::wasm::engine::{self, Setup};
+    let session = Session::start(Protocol::Discover).await;
+    let program = add(&session).await;
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let module = lengua::wasm::text::build(CODE)
+        .expect("main.wat builds")
+        .wasm;
+    let hash = Sha256Hex::of(&module);
+    let file = compiled(&session, &module);
+    let sealed = std::fs::read(&file).expect("check compiled the module ahead of its runs");
+    let key = signing_key(&session);
+    let runner = wasmtime::Engine::new(&engine::runner_config(Setup::Shell)).expect("an engine");
+    let loads = |bytes: &[u8]| key.load_sealed(&runner, &hash, bytes).is_ok();
+    assert!(loads(&sealed), "check's compiled module doesn't load");
+
+    let compiler = engine::engine(Setup::Shell, None).expect("the engine that compiles");
+    let other = lengua::wasm::text::build(OTHER).expect("it builds").wasm;
+    let six = key
+        .compile_sealed(&compiler, &Sha256Hex::of(&other), &other)
+        .expect("it compiles");
+    let mut changed = sealed.clone();
+    let middle = changed.len() / 2;
+    changed[middle] ^= 1;
+    let stranger = lengua::lock::Key::from_bytes([9; 32]);
+    let theirs = stranger
+        .compile_sealed(&compiler, &hash, &module)
+        .expect("it compiles");
+    let planted: [(&str, Vec<u8>); 5] = [
+        ("another module, under the user's key as itself", six),
+        ("add's own compiled module with a byte changed", changed),
+        ("add's module under another key", theirs),
+        ("bytes no engine made", b"not a compiled module".to_vec()),
+        ("nothing", Vec::new()),
+    ];
+    let exe = std::env::consts::EXE_SUFFIX;
+    let alone = Path::new(env!("CARGO_BIN_EXE_lengua-mcp"))
+        .with_file_name(format!("lengua-run{exe}"));
+    let run_alone = || {
+        Command::new(&alone)
+            .arg("--data-dir")
+            .arg(session.data_dir.path())
+            .arg(program.path())
+            .args(["2", "3"])
+            .output()
+            .expect("lengua-run runs")
+    };
+    if !alone.is_file() {
+        lengua::skiplog::note(
+            "lengua-run isn't built beside lengua-mcp, which a run of the whole suite does, so \
+             only lengua-mcp's run was held to the user's key",
+        );
+    }
+    for (what, bytes) in &planted {
+        assert!(!loads(bytes), "{what} loads as add's module");
+        std::fs::write(&file, bytes).expect("plant it");
+        if alone.is_file() {
+            let sum = run_alone();
+            assert_eq!(sum.stdout, b"5\n", "{what}: {sum:?}");
+            assert_eq!(sum.status.code(), Some(0), "{what}: {sum:?}");
+            let said = String::from_utf8_lossy(&sum.stderr);
+            assert!(
+                said.contains("has no compiled form to load here"),
+                "{what}: lengua-run didn't say it left the run to lengua-mcp: {said}"
+            );
+            std::fs::write(&file, bytes).expect("plant it again");
+        }
+        let sum = run_from_shell(&session, program.path(), &["2", "3"]);
+        assert_eq!(sum.stdout, b"5\n", "{what}: {sum:?}");
+        assert_eq!(sum.status.code(), Some(0), "{what}: {sum:?}");
+        let now = std::fs::read(&file).expect("a compiled module");
+        assert!(loads(&now), "{what}: the run didn't put add's compiled module back");
+    }
+    if alone.is_file() {
+        let sum = run_alone();
+        assert_eq!(sum.stdout, b"5\n", "{sum:?}");
+        assert!(sum.stderr.is_empty(), "lengua-run left the run to lengua-mcp: {sum:?}");
+        assert_eq!(sum.status.code(), Some(0), "{sum:?}");
+    }
     session.service.cancel().await.expect("close the session");
 }
 

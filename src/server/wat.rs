@@ -40,14 +40,15 @@ use crate::platform::{Cache, CacheHolds, Machine};
 use crate::prove::{self, Verdict};
 use crate::runner::{End, Limits};
 use crate::state::{
-    CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, ProgramFolder, State, tested_module, wrong_record,
+    CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, ProgramFolder, State, compiled_module, tested_module,
+    wrong_record,
 };
 use crate::testfile::{self, TestSuite};
 use crate::testrun;
 use crate::trust;
 use crate::wasm::engine::{self, Setup};
 use crate::wasm::job::{Connection, Made};
-use crate::wasm::runner::{Here, Order, Source, run_once_checked};
+use crate::wasm::runner::{Here, On, Order, Source, run_once_checked};
 use crate::wasm::text::{self, Built};
 use crate::wasm::{Policy, Pool, Program, Spec, parts};
 
@@ -601,6 +602,39 @@ struct Runnable {
     secrets: Vec<idea::Source>,
     /// The SHA-256 of the module check tested.
     module: Sha256Hex,
+    /// The user's key, which verified the lock: a run from a shell loads the module's compiled
+    /// form under it ([`loaded_or_compiled`]).
+    key: Key,
+}
+
+/// The operators of `built`, main.wat's build in `ready`, that take a secret, as the rules find
+/// them, or why main.wat doesn't keep its idea's secrets.
+fn secret_operators(
+    folder: &ProgramFolder,
+    ready: &Runnable,
+    built: &Built,
+) -> Result<Vec<checker::wasm::secret::Taken>, String> {
+    let context = checker::wasm::Context {
+        uses: &ready.uses,
+        network: &ready.network,
+        secrets: &ready.secrets,
+    };
+    let report = checker::wasm::check(&ready.code, built, &context);
+    if report.passed() {
+        Ok(report.secret_operators)
+    } else {
+        Err(leaks(folder, &report.lines()))
+    }
+}
+
+/// What `run` says of a program that doesn't keep its idea's secrets on this computer, for
+/// `refused`, what the rules or the machine code's check found.
+fn leaks(folder: &ProgramFolder, refused: &[String]) -> String {
+    format!(
+        "{IDEA_FILE} names a secret, and {CODE_FILE} doesn't keep it on this computer, so it \
+         won't run: {}. Call check with path {folder}, then fix {CODE_FILE}.",
+        refused.join("; ")
+    )
 }
 
 /// For a program whose idea names secrets, checks the machine code the engine compiles `built`
@@ -619,31 +653,38 @@ fn keeps_secrets(
     if ready.secrets.is_empty() {
         return Ok(());
     }
-    let context = checker::wasm::Context {
-        uses: &ready.uses,
-        network: &ready.network,
-        secrets: &ready.secrets,
-    };
-    let report = checker::wasm::check(&ready.code, built, &context);
-    let refused = if report.passed() {
-        let cache = engine::cache_folder(data_dir);
-        match machine::check(
-            &built.wasm,
-            &report.secret_operators,
-            &[setup],
-            Some(cache.as_path()),
-        ) {
-            Ok(_) => return Ok(()),
-            Err(refused) => refused.iter().map(ToString::to_string).collect(),
+    let operators = secret_operators(folder, ready, built)?;
+    let cache = engine::cache_folder(data_dir);
+    match machine::check(&built.wasm, &operators, &[setup], Some(cache.as_path())) {
+        Ok(_) => Ok(()),
+        Err(refused) => {
+            let refused: Vec<String> = refused.iter().map(ToString::to_string).collect();
+            Err(leaks(folder, &refused))
         }
-    } else {
-        report.lines()
-    };
-    Err(format!(
-        "{IDEA_FILE} names a secret, and {CODE_FILE} doesn't keep it on this computer, so it \
-         won't run: {}. Call check with path {folder}, then fix {CODE_FILE}.",
-        refused.join("; ")
-    ))
+    }
+}
+
+/// [`keeps_secrets`] for a run from a shell, over `compiled`, the compiled module the run has
+/// loaded and is about to execute: the rules find the operators that take a secret in main.wat's
+/// build, which must be the module check tested, and the code `compiled` holds for each keeps
+/// the secret rule. The code read is the code that runs, not another compilation of the module.
+fn loaded_keeps_secrets(
+    folder: &ProgramFolder,
+    ready: &Runnable,
+    compiled: &wasmtime::Module,
+) -> Result<(), String> {
+    if ready.secrets.is_empty() {
+        return Ok(());
+    }
+    let built = built_as_tested(folder, ready)?;
+    let operators = secret_operators(folder, ready, &built)?;
+    match machine::check_loaded(compiled, &operators) {
+        Ok(_) => Ok(()),
+        Err(refused) => {
+            let refused: Vec<String> = refused.iter().map(ToString::to_string).collect();
+            Err(leaks(folder, &refused))
+        }
+    }
 }
 
 /// Checks that `folder` holds main.wat lengua may run, as `run` does from MCP and from a shell:
@@ -659,7 +700,7 @@ fn runnable(
     folder: &ProgramFolder,
     env: &BTreeMap<String, String>,
 ) -> Result<Runnable, String> {
-    let (state, snapshot, files) = state_for_run(data_dir, folder)?;
+    let (state, snapshot, files, key) = state_for_run(data_dir, folder)?;
     crate::stages::mark("state");
     if state != State::Ready {
         return Err(format!(
@@ -672,6 +713,7 @@ fn runnable(
     let lock = snapshot
         .valid_lock()
         .ok_or("lengua.lock is missing; call check")?;
+    let key = key.ok_or("lengua.lock is missing; call check")?;
     let stamp = lock
         .code
         .as_ref()
@@ -725,6 +767,7 @@ fn runnable(
         network,
         secrets,
         module: stamp.module_sha256.clone(),
+        key,
     })
 }
 
@@ -742,33 +785,108 @@ fn built_as_tested(folder: &ProgramFolder, ready: &Runnable) -> Result<Built, St
     Ok(built)
 }
 
-/// The module a run from a shell runs.
-enum ToRun {
-    /// The module check kept, whose bytes hash to the module it tested: main.wat isn't built.
-    Kept(Vec<u8>),
-    /// main.wat built now, the module check tested.
-    Built(Built),
-}
-
-/// The module a run from a shell runs for `ready`: the one check kept in this build's folder of
-/// the data folder, when its bytes hash to the module check tested, with no build of main.wat;
-/// otherwise, missing, unreadable or other bytes, main.wat built from the bytes the state's read
-/// kept, provided the build is that very module ([`built_as_tested`]), and kept again for the
-/// next run, which never fails for a module it couldn't keep.
+/// The module a run from a shell compiles for `ready` when no compiled form of it is kept: the
+/// one check kept in this build's folder of the data folder, when its bytes hash to the module
+/// check tested, with no build of main.wat; otherwise, missing, unreadable or other bytes,
+/// main.wat built from the bytes the state's read kept, provided the build is that very module
+/// ([`built_as_tested`]), and kept again for the next run, which never fails for a module it
+/// couldn't keep.
 fn kept_or_built(
     data_dir: &DataDir,
     folder: &ProgramFolder,
     ready: &Runnable,
-) -> Result<ToRun, String> {
+) -> Result<Vec<u8>, String> {
     let kept = tested_module(data_dir.path(), text::BUILDER, &ready.module);
     if let Ok(wasm) = std::fs::read(&kept)
         && Sha256Hex::of(&wasm) == ready.module
     {
-        return Ok(ToRun::Kept(wasm));
+        return Ok(wasm);
     }
     let built = built_as_tested(folder, ready)?;
     let _ = keep_tested(data_dir, &ready.module, &built.wasm);
-    Ok(ToRun::Built(built))
+    Ok(built.wasm)
+}
+
+/// Why a run from a shell didn't happen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotRun {
+    /// lengua won't run the program, or can't: why, for the user.
+    Refused(String),
+    /// This process only runs what was compiled before (lengua-run), and the module check
+    /// tested has no compiled form it can load, as it says: none is kept yet, the one kept
+    /// doesn't carry the user's seal, or the engine doesn't take it on this computer.
+    /// lengua-mcp compiles it, keeps it and runs it.
+    NotCompiled(String),
+    /// This process only runs what was compiled before, and the idea names a secret: the
+    /// machine code is read on every run, with main.wat's rules, which lengua-mcp does.
+    Secret,
+}
+
+impl From<String> for NotRun {
+    fn from(why: String) -> Self {
+        Self::Refused(why)
+    }
+}
+
+/// Compiles `wasm`, the module whose SHA-256 is `module`, for a run from a shell on this
+/// computer, seals it with `key`, and keeps it in the data folder ([`compiled_module`]), written
+/// atomically: what later runs load in place of compiling. Gives the sealed bytes, kept or not:
+/// a run never fails for a compiled module it couldn't keep.
+///
+/// # Errors
+///
+/// When the engine doesn't compile the module, or this process has no compiler.
+pub fn compile_and_keep(
+    data_dir: &DataDir,
+    key: &Key,
+    module: &Sha256Hex,
+    wasm: &[u8],
+) -> Result<Vec<u8>, String> {
+    use std::io::Write as _;
+    // The process's one engine that compiles for a run from a shell, which the check of a
+    // secret idea's machine code makes with the cache too; what is sealed here goes through no
+    // cache.
+    let compiler = engine::engine(Setup::Shell, Some(engine::cache_folder(data_dir).as_path()))?;
+    let sealed = key.compile_sealed(&compiler, module, wasm)?;
+    let path = compiled_module(data_dir.path(), text::BUILDER, module);
+    if let Some(folder) = path.parent()
+        && std::fs::create_dir_all(folder).is_ok()
+        && let Ok(mut file) = tempfile::NamedTempFile::new_in(folder)
+        && file.write_all(&sealed).is_ok()
+    {
+        let _ = file.persist(&path);
+    }
+    Ok(sealed)
+}
+
+/// The compiled module a run from a shell runs, in the engine that only runs: the one kept in
+/// the data folder for `module`, the SHA-256 of the module check tested, once it carries `key`'s
+/// seal as that module's and the engine takes it ([`Key::load_sealed`]). No file that isn't
+/// sealed so is ever handed to the engine. Where there is none to load, a process that compiles
+/// takes `wasm`'s bytes, which the caller holds to that hash, compiles them, seals and keeps the
+/// result, and loads it as every later run will; a process that only runs says why it can't.
+pub(crate) fn loaded_or_compiled(
+    data_dir: &DataDir,
+    key: &Key,
+    module: &Sha256Hex,
+    wasm: impl FnOnce() -> Result<Vec<u8>, String>,
+) -> Result<wasmtime::Module, NotRun> {
+    let runner = engine::runner()?;
+    let path = compiled_module(data_dir.path(), text::BUILDER, module);
+    let why = match std::fs::read(&path) {
+        Ok(sealed) => match key.load_sealed(&runner, module, &sealed) {
+            Ok(loaded) => return Ok(loaded),
+            Err(unsealed) => unsealed.to_string(),
+        },
+        Err(_) => "it isn't compiled for this computer yet".to_owned(),
+    };
+    if !engine::compiles() {
+        return Err(NotRun::NotCompiled(why));
+    }
+    let sealed = compile_and_keep(data_dir, key, module, &wasm()?)
+        .map_err(|error| format!("the engine couldn't compile the module: {error}"))?;
+    key.load_sealed(&runner, module, &sealed)
+        .map_err(|unsealed| NotRun::Refused(format!("lengua couldn't load what it compiled: {unsealed}")))
 }
 
 /// The bytes of `name`, a file inside `folder`, as a run's standard input: at most
@@ -819,8 +937,8 @@ fn made(reach: &Reach, args: &[String]) -> Made {
     Made { place, connection }
 }
 
-/// What a run from a shell runs once its checks pass: the module check tested, kept or built,
-/// and what the program is given, all from the bytes the checks read.
+/// What a run from a shell runs once its checks pass: the module check tested, compiled, and
+/// what the program is given, all from the bytes the checks read.
 struct Checked<'r> {
     /// The run, as the shell asked for it.
     request: &'r ShellRun,
@@ -828,18 +946,15 @@ struct Checked<'r> {
     workspace: PathBuf,
     /// main.wat, what its idea grants, and the module check tested, by its hash.
     ready: Runnable,
-    /// The module that runs.
-    to_run: ToRun,
+    /// That module, compiled, in the engine that runs it.
+    compiled: wasmtime::Module,
     /// The connections lengua makes for it, in order.
     connections: Vec<Made>,
 }
 
 impl Order for Checked<'_> {
-    fn wasm(&self) -> &[u8] {
-        match &self.to_run {
-            ToRun::Kept(wasm) => wasm.as_slice(),
-            ToRun::Built(built) => built.wasm.as_slice(),
-        }
+    fn module(&self) -> &wasmtime::Module {
+        &self.compiled
     }
 
     fn here(&self) -> Here<'_> {
@@ -851,35 +966,37 @@ impl Order for Checked<'_> {
             policy: Policy::of(&self.ready.uses, network),
             listen: network.listens.map(|port| (port, network.serves_anywhere)),
             connections: &self.connections,
-            source: match &self.to_run {
-                ToRun::Kept(_) => Source::Text {
-                    text: &self.ready.code,
-                    module: &self.ready.module,
-                },
-                ToRun::Built(built) => Source::Built(built),
+            // main.wat is built only if the program traps, to place the trap on its line.
+            source: Source::Text {
+                text: &self.ready.code,
+                module: &self.ready.module,
             },
         }
     }
 }
 
-/// `lengua-mcp run` for main.wat: `run`'s checks, in the program folder and the working folder
-/// `folders` gives, then the module check tested, kept or built ([`kept_or_built`]), in this
-/// process, attached to the shell's standard input, output and error, with no time limit. The
-/// engine starts on the program's thread while the checks run on this one, and compiles nothing
-/// until they pass ([`run_once_checked`]), but for an idea that names a secret, whose checks
-/// compile the module to read its machine code ([`keeps_secrets`]). Gives the program's exit
-/// code, or [`TRAPPED`] when it trapped, which it says on standard error.
+/// A run from a shell of main.wat: `run`'s checks, in the program folder and the working folder
+/// `folders` gives, then the module check tested, in this process, attached to the shell's
+/// standard input, output and error, with no time limit, on the thread `on` says. What runs is
+/// the compiled form of that module kept under the user's key ([`loaded_or_compiled`]); a process
+/// that compiles makes it where there is none, from the module check kept or main.wat built
+/// again
+/// ([`kept_or_built`]). For an idea that names a secret, the machine code about to run is read
+/// first ([`loaded_keeps_secrets`]). Nothing of the program is instantiated or run until every
+/// check has passed. Gives the program's exit code, or [`TRAPPED`] when it trapped, which it
+/// says on standard error.
 ///
 /// # Errors
 ///
-/// Why lengua won't run it, or can't.
+/// Why lengua won't run it, or can't, or why this process, which only runs, leaves it to
+/// lengua-mcp.
 pub(super) fn run_from_shell(
     data_dir: &DataDir,
     request: &ShellRun,
+    on: On,
     folders: impl FnOnce() -> Result<(ProgramFolder, PathBuf), String>,
-) -> Result<i32, String> {
-    let cache = engine::cache_folder(data_dir);
-    let ended = run_once_checked(Some(cache.as_path()), || {
+) -> Result<i32, NotRun> {
+    let ended = run_once_checked(on, || -> Result<Checked<'_>, NotRun> {
         let (folder, workspace) = folders()?;
         crate::stages::mark("folders");
         let ready = runnable(data_dir, &folder, &request.env)?;
@@ -889,23 +1006,18 @@ pub(super) fn run_from_shell(
         if ready.uses.contains(&Use::Files)
             && let Some(problem) = own_folder_problem(data_dir, &workspace)
         {
-            return Err(problem);
+            return Err(NotRun::Refused(problem));
         }
-        let to_run = kept_or_built(data_dir, &folder, &ready)?;
-        crate::stages::mark("kept");
-        // An idea that names a secret: the code this computer runs is checked first, from
-        // main.wat built again when the module is the one check kept.
-        if !ready.secrets.is_empty() {
-            match &to_run {
-                ToRun::Built(built) => {
-                    keeps_secrets(data_dir, &folder, &ready, built, Setup::Shell)?;
-                }
-                ToRun::Kept(_) => {
-                    let built = built_as_tested(&folder, &ready)?;
-                    keeps_secrets(data_dir, &folder, &ready, &built, Setup::Shell)?;
-                }
-            }
+        // An idea that names a secret: reading the machine code takes main.wat's rules, which
+        // a process that only runs leaves to lengua-mcp.
+        if !ready.secrets.is_empty() && !engine::compiles() {
+            return Err(NotRun::Secret);
         }
+        let compiled = loaded_or_compiled(data_dir, &ready.key, &ready.module, || {
+            kept_or_built(data_dir, &folder, &ready)
+        })?;
+        crate::stages::mark("compiled");
+        loaded_keeps_secrets(&folder, &ready, &compiled)?;
         let connections = reaches(&ready.network)
             .iter()
             .map(|reach| made(reach, &request.args))
@@ -914,20 +1026,21 @@ pub(super) fn run_from_shell(
             request,
             workspace,
             ready,
-            to_run,
+            compiled,
             connections,
         })
     })?;
+    let lengua = engine::name();
     match ended.map_err(|error| format!("couldn't run the program: {error}"))? {
         End::Exited(code) => Ok(code),
         trapped @ End::Trapped(..) => {
             eprintln!(
-                "lengua-mcp: the program {}",
+                "{lengua}: the program {}",
                 trapped.describe(Limits::default())
             );
             Ok(TRAPPED)
         }
-        other => Err(other.describe(Limits::default())),
+        other => Err(NotRun::Refused(other.describe(Limits::default()))),
     }
 }
 
@@ -1150,6 +1263,14 @@ impl LenguaServer {
         let tested = &code.program.built().wasm;
         if let Err(error) = keep_tested(&self.data_dir, &checking.module, tested) {
             return fail(vec![error]);
+        }
+        // And compiled for this computer ahead of its runs, sealed with the user's key: a run
+        // from a shell loads that and compiles nothing. A module that couldn't be compiled or
+        // kept here still runs, since its first run from lengua-mcp compiles it.
+        if let Ok(Some(key)) = Key::load(&self.data_dir)
+            && let Err(error) = compile_and_keep(&self.data_dir, &key, &checking.module, tested)
+        {
+            tracing::warn!("couldn't compile the module ahead of its runs: {error}");
         }
         let stamp = CodeStamp {
             sha256: code_hash,

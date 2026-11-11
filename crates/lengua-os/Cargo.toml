@@ -2,9 +2,9 @@
 name = "lengua-os"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.97"
 license = "Apache-2.0"
-description = "lengua's calls into the operating system: the only crate of the workspace that may hold unsafe code, each call in a safe function with a test on its system's runner."
+description = "lengua's calls that need unsafe code: into the operating system, and the one that loads a compiled module into the engine. The only crate of the workspace that may hold unsafe code, each call in a safe function with a test."
 publish = false
 
 [lib]
@@ -19,6 +19,19 @@ missing_docs = "warn"
 [lints.clippy]
 unwrap_used = "warn"
 
+# `compiler`: the engine's compiler, which compiles a module ahead of its runs and seals it
+# (`compile_sealed`). Without it the crate only loads what was sealed, as lengua-run does.
+[features]
+compiler = ["wasmtime/cranelift"]
+
+[dependencies]
+# The seal of a compiled module: HMAC-SHA256, the versions the lengua crate signs its locks with.
+hmac = "0.12.1"
+sha2 = "0.10.9"
+# The engine, as the lengua crate pins it, for the one call that loads a compiled module: its
+# runtime alone, which the lengua crate's own features add to.
+wasmtime = { version = "=50.0.1", default-features = false, features = ["runtime", "std"] }
+
 # The Unix calls that need unsafe code (the nix crate is empty elsewhere): on Linux, the fork
 # lengua-spawn starts a program with, its wait and its counts; on macOS, the system's counts of the
 # computer's memory and of a process's.
@@ -29,7 +42,3 @@ nix = { version = "0.31", default-features = false, features = ["process", "reso
 # memory. The version the lock already holds for the rest of the workspace.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
-
-# The engine, as the lengua crate pins it, for the one call that loads a precompiled module.
-[dependencies]
-wasmtime = { version = "=50.0.1", default-features = false, features = ["runtime", "std"] }

@@ -92,6 +92,7 @@ pub fn doctor(data_dir: Option<&DataDir>) -> Report {
     Report {
         findings: vec![
             server(),
+            runner(),
             engine_runs(),
             cpu(),
             solver(Kind::Z3),
@@ -117,6 +118,60 @@ fn server() -> Finding {
     }
 }
 
+/// lengua-run, the small program beside the server that runs a checked program from a shell:
+/// whether it is there, and of this server's version. Where it isn't there, as in a build that
+/// didn't make it, `lengua-mcp run` runs programs, and nothing is wrong.
+fn runner() -> Finding {
+    let version = env!("CARGO_PKG_VERSION");
+    let name = crate::measure::RUNNER;
+    let beside = std::env::current_exe()
+        .map(|server| server.with_file_name(format!("{name}{}", std::env::consts::EXE_SUFFIX)));
+    let Ok(path) = beside else {
+        return Finding::fine(
+            "runner: lengua-mcp can't find its own file, so `lengua-mcp run` runs checked programs"
+                .to_owned(),
+        );
+    };
+    if !path.is_file() {
+        return Finding::fine(format!(
+            "runner: no {name} beside lengua-mcp, so `lengua-mcp run` runs checked programs"
+        ));
+    }
+    let said = Command::new(&path)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
+    let expected = format!("{name} {version}");
+    match said {
+        Ok(said) if said == expected => Finding::fine(format!(
+            "runner: {name} {version}, {}, which runs checked programs with no compiler in it",
+            path.display()
+        )),
+        Ok(said) if said.starts_with(&format!("{expected},")) => Finding::fine(format!(
+            "runner: {said}, {}",
+            path.display()
+        )),
+        Ok(said) => Finding::wrong(
+            format!(
+                "runner: {} says {said:?}, not {expected}",
+                path.display()
+            ),
+            format!(
+                "{name} and lengua-mcp come from one release archive, and a {name} of another \
+                 version leaves every run to lengua-mcp or loads nothing: install lengua again."
+            ),
+        ),
+        Err(error) => Finding::wrong(
+            format!("runner: {} doesn't start: {error}", path.display()),
+            format!(
+                "`lengua-mcp run` still runs checked programs; install lengua again for {name}."
+            ),
+        ),
+    }
+}
+
 /// A module that uses the WebAssembly features lengua turns on: sixteen bytes of 7 filled in
 /// (bulk memory), read as four lanes with 1 added to each (SIMD), lane 0's low byte widened with
 /// its sign (sign extension), 2.5 made a whole number (saturating conversion), and two values
@@ -136,8 +191,9 @@ const PROBE: &str = "(module
 /// What [`PROBE`] computes.
 const PROBED: i32 = 38;
 
-/// The engine: Wasmtime with Cranelift, made as a run from a shell makes it, compiling and
-/// running [`PROBE`] on this computer.
+/// The engine: Wasmtime with Cranelift, compiling [`PROBE`] on this computer as check compiles a
+/// module ahead of its runs, and the engine that only runs loading what it compiled and running
+/// it, as a run from a shell does.
 fn engine_runs() -> Finding {
     let engine = format!("Wasmtime {} with Cranelift", engine::ENGINE_VERSION);
     match probe() {
@@ -154,12 +210,20 @@ fn engine_runs() -> Finding {
     }
 }
 
-/// Compiles and runs [`PROBE`], which must compute [`PROBED`].
+/// Compiles [`PROBE`], seals it with a key of its own that nothing else has, loads it into the
+/// engine that only runs, and runs it there: it must compute [`PROBED`].
 fn probe() -> Result<(), String> {
     let built = crate::wasm::text::build(PROBE).map_err(|problem| problem.to_string())?;
-    let engine = engine::engine(Setup::Shell, None)?;
-    let module = wasmtime::Module::from_binary(&engine, &built.wasm)
+    let compiler = engine::engine(Setup::Shell, None)?;
+    let key = crate::lock::Key::from_bytes([0; 32]);
+    let hash = crate::hash::Sha256Hex::of(&built.wasm);
+    let sealed = key
+        .compile_sealed(&compiler, &hash, &built.wasm)
         .map_err(|error| format!("it compiles no module: {error}"))?;
+    let engine = engine::runner()?;
+    let module = key
+        .load_sealed(&engine, &hash, &sealed)
+        .map_err(|error| format!("it loads no compiled module: {error}"))?;
     let mut store = wasmtime::Store::new(&engine, ());
     let instance = wasmtime::Instance::new(&mut store, &module, &[])
         .map_err(|error| format!("it starts no module: {error}"))?;

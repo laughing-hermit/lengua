@@ -439,20 +439,77 @@ fn answer(
 /// What a function lengua doesn't give answers.
 const NOSYS: i32 = 52;
 
-/// The linker with lengua's host: every function of WASI preview 1.
+/// The linker with lengua's host: every function of WASI preview 1, for whatever module comes,
+/// as a worker that runs module after module needs it.
 ///
 /// # Errors
 ///
 /// When a function can't be defined, which lengua's tests rule out.
 pub fn linker(engine: &Engine) -> Result<Linker<Host>, String> {
     let mut linker = Linker::new(engine);
-    define(&mut linker).map_err(|error| format!("lengua's host couldn't be set up: {error}"))?;
+    let mut defining = Defining {
+        linker: &mut linker,
+        wanted: None,
+    };
+    define(&mut defining).map_err(|error| format!("lengua's host couldn't be set up: {error}"))?;
     Ok(linker)
+}
+
+/// The linker with lengua's host for `module` alone, in its engine: the functions of WASI
+/// preview 1 the module imports, each the very function [`linker`] defines, and no others. A
+/// run from a shell runs one module once, and defining a function has a cost of its own (the
+/// 46 took about 0.09 ms of a run of 1 ms, as W19 measured), so it defines the few it will
+/// call. An import lengua's host doesn't have is undefined here as it is there, and the module
+/// doesn't start.
+///
+/// # Errors
+///
+/// When a function can't be defined, which lengua's tests rule out.
+pub fn linker_for(module: &wasmtime::Module) -> Result<Linker<Host>, String> {
+    let wanted: Vec<&str> = module
+        .imports()
+        .filter(|import| import.module() == wasi::MODULE)
+        .map(|import| import.name())
+        .collect();
+    let mut linker = Linker::new(module.engine());
+    let mut defining = Defining {
+        linker: &mut linker,
+        wanted: Some(wanted.as_slice()),
+    };
+    define(&mut defining).map_err(|error| format!("lengua's host couldn't be set up: {error}"))?;
+    Ok(linker)
+}
+
+/// A linker as [`define`] fills it: with every function, or only with those wanted.
+struct Defining<'l> {
+    /// The linker.
+    linker: &'l mut Linker<Host>,
+    /// The names of the functions to define, or every one.
+    wanted: Option<&'l [&'l str]>,
+}
+
+impl Defining<'_> {
+    /// Defines `name` of `module` as `function`, as [`Linker::func_wrap`] does, when it is
+    /// wanted.
+    fn func_wrap<Params, Results>(
+        &mut self,
+        module: &str,
+        name: &str,
+        function: impl wasmtime::IntoFunc<Host, Params, Results>,
+    ) -> wasmtime::Result<()> {
+        if self
+            .wanted
+            .is_none_or(|wanted| wanted.iter().any(|want| *want == name))
+        {
+            self.linker.func_wrap(module, name, function)?;
+        }
+        Ok(())
+    }
 }
 
 /// Defines every function on `linker`.
 #[allow(clippy::too_many_lines)]
-fn define(linker: &mut Linker<Host>) -> wasmtime::Result<()> {
+fn define(linker: &mut Defining<'_>) -> wasmtime::Result<()> {
     use wasi::MODULE;
     let unsigned = i32::cast_unsigned;
 

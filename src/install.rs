@@ -573,11 +573,15 @@ fn installed(options: &Options, data_dir: Option<&DataDir>) -> Result<u8, String
     let dest = place(&here, &market, &version)?;
     quarantine_note(&dest);
     zone_note(&dest);
-    let server = dest
-        .join("server")
-        .join(format!("lengua-mcp{}", std::env::consts::EXE_SUFFIX));
+    let exe = std::env::consts::EXE_SUFFIX;
+    let server = dest.join("server").join(format!("lengua-mcp{exe}"));
+    // lengua-run, which runs a checked program, is beside the server in every archive.
+    let runner = server.with_file_name(format!("{}{exe}", crate::measure::RUNNER));
     if options.link {
         link(&server)?;
+        if runner.is_file() {
+            link(&runner)?;
+        }
     }
 
     let (said, shown) = (described(target), dest.display());
@@ -596,13 +600,18 @@ fn installed(options: &Options, data_dir: Option<&DataDir>) -> Result<u8, String
     println!("{DESCRIBE}");
     println!();
     println!("Run a program it built from a shell, script or service:");
-    let program = quoted(&server);
-    if options.link {
-        println!("    lengua-mcp run <program folder> -- <arguments>");
-    } else if cfg!(windows) {
-        println!("    & {program} run <program folder> -- <arguments>");
+    let (program, run) = if runner.is_file() {
+        (quoted(&runner), "")
     } else {
-        println!("    {program} run <program folder> -- <arguments>");
+        (quoted(&server), " run")
+    };
+    if options.link {
+        let name = if run.is_empty() { "lengua-run" } else { "lengua-mcp" };
+        println!("    {name}{run} <program folder> -- <arguments>");
+    } else if cfg!(windows) {
+        println!("    & {program}{run} <program folder> -- <arguments>");
+    } else {
+        println!("    {program}{run} <program folder> -- <arguments>");
     }
     println!();
     Ok(installed_doctor(&server, data_dir))
@@ -613,16 +622,20 @@ fn absolute(folder: &Path) -> Result<PathBuf, String> {
     std::path::absolute(folder).map_err(|error| format!("{}: {error}", folder.display()))
 }
 
-/// Links lengua-mcp, `server`, into ~/.local/bin, as `ln -sf` does.
+/// Links `program`, lengua-mcp or lengua-run, into ~/.local/bin under its own name, as `ln -sf`
+/// does.
 #[cfg(unix)]
-fn link(server: &Path) -> Result<(), String> {
+fn link(program: &Path) -> Result<(), String> {
     let home =
         std::env::var_os("HOME").ok_or("--link needs HOME, the folder ~/.local/bin is in")?;
     let bin = PathBuf::from(home).join(".local").join("bin");
     std::fs::create_dir_all(&bin).map_err(|error| format!("{}: {error}", bin.display()))?;
-    let link = bin.join("lengua-mcp");
+    let name = program
+        .file_name()
+        .ok_or_else(|| format!("{} names no program", program.display()))?;
+    let link = bin.join(name);
     let _ = std::fs::remove_file(&link);
-    std::os::unix::fs::symlink(server, &link)
+    std::os::unix::fs::symlink(program, &link)
         .map_err(|error| format!("{}: {error}", link.display()))
 }
 

@@ -1,5 +1,6 @@
-//! Temporary, for W19's measurements: where a shell run's time and memory go, and what each
-//! candidate change would buy, measured by `lengua-mcp measure` on this runner.
+//! Temporary, for W19's measurements: what a shell run costs with lengua-run, built with no
+//! compiler, against lengua-mcp's own run and the smallest programs, and what each of its parts
+//! buys, measured by `lengua-mcp measure` on this runner.
 
 mod common;
 
@@ -7,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use common::{Program, Protocol, Session};
-use lengua::wasm::engine::{self, Setup};
 
 /// The add program's idea.
 const IDEA: &str = include_str!("fixtures/add/idea.md");
@@ -36,29 +36,21 @@ struct Case {
     name: &'static str,
     /// `LENGUA_VARIANT` for it.
     variant: &'static str,
+    /// The lengua-mcp that measures it, which runs it with the lengua-run beside it, if any.
+    measurer: PathBuf,
     /// What runs.
     target: Target,
 }
 
-/// Where the measurements keep their files.
-struct Places {
-    /// The data folder.
-    data: PathBuf,
-    /// The precompiled modules' folder.
-    aot: PathBuf,
-}
-
 /// Runs `case` once through `lengua-mcp measure`: what it printed.
-fn measured(case: &Case, places: &Places, stages: Option<&Path>) -> serde_json::Value {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_lengua-mcp"));
-    command.arg("--data-dir").arg(&places.data).arg("measure");
+fn measured(case: &Case, data: &Path, stages: Option<&Path>) -> serde_json::Value {
+    let mut command = Command::new(&case.measurer);
+    command.arg("--data-dir").arg(data).arg("measure");
     if let Some(file) = stages {
         command.arg("--stderr").arg(file);
         command.env("LENGUA_STAGES", "maps");
     }
-    command
-        .env("LENGUA_VARIANT", case.variant)
-        .env("LENGUA_AOT_DIR", &places.aot);
+    command.env("LENGUA_VARIANT", case.variant);
     let args = match &case.target {
         Target::Native(program, args) | Target::Folder(program, args) => {
             command.arg(program);
@@ -86,29 +78,49 @@ fn median(values: &mut [u64]) -> u64 {
     values.get(values.len() / 2).copied().unwrap_or(0)
 }
 
+/// Copies the programs `names` from `from` into the new folder `to`.
+fn kit(from: &[&PathBuf], to: &Path) {
+    std::fs::create_dir_all(to).expect("a folder");
+    for program in from {
+        let name = program.file_name().expect("a name");
+        std::fs::copy(program, to.join(name)).expect("copied");
+    }
+}
+
 #[tokio::test]
 #[ignore = "temporary: W19's measurements"]
 async fn w19_probe() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let exe = std::env::consts::EXE_SUFFIX;
     let server = PathBuf::from(env!("CARGO_BIN_EXE_lengua-mcp"));
     let spawner = PathBuf::from(env!("CARGO_BIN_EXE_lengua-spawn"));
+    let whole = server.with_file_name(format!("lengua-run{exe}"));
 
-    // The probe, built alone, so that its Wasmtime has no compiler.
+    // lengua-run built alone, so that it has no compiler.
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let built = Command::new(cargo)
         .current_dir(root)
-        .args(["build", "--release", "--locked", "-p", "lean-probe"])
+        .args(["build", "--release", "--locked", "-p", "lengua-run"])
         .args(["--target-dir", "target/lean"])
         .status()
         .expect("cargo starts");
-    assert!(built.success(), "the probe didn't build");
-    let probe = root
+    assert!(built.success(), "lengua-run didn't build alone");
+    let lean = root
         .join("target/lean/release")
-        .join(format!("lean-probe{}", std::env::consts::EXE_SUFFIX));
-    for file in [&server, &spawner, &probe] {
-        let size = std::fs::metadata(file).expect("the file").len();
+        .join(format!("lengua-run{exe}"));
+    for file in [&server, &spawner, &lean, &whole] {
+        let size = std::fs::metadata(file).map_or(0, |file| file.len());
         println!("SIZE {} {size}", file.display());
     }
+
+    let folder = tempfile::tempdir().expect("a folder");
+    let with_lean = folder.path().join("lean");
+    let with_whole = folder.path().join("whole");
+    let without = folder.path().join("without");
+    kit(&[&server, &spawner, &lean], &with_lean);
+    kit(&[&server, &spawner, &whole], &with_whole);
+    kit(&[&server, &spawner], &without);
+    let measurer = |kit: &Path| kit.join(format!("lengua-mcp{exe}"));
 
     // add, checked to done.
     let session = Session::start(Protocol::Discover).await;
@@ -119,77 +131,52 @@ async fn w19_probe() {
     program.write("main.wat", CODE);
     let done = session.settle(&program).await;
     assert_eq!(done["state"], "done", "{done}");
+    println!("SHELL {}", done["shell"]);
+    let data = session.data_dir.path().to_path_buf();
 
-    let folder = tempfile::tempdir().expect("a folder");
-    let places = Places {
-        data: session.data_dir.path().to_path_buf(),
-        aot: folder.path().join("aot"),
-    };
     let tiny = lengua::wasm::text::build(TINY).expect("it builds").wasm;
     let tiny_wasm = folder.path().join("tiny.wasm");
     std::fs::write(&tiny_wasm, &tiny).expect("written");
-    let config = engine::config(Setup::Shell, None).expect("the configuration");
-    let compiler = wasmtime::Engine::new(&config).expect("the engine");
-    let precompiled = compiler.precompile_module(&tiny).expect("it compiles");
-    println!("SIZE tiny.wasm {}", tiny.len());
-    println!("SIZE tiny.cwasm {}", precompiled.len());
-    let add_wasm = lengua::wasm::text::build(CODE).expect("it builds").wasm;
-    println!("SIZE add.wasm {}", add_wasm.len());
-    println!(
-        "SIZE add.cwasm {}",
-        compiler
-            .precompile_module(&add_wasm)
-            .expect("it compiles")
-            .len()
-    );
-    let tiny_cwasm = folder.path().join("tiny.cwasm");
-    std::fs::write(&tiny_cwasm, &precompiled).expect("written");
 
     let words = |list: &[&str]| list.iter().map(|word| (*word).to_owned()).collect::<Vec<_>>();
-    let cwasm_path = tiny_cwasm.to_string_lossy().into_owned();
-    let cwasm = cwasm_path.as_str();
-    let module = |name, variant| Case {
+    let module = |name, variant, kit: &Path| Case {
         name,
         variant,
+        measurer: measurer(kit),
         target: Target::Module(tiny_wasm.clone()),
     };
-    let run = |name, variant| Case {
+    let run = |name, variant, kit: &Path| Case {
         name,
         variant,
+        measurer: measurer(kit),
         target: Target::Folder(program.path().to_path_buf(), words(&["2", "3"])),
     };
     let native = |name, program: &Path, args: &[&str]| Case {
         name,
         variant: "",
+        measurer: measurer(&without),
         target: Target::Native(program.to_path_buf(), words(args)),
     };
     let cases = [
         native("spawn (a small Rust program)", &spawner, &[]),
-        native("lengua-mcp --run-module ''", &server, &["--run-module", ""]),
         native("lengua-mcp --version", &server, &["--version"]),
-        native("probe: engine only", &probe, &[cwasm, "none"]),
-        native("probe: bytes", &probe, &[cwasm, "bytes"]),
-        native("probe: file", &probe, &[cwasm, "file"]),
-        module("module: today", ""),
-        module("module: main thread", "main"),
-        module("module: small stack", "smallstack"),
-        module("module: no cow", "nocow"),
-        module("module: aot", "aot"),
-        module("module: aot file", "aotfile"),
-        module("module: aot, main thread", "aot,main"),
-        module("module: aot file, main thread", "aotfile,main"),
-        module("module: aot, main, no cow", "aot,main,nocow"),
-        run("run: today", ""),
-        run("run: main thread", "main"),
-        run("run: aot", "aot"),
-        run("run: aot, main thread", "aot,main"),
-        run("run: aot file, main thread", "aotfile,main"),
+        native("lengua-run --version, whole workspace", &whole, &["--version"]),
+        native("lengua-run --version, alone", &lean, &["--version"]),
+        run("run: lengua-mcp run", "", &without),
+        run("run: lengua-run, whole workspace", "", &with_whole),
+        run("run: lengua-run", "", &with_lean),
+        run("run: lengua-run, a thread", "thread", &with_lean),
+        run("run: lengua-run, every function", "linkall", &with_lean),
+        module("module: lengua-mcp", "", &without),
+        module("module: lengua-run", "", &with_lean),
+        module("module: lengua-run, a thread", "thread", &with_lean),
+        module("module: lengua-run, every function", "linkall", &with_lean),
     ];
     let mut results: Vec<[Vec<u64>; 3]> = cases.iter().map(|_| Default::default()).collect();
-    let rounds = 120;
+    let rounds = 160;
     for round in 0..rounds + 3 {
         for (at, case) in cases.iter().enumerate() {
-            let measures = measured(case, &places, None);
+            let measures = measured(case, &data, None);
             if round < 3 {
                 println!("FIRST {} exit={}", case.name, measures["exit"]);
                 continue;
@@ -217,7 +204,7 @@ async fn w19_probe() {
             continue;
         }
         for _ in 0..3 {
-            let _ = measured(case, &places, Some(&stages));
+            let _ = measured(case, &data, Some(&stages));
             let text = std::fs::read_to_string(&stages).unwrap_or_default();
             println!("TRACE {}", case.name);
             for line in text.lines().filter(|line| line.starts_with("STAGE")) {

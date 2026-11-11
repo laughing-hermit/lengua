@@ -1042,6 +1042,60 @@ impl Key {
         }
     }
 
+    /// What a sealed module compiled for a run from a shell is said to be: the module whose
+    /// SHA-256 is `module`, which is what the seal binds its compiled code to.
+    fn sealed_as(module: &Sha256Hex) -> String {
+        format!("shell sha256:{module}")
+    }
+
+    /// Compiles `wasm`, which must be the module whose SHA-256 is `module`, with `engine`, the
+    /// engine that compiles for a run from a shell, and seals what it made with this key as
+    /// that module's ([`lengua_os::compile_sealed`]): the bytes a run loads in place of
+    /// compiling.
+    ///
+    /// # Errors
+    ///
+    /// When `wasm` isn't that module, the engine doesn't compile it, or this build has no
+    /// compiler.
+    pub fn compile_sealed(
+        &self,
+        engine: &wasmtime::Engine,
+        module: &Sha256Hex,
+        wasm: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        if Sha256Hex::of(wasm) != *module {
+            return Err(format!("the module to compile isn't sha256:{module}"));
+        }
+        #[cfg(feature = "compiler")]
+        {
+            let about = Self::sealed_as(module);
+            lengua_os::compile_sealed(engine, &self.0, about.as_bytes(), wasm)
+        }
+        #[cfg(not(feature = "compiler"))]
+        {
+            let _ = engine;
+            Err("this lengua only runs modules compiled before, and has no compiler".to_owned())
+        }
+    }
+
+    /// Loads into `engine`, the engine that only runs, the compiled module `sealed` holds, when
+    /// it carries this key's seal as the module whose SHA-256 is `module`
+    /// ([`lengua_os::load_sealed`]): compiled by this user's lengua from those very bytes, and
+    /// not changed since.
+    ///
+    /// # Errors
+    ///
+    /// When the bytes don't carry that seal, or the engine doesn't take the module.
+    pub fn load_sealed(
+        &self,
+        engine: &wasmtime::Engine,
+        module: &Sha256Hex,
+        sealed: &[u8],
+    ) -> Result<wasmtime::Module, lengua_os::Unsealed> {
+        let about = Self::sealed_as(module);
+        lengua_os::load_sealed(engine, &self.0, about.as_bytes(), sealed)
+    }
+
     fn sign(&self, body: &str) -> Sha256Hex {
         let tag = self.mac(body).finalize().into_bytes();
         Sha256Hex::parse(&hex(&tag)).expect("an HMAC-SHA256 tag is 32 bytes")
