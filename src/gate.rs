@@ -877,7 +877,10 @@ mod tests {
         let every = KnownBehind::parse("linux-x86_64 * * *\n").expect("a list");
         let problems = ratchet(&every, "linux-x86_64", &runs);
         assert_eq!(problems.len(), 3, "{problems:?}");
-        assert!(problems[0].contains("wall: lengua is level"), "{problems:?}");
+        assert!(
+            problems[0].contains("wall: lengua is level"),
+            "{problems:?}"
+        );
         let all = problems.iter().all(|one| one.contains("names every row"));
         assert!(all, "{problems:?}");
         // Another target's lines say nothing of this one's: its two rows behind are unnamed.
