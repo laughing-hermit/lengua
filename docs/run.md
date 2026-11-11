@@ -44,7 +44,7 @@ that came from another computer, where this user's key never signed its lock, us
 
 ## What the program reaches
 
-Only what its idea's `- Uses:` and `- Network:` lines name:
+Only what its idea's `- Uses:`, `- Network:`, `- Files:` and `- Runs:` lines name:
 
 - always its arguments, standard output and standard error, and its exit;
 - standard input, with `standard input` or `the terminal`;
@@ -87,6 +87,32 @@ Only what its idea's `- Uses:` and `- Network:` lines name:
   refuses, the program gets as an error (`NOTCAPABLE`), and `lengua-mcp run` says it on
   standard error, the first 64 times. A program holds at most 64 connections of its own at
   once, and lengua ends one that no byte crosses for five minutes.
+- the file or folder one of its arguments names, with a `- Files:` line for that argument:
+  - `reads the file its first argument names`, `writes the file its second argument names`,
+    `reads and writes …`, or `reads the files its arguments name` for every argument;
+  - `reads the folder its first argument names`, or `reads and writes …`, for a folder and
+    everything in it.
+
+  The path is the user's: it counts from the shell's current folder when it doesn't start at
+  the root, and the folders on the way are followed as the system follows them. The program
+  never gives a path: it tells lengua which argument to open. Before the program starts,
+  `lengua-mcp run` says each grant and the place each such argument names, as `lengua-mcp: its
+  argument 1 names /home/you/notes/in.txt`. lengua opens no file in its own data folder or its
+  folder of compiled modules, and no folder that is one, holds one or lies in one; nothing in
+  `/proc`, `/sys` or `/dev`, and on Windows nothing that isn't on a drive or a share; no link at
+  the last name; and no file with a second name. The program gets an error for each
+  (`NOTCAPABLE`, or `ACCES` for a link), and lengua says why on standard error;
+- the programs its `- Runs:` lines name, each with the arguments its line bounds, as
+  ``- Runs: `hostname` with no arguments``. lengua finds each in the absolute folders of `PATH`
+  and says the file before the program starts, as ``lengua-mcp: `hostname` is
+  /usr/bin/hostname``. A started program gets the input the program gives it, an empty
+  environment, an empty folder of its own, and its line's time, 10 seconds unless the line
+  says more. It is the user's own program: lengua doesn't confine it. lengua starts no shell,
+  and no file that lies in the working folder, in a place an argument names, or in the
+  system's temporary folder;
+- the terminal's mode and size, with `the terminal`: keys as they're pressed, with no echo.
+  lengua puts the terminal back as it was when the program ends, by its exit, a trap, or a
+  signal that ends `lengua-mcp` (Ctrl-C, which still ends the program, among them).
 
 ## Limits and exit codes
 
@@ -107,8 +133,9 @@ In an agent, the MCP tool `run` runs the program in a process of its own, for 10
 default and at most 40, with at most 8 MiB of each output stream, in an empty folder or in the
 folder it names. A server, of TCP connections or of UDP datagrams, keeps serving in the
 background until `run` stops it, ten minutes pass, or the session ends. Its reply's `may_reach`
-says what the idea grants the program to open by itself, as `check`'s reply does, and its
-`connections` what the program asked to open and what lengua refused.
+says what the idea grants the program to reach by itself, as `check`'s reply does, and its
+`connections` what the program asked to open or start and what lengua refused. The `run` tool
+has no terminal, and it counts the paths of a `- Files:` line from `folder`, or takes them whole.
 
 ## The receipt
 

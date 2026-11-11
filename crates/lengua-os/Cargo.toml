@@ -21,7 +21,8 @@ unwrap_used = "warn"
 
 # The Unix calls that need unsafe code (the nix crate is empty elsewhere): on Linux, the fork
 # lengua-spawn starts a program with, its wait and its counts; on macOS, the system's counts of the
-# computer's memory and of a process's.
+# computer's memory and of a process's; on both, the terminal's mode and size, and the handler that
+# puts the mode back when a signal ends the process.
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31", default-features = false, features = ["ioctl", "process", "resource", "signal", "term"] }
 

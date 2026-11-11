@@ -72,9 +72,11 @@ fn text(path: &Path) -> &str {
 
 /// Whether `report`'s `may_reach` has a line that contains `words`.
 fn may(report: &Value, words: &str) -> bool {
-    report["may_reach"]
-        .as_array()
-        .is_some_and(|lines| lines.iter().any(|line| line.as_str().is_some_and(|line| line.contains(words))))
+    report["may_reach"].as_array().is_some_and(|lines| {
+        lines
+            .iter()
+            .any(|line| line.as_str().is_some_and(|line| line.contains(words)))
+    })
 }
 
 /// Files anywhere the user names: `copy` reads the file its first argument names and writes
@@ -86,8 +88,14 @@ async fn a_run_opens_the_files_its_arguments_name_and_no_file_of_lenguas_own() {
     let session = Session::start(Protocol::Discover).await;
     let program = checked(&session, "copy").await;
     let report = session.check(&program).await;
-    assert!(may(&report, "it may read the file its first argument names"), "{report}");
-    assert!(may(&report, "it may write the file its second argument names"), "{report}");
+    assert!(
+        may(&report, "it may read the file its first argument names"),
+        "{report}"
+    );
+    assert!(
+        may(&report, "it may write the file its second argument names"),
+        "{report}"
+    );
     let notes = tempfile::tempdir().expect("a folder of the user's");
     let elsewhere = tempfile::tempdir().expect("another folder of the user's");
     std::fs::write(notes.path().join("in.txt"), "hello\n").expect("a file");
@@ -102,7 +110,10 @@ async fn a_run_opens_the_files_its_arguments_name_and_no_file_of_lenguas_own() {
     assert_eq!(ran.status.code(), Some(0), "{ran:?}");
     assert_eq!(std::fs::read(&out).expect("the copy"), b"hello\n");
     let words = said(&ran);
-    assert!(words.contains("it may read the file its first argument names"), "{words}");
+    assert!(
+        words.contains("it may read the file its first argument names"),
+        "{words}"
+    );
     assert!(words.contains("its argument 1 names"), "{words}");
     // lengua's own: the key that signs every lock, as the input and as the output.
     let key = session.data_dir.path().join("key");
@@ -117,7 +128,10 @@ async fn a_run_opens_the_files_its_arguments_name_and_no_file_of_lenguas_own() {
     assert_eq!(ran.status.code(), Some(2), "{ran:?}");
     assert!(!stolen.exists(), "the key was copied");
     let words = said(&ran);
-    assert!(words.contains("copy: cannot open the input file"), "{words}");
+    assert!(
+        words.contains("copy: cannot open the input file"),
+        "{words}"
+    );
     assert!(words.contains("lengua's own"), "{words}");
     let ran = from_shell(
         &session,
@@ -126,7 +140,10 @@ async fn a_run_opens_the_files_its_arguments_name_and_no_file_of_lenguas_own() {
         &[OsStr::new("in.txt"), key.as_os_str()],
     );
     assert_eq!(ran.status.code(), Some(2), "{ran:?}");
-    assert!(said(&ran).contains("copy: cannot open the output file"), "{ran:?}");
+    assert!(
+        said(&ran).contains("copy: cannot open the output file"),
+        "{ran:?}"
+    );
     assert_eq!(std::fs::read(&key).expect("the key"), before);
     // The system's own, where there is one to name.
     #[cfg(unix)]
@@ -145,12 +162,18 @@ async fn a_run_opens_the_files_its_arguments_name_and_no_file_of_lenguas_own() {
     let ran = session
         .call_ok(
             "run",
-            with_args(&program, &[text(&notes.path().join("in.txt")), text(&again)]),
+            with_args(
+                &program,
+                &[text(&notes.path().join("in.txt")), text(&again)],
+            ),
         )
         .await;
     assert_eq!(ran["exit_code"], 0, "{ran}");
     assert_eq!(std::fs::read(&again).expect("the copy"), b"hello\n");
-    assert!(may(&ran, "it may read the file its first argument names"), "{ran}");
+    assert!(
+        may(&ran, "it may read the file its first argument names"),
+        "{ran}"
+    );
     let mut near = with_args(&program, &["in.txt", "near.txt"]);
     near["folder"] = json!(text(notes.path()));
     let ran = session.call_ok("run", near).await;
@@ -181,9 +204,15 @@ async fn a_run_starts_the_programs_its_idea_names() {
     let ran = from_shell(&session, here.path(), &program, &[]);
     assert_eq!(ran.status.code(), Some(0), "{ran:?}");
     let printed = String::from_utf8_lossy(&ran.stdout).into_owned();
-    let lines: Vec<&str> = printed.lines().filter(|line| !line.trim().is_empty()).collect();
+    let lines: Vec<&str> = printed
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
     assert_eq!(lines.len(), 2, "{ran:?}");
-    assert!(!printed.contains("not found") && !printed.contains("failed"), "{ran:?}");
+    assert!(
+        !printed.contains("not found") && !printed.contains("failed"),
+        "{ran:?}"
+    );
     let words = said(&ran);
     assert!(
         words.contains("it may start the program `hostname` with no arguments"),
@@ -194,7 +223,10 @@ async fn a_run_starts_the_programs_its_idea_names() {
     let ran = session.call_ok("run", program.arguments()).await;
     assert_eq!(ran["exit_code"], 0, "{ran}");
     assert_eq!(ran["stdout"], printed.as_str(), "{ran}");
-    assert!(may(&ran, "it may start the program `whoami` with no arguments"), "{ran}");
+    assert!(
+        may(&ran, "it may start the program `whoami` with no arguments"),
+        "{ran}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 
@@ -214,7 +246,11 @@ async fn a_run_with_no_terminal_reads_its_input_as_it_comes() {
     let here = tempfile::tempdir().expect("a folder");
     let ran = from_shell(&session, here.path(), &program, &[]);
     assert_eq!(ran.status.code(), Some(1), "{ran:?}");
-    assert_eq!(String::from_utf8_lossy(&ran.stdout), "Press a key.\n", "{ran:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout),
+        "Press a key.\n",
+        "{ran:?}"
+    );
     let words = said(&ran);
     assert!(words.contains("key: no key came"), "{words}");
     assert!(words.contains("it may read the terminal's size"), "{words}");

@@ -45,9 +45,12 @@ its own memory, and it reaches the computer only through the calls its idea allo
     unreachable))
 ```
 
-- **Imports** come only from `wasi_snapshot_preview1`, and, for what a program opens on the
-  network by itself, from lengua's own `lengua_net_1`; and only the functions the idea allows:
-  [the host](host.md) says which each `- Uses:` and `- Network:` line grants. `check` refuses any
+- **Imports** come only from `wasi_snapshot_preview1`, and, for what a program reaches by itself
+  while it runs (the network, the files its arguments name, a program it starts, the terminal),
+  from lengua's own modules, `lengua_net_1`, `lengua_fs_1`, `lengua_run_1` and `lengua_term_1`;
+  and only the functions the idea allows:
+  [the host](host.md) says which each `- Uses:`, `- Network:`, `- Files:` and `- Runs:` line
+  grants. `check` refuses any
   other import, so a program can't even name a call it isn't allowed.
 - **Exports** are exactly the function `_start` and the memory `memory`.
 - **One memory**, declared once with its minimum equal to its maximum (rule 3), of at most 16,384

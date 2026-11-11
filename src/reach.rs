@@ -1142,6 +1142,27 @@ mod tests {
         assert!(told.reaches_private(&computer("192.168.1.20")));
     }
 
+    /// The system's own resolver, which a run uses and a test's own internet stands in for,
+    /// asked here for the one name every computer knows without a network: this computer's.
+    /// It answers, with addresses of this computer alone, and lengua's rules then refuse the
+    /// name whatever a grant says. A program never gets that far: `spelled` refuses the name
+    /// before the resolver is asked.
+    #[test]
+    fn the_systems_resolver_answers_and_its_answer_is_held_to_the_rules() {
+        let found = lookup("localhost", Duration::from_secs(10)).expect("the resolver answers");
+        assert!(!found.is_empty());
+        for address in &found {
+            assert_eq!(class(*address), Class::ThisComputer, "{address}");
+        }
+        for private in [false, true] {
+            match vetted("localhost", &found, private) {
+                Err(Refusal::NotGranted(why)) => assert!(why.contains("this computer"), "{why}"),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(spelled("localhost"), Err(Unspelled::ThisComputer));
+    }
+
     /// A place that takes no connection is said so, and nothing is tried past the time given.
     #[test]
     fn a_place_that_takes_no_connection_is_not_made() {

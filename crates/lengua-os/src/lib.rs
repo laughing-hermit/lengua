@@ -3,7 +3,10 @@
 //! test on the runner of the system it is for. On Linux, a program run in a process forked from
 //! this one, with what the system counted of its cost; on Windows, how the system describes the
 //! CPU's caches, and what a child process cost; on Windows and macOS, the memory the computer has
-//! free and in all, and what a process holds of it.
+//! free and in all, and what a process holds of it; on every system, the terminal a program runs
+//! in, its size and its mode made raw and put back, by a handler too when a signal or the
+//! console's closing ends the process; and on Windows, a job that ends a started program with
+//! every process it started.
 
 /// One of the CPU's caches, as Windows describes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

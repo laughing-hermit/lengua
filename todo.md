@@ -107,8 +107,9 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
   other four runners; it was faster only on tally, and on sort on Windows on x86-64. Its peak
   memory was 0.98 to 19.33 times the best native build's, below it on one row (sort on macOS on
   ARM64). That gap is published, not hidden ([docs/benchmarks](docs/benchmarks/README.md)).
-- Programs lengua can't express yet: threads, GUIs, network connections a program opens on its
-  own, and UDP.
+- Programs lengua can't express yet: threads and GUIs. W18 gave connections a program opens on
+  its own, UDP, files anywhere the user names, programs to start and the terminal; a started
+  program that works in the user's folder is still out ("W18's second part", below).
 - A few workloads: tally, sort and histogram, where lengua's own programs are slower; W12c is on
   those now. lengua also uses about 1 MiB more memory per run, the last of run's own overhead.
   - 2026-11-10, after W12c (bench 42756074550, at 076bcc1): on all five runners, lengua's tally,

@@ -1,8 +1,10 @@
 # lengua's host: what a WebAssembly program may call
 
 A `main.wat` program reaches the computer only through WASI preview 1's functions
-(`wasi_snapshot_preview1`) and, for what it opens on the network by itself, lengua's own
-(`lengua_net_1`), and only those its idea allows. lengua implements them itself, the same way on
+(`wasi_snapshot_preview1`) and, for what it reaches by itself while it runs, lengua's own
+(`lengua_net_1` for the network, `lengua_fs_1` for the files its arguments name,
+`lengua_run_1` to start a program, `lengua_term_1` for the terminal), and only those its idea
+allows. lengua implements them itself, the same way on
 every computer, so a program does the same thing everywhere. `check` refuses any other import
 (rule 3 of [the WebAssembly dialect](power-of-10-webassembly.md)).
 
@@ -12,6 +14,7 @@ every computer, so a program does the same thing everywhere. `check` refuses any
 |---|---|
 | (always) | `args_get`, `args_sizes_get`, `fd_write` (to descriptors 1 and 2), `fd_fdstat_get`, `proc_exit`, `sched_yield` |
 | `- Uses: standard input` | `fd_read` (descriptor 0), `poll_oneoff` (a wait to read it) |
+| `- Uses: the terminal` | what `standard input` allows, `poll_oneoff`'s waits on time, and from `lengua_term_1`: `term_is`, `term_size`, `term_raw` |
 | `- Uses: the environment` | `environ_get`, `environ_sizes_get` |
 | `- Uses: files` | `fd_prestat_get`, `fd_prestat_dir_name` (descriptor 3), `path_open`, `fd_read`, `fd_write`, `fd_seek`, `fd_tell`, `fd_close`, `fd_filestat_get`, `path_filestat_get`, `fd_readdir`, `path_create_directory`, `path_remove_directory`, `path_unlink_file`, `path_rename` |
 | `- Uses: the clock` | `clock_time_get`, `clock_res_get`, `poll_oneoff` (clock waits) |
@@ -21,6 +24,9 @@ every computer, so a program does the same thing everywhere. `check` refuses any
 | `- Network: looks up the addresses of …` | from `lengua_net_1`: `dns_lookup` |
 | `- Network: sends UDP datagrams to …` | from `lengua_net_1`: `udp_open`, `udp_send`, `udp_recv` |
 | `- Network: receives UDP datagrams on …` | from `lengua_net_1`: `udp_recv_from`, `udp_send_to` |
+| `- Files: reads the file its first argument names` (any `- Files:` line) | from `lengua_fs_1`: `file_open`; and `fd_read`, `fd_write`, `fd_seek`, `fd_tell`, `fd_filestat_get`, `fd_close` on what it opened |
+| `- Files: reads the folder its first argument names` (a line that names a folder) | from `lengua_fs_1`: `folder_open`; and on the folder it gives, what `- Uses: files` allows on descriptor 3: `path_open`, `path_filestat_get`, `fd_readdir`, `path_create_directory`, `path_remove_directory`, `path_unlink_file`, `path_rename` |
+| ``- Runs: `hostname` with no arguments`` (any `- Runs:` line) | from `lengua_run_1`: `program_run` |
 
 ## Descriptors
 
@@ -93,11 +99,86 @@ computer its idea doesn't grant, by any spelling, and never this computer.
   server gives `CONNREFUSED`, a datagram to one is lost and `udp_recv` then gives `CONNREFUSED`,
   and a name the test gives no addresses gives `NOENT`.
 
+## Files the user names: `lengua_fs_1`
+
+`path_open` opens a path beneath the working folder. A file or a folder the user names when the
+program runs, anywhere on the computer, is opened by the place of the argument that names it,
+never by a path: lengua reads the argument and opens what it names, so the program needs no
+`args_get` for it and can't open a path it built.
+
+| Import, with its type | What it does |
+|---|---|
+| `file_open (param i32 i32 i32) (result i32)`: argument, mode, out | Opens the file the argument at that place names, 1 for the first, and writes its descriptor at `out`, 4 bytes. The mode adds 1 to read, 2 to write, 4 to make the file when it isn't there, 8 to empty it, 16 to write at its end; 4, 8 and 16 need 2 |
+| `folder_open (param i32 i32) (result i32)`: argument, out | Opens the folder the argument at that place names and writes its descriptor at `out`: the `path_` functions and `fd_readdir` take it as they take descriptor 3 |
+
+- **Name the mode**, as any mode: `(global $READ i32 (i32.const 1))`, or `$MAKE_AND_EMPTY` for
+  14. The idea's line says which: a file granted with `reads` opens with 1 alone.
+- **What the errors mean**: `NOTCAPABLE`, the idea has no line for that argument, or not for
+  that mode, or lengua won't open the place: one of its own folders, the system's (`/proc`,
+  `/sys`, `/dev`, a device), or, in a test, a path that leaves the test's folder; `INVAL`, the
+  program has no such argument, or the mode is none: show the usage line; `NOENT`, no such
+  file, or a folder on the way isn't there; `ISDIR`, it is a folder; `ACCES`, it is a link, a
+  file with a second name, or nothing a program opens; `EXIST`, a new name that differs from
+  one in its folder only in case; `ILSEQ`, `NAMETOOLONG`, a last name not every system takes.
+  Give the user one message for a file that can't be opened and another for a missing argument.
+- **A file `file_open` gave is a file like any other**: `$fill`, `$write_all`, `fd_seek`,
+  `fd_filestat_get` and `fd_close` take it. Close it when it is done.
+- **A folder granted for reading takes no change**: `path_open` to write or with `CREAT`,
+  `path_create_directory`, `path_remove_directory`, `path_unlink_file` and `path_rename` give
+  `NOTCAPABLE`. Nothing is renamed from one folder the program was given into another.
+
+`files-template.wat` is a whole program: it never reads its arguments' text.
+
+## Starting a program: `lengua_run_1`
+
+| Import, with its type | What it does |
+|---|---|
+| `program_run (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)`: command, its length, input, its length, output, its length, out_size, out_code | Starts the program the command names with its arguments, gives it the input as its standard input, waits until it ends, copies what it printed to `output`, and writes how many bytes that is at `out_size` and its exit code at `out_code`, 4 bytes each |
+
+- **The command** is the program's name and then each argument, each ended by a NUL byte:
+  `"hostname\00"`, or `"tar\00-tf\00a.tar\00"`. Keep a fixed command in a read-only region; build
+  one with a value in a writable region, each piece with its NUL. The idea's `- Runs:` lines
+  say which commands start: every other gives `NOTCAPABLE`, and so does a value that starts
+  with `-` or `/`.
+- **The call returns when the started program has ended.** It gets nothing but its input: no
+  environment, an empty folder of its own, no standard error.
+- **What the errors mean**: `NOTCAPABLE`, no line of the idea covers the command, or lengua
+  won't start the file it found; `NOENT`, the computer has no such program, which in a test is
+  a command no step gives; `TIMEDOUT`, it ran past its line's seconds and lengua ended it;
+  `FBIG`, it printed more than the output's length and lengua ended it, with the buffer full;
+  `INVAL`, the command isn't a name and arguments each ended by a NUL; `ILSEQ`, it isn't text;
+  `IO`, the system didn't start it.
+- **Test the error, then the exit code, then use the size**: a program that started and failed
+  returns 0 from `program_run` and a code other than 0 at `out_code`. Check the size against
+  the output's region before a write of it, as after `$fill`.
+
+`program-template.wat` is a whole program.
+
+## The terminal: `lengua_term_1`
+
+| Import, with its type | What it does |
+|---|---|
+| `term_is (param i32 i32) (result i32)`: descriptor, out | Writes 1 at `out` when descriptor 0, 1 or 2 is a terminal, and 0 when it isn't |
+| `term_size (param i32 i32) (result i32)`: out_columns, out_rows | Writes the terminal's columns and rows, 4 bytes each |
+| `term_raw (param i32) (result i32)`: mode | With 1, standard input gives each key as it is pressed, with no echo and no line editing: Enter is the byte 13, and an arrow or a function key is a sequence that starts with the byte 27. With 0, the terminal is as it was |
+
+- **`NOTTY` means there is no terminal**, as in every test and in the `run` tool: go on and
+  read standard input as it comes, which is what the idea's tests show. Don't treat it as a
+  failure.
+- **Put the terminal back before the program prints its last lines**, with `term_raw` and 0.
+  lengua puts it back too when the program ends, however it ends.
+- **A wait for a key that ends at a time** is `poll_oneoff` with a read of descriptor 0 and a
+  clock: once the terminal is raw, the read's event comes only when a key is there.
+- **Ctrl-C still ends the program**; it doesn't arrive as a key.
+
+`terminal-template.wat` is a whole program.
+
 ## What a call borrows
 
 A call reads or writes only the memory its arguments name, and every byte of it must lie inside
 one of the program's regions (M2): an iovec array and each buffer it points to, a path's bytes, a
-computer's name, a datagram's bytes, and the place where a call writes a count, a descriptor, an
+computer's name, a datagram's bytes, a command, what a started program is given and what it
+printed, and the place where a call writes a count, a descriptor, an
 address or a time. A buffer a call writes may not overlap another argument it reads (M4).
 
 ## Errors

@@ -155,7 +155,8 @@ verdict that changed from the native lengua, with its reason
 ([docs/history/PARITY.md](docs/history/PARITY.md)). The server template waits with `poll_oneoff`,
 which the model doesn't follow yet, so its proofs stop there. A program that reads keys from the
 terminal has no template: it waits for the host to give the terminal's raw mode and window size,
-which W18 plans. *Verified by:* every program's rules and tests on all five runners, each run with
+which W18 has since given. *Verified by:* every program's rules and tests on all five runners, each
+run with
 format, the suite and the gate green: the WebAssembly templates, wasm.md and write-idea's Attested
 Computation at 50a546f (42356699038); all 29 programs in WebAssembly from the request to done at
 b761dd3 (42367496557); the compile skill for main.wat, the parity ledger and 0.2.0 (42373720077).
@@ -381,11 +382,10 @@ After the finish line, as are W19 to W21 (the owner, 2026-11-09: "I agreee pleas
 Least privilege stays the default. An idea may grant whatever a C, C++ or Rust program can do:
 each grant is declared under `# Constraints`, checked by lengua, shown to the user before the
 program runs, enforced by the host, and modelled by the prover.
-- Files anywhere the user names: a folder or file an argument names, the home folder, or
-  read-only system files.
+- Files anywhere the user names: a folder or file an argument names.
 - The network chosen at run time: any computer on a declared port, over TLS, and also UDP and DNS.
-- Starting named programs (`- Runs: git`), with pipes.
-- The terminal's two imports (keys as they're pressed, the window's size), so interactive tools
+- Starting named programs (``- Runs: `git` …``).
+- The terminal's imports (keys as they're pressed, the window's size), so interactive tools
   work.
 
 What it unlocks: shells, build tools, package managers, crawlers, proxies, and programs over
@@ -408,7 +408,34 @@ holds each are in docs/reviews/reach-2026-11-11.md. *Verified by:* the suite on 
 runners at ca87111, with format and the gate green (43049640420); 17 of the defences' tests
 failing on the commit that took the defences out (43037211691); todo.md, "W18's network", has
 every run.
-What is left of W18: files anywhere the user names, starting named programs, and the terminal.
+
+**Files, programs and the terminal, built on 2026-11-11** (branch `wip/reach-2`). An idea grants
+the rest of what a program reaches by itself, each grant in its own words:
+- `- Files:` lines grant the file or the folder one of the program's arguments names, to read,
+  to write or both (`reads the file its first argument names`, `reads the files its arguments
+  name`, `reads and writes the folder its second argument names`). Two functions of
+  `lengua_fs_1` open them by the argument's place, never by a path: `file_open` and
+  `folder_open`. lengua resolves the argument itself, in a test beneath the test's own folder
+  and in a run on the user's file system, opens nothing among its own folders or the system's,
+  follows no link at the last name, and opens no file with a second name.
+- `- Runs:` lines name a program and bound its arguments (``- Runs: `tar` with the arguments
+  `-tf` and a value, within 60 seconds``). One function of `lengua_run_1`, `program_run`, starts
+  the program, gives it input, waits, and gives back its output and exit code. A line never
+  names a shell; lengua finds the program in the absolute folders of `PATH`, never where the
+  starter could have written it, starts it with no environment in an empty folder of its own,
+  and ends it, with every process it started, at its time or at the buffer's end. A test starts
+  nothing: a step says what a command gives.
+- `- Uses: the terminal` now has its functions, three in `lengua_term_1`: `term_is`,
+  `term_size` and `term_raw`. lengua puts a raw terminal back however the program ends, from the
+  host's own end and from a handler in lengua-os for a signal or Windows's console closing.
+
+The checker's import rule, the constants rule, the secret rule (a command is no data; a
+started program's input is), `check`'s and `run`'s `may_reach`, the skills with a reference
+page, and three examples came with it: `copy`, `computer` and `key`. The prover refuses such a
+program with the reason: tested, not proven. The threat cases and the test that holds each are
+in docs/reviews/reach-2-2026-11-11.md. What it leaves: a started program that works in the
+user's folder, pipes between started programs, an environment for one, and a step of a test for
+each test alone; todo.md, "W18's second part", has each with why. *Verified by:* RUNS
 
 ## W19. Native speed: a lean runner and native builds
 

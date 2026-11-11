@@ -2423,34 +2423,37 @@ fn rule_3_takes_the_files_and_programs_only_as_the_idea_grants_them() {
     let report = check_lines(REACHER, &[terminal, file, folder, runs], &[]);
     assert_no(&report, Rule::Resources);
     assert_no(&report, Rule::Constants);
-    // Each import needs its own line: an import is reported on the line of its `func`.
-    for (lines, import, needs) in [
+    // Each import needs its own line: an import is reported on the line of its `func`. Any
+    // `- Files:` line lets a program import `file_open`, and the host holds each call to the
+    // argument and the mode its lines name; only a line that names a folder lets it import
+    // `folder_open`.
+    let cases: [(&[&str], &str, &str); 4] = [
         (
-            [terminal, folder, runs],
+            &[terminal, runs],
             "(func $file_open (param",
             "it needs `- Files: reads the file its first argument names`",
         ),
         (
-            [terminal, file, runs],
+            &[terminal, file, runs],
             "(func $folder_open (param",
             "it needs `- Files: reads the folder its first argument names`",
         ),
         (
-            [terminal, file, folder],
+            &[terminal, file, folder],
             "(func $program_run (param",
             "it needs ``- Runs: `program` with no arguments``",
         ),
         (
-            [file, folder, runs],
+            &[file, folder, runs],
             "(func $term_raw (param",
             "it needs `the terminal` in its `- Uses:` line",
         ),
-    ] {
-        let report = check_lines(REACHER, &lines, &[]);
+    ];
+    for (lines, import, needs) in cases {
+        let report = check_lines(REACHER, lines, &[]);
         assert_violation(&report, Rule::Resources, line_of(REACHER, import), needs);
     }
-    // A folder's line grants the files in it, and so `file_open`'s neighbours, not `file_open`
-    // of an argument; the working folder grants neither.
+    // The working folder grants no file an argument names.
     let report = check_lines(REACHER, &["- Uses: files, the terminal", runs], &[]);
     assert_violation(
         &report,

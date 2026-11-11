@@ -4,8 +4,6 @@ title: key
 description: Waits until a person presses a key, and reads the key from the terminal without the Enter key.
 runtime: webassembly
 computation: main.wat
-parameters:
-  - { name: keys, type: text, required: true, from: standard input }
 executor:
   resource: https://github.com/laughing-hermit/lengua/blob/main/docs/run.md
   receipt: [stdout, stderr, exit]

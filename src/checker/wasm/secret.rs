@@ -53,6 +53,12 @@
 //! what a connection gives is. Since no branch and no loop's count depends on a secret, neither
 //! does how many connections a program opens, nor when it opens them.
 //!
+//! A program a program starts follows them too. Its command, the name and the arguments, isn't
+//! data: every process of the computer can read a command, so a secret in it is refused. Its
+//! input is data the program gives away, as `sock_send`'s bytes are, and once a secret has left,
+//! what the started program printed is secret. Which argument `file_open` opens, and how, are
+//! arguments like any other: no secret chooses them.
+//!
 //! Lengths and counts aren't secret: what `$fill` reads to the end says it read, what a read of
 //! a file says, the sizes calls write, and where `args_get` puts each argument. One count is:
 //! how many bytes a single `fd_read` of a secret standard input gave, since a terminal gives a
