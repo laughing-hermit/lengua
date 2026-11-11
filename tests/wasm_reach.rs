@@ -20,6 +20,9 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 /// The error number of what an idea doesn't grant, which the programs here exit with.
 const NOTCAPABLE: i32 = 76;
 
+/// The longest a test waits for a program to reach one of its own servers, or to answer.
+const WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// This binary, which the pool's workers are.
 fn launcher() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_lengua-mcp"))
@@ -153,8 +156,10 @@ async fn a_program_reaches_the_tests_own_servers_and_no_computer_its_idea_doesnt
         names: &names,
         ..Spec::new(&[], &[], policy)
     };
+    // The module's file lasts as long as its program: the worker reads it after the job starts.
+    let reaches = program(REACHES);
     let mut running = pool
-        .start(&program(REACHES), spec, Limits::default())
+        .start(&reaches, spec, Limits::default())
         .await
         .expect("it starts");
     let peers = running.take_stands();
@@ -181,10 +186,14 @@ async fn a_program_reaches_the_tests_own_servers_and_no_computer_its_idea_doesnt
         }));
     }
     let ran = running.wait().await.expect("it ends");
+    assert_eq!(exited(&ran), NOTCAPABLE, "{:?}", ran.connections);
+    // The program reached each of the test's servers before it ended.
     for server in servers {
-        server.await.expect("the test's server");
+        tokio::time::timeout(WAIT, server)
+            .await
+            .expect("the program reached the test's server")
+            .expect("the test's server");
     }
-    assert_eq!(exited(&ran), NOTCAPABLE);
     // The addresses, IPv4 first, 17 bytes each; then the datagram's answer and the connection's.
     let mut wanted = vec![4_u8];
     wanted.extend(Ipv4Addr::new(192, 0, 2, 7).octets());
@@ -217,14 +226,14 @@ async fn a_program_reaches_the_tests_own_servers_and_no_computer_its_idea_doesnt
     // address, and nothing answers a datagram: the program's first step fails.
     let spec = Spec::new(&[], &[], policy);
     let alone = pool
-        .run(&program(REACHES), spec, Limits::default())
+        .run(&reaches, spec, Limits::default())
         .await
         .expect("it runs");
     assert_eq!(exited(&alone), 10);
     // And a program whose idea grants nothing is refused at once.
     let bare = pool
         .run(
-            &program(REACHES),
+            &reaches,
             Spec {
                 stands: Some(&stands),
                 names: &names,
@@ -270,12 +279,9 @@ const ANSWERS: &str = r#"(module
 async fn a_program_that_receives_datagrams_answers_its_sender_and_no_other_address() {
     let policy = policy(&["receives udp datagrams on port 5353"]);
     let pool = Pool::new(launcher(), None);
+    let answers = program(ANSWERS);
     let running = pool
-        .start(
-            &program(ANSWERS),
-            Spec::new(&[], &[], policy),
-            Limits::default(),
-        )
+        .start(&answers, Spec::new(&[], &[], policy), Limits::default())
         .await
         .expect("it starts");
     // In a test the port is a free one of the loopback, which the test's client is told.
@@ -289,7 +295,10 @@ async fn a_program_that_receives_datagrams_answers_its_sender_and_no_other_addre
         .await
         .expect("a datagram");
     let mut chunk = [0_u8; 64];
-    let (count, from) = client.recv_from(&mut chunk).await.expect("the answer");
+    let (count, from) = tokio::time::timeout(WAIT, client.recv_from(&mut chunk))
+        .await
+        .expect("the program answered")
+        .expect("the answer");
     assert_eq!(&chunk[..count], b"hello");
     assert_eq!(from.port(), port);
     let ran = running.wait().await.expect("it ends");
