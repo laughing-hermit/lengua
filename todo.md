@@ -251,11 +251,13 @@ Still open from it, for the owner:
 ### The gaps the two reviews left open (2026-11-11)
 
 Seven, each with a test that failed before its fix where there was something to fix (run
-RUN_A, on Linux on x86-64: the seven tests of the first six failed, and the three new tests of
-the secret rule's limits passed) and passes after it (RUN_B, on Linux on x86-64, macOS on ARM64
-and Windows on x86-64; the suite on Linux on x86-64, RUN_FULL1, and on all five systems,
-RUN_FULL5). The tests are the `review_gaps` modules of `src/checker/wasm/tests.rs`,
-`src/server/wat.rs`, `tests/host_hard.rs` and `tests/wasm_limits.rs`.
+42963770196, on Linux on x86-64: the seven tests of the first six failed, and the three new
+tests of the secret rule's limits passed) and passes after it (42966804383, on Linux on x86-64
+and macOS on ARM64, where the Windows leg didn't build, for an import in a test module that
+only Linux and macOS use; 42970990384, on Windows on x86-64; the suite on Linux on x86-64,
+42970986469, and on all five systems, 42975320565). The tests are the `review_gaps` modules of
+`src/checker/wasm/tests.rs`, `src/server/wat.rs`, `tests/host_hard.rs` and
+`tests/wasm_limits.rs`.
 1. **The memory rules took a write they leave to the proof to stay in its region.** What the
    prover does with such an obligation was read first: it holds the access inside the program's
    memory and follows no region (`src/prove/wasm/memory.rs`), and check's memory line already
