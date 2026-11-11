@@ -73,7 +73,24 @@ type Smaller = (&'static str, &'static [(&'static str, &'static str)]);
 /// bytes takes the solvers minutes. Each change is a line of main.wat and what it becomes: the
 /// buffer's size, and where the program counts the steps a buffer-full takes, their count and
 /// where the last one starts, so its loops still go over the whole of the smaller buffer.
-const SMALLER: [Smaller; 5] = [
+const SMALLER: [Smaller; 6] = [
+    (
+        "vowels",
+        &[
+            (
+                "(global $buffer.size i32 (i32.const 65536))",
+                "(global $buffer.size i32 (i32.const 64))",
+            ),
+            (
+                "(global $CHUNKS i32 (i32.const 4096))",
+                "(global $CHUNKS i32 (i32.const 4))",
+            ),
+            (
+                "(global $LAST_CHUNK i32 (i32.const 65520))",
+                "(global $LAST_CHUNK i32 (i32.const 48))",
+            ),
+        ],
+    ),
     (
         "count",
         &[

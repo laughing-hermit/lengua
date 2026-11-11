@@ -260,6 +260,11 @@ pub(super) fn arrive(
         let value = pool.var(width, &format!("induction.r{slot}"));
         set_slot(pool, &mut state.core, *slot, value)?;
     }
+    for (slot, (low, high)) in &hook.ranged {
+        let width = slot_value(&state.core, *slot).map_or(32, |value| pool.width(value));
+        let value = pool.var_in(width, &format!("induction.b{slot}"), *low, *high);
+        set_slot(pool, &mut state.core, *slot, value)?;
+    }
     for (slot, start) in &hook.counters {
         let width = slot_value(&state.core, *slot).map_or(32, |value| pool.width(value));
         let value = pool.var_in(width, &format!("induction.c{slot}"), hook.low, *start);

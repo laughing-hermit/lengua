@@ -306,25 +306,106 @@ fn space(pool: &mut Pool, byte: Term) -> Term {
     pool.bool_or(control, is_blank)
 }
 
+/// Whether `expr` maps the text `name` byte by byte, each byte's output a byte that depends on
+/// it alone: the text itself, or it through `upper`, `lower` and `tr` with fixed characters.
+#[must_use]
+pub fn byte_map(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Var(var) => var == name,
+        Expr::Call(Function::Upper | Function::Lower, arguments) => {
+            matches!(arguments.as_slice(), [inner] if byte_map(inner, name))
+        }
+        Expr::Call(Function::Tr, arguments) => matches!(
+            arguments.as_slice(),
+            [inner, Expr::Literal(Value::Str(_)), Expr::Literal(Value::Str(_))]
+                if byte_map(inner, name)
+        ),
+        _ => false,
+    }
+}
+
+/// The variable whose text `expr` is, itself or mapped byte by byte ([`byte_map`]).
+fn mapped_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Var(name) => Some(name.as_str()),
+        Expr::Call(Function::Upper | Function::Lower | Function::Tr, arguments) => {
+            let name = mapped_name(arguments.first()?)?;
+            byte_map(expr, name).then_some(name)
+        }
+        _ => None,
+    }
+}
+
+/// What `argument`, the text `name` mapped byte by byte, makes of `bytes` as that text: the
+/// bytes themselves for the text alone, as many bytes for any map.
+fn mapped(
+    pool: &mut Pool,
+    argument: &Expr,
+    name: &str,
+    bytes: &[Term],
+) -> Result<Vec<Term>, String> {
+    if matches!(argument, Expr::Var(_)) {
+        return Ok(bytes.to_vec());
+    }
+    let texts = BTreeMap::from([(name.to_owned(), bytes.to_vec())]);
+    let made = text(translate(pool, argument, &BTreeMap::new(), &texts)?)?;
+    if made.len() == bytes.len() {
+        Ok(made)
+    } else {
+        Err("a map of a text that isn't byte by byte".into())
+    }
+}
+
+/// `a + b`, two counts.
+fn counts_added(pool: &mut Pool, a: Formula, b: Formula) -> Result<Formula, String> {
+    let (a, b) = (number(a)?, number(b)?);
+    let low = a.low.checked_add(b.low).ok_or_else(overflow)?;
+    let high = a.high.checked_add(b.high).ok_or_else(overflow)?;
+    Ok(Formula::Number(Number::whole(
+        pool.add(a.term, b.term),
+        low,
+        high,
+    )))
+}
+
 /// How many bytes before a piece of the text `name` the count `expr` needs, when the count of a
 /// whole is the count of what comes before the piece and what the piece adds after those bytes:
 /// none for `len` and `count` of one byte, one for `words`, and one fewer than a part's length
-/// for `count` of a part no two of whose matches can overlap. `None` for any other formula,
-/// whose count of a whole doesn't follow from its pieces' so.
+/// for `count` of a part no two of whose matches can overlap; for a sum of such counts, the most
+/// any of them needs. Each counts the text itself or the text mapped byte by byte
+/// ([`byte_map`]), whose pieces map to the map's pieces. `None` for any other formula, whose
+/// count of a whole doesn't follow from its pieces' so.
 #[must_use]
 pub fn lookback(expr: &Expr, name: &str) -> Option<usize> {
-    let Expr::Call(function, arguments) = expr else {
-        return None;
+    let (function, arguments) = match expr {
+        Expr::Binary(BinaryOp::Add, left, right) => {
+            return Some(lookback(left, name)?.max(lookback(right, name)?));
+        }
+        Expr::Call(function, arguments) => (function, arguments),
+        _ => return None,
     };
     match (function, arguments.as_slice()) {
-        (Function::Len, [Expr::Var(var)]) if var == name => Some(0),
-        (Function::Words, [Expr::Var(var)]) if var == name => Some(1),
-        (Function::Count, [Expr::Var(var), Expr::Literal(Value::Str(part))])
-            if var == name && !part.is_empty() && borderless(part.as_bytes()) =>
+        (Function::Len, [text]) if byte_map(text, name) => Some(0),
+        (Function::Words, [text]) if byte_map(text, name) => Some(1),
+        (Function::Count, [text, Expr::Literal(Value::Str(part))])
+            if byte_map(text, name) && !part.is_empty() && borderless(part.as_bytes()) =>
         {
             Some(part.len() - 1)
         }
         _ => None,
+    }
+}
+
+/// The most the count `expr`, one [`lookback`] admits, adds for one byte of its text: one for
+/// `len`, for `words`, and for `count`, whose matches each end at a byte of their own; for a
+/// sum, its counts' together.
+#[must_use]
+pub fn most_a_byte(expr: &Expr) -> u128 {
+    match expr {
+        Expr::Binary(BinaryOp::Add, left, right) => {
+            most_a_byte(left).saturating_add(most_a_byte(right))
+        }
+        _ => 1,
     }
 }
 
@@ -333,7 +414,8 @@ pub fn lookback(expr: &Expr, name: &str) -> Option<usize> {
 /// where its last byte is inside. A count of a part that overlaps itself reads the text from
 /// `phase` where one is given, as [`count_from`] does; a count that looks back reads `window`,
 /// the bytes just before the text, as [`delta`] does, counting the parts that end inside the
-/// text. Any other formula of such a text isn't taken.
+/// text. The text may be mapped byte by byte ([`byte_map`]), its window with it, and such
+/// counts may be added up. Any other formula of such a text isn't taken.
 ///
 /// # Errors
 ///
@@ -348,18 +430,28 @@ pub fn within(
 ) -> Result<Formula, String> {
     let refused = || {
         "a formula of a text whose length the input chooses other than len, count \
-                      or words of it"
+                      or words of it, or a sum of those"
             .to_owned()
     };
+    if let Expr::Binary(BinaryOp::Add, left, right) = expr {
+        let left = within(pool, left, texts, lengths, phase, window)?;
+        let right = within(pool, right, texts, lengths, phase, window)?;
+        return counts_added(pool, left, right);
+    }
     let Expr::Call(function, arguments) = expr else {
         return Err(refused());
     };
-    let Some(Expr::Var(name)) = arguments.first() else {
+    let Some(counted) = arguments.first() else {
+        return Err(refused());
+    };
+    let Some(name) = mapped_name(counted) else {
         return Err(refused());
     };
     let (Some(bytes), Some(length)) = (texts.get(name), lengths.get(name)) else {
         return Err(refused());
     };
+    let bytes = &mapped(pool, counted, name, bytes)?;
+    let window = &mapped(pool, counted, name, window)?;
     let (shortest, longest) = pool.range(*length);
     let shortest = i128::try_from(shortest).map_err(|_| overflow())?;
     let longest_bytes = usize::try_from(longest)
@@ -495,7 +587,8 @@ pub fn count_from(
 /// What the count `expr`, one [`lookback`] admits, adds for the text in `texts` after `window`,
 /// the bytes just before it: its parts whose last byte is the text's, built as the count's own
 /// formula builds them, so they're the same terms. With a window as long as the count's
-/// lookback, a whole's count is the count before the text and this.
+/// lookback, a whole's count is the count before the text and this. A count of the text mapped
+/// byte by byte reads the window mapped too, and a sum adds what each of its counts adds.
 ///
 /// # Errors
 ///
@@ -506,16 +599,26 @@ pub fn delta(
     texts: &BTreeMap<String, Vec<Term>>,
     window: &[Term],
 ) -> Result<Formula, String> {
+    if let Expr::Binary(BinaryOp::Add, left, right) = expr {
+        let left = delta(pool, left, texts, window)?;
+        let right = delta(pool, right, texts, window)?;
+        return counts_added(pool, left, right);
+    }
     let Expr::Call(function, arguments) = expr else {
         return Err("a count that isn't a function".into());
     };
-    let Some(Expr::Var(name)) = arguments.first() else {
+    let Some(counted) = arguments.first() else {
+        return Err("a count of no text".into());
+    };
+    let Some(name) = mapped_name(counted) else {
         return Err("a count of no text".into());
     };
     if lookback(expr, name).is_none() {
         return Err("a count whose whole doesn't follow from its pieces'".into());
     }
     let piece = texts.get(name).ok_or("a count of an unknown text")?;
+    let piece = &mapped(pool, counted, name, piece)?;
+    let window = &mapped(pool, counted, name, window)?;
     let bytes: Vec<Term> = window.iter().chain(piece).copied().collect();
     let first = window.len();
     let most = i128::try_from(piece.len()).map_err(|_| overflow())?;
@@ -1904,13 +2007,21 @@ mod tests {
             ("count(s, \"aba\")", None),
             ("upper(s)", None),
             ("words(t)", None),
+            ("len(upper(s))", Some(0)),
+            ("count(lower(s), \"a\") + count(lower(s), \"b\")", Some(0)),
+            ("len(s) + words(tr(s, \"a\", \" \"))", Some(1)),
+            ("count(s, \"abc\") + words(s) + len(s)", Some(2)),
+            ("count(lower(s), \"a\") + count(s, \"aa\")", None),
+            ("len(s) - words(s)", None),
+            ("len(s) + 1", None),
+            ("count(lower(t), \"a\") + len(s)", None),
         ];
         for (source, expected) in looks {
             let expr = crate::expr::parse(source).expect("a formula");
             assert_eq!(lookback(&expr, "s"), expected, "{source}");
         }
         let mut rng = ChaCha8Rng::seed_from_u64(0x5eed_c0de);
-        let alphabet = b"ab \n\r\t";
+        let alphabet = b"abAB \n\r\t";
         let counts = [
             "len(s)",
             "count(s, \"\\n\")",
@@ -1918,6 +2029,9 @@ mod tests {
             "count(s, \"\\r\\n\")",
             "count(s, \"ab\")",
             "count(s, \"aa\")",
+            "count(lower(s), \"a\") + count(lower(s), \"b\")",
+            "count(lower(s), \"ab\") + words(tr(s, \"a\", \" \")) + len(upper(s))",
+            "count(s, \"a\") + count(lower(s), \"a\")",
         ];
         for _ in 0..400 {
             let first: Vec<u8> = (0..rng.random_range(0..6))

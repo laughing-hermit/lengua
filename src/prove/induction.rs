@@ -45,7 +45,7 @@ use super::world::Arrival;
 use super::{
     Budget, Known, MAX_CHOICES, Program, Solvers, Witnessed, conjuncts, disjuncts, settled, text_is,
 };
-use crate::expr::{Expr, Function, Generator, Piece, Value};
+use crate::expr::{Expr, Generator, Piece};
 use crate::testfile::{ExitCode, Generated};
 
 /// What a proof by induction found, once its step holds.
@@ -91,8 +91,32 @@ impl From<&str> for Refused {
     }
 }
 
-/// Rounds of finding what a time round the loop changes before giving up on a fixpoint.
-const MAX_ROUNDS: usize = 4;
+/// Rounds of finding what a time round the loop changes before giving up on a fixpoint. A slot
+/// first taken to stay in a range and then found to leave it takes a round more than one made
+/// any value at once.
+const MAX_ROUNDS: usize = 6;
+
+/// The range a slot stays in from one time at the read loop's head to the next, as far as its
+/// terms' own ranges say: from `then`, what it held the first time at the head, to each of
+/// `ends`, what it holds each time the run is back there. `None` where it didn't start as a
+/// constant, or where the range is every value of the slot's width, which says nothing.
+fn ranged(pool: &Pool, then: Term, ends: &[Term]) -> Option<(u128, u128)> {
+    let start = pool.constant(then)?;
+    let (mut low, mut high) = (start, start);
+    for end in ends {
+        let (least, most) = pool.range(*end);
+        low = low.min(least);
+        high = high.max(most);
+    }
+    let all = u128::MAX >> (128 - pool.width(then).clamp(1, 128));
+    (low > 0 || high < all).then_some((low, high))
+}
+
+/// Whether `value` stays in `range` whatever its variables are, by its term's own range.
+fn stays_in(pool: &Pool, value: Term, (low, high): (u128, u128)) -> bool {
+    let (least, most) = pool.range(value);
+    low <= least && most <= high
+}
 
 /// The text a block streams through its read loop.
 struct Streamed<'a> {
@@ -139,7 +163,7 @@ fn streamed<'a, P: Program>(image: &P, block: &'a Generated) -> Result<Streamed<
     }
     let pieces = block.stdout.pieces();
     let (output, lookback) = match pieces[..] {
-        [Piece::Expr(mapped)] if byte_map(mapped, name) => (Output::Map, 0),
+        [Piece::Expr(mapped)] if formula::byte_map(mapped, name) => (Output::Map, 0),
         _ => {
             let counts: Vec<(usize, &Expr)> = pieces
                 .iter()
@@ -158,8 +182,10 @@ fn streamed<'a, P: Program>(image: &P, block: &'a Generated) -> Result<Streamed<
                         .or_else(|| formula::bordered_part(expr, name).map(|_| 0))
                 })
                 .collect();
-            let lookback = lookbacks.and_then(|lookbacks| lookbacks.into_iter().max());
-            let Some(lookback) = lookback.filter(|_| !counts.is_empty()) else {
+            // Output with no placeholder is the same for every text: no count to keep.
+            let lookback =
+                lookbacks.map(|lookbacks| lookbacks.into_iter().max().unwrap_or_default());
+            let Some(lookback) = lookback else {
                 return Err(
                     "its output isn't the text mapped byte by byte, as upper, lower and \
                      tr map it, nor counts that add up over its pieces after the bytes just \
@@ -470,23 +496,6 @@ fn widened(pool: &mut Pool, value: Term) -> Term {
     pool.zero_extend(value, WIDTH - width)
 }
 
-/// Whether `expr` maps the text `name` byte by byte, each byte's output a byte that depends on
-/// it alone: the text itself, or it through `upper`, `lower` and `tr` with fixed characters.
-fn byte_map(expr: &Expr, name: &str) -> bool {
-    match expr {
-        Expr::Var(var) => var == name,
-        Expr::Call(Function::Upper | Function::Lower, arguments) => {
-            matches!(arguments.as_slice(), [inner] if byte_map(inner, name))
-        }
-        Expr::Call(Function::Tr, arguments) => matches!(
-            arguments.as_slice(),
-            [inner, Expr::Literal(Value::Str(_)), Expr::Literal(Value::Str(_))]
-                if byte_map(inner, name)
-        ),
-        _ => false,
-    }
-}
-
 /// The runs from `start`, as a proof's shapes explore them: a branch no witness reaches is
 /// followed without asking, since each run's end is asked about anyway.
 fn explore<P: Program>(
@@ -744,11 +753,38 @@ pub(super) fn step<P: Program>(
                 }
             }
             for slot in changes.slots {
-                if !grown.counters.contains_key(&slot)
-                    && !grown.folds.contains_key(&slot)
-                    && !grown.phases.contains_key(&slot)
+                if grown.counters.contains_key(&slot)
+                    || grown.folds.contains_key(&slot)
+                    || grown.phases.contains_key(&slot)
+                    || grown.slots.contains(&slot)
                 {
-                    grown.slots.insert(slot);
+                    continue;
+                }
+                // What the slot holds each time the run is back at the head.
+                let mut ends = vec![run.held(slot)];
+                if let Some(second) = run.world.at_second() {
+                    ends.push(second.held(slot));
+                }
+                let kept = if round == 0 {
+                    let found = ranged(&pool, snapshot.held(slot), &ends);
+                    let known = grown.ranged.get(&slot).copied();
+                    found.map(|(low, high)| {
+                        known.map_or((low, high), |(least, most)| (low.min(least), high.max(most)))
+                    })
+                } else {
+                    hook.ranged
+                        .get(&slot)
+                        .copied()
+                        .filter(|range| ends.iter().all(|end| stays_in(&pool, *end, *range)))
+                };
+                match kept {
+                    Some(range) => {
+                        grown.ranged.insert(slot, range);
+                    }
+                    None => {
+                        grown.ranged.remove(&slot);
+                        grown.slots.insert(slot);
+                    }
                 }
             }
             grown.memory.extend(changes.memory);
@@ -757,6 +793,7 @@ pub(super) fn step<P: Program>(
         if let Some(found) = candidates {
             for slot in found.keys() {
                 grown.slots.remove(slot);
+                grown.ranged.remove(slot);
             }
             grown.folds = found;
             // From here on a run reads two buffer-fulls, the second checked after the first.
@@ -807,14 +844,24 @@ pub(super) fn step<P: Program>(
         let reach = rounds
             .saturating_mul(chunk as u128)
             .min(streamed.max as u128);
+        // A count goes up by at most one a byte, and a sum of counts by at most one a byte for
+        // each of them.
+        let a_byte = |fold: &Fold| match &streamed.output {
+            Output::Counts(counts) => counts
+                .iter()
+                .find(|(place, _)| *place == fold.placeholder)
+                .map_or(1, |(_, expr)| formula::most_a_byte(expr)),
+            Output::Map => 1,
+        };
         for fold in grown.folds.values_mut() {
-            fold.most = reach - chunk as u128;
+            fold.most = (reach - chunk as u128).saturating_mul(a_byte(fold));
         }
-        // A count goes up by at most one a byte: one kept in fewer bits than the idea's longest
-        // text needs would wrap.
+        // One kept in fewer bits than the idea's longest text needs would wrap.
         if grown.folds.values().any(|fold| {
             let most = u128::MAX >> (128 - fold.width.clamp(1, 128));
-            fold.start.checked_add(reach).is_none_or(|top| top > most)
+            fold.start
+                .checked_add(reach.saturating_mul(a_byte(fold)))
+                .is_none_or(|top| top > most)
         }) {
             return Err("it keeps a count in fewer bits than the idea's longest text needs".into());
         }
@@ -836,7 +883,7 @@ pub(super) fn step<P: Program>(
             }
             let mut folds = hook.folds.clone();
             for fold in folds.values_mut() {
-                fold.most = reach;
+                fold.most = reach.saturating_mul(a_byte(fold));
             }
             let base = if looks_back {
                 Hook {
