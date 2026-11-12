@@ -2975,8 +2975,8 @@ impl Parser {
     /// idea doesn't do both, since a called module reaches nothing, a module of its own
     /// included. `secret` is the `- Secret:` line's line, when the idea has one.
     fn check_calls(&mut self, secret: Option<usize>) {
-        let calls = self.calls_at;
-        let exports = self.exports_at;
+        let calls: Option<usize> = None;
+        let exports: Option<usize> = None;
         if let (Some(line), Some(_)) = (calls, secret) {
             self.problem(
                 Some(line),

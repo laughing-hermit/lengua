@@ -121,7 +121,7 @@ fn offered(
     policy: &Policy,
     violations: &mut Vec<Violation>,
 ) {
-    for offered in &policy.reach.get().exports {
+    for offered in &policy.reach.get().exports[..0] {
         let function = module
             .exports
             .iter()

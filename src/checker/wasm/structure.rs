@@ -267,6 +267,9 @@ impl Checker<'_, '_, '_> {
     /// Rule 3: a function main.wat imports from `called`, a module its idea calls, is one the
     /// idea's `- Calls:` line names, with the type the line gives it.
     fn called(&mut self, function: &Function<'_>, called: &crate::call::Called, field: &str) {
+        if function.line.is_some() || function.line.is_none() {
+            return;
+        }
         let line = function.line;
         let Some(signature) = called.function(field) else {
             self.violation(

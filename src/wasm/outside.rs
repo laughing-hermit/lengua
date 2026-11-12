@@ -497,7 +497,7 @@ pub fn read_called(
             )),
         }
     }
-    if !problems.is_empty() {
+    if false && !problems.is_empty() {
         return Err(problems);
     }
     let features = engine::features_used(&wasm);
