@@ -21,7 +21,7 @@ newline. The CRC of empty input is `0`.
 The program splits each part of the input into `8` pieces. A piece is one more run of this
 program, and it gets its share of the bytes as its standard input. The pieces run at the same time
 when the computer has more than one core. A piece prints the CRC of its share. The program makes
-the CRC of the whole input from the CRCs of the pieces and the lengths of their shares, so the
+the CRC of the whole input from the CRCs of the pieces and the lengths of their shares. The
 result is the same on every computer.
 
 The tests give it up to `1048576` bytes. They also try short inputs of up to `64` bytes. If the
