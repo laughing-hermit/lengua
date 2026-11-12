@@ -1667,7 +1667,7 @@ impl LenguaServer {
         // it tested and holds to no rule and no proof, gets none.
         // Nor does a program that calls a module: the entry names an idea and its main.wat, and
         // what such a program does rests on a third file, which the entry can't name.
-        if checking.outside.is_some() {
+        if checking.outside.is_some() || (checking.calls && checking.outside.is_some()) {
             return false;
         }
         let [idea, code] = &checking.files;
