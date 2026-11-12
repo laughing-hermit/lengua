@@ -950,7 +950,8 @@ What was built:
    64 KiB at a time.
 5. **What W20 left unexercised**, where it was cheap: a program that splits through the MCP
    server's `run` tool (`the_run_tool_runs_a_program_that_splits_its_work`), and both
-   examples in the goldens' recordings (GOLDEN_WORDS).
+   examples in the goldens' recordings, made of this branch on Linux on x86-64 (43188485844,
+   at dc60de0; the runners view, so with no base to compare).
 
 What the runs show (43178785543 at 3c7f522, all five runners; ROADMAP.md, W20, has all 20
 rows): with a piece for each core against the one-core program,
@@ -987,7 +988,13 @@ What still costs, and what is left:
 Where the work left the rules: one commit staged with `git add -u` held to three folders,
 where the rule is named paths; the files were this branch's own.
 
-The runs: SPEED_RUNS
+The runs: the suite, green on all five runners at 4aa8cb1, which holds main's 42507ef
+(43193013728); the measurement on all five (43178785543, at 3c7f522); the split's tests and
+lengua-run's on Linux on x86-64 (43173741293); the two examples from their ideas to done
+(43173745273 for the histogram, 43188174836 for the CRC, after two runs that stopped at its
+idea: a sentence of 30 words, 43173745273, and a range without its example, 43178781658); the
+goldens (43188485844); and the first two runs, which a lint stopped (43173164260,
+43173168343). The commit that writes this paragraph changes documents alone.
 
 ### What the permission checks refused
 
