@@ -753,7 +753,10 @@ race, since no byte of a piece's memory is another piece's or the program's; eve
 every proof holds for a piece as for any program, since a piece is one; the engine's settings
 don't change; and the code is the same on all five runners. The cost is two copies of each
 piece's bytes, one into lengua's memory and one into the piece's as it reads them, and one of
-its answer. lengua has the second design. What it costs and buys is measured, below.
+its answer. lengua has the second design. Measured, that cost is more than the work of the one
+example: on 64 MiB its byte count with a piece for each core is 1.4 to 1.9 times as fast as
+with one piece at a time, and against the same count on one core it is slower on two runners,
+level on two and faster on one (ROADMAP.md, W20, has the table and why).
 
 What a call gives depends on its bytes and its numbers alone:
 - the cut is arithmetic: piece `k` of `n` holds the bytes from `floor(k × len / n)` to
@@ -795,7 +798,9 @@ A test runs a program that split its work a second time with its pieces one at a
 last first, as it runs one that listed a folder with the listing turned round, and both runs
 must pass. A step, `the program is a piece`, makes a test's run a piece: with a piece's reach,
 and its output held to the line's bytes. So an idea tests its pieces as programs, and the
-prover proves such a test as any other, on a model in which `piece()` answers 0. A test of the
+prover proves such a test as any other, on a model in which `piece()` answers 0, as far as it
+follows the piece's work: of the example's piece, a histogram in tables, it proves the empty text
+alone. A test of the
 whole program is tested, not proven: the model stops at `split`, since it doesn't follow the
 pieces' runs. What a piece executes counts in a test's cost with the program's own operations.
 `check`'s reply and `run`'s (`may_reach`) say the grant in words, and a run from a shell says it

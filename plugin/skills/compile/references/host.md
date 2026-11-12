@@ -190,9 +190,11 @@ never by a path: lengua reads the argument and opens what it names, so the progr
 - **Read in one loop for both kinds of run**, as `examples/histogram-split` does: one call of
   `$fill` in a loop, whose body counts when the run is a piece and calls `split` when it is
   the whole program. A program that reads in one place is proven by induction as a piece.
-- **It pays for work that takes longer than a copy of its bytes**: each piece's bytes are
-  copied twice and a piece starts in about a tenth of a millisecond. Split megabytes, not
-  kilobytes.
+- **A split is not faster by itself.** Each piece's bytes are copied twice, and each call
+  starts its pieces anew. Measured on the runners, a byte count of 64 MiB split in eight was
+  slower than the same count on one core on two systems, level on two and faster on one. Split
+  only work that costs several times a copy of its bytes, megabytes at a time, and tell the
+  user what the split bought only after a run has shown it.
 
 ```wat
 (import "lengua_split_1" "split" (func $split (param i32 i32 i32 i32 i32) (result i32)))

@@ -93,11 +93,7 @@ impl Input {
                 if *piece == 0 {
                     *piece = pieces.pop_front().unwrap_or(bytes.len() - *at);
                 }
-                let count = buffer
-                    .len()
-                    .min(*piece)
-                    .min(*most)
-                    .min(bytes.len() - *at);
+                let count = buffer.len().min(*piece).min(*most).min(bytes.len() - *at);
                 buffer[..count].copy_from_slice(&bytes[*at..*at + count]);
                 *at += count;
                 *piece -= count;
