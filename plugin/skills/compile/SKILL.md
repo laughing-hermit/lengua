@@ -334,6 +334,31 @@ to get past a rule or a proof that `main.wat` fails.
 [An outside module](references/outside.md) has the build commands for Rust and C, what `check`
 refuses, a whole idea, and the report to give.
 
+## A program that calls other code
+
+A `main.wat` program may call a module beside it, when the user asks for that or has the code:
+a library that a compiler made from Rust, C or another language, or another lengua program.
+The idea names it with a `- Calls:` line, and a lengua program offers functions with an
+`- Exports:` line.
+
+- The called module runs beside the program with a memory of its own and **no function of
+  lengua's host**: it reaches nothing of the computer. Numbers pass in a call; bytes pass by
+  copy, with `give` and `take` of `lengua_call_1`.
+- `check`'s reply has `calls`, one line for each module: an outside module is
+  `trusted, not proven`, and a lengua program is `checked`. A generated test that reaches a
+  call is tested, not proven; one that ends before any call is proven as before. lengua writes
+  no entry in `verified` for a program that calls a module.
+- A run refuses the program when a called module is no longer the one its tests ran with:
+  check the library again, then the program.
+- All three tools of a run work for it. A trace has the copies, `lengua_call_1.give` and
+  `lengua_call_1.take`, and not the calls of the module's functions, which never reach the
+  host; a profile counts a sample inside the module for the line of `main.wat` that called it.
+- Tell the user what is trusted and what is checked, from `calls`, before you build it and in
+  your report.
+
+[Calls between modules](references/calls.md) has the idea's lines, the imports, the build
+commands for a library in Rust and in C, what `check` refuses, and the rule for exports.
+
 ## Shared ideas
 
 People share ideas, not code: the idea is the source of truth, and main.wat is disposable. Every

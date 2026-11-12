@@ -258,6 +258,101 @@ A run from a shell has no deadline for any program, by design: a server runs as 
 wants. main.wat ends by its rules; an outside module may not, and the reply and docs/run.md say
 so.
 
+## Calls between modules
+
+A lengua program may call a module that stands beside it, and a lengua program may be the module
+another one calls (W23; `src/call.rs`, `src/wasm/host/call.rs`, `src/server/calls.rs`). Each is a
+line of the idea's `# Constraints`:
+
+```markdown
+- Calls: crc32.wasm, built from Rust (crc32.rs) with rustc for wasm32-wasip1; its functions: buffer() -> i32, crc32(i32) -> i32
+- Calls: [crc32-library](../crc32-library/idea.md); its functions: buffer() -> i32, crc32(i32) -> i32
+- Exports: buffer() -> i32, crc32(i32) -> i32
+```
+
+The first names an outside module, `crc32.wasm` in the program's folder, which a compiler made
+from another language, with the idea's own words for what it was built from. The second names a
+lengua program of the same bundle by the link to its idea. The third is the other side: the
+functions a program's `main.wat` exports for a caller. A function that crosses takes up to 8
+numbers (`i32`, `i64`, `f32`, `f64`) and gives one or none. An idea calls at most 4 modules.
+The lines are in the grants a run reads (`Grants`, `src/reach.rs`), so the rules, the prover,
+the workers and the host all read one declaration.
+
+**A separate instance.** At the start of a run, before the program is instantiated, lengua
+instantiates each called module in the program's store, as an instance of its own: with its own
+memory, globals and table, and with a linker in which every function of the host that the module
+imports is defined as one that stops the run. Then it defines, for the program's imports, each
+function the idea's line names, under the called module's name, and only those. So:
+
+- the called module's memory is not the program's, and nothing is shared between them;
+- a called module has no function of the host and none of the program's grants: it reads no
+  file, opens no connection, prints nothing and has no clock;
+- a call passes numbers, WebAssembly to WebAssembly, with no host function in between;
+- bytes pass by copy, through `give` and `take` of lengua's module `lengua_call_1`, which the
+  program calls with the called module's number, an address in each memory and a length. The
+  host checks each side against its own memory;
+- the run's deadline, the engine's stack and the store's limits bound the called module with
+  the program, and its memory is held to the maximum its own module declares, at most 1 GiB.
+
+A called module that exports `_initialize`, as a library built for WASI does, has it called once
+after it is instantiated. A called lengua program's `_start` is never run.
+
+**Why an instance in the same store, and why direct calls.** A store of its own for the called
+module would need a thread or a copy of every call's numbers through the host, and a second
+deadline. In one store the engine's own limits cover both modules, a call costs what a call
+costs, and the memories are still two: WebAssembly gives a module no way to name a memory it
+doesn't import, and the engine has multiple memories off. The calls are linked directly because
+lengua-run is built without the engine's compiler, and the engine makes a host function of a
+type it learns at run time only with the compiler. The price is that a trace, which records
+what crosses the host's edge, doesn't show the calls of a called function; it shows the copies.
+
+**What `check` does.** For an outside module it reads `<name>.wasm` as it reads an outside module
+that is the program (`src/wasm/outside.rs` `read_called`): the size, the validator with exactly
+the engine's features, a memory exported as `memory` with a maximum of at most 16,384 pages. It
+needs no `_start`. It refuses any import, and a function of the idea's line that the module
+doesn't export with the line's type. For a lengua program it requires the folder checked on this
+computer, with its lock verified by this computer's key, no proof that found it wrong, and each
+function offered by its idea's `- Exports:` line; what runs is the module that lock records.
+Either way the rules hold `main.wat`'s imports to the idea's line (rule 3), the program's tests
+run with the modules beside it, and the reply's `calls` has a line for each: `trusted, not
+proven` for an outside module, `checked` for a lengua program.
+
+**What is proven.** The prover's model follows one module. A run of the model stops at a call of
+a called function, and at `give` and `take`, so a generated test whose runs reach a call is
+tested, not proven, and its proof line names the call. A generated test that ends before any
+call is proven as before: in `examples/checksum-rust`, the refusal of input that is too long.
+The rules treat what a called function gives as a plain number: never an address, and never an
+error number. lengua writes no entry in idea.md's `verified` for a program that calls a module,
+and the attester doesn't attest one, since the entry names an idea and its main.wat and the
+program rests on a third file.
+
+**The lock** keeps its format. The code's stamp has one more line when the program calls,
+`calls = [{ call = "crc32.wasm", module = "<SHA-256>", checked = false }]`, as `parts` was added.
+A run opens each called module again as `check` did, a called program with its lock verified
+again, and refuses the program when a module is not the one recorded. `check` keeps each called
+module compiled and sealed with the user's key beside the program's own, and a run loads it
+only so; a profile or a stop, which compile the program for the one run, compile its called
+modules beside it.
+
+**An exported function** is one of `main.wat`'s own, with the type the idea's line gives it, and
+the rules refuse any other export but `_start` and `memory`. It takes numbers and never an
+address: the memory rules hold a function to what it reaches through an address by checking each
+caller, and a caller in another module is checked by no rule of this one. So `check` refuses an
+exported function that uses a parameter as an address. A library keeps its bytes in a region,
+gives the region's address with a function, and takes a length, which it checks. Its proofs are
+of its own tests. Another host can call the same exports, since they are ordinary WebAssembly
+exports; lengua ships nothing for that yet.
+
+**What an idea with these lines can't have.** No `- Secret:` line beside `- Calls:` or
+`- Exports:`: a secret that a call passes leaves what the secret rule follows. No `- Splits:`
+line beside `- Calls:`: a piece is a run of the program's module alone. Not both `- Calls:` and
+`- Exports:`: a called module reaches nothing, a module of its own included. Neither for an
+outside module that is the program.
+
+The review ([docs/reviews/calls-2026-11-12.md](docs/reviews/calls-2026-11-12.md)) lists each
+limit with what holds it and its test. `examples/checksum-rust` calls a Rust library, and
+`examples/checksum-library` calls `examples/crc32-library`.
+
 ## Parts
 
 A part is a program whose idea offers some of its functions to other programs (W21;

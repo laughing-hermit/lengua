@@ -1,4 +1,4 @@
-# What a program reaches by itself: files the user names, programs, the terminal, more cores
+# What a program reaches by itself: files the user names, programs, the terminal, more cores, other code
 
 Most programs need no line of this page. A program that works on files in the folder it runs in
 says `- Uses: files`, and that is the least it can have, so choose it whenever the user's files
@@ -148,3 +148,41 @@ than one core, and the result is the same on every computer.
 input. A behavior of the whole program is tested, not proven: each of its tests runs twice,
 with the pieces at once and with the pieces one at a time, the last first, and both runs must
 pass.
+
+## Other code the program calls
+
+By default a program is one module, and all of it is checked and proven. When the user has a
+library in another language, or wants one lengua program to use another, the idea names the
+module the program calls, on one line for each:
+
+```markdown
+- Calls: crc32.wasm, built from Rust (crc32.rs) with rustc for wasm32-wasip1; its functions: buffer() -> i32, crc32(i32) -> i32
+- Calls: [crc32-library](../crc32-library/idea.md); its functions: buffer() -> i32, crc32(i32) -> i32
+```
+
+The first names an outside module, a file `crc32.wasm` beside `main.wat`, with what it was built
+from in up to 200 characters. The second names another lengua program of the same bundle, by a
+link to its idea. Each lists the functions the program calls: a function takes up to 8 numbers,
+each `i32`, `i64`, `f32` or `f64`, and gives one or none. A called module runs with a memory of
+its own and reaches nothing of the computer, whatever this idea grants the program.
+
+- **Use the line only when the user asks for other code.** lengua says of an outside module
+  that it is trusted, not proven, and what depends on a call is tested, not proven. Tell the
+  user so before you write the line.
+- **Name no secret and no split.** `check` refuses a `- Calls:` line beside a `- Secret:` line
+  or a `- Splits:` line. An idea calls at most 4 modules.
+- **Say in Purpose what the module does for the program**, in plain words, and that it is not
+  a lengua program when it is not.
+- **The tests are the program's own.** Write the behaviors as for any program: `check` runs
+  them with the module beside the program.
+
+A lengua program offers functions to the programs that call it with one more line:
+
+```markdown
+- Exports: buffer() -> i32, crc32(i32) -> i32
+```
+
+It stays a program, with its own behaviors and tests. Its functions take numbers, never an
+address: say in Purpose how a caller gives it bytes, which is by copy into its memory. An idea
+with `- Exports:` has no `- Secret:` line and no `- Calls:` line. The compile skill's
+`references/calls.md` has the code's side of both lines.

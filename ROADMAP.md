@@ -749,8 +749,31 @@ That part is built and on main since 3fd8a3a (2026-11-12, run 43172439582 on all
   shell has none. Inside its own memory it is held to nothing. What it was built from is the
   idea's word.
 
-The rest of W23, a lengua program as a library and an outside module that a lengua program
-calls, is not started. Runs: todo.md's table.
+The rest of W23 is built (2026-11-12; todo.md has the runs):
+
+- **A lengua program calls a module.** An idea's `- Calls:` line names an outside module beside
+  main.wat, with its functions and their types. lengua starts it as an instance of its own in
+  the program's store, with a memory of its own and no function of the host, and links the
+  named functions to the program's imports. Numbers pass in a call; bytes pass by copy, through
+  `give` and `take` of `lengua_call_1`. `check` reads the module as it reads an outside module,
+  refuses any import, and says `trusted, not proven` of it in the reply's `calls`; the lock
+  records its hash on a new `calls` line, in the same format; a run refuses a module that
+  changed.
+- **A lengua program as a library.** An idea's `- Exports:` line lists the functions its
+  main.wat exports, which take numbers and never an address, and another program of the bundle
+  calls them with `- Calls: [name](../name/idea.md); …`. The library is checked like any
+  program, its lock is verified before each run of a caller, and the reply says `checked`.
+- **What is proven.** A proof stops at a call: a generated test that reaches one is tested,
+  not proven, and one that ends before any call is proven as before.
+- **Refused:** `- Secret:` beside either line, `- Splits:` beside `- Calls:`, both lines in
+  one idea, and either for an outside module that is the program. lengua writes no entry in
+  `verified` for a program that calls a module, and the attester doesn't attest one.
+- **Not built:** a native build of a library; a host library for a program in another language
+  to call a lengua module, whose exports are ordinary WebAssembly exports; a proof that uses
+  what a called lengua program's own proofs show; a called module with grants of its own.
+  `examples/checksum-rust`, `examples/checksum-library` and `examples/crc32-library` show what
+  is built, and [docs/reviews/calls-2026-11-12.md](docs/reviews/calls-2026-11-12.md) what a
+  called module can and can't reach.
 
 ## W24. Tools
 

@@ -47,7 +47,7 @@
   (data (i32.const 1024) "error: input too long\0a")
   ;; The text: standard input, which main has $fill write, or the bytes a program that calls
   ;; this one copied here. $crc32 reads it. READ_MAX bytes, rounded up.
-  (global $text i32 (i32.const 2048))
+  (global $text i32 (i32.const 2048))  ;; shared: main has $fill write it, or a caller copies its bytes here; buffer gives its address and crc32 reads it
   (global $text.size i32 (i32.const 4160))
   ;; The output, which main lends $decimal_format to write: a number's text, then a newline.
   (global $out i32 (i32.const 6208))

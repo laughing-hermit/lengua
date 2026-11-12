@@ -193,6 +193,25 @@ Such a module is **trusted, not proven**. `check` ends at `trusted_not_proven`, 
 and its reply's `outside` lines say each thing that does not hold; every run says the same words
 before the program starts. The next section says which guarantees it keeps.
 
+### A library in another language, and one lengua program that calls another
+
+A lengua program can also call other code, when you ask for it: "Use my Rust CRC library in
+this program". The idea names the module with a line of `# Constraints`,
+`- Calls: crc32.wasm, built from Rust …; its functions: buffer() -> i32, crc32(i32) -> i32`, and
+the library's module stands beside `main.wat`. lengua starts it as an instance of its own, with
+a memory of its own and **no function of the host**: it reads no file, opens no connection and
+prints nothing, whatever the idea grants the program. Numbers pass in a call, and bytes pass by
+copy. `check` says of the module that it is **trusted, not proven**, and each generated test
+that reaches a call is tested, not proven; a test that ends before any call is proven as
+before.
+
+A lengua program can be the library too. Its idea lists the functions it offers,
+`- Exports: buffer() -> i32, crc32(i32) -> i32`, and another program of the same bundle calls
+them: `- Calls: [crc32-library](../crc32-library/idea.md); its functions: …`. lengua says of it
+that it is **checked**: it is held to every rule, it passed its own tests, and its lock is
+verified again before each run. `examples/checksum-rust` and `examples/checksum-library` show
+both.
+
 ## What lengua guarantees, and what it doesn't
 
 Within lengua, for a program at `done`:
@@ -260,6 +279,22 @@ program, and fewer of these hold:
 
 The threat cases, with the test of each, are in
 [docs/reviews/outside-2026-11-12.md](docs/reviews/outside-2026-11-12.md).
+
+For a program that calls a module, with a `- Calls:` line, the program itself is at `done` and
+held as above, and of the called module:
+
+- **It reaches nothing.** It gets no function of lengua's host and none of the program's
+  grants, and its memory is its own. Only the program can copy bytes to it or from it.
+- **The deadline, the engine's stack and its declared memory bound it**, with the program.
+- **Only the module the program's tests ran with runs beside it**, by the SHA-256 the signed
+  lock records; a called lengua program's own lock is verified before each run.
+- **An outside module's answers are trusted, not proven**, and a called lengua program's are
+  proven only for its own tests. A generated test of the program that reaches a call is
+  tested, not proven. The program gets no entry in `verified`, and `lengua-mcp check` doesn't
+  attest it.
+
+What a called module can and can't reach, with the test of each, is in
+[docs/reviews/calls-2026-11-12.md](docs/reviews/calls-2026-11-12.md).
 
 What it doesn't promise:
 
@@ -422,11 +457,13 @@ with rows the list can't take back is the owner's ([todo.md](todo.md)).
 - `crates/lengua-os/`: the one crate allowed unsafe code, each call in a safe function.
 - `plugin/`: the plugin as it ships: its manifests, the two skills with their references and
   templates, its [README](plugin/README.md) and licence.
-- `examples/`: 28 programs, each a folder of `idea.md` and `main.wat`. Five are the library's
+- `examples/`: 34 programs, each a folder of `idea.md` and `main.wat`. Five are the library's
   parts, `decimal`, `lines`, `crc32`, `bytes` and `sort64`, the same files the compile skill
-  ships in its `assets/parts`, and `sum` and `checksums` are built on them.
+  ships in its `assets/parts`, and `sum` and `checksums` are built on them. `checksum-rust`
+  calls a Rust library, whose source is beside it, and `checksum-library` calls
+  `crc32-library`, a lengua program that offers functions.
 - `tests/`: the suite, the 29 programs of `tests/fixtures`, the host's 109 cases in
-  `tests/host-cases`, the Rust and C programs of `tests/outside`, which CI compiles to outside
+  `tests/host-cases`, the Rust and C programs and libraries of `tests/outside`, which CI compiles to outside
   modules, and the vendored schemas.
 - `benches/`: the gate, and the C, C++ and Rust versions of its workloads.
 - `xtask/`: lengua's tooling, in Rust (`cargo xtask help` lists the tasks), with the runners in
@@ -507,11 +544,13 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
   proven for every input in their ranges; `sort64` for two numbers and `crc32` for 2
   characters of text, each tested beyond.
 - **W22, scale; W23, working with other code:** what a programming language has
-  that lengua still lacks ([todo.md](todo.md)). One part of W23 is built, on main:
+  that lengua still lacks ([todo.md](todo.md)). W23 is built:
   a module that a compiler made from Rust, C or another language, run as the
-  program itself under an idea's grants and tests, and marked "trusted, not proven" (above).
-  The rest of W23, a lengua program as a library and an outside module that a lengua program
-  calls, isn't started.
+  program itself under an idea's grants and tests, and marked "trusted, not proven" (above);
+  a module that a lengua program calls, as an instance of its own that reaches nothing; and
+  a lengua program as a library that another lengua program calls, marked "checked". Not
+  built: a native build of a library, a host library for other languages to call one, and
+  a proof that covers a call.
 - **W24, tools:** built: a trace of a run's calls to the host, a profile of its time by
   function, and a stop at a line or a function of `main.wat` that shows its values, each on
   the `run` tool and from a shell, and a first cut of a language server for editors,

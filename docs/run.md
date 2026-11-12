@@ -82,6 +82,34 @@ under the same grants, with the same limits and exit codes, and with these diffe
 What holds for it is what the next section says, and it holds by the host alone: no call
 reaches anything the idea doesn't grant, whatever the module imports or passes.
 
+## A program that calls a module
+
+A folder whose idea has a `- Calls:` line runs with each module the line names beside the
+program: an outside module, `<name>.wasm` in the folder, or the module of another lengua program
+of the same bundle. Such a folder runs by the same commands, with these differences:
+
+- every check of a run is made of each called module too, before anything starts. An outside
+  module must be, byte for byte, the file the program's tests ran with, by the SHA-256 the lock
+  records, and is read again as `check` read it. A called lengua program must still be checked
+  on this computer: its idea.md and main.wat as its own lock records them, that lock verified
+  with this computer's key, and no proof that found it wrong. A run that finds another module
+  refuses the program, with exit code 125, and says to call `check`;
+- before the program starts, the run says on standard error what it calls, in a line such as
+  `lengua-run: it calls crc32.wasm, an outside module that is trusted, not proven, which its
+  idea says was built from …`, or `it calls the lengua program ../crc32-library, which lengua
+  checked on this computer`. The `run` tool's reply says the same in `may_reach`;
+- a called module is loaded as the program's own is: in the compiled form `check` kept for this
+  computer, under the seal of the user's key. lengua-run loads both and compiles nothing; where
+  one has no compiled form yet, it hands the run to lengua-mcp, as for any program;
+- a called module runs with a memory of its own and reaches nothing: no file, no network, no
+  clock and no output, whatever the idea grants the program. A call it makes to a function of
+  the host ends the run, which says `a module the program calls called a function of lengua's
+  host, and a called module reaches nothing`;
+- a trap inside a called module ends the run as a trap of the program's, placed on the line of
+  `main.wat` that made the call, with the words `it trapped inside a module it calls`;
+- the run's limits are for the program and its modules together: the deadline of the `run`
+  tool, and the engine's stack. Each module's memory is held to what that module declares.
+
 ## What the program reaches
 
 Only what its idea's `- Uses:`, `- Network:`, `- Files:` and `- Runs:` lines name:
@@ -266,13 +294,14 @@ never stamps it, and no proof covers it. It runs in the same host, under the ide
 it reaches nothing the idea doesn't grant. A stop is at one place for one run: there is no step
 to the next line, no second stop and no value changed by hand.
 
-Three kinds of program differ:
+Four kinds of program differ:
 
 | | Trace | Profile | Stop |
 |---|---|---|---|
 | An idea with a `- Secret:` line | the calls' names and the host's answers, with none of the numbers the program passed | given | refused: a stop shows values |
 | An idea with a `- Splits:` line | the program's own calls; its pieces' calls are not in it | the program's own code; its pieces are not sampled | refused: the pieces' values are not kept |
 | An outside module, `main.wasm` | given | given, by the names the module's own `name` section has | refused: there is no `main.wat` to stop in |
+| A program that calls a module (`- Calls:`) | the program's calls of the host, with its copies to and from the module (`lengua_call_1.give`, `lengua_call_1.take`); a call of the module's function is no call of the host, and is not in it | given: a sample inside the module counts for the function and line of `main.wat` that called it | given, in `main.wat`; the copy runs beside the same modules |
 
 A server, which the `run` tool leaves serving in the background, gets none of the three from
 the tool. From a shell, a report is said once the program has ended, so a run that a signal
