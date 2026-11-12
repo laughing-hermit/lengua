@@ -420,6 +420,7 @@ fn module_folder(data_dir: &DataDir, idea: &[u8], wasm: &[u8]) -> Result<PathBuf
                 max_stack_bytes: 0,
                 unsafe_blocks: 0,
                 features: engine::features_used(wasm),
+                parts: Vec::new(),
             }),
             proofs: None,
         };
