@@ -65,7 +65,13 @@ impl Worker {
     /// The compiled form of `job`'s module that the data folder keeps for the job's
     /// configuration, loaded into `engine` once it carries the seal of `key` as that module's;
     /// or why there is none to load.
-    fn kept(engine: &Engine, job: &Job, key: &Key, path: &Path, hash: &Sha256Hex) -> Result<Module, String> {
+    fn kept(
+        engine: &Engine,
+        job: &Job,
+        key: &Key,
+        path: &Path,
+        hash: &Sha256Hex,
+    ) -> Result<Module, String> {
         let sealed = std::fs::read(path)
             .map_err(|_| "it isn't compiled for this computer yet".to_owned())?;
         key.load_sealed_for(job.setup, engine, hash, &sealed)

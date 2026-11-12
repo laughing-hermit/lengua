@@ -126,7 +126,10 @@ async fn a_working_folder_is_never_one_of_lengua_s_own() {
     );
     assert_eq!(ran.status.code(), Some(0), "{ran:?}");
     assert_eq!(ran.stdout, b"1 5\n", "{ran:?}");
-    assert!(!plugin.join("cache").exists(), "lengua kept something in PLUGIN_DATA");
+    assert!(
+        !plugin.join("cache").exists(),
+        "lengua kept something in PLUGIN_DATA"
+    );
     // The program's own folder, and any other, is a working folder.
     let own = session
         .call_ok("run", in_folder(&program, program.path()))

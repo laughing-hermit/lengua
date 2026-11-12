@@ -440,11 +440,7 @@ impl Passed {
 ///
 /// What the code has, as violations of the secret rule on main.wat's lines; or why the code
 /// couldn't be checked, as one with no line.
-pub fn check(
-    wasm: &[u8],
-    taken: &[Taken],
-    setups: &[Setup],
-) -> Result<Passed, Vec<Violation>> {
+pub fn check(wasm: &[u8], taken: &[Taken], setups: &[Setup]) -> Result<Passed, Vec<Violation>> {
     let Some(cpu) = Cpu::here() else {
         return Err(unchecked(
             "it reads the code of x86-64 and ARM64 CPUs, and this CPU is neither",

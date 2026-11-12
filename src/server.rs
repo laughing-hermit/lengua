@@ -2588,9 +2588,7 @@ fn own_folder_problem(data_dir: &DataDir, folder: &Path) -> Option<String> {
 /// holds the compiled modules lengua keeps. No file or folder an argument of a program names is
 /// it, lies in it or holds it ([`crate::named::forbidden`]).
 fn own_folders(data_dir: &DataDir) -> Vec<PathBuf> {
-    vec![
-        canonical(data_dir.path()),
-    ]
+    vec![canonical(data_dir.path())]
 }
 
 /// What the terminal's grant lets a program do, in words, as [`may_reach`] says it.

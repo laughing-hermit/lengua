@@ -159,11 +159,17 @@ fn a_folder_that_can_t_be_written_is_a_problem() {
         "{said}"
     );
     assert!(!said.contains("PLUGIN_DATA"), "{said}");
-    let (_, said) = doctor(&root.path().join("data"), Some(file.join("plugin").as_path()));
+    let (_, said) = doctor(
+        &root.path().join("data"),
+        Some(file.join("plugin").as_path()),
+    );
     let (_, problem) = line_of(&said, "data folder: ");
     assert_eq!(problem, None, "{said}");
     assert!(!said.contains("PLUGIN_DATA"), "{said}");
-    assert!(!file.join("plugin").exists(), "doctor wrote where PLUGIN_DATA names");
+    assert!(
+        !file.join("plugin").exists(),
+        "doctor wrote where PLUGIN_DATA names"
+    );
     let (_, said) = doctor(&root.path().join("data"), Some(Path::new("relative")));
     assert!(!said.contains("PLUGIN_DATA"), "{said}");
 }

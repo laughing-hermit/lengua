@@ -48,8 +48,8 @@ use crate::platform::{Cache, CacheHolds, Machine};
 use crate::prove::{self, Verdict};
 use crate::runner::{End, Limits};
 use crate::state::{
-    CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, OUTSIDE_FILE, ProgramFolder, State, compiled_for, compiled_module,
-    tested_module, wrong_record,
+    CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, OUTSIDE_FILE, ProgramFolder, State, compiled_for,
+    compiled_module, tested_module, wrong_record,
 };
 use crate::testfile::{self, TestSuite};
 use crate::testrun;

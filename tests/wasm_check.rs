@@ -676,7 +676,10 @@ async fn the_run_tool_loads_a_compiled_module_only_under_the_user_s_key() {
     let planted: [(&str, Option<Vec<u8>>); 7] = [
         ("another module, under the user's key as itself", Some(six)),
         ("add's compiled module for a shell", Some(for_a_shell)),
-        ("add's own compiled module with a byte changed", Some(changed)),
+        (
+            "add's own compiled module with a byte changed",
+            Some(changed),
+        ),
         ("add's module under another key", Some(theirs)),
         (
             "bytes no engine made",
