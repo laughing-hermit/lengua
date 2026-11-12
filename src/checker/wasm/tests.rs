@@ -2342,3 +2342,219 @@ mod review_gaps {
         );
     }
 }
+
+/// Checks `text` with an idea whose `# Constraints` holds `lines`, each written whole, and whose
+/// `- Secret:` line names `secrets`.
+fn check_lines(text: &str, lines: &[&str], secrets: &[Source]) -> Report {
+    let built = build(text).unwrap_or_else(|problem| panic!("it builds: {problem}"));
+    let (uses, network) = crate::idea::constraints_of(lines).expect("valid constraints");
+    check(
+        text,
+        &built,
+        &Context {
+            uses: &uses,
+            network: &network,
+            secrets,
+        },
+    )
+}
+
+/// A program that opens the file and the folder its first argument names, starts a program and
+/// makes the terminal raw, for the tests of what its idea must grant it.
+const REACHER: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (import "lengua_fs_1" "file_open"
+    (func $file_open (param i32 i32 i32) (result i32)))
+  (import "lengua_fs_1" "folder_open"
+    (func $folder_open (param i32 i32) (result i32)))
+  (import "lengua_run_1" "program_run"
+    (func $program_run (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+  (import "lengua_term_1" "term_raw"
+    (func $term_raw (param i32) (result i32)))
+  (memory (export "memory") 1 1)
+  (global $EXIT_OK i32 (i32.const 0))
+  (global $EXIT_FAILED i32 (i32.const 1))
+  (global $FIRST i32 (i32.const 1))
+  (global $READ i32 (i32.const 1))
+  (global $RAW i32 (i32.const 1))
+  (global $command i32 (i32.const 1024))
+  (global $command.rosize i32 (i32.const 9))
+  (data (i32.const 1024) "hostname\00")
+  (global $opened i32 (i32.const 2048))
+  (global $opened.size i32 (i32.const 12))
+  (global $given i32 (i32.const 3072))
+  (global $given.size i32 (i32.const 64))
+  (global $printed i32 (i32.const 4096))
+  (global $printed.size i32 (i32.const 64))
+  (func $main (export "_start")
+    (local $err i32)
+    (block $failed
+      (local.set $err
+        (call $file_open (global.get $FIRST) (global.get $READ) (global.get $opened)))
+      (br_if $failed (local.get $err))
+      (local.set $err
+        (call $folder_open (global.get $FIRST) (global.get $opened)))
+      (br_if $failed (local.get $err))
+      (local.set $err
+        (call $program_run (global.get $command) (global.get $command.rosize)
+          (global.get $given) (global.get $given.size)
+          (global.get $printed) (global.get $printed.size)
+          (i32.add (global.get $opened) (i32.const 4))
+          (i32.add (global.get $opened) (i32.const 8))))
+      (br_if $failed (local.get $err))
+      (local.set $err
+        (call $term_raw (global.get $RAW)))
+      (br_if $failed (local.get $err))
+      (call $proc_exit (global.get $EXIT_OK))
+      unreachable)
+    (call $proc_exit (global.get $EXIT_FAILED))
+    unreachable))
+"#;
+
+/// Rule 3 for the files a program's arguments name, the programs it starts and the terminal:
+/// lengua's own functions for them are imported from their own modules, each only when the idea
+/// grants it, and a mode is a named constant there too.
+#[test]
+fn rule_3_takes_the_files_and_programs_only_as_the_idea_grants_them() {
+    let file = "- Files: reads the file its first argument names";
+    let folder = "- Files: reads the folder its second argument names";
+    let runs = "- Runs: `hostname` with no arguments";
+    let terminal = "- Uses: the terminal";
+    let report = check_lines(REACHER, &[terminal, file, folder, runs], &[]);
+    assert_no(&report, Rule::Resources);
+    assert_no(&report, Rule::Constants);
+    // Each import needs its own line: an import is reported on the line of its `func`. Any
+    // `- Files:` line lets a program import `file_open`, and the host holds each call to the
+    // argument and the mode its lines name; only a line that names a folder lets it import
+    // `folder_open`.
+    let cases: [(&[&str], &str, &str); 4] = [
+        (
+            &[terminal, runs],
+            "(func $file_open (param",
+            "it needs `- Files: reads the file its first argument names`",
+        ),
+        (
+            &[terminal, file, runs],
+            "(func $folder_open (param",
+            "it needs `- Files: reads the folder its first argument names`",
+        ),
+        (
+            &[terminal, file, folder],
+            "(func $program_run (param",
+            "it needs ``- Runs: `program` with no arguments``",
+        ),
+        (
+            &[file, folder, runs],
+            "(func $term_raw (param",
+            "it needs `the terminal` in its `- Uses:` line",
+        ),
+    ];
+    for (lines, import, needs) in cases {
+        let report = check_lines(REACHER, lines, &[]);
+        assert_violation(&report, Rule::Resources, line_of(REACHER, import), needs);
+    }
+    // The working folder grants no file an argument names.
+    let report = check_lines(REACHER, &["- Uses: files, the terminal", runs], &[]);
+    assert_violation(
+        &report,
+        Rule::Resources,
+        line_of(REACHER, "(func $file_open (param"),
+        "it needs `- Files:",
+    );
+    // Each function is in its own module alone.
+    let moved = REACHER.replacen(
+        "\"lengua_fs_1\" \"file_open\"",
+        "\"lengua_net_1\" \"file_open\"",
+        1,
+    );
+    let report = check_lines(&moved, &[terminal, file, folder, runs], &[]);
+    assert_violation(
+        &report,
+        Rule::Resources,
+        line_of(&moved, "(func $file_open (param"),
+        "`lengua_net_1` has no function `file_open`",
+    );
+    // How a file is opened, and the terminal's mode, are named like any other mode.
+    let bare = REACHER.replacen(
+        "(call $file_open (global.get $FIRST) (global.get $READ)",
+        "(call $file_open (global.get $FIRST) (i32.const 3)",
+        1,
+    );
+    let report = check_lines(&bare, &[terminal, file, folder, runs], &[]);
+    assert_violation(
+        &report,
+        Rule::Constants,
+        line_of(&bare, "(call $file_open"),
+        "the mode 3 is a bare number",
+    );
+    let bare = REACHER.replacen(
+        "(call $term_raw (global.get $RAW))",
+        "(call $term_raw (i32.const 1))",
+        1,
+    );
+    let report = check_lines(&bare, &[terminal, file, folder, runs], &[]);
+    assert_violation(
+        &report,
+        Rule::Constants,
+        line_of(&bare, "(call $term_raw"),
+        "the mode 1 is a bare number",
+    );
+}
+
+/// The secret rule on a program a program starts. Its command is no data: every process of
+/// the computer can read a command, so a secret in it is refused. Its input is data the program
+/// gives away, so a secret may be in it, and what comes back is then secret.
+#[test]
+fn a_secret_never_names_a_command() {
+    let secret = [Source::StandardInput];
+    let lines = [
+        "- Uses: standard input, the terminal",
+        "- Files: reads the file its first argument names",
+        "- Files: reads the folder its second argument names",
+        "- Runs: `hostname` with no arguments",
+    ];
+    // The program reads the secret into `$given` first.
+    let read = "(local.set $err\n        (call $file_open (global.get $FIRST)";
+    assert!(REACHER.contains(read));
+    let reads = REACHER.replacen(
+        read,
+        "(drop (call $fill (i32.const 0) (global.get $given) (global.get $given.size)\n        \
+         (i32.const -1)))\n      (local.set $err\n        (call $file_open (global.get $FIRST)",
+        1,
+    );
+    // As the started program's input, the secret is data.
+    let report = check_lines(&reads, &lines, &secret);
+    assert_no(&report, Rule::Secrets);
+    // As its command, it is refused.
+    let named = "(call $program_run (global.get $command) (global.get $command.rosize)";
+    assert!(reads.contains(named));
+    let secret_command = reads.replacen(
+        named,
+        "(call $program_run (global.get $given) (global.get $given.size)",
+        1,
+    );
+    let report = check_lines(&secret_command, &lines, &secret);
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(&secret_command, "(call $program_run (global.get $given)"),
+        "reads a secret in the buffer of argument 1",
+    );
+    // What the started program printed, after a secret went in, is secret: a branch on it is
+    // refused.
+    let ended = "(local.set $err\n        (call $term_raw (global.get $RAW)))";
+    assert!(reads.contains(ended));
+    let branches = reads.replacen(
+        ended,
+        "(if (i32.load8_u (global.get $printed)) (then (nop)))\n      (local.set $err\n        \
+         (call $term_raw (global.get $RAW)))",
+        1,
+    );
+    let report = check_lines(&branches, &lines, &secret);
+    assert_violation(
+        &report,
+        Rule::Secrets,
+        line_of(&branches, "(if (i32.load8_u (global.get $printed))"),
+        "the condition of this `if`",
+    );
+}

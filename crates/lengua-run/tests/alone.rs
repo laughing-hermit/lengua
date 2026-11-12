@@ -493,3 +493,147 @@ fn a_program_reaches_only_what_its_idea_grants() {
         "{said}"
     );
 }
+
+/// A file of the example `name`, in examples.
+fn example(name: &str, file: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples")
+        .join(name)
+        .join(file);
+    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+/// The example `name` as check leaves it at done, with its module compiled.
+fn checked_example(name: &str) -> Checked {
+    let checked = Checked::new(&example(name, "idea.md"), &example(name, "main.wat"));
+    checked.compile();
+    checked
+}
+
+/// lengua-run holds a program to what its idea lets it reach by itself, as `lengua-mcp run`
+/// does, through the same host: the files its arguments name, and never lengua's own; the
+/// programs its `- Runs:` lines name, which it starts for real; and the terminal, which a run
+/// with no terminal doesn't have. It says each grant before the program starts.
+#[test]
+fn a_program_opens_starts_and_asks_only_what_its_idea_grants() {
+    // Files the arguments name: one beside the shell, one by a whole path.
+    let copy = checked_example("copy");
+    let work = copy.root.path().join("work");
+    std::fs::write(work.join("in.txt"), "hello\n").expect("a file");
+    let out = copy.root.path().join("out.txt");
+    let out_text = out.to_str().expect("a UTF-8 path");
+    let run = copy.run(&["in.txt", out_text]);
+    assert_eq!(run.status.code(), Some(0), "{run:?}");
+    assert_eq!(std::fs::read(&out).expect("the copy"), b"hello\n");
+    let words = said(&run);
+    assert!(
+        words.contains("lengua-run: ")
+            && words.contains("it may read the file its first argument names"),
+        "{words}"
+    );
+    // lengua's own: the key that signs every lock, to read and to write.
+    let key = copy.data.path().join("key");
+    let key_text = key.to_str().expect("a UTF-8 path");
+    let before = std::fs::read(&key).expect("the key");
+    let stolen = copy.root.path().join("stolen.txt");
+    let run = copy.run(&[key_text, stolen.to_str().expect("a UTF-8 path")]);
+    assert_eq!(run.status.code(), Some(2), "{run:?}");
+    assert!(!stolen.exists(), "the key was copied");
+    assert!(said(&run).contains("lengua's own"), "{run:?}");
+    let run = copy.run(&["in.txt", key_text]);
+    assert_eq!(run.status.code(), Some(2), "{run:?}");
+    assert_eq!(std::fs::read(&key).expect("the key"), before);
+    // The programs the idea names, which every runner has.
+    let computer = checked_example("computer");
+    let run = computer.run(&[]);
+    assert_eq!(run.status.code(), Some(0), "{run:?}");
+    let printed = String::from_utf8_lossy(&run.stdout).into_owned();
+    let lines = printed
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    assert_eq!(lines, 2, "{run:?}");
+    assert!(
+        !printed.contains("not found") && !printed.contains("failed"),
+        "{run:?}"
+    );
+    let words = said(&run);
+    assert!(
+        words.contains("it may start the program `hostname` with no arguments"),
+        "{words}"
+    );
+    assert!(words.contains("`whoami` is "), "{words}");
+    // The terminal: this run has none, so the program hears so and no key comes.
+    let key = checked_example("key");
+    let run = key.run(&[]);
+    assert_eq!(run.status.code(), Some(1), "{run:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Press a key.\n",
+        "{run:?}"
+    );
+    let words = said(&run);
+    assert!(words.contains("key: no key came"), "{words}");
+    assert!(words.contains("it may read the terminal's size"), "{words}");
+}
+
+/// The terminal, for real, where a test can make one: under lengua-run, at a pseudo-terminal,
+/// the program makes the terminal raw, gets one key with no Enter after it, and the terminal is
+/// afterwards as it was before the run.
+#[cfg(unix)]
+#[test]
+fn at_a_terminal_a_program_reads_a_key_and_the_terminal_is_put_back() {
+    use std::io::Write as _;
+    use std::os::fd::AsFd as _;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let key = checked_example("key");
+    let (terminal, keyboard) = lengua_os::terminal::pseudo().expect("a pseudo-terminal");
+    let mode = || lengua_os::terminal::mode_of(terminal.as_fd()).expect("the terminal's mode");
+    let before = mode();
+    let from = Path::new(env!("CARGO_BIN_EXE_lengua-run"));
+    let program = key.bin().join(from.file_name().expect("lengua-run's name"));
+    let mut tries = 0;
+    let child = loop {
+        let started = Command::new(&program)
+            .arg("--data-dir")
+            .arg(key.data.path())
+            .arg(key.folder())
+            .current_dir(key.root.path().join("work"))
+            .stdin(Stdio::from(
+                terminal.try_clone().expect("a second descriptor"),
+            ))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .env_remove("LENGUA_LOG")
+            .spawn();
+        match started {
+            Ok(child) => break child,
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && tries < 200 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("lengua-run didn't start: {error}"),
+        }
+    };
+    // The program makes the terminal raw before it reads. Then one key is pressed, and no Enter.
+    let started = Instant::now();
+    while mode() == before {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the program never made the terminal raw"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut keyboard = std::fs::File::from(keyboard);
+    keyboard.write_all(b"x").expect("a key");
+    let run = child.wait_with_output().expect("the run ends");
+    assert_eq!(run.status.code(), Some(0), "{run:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Press a key.\nYou pressed a key.\n",
+        "{run:?}"
+    );
+    assert_eq!(mode(), before);
+}

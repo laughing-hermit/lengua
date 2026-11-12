@@ -285,6 +285,14 @@ pub enum Allowance {
     /// A program that receives UDP datagrams on a port lengua binds: `receives UDP datagrams
     /// on …`.
     Receives,
+    /// A program whose idea lets it open a file or a folder one of its arguments names: a
+    /// `- Files:` line.
+    Named,
+    /// A program whose idea lets it open a folder one of its arguments names: `- Files: reads
+    /// the folder its first argument names`.
+    NamedFolder,
+    /// A program whose idea lets it start a program: a `- Runs:` line.
+    Runs,
 }
 
 /// What a function does when the program's idea doesn't allow it.
@@ -326,8 +334,11 @@ use errno::{
 
 /// Every program may call it.
 const ALWAYS: &[Allowance] = &[Allowance::Always];
-/// A program that names files.
-const FILES: &[Allowance] = &[Allowance::Use(Use::Files)];
+/// A program that names files, or a folder one of its arguments names: what works on a folder
+/// and the paths in it.
+const FILES: &[Allowance] = &[Allowance::Use(Use::Files), Allowance::NamedFolder];
+/// A program that holds files open: one that names files, or one whose arguments name them.
+const HELD: &[Allowance] = &[Allowance::Use(Use::Files), Allowance::Named];
 /// A program on the network at all.
 const NETWORK: &[Allowance] = &[Allowance::Network];
 /// What a function that gives an error number gives.
@@ -452,7 +463,11 @@ pub const FUNCTIONS: &[Function] = &[
     given(
         "fd_close",
         &[I32],
-        &[Allowance::Use(Use::Files), Allowance::Network],
+        &[
+            Allowance::Use(Use::Files),
+            Allowance::Network,
+            Allowance::Named,
+        ],
         &[],
         &[BADF, IO, NOTCAPABLE],
     ),
@@ -469,7 +484,7 @@ pub const FUNCTIONS: &[Function] = &[
     given(
         "fd_filestat_get",
         &[I32, I32],
-        FILES,
+        HELD,
         &[written(1, Bytes::Fixed(size::FILESTAT))],
         &[BADF, IO, NOTCAPABLE],
     ),
@@ -499,6 +514,7 @@ pub const FUNCTIONS: &[Function] = &[
             Allowance::Use(Use::Files),
             Allowance::Use(Use::Terminal),
             Allowance::Network,
+            Allowance::Named,
         ],
         &[read(1, IOVECS), written(3, Bytes::Fixed(4))],
         &[AGAIN, BADF, INVAL, IO, ISDIR, NOTCAPABLE],
@@ -514,7 +530,7 @@ pub const FUNCTIONS: &[Function] = &[
     given(
         "fd_seek",
         &[I32, I64, I32, I32],
-        FILES,
+        HELD,
         &[written(3, Bytes::Fixed(8))],
         &[BADF, INVAL, IO, SPIPE, NOTCAPABLE],
     ),
@@ -522,7 +538,7 @@ pub const FUNCTIONS: &[Function] = &[
     given(
         "fd_tell",
         &[I32, I32],
-        FILES,
+        HELD,
         &[written(1, Bytes::Fixed(8))],
         &[BADF, IO, SPIPE, NOTCAPABLE],
     ),
@@ -853,25 +869,181 @@ pub const NET_FUNCTIONS: &[Function] = &[
     ),
 ];
 
+/// The module lengua's own functions for the files a program's arguments name are imported
+/// from: WASI preview 1 opens a path beneath a folder it was given, and never one the user
+/// names when the program runs.
+pub const FS_MODULE: &str = "lengua_fs_1";
+
+/// A program that opens a file or a folder one of its arguments names.
+const NAMED: &[Allowance] = &[Allowance::Named];
+
+/// lengua's own functions for the files and folders a program's arguments name. The program
+/// gives the place of an argument, from 1, and never a path: lengua reads the argument, which
+/// the user typed, and opens what it names.
+///
+/// - `file_open(argument, mode, out_fd)`: opens the file the argument at `argument` names, to
+///   read (1), to write (2) or both, making it when it isn't there (4), emptying it (8), or
+///   with every write at its end (16), as the idea's `- Files:` line for that argument allows,
+///   and writes its descriptor, which `fd_read`, `fd_write`, `fd_seek`, `fd_tell`,
+///   `fd_filestat_get` and `fd_close` then take.
+/// - `folder_open(argument, out_fd)`: opens the folder the argument at `argument` names and
+///   writes its descriptor, which the `path_` functions and `fd_readdir` take as the working
+///   folder's descriptor is taken; one granted for reading alone takes no change.
+pub const FS_FUNCTIONS: &[Function] = &[
+    given(
+        "file_open",
+        &[I32, I32, I32],
+        NAMED,
+        &[written(2, Bytes::Fixed(4))],
+        &[
+            ACCES,
+            EXIST,
+            FBIG,
+            ILSEQ,
+            INVAL,
+            IO,
+            ISDIR,
+            MFILE,
+            NAMETOOLONG,
+            NOENT,
+            NOTDIR,
+            NOTCAPABLE,
+        ],
+    ),
+    given(
+        "folder_open",
+        &[I32, I32],
+        &[Allowance::NamedFolder],
+        &[written(1, Bytes::Fixed(4))],
+        &[
+            ACCES,
+            ILSEQ,
+            INVAL,
+            IO,
+            MFILE,
+            NAMETOOLONG,
+            NOENT,
+            NOTDIR,
+            NOTCAPABLE,
+        ],
+    ),
+];
+
+/// The module lengua's own function that starts a program is imported from: WASI preview 1 has
+/// none.
+pub const RUN_MODULE: &str = "lengua_run_1";
+
+/// lengua's own function that starts a program the idea names, and waits for it.
+///
+/// - `program_run(command, command_len, input, input_len, output, output_len, out_size,
+///   out_code)`: `command` holds the program's name and then each argument, each ended by a NUL
+///   byte. lengua starts the program when a `- Runs:` line of the idea covers that command,
+///   gives it the `input_len` bytes at `input` as its standard input, waits until it ends,
+///   writes what it printed to `output`, how many bytes that is to `out_size`, and its exit
+///   code to `out_code`. A program that runs past its line's time is ended (`TIMEDOUT`), and
+///   so is one that prints more than `output_len` bytes (`FBIG`, with the buffer full).
+pub const RUN_FUNCTIONS: &[Function] = &[given(
+    "program_run",
+    &[I32, I32, I32, I32, I32, I32, I32, I32],
+    &[Allowance::Runs],
+    &[
+        read(0, Bytes::Argument(1)),
+        read(2, Bytes::Argument(3)),
+        written(4, Bytes::Argument(5)),
+        written(6, Bytes::Fixed(4)),
+        written(7, Bytes::Fixed(4)),
+    ],
+    &[FBIG, ILSEQ, INVAL, IO, NOENT, TIMEDOUT, NOTCAPABLE],
+)];
+
+/// The module lengua's own functions for the terminal are imported from: WASI preview 1 says
+/// whether a descriptor is a terminal, and nothing of its mode or its size.
+pub const TERM_MODULE: &str = "lengua_term_1";
+
+/// The modes of [`TERM_MODULE`]'s `term_raw`.
+pub mod term {
+    /// The mode the terminal had: a line at a time, with echo.
+    pub const AS_BEFORE: u32 = 0;
+    /// Keys as they're pressed, with no echo and no line editing.
+    pub const RAW: u32 = 1;
+}
+
+/// A program that names the terminal.
+const TERMINAL: &[Allowance] = &[Allowance::Use(Use::Terminal)];
+
+/// lengua's own functions for the terminal a program runs in, for an idea that uses `the
+/// terminal`. A test and the `run` tool have no terminal.
+///
+/// - `term_is(fd, out)`: writes 1 when standard input (0), output (1) or error (2) is a
+///   terminal, and 0 when it isn't.
+/// - `term_size(out_columns, out_rows)`: writes the terminal's columns and rows; `NOTTY` when
+///   there is no terminal.
+/// - `term_raw(mode)`: with 1, standard input gives keys as they're pressed, with no echo and
+///   no line editing; with 0, the terminal is as it was. `NOTTY` when standard input is no
+///   terminal. lengua puts the terminal back as it was when the program ends, however it ends.
+pub const TERM_FUNCTIONS: &[Function] = &[
+    given(
+        "term_is",
+        &[I32, I32],
+        TERMINAL,
+        &[written(1, Bytes::Fixed(4))],
+        &[BADF, NOTCAPABLE],
+    ),
+    given(
+        "term_size",
+        &[I32, I32],
+        TERMINAL,
+        &[written(0, Bytes::Fixed(4)), written(1, Bytes::Fixed(4))],
+        &[errno::NOTTY, NOTCAPABLE],
+    ),
+    given(
+        "term_raw",
+        &[I32],
+        TERMINAL,
+        &[],
+        &[INVAL, IO, errno::NOTTY, NOTCAPABLE],
+    ),
+];
+
+/// lengua's own modules, each with its functions: what a program imports besides WASI preview
+/// 1's, for what its idea grants it to reach by itself while it runs.
+pub const OWN: &[(&str, &[Function])] = &[
+    (NET_MODULE, NET_FUNCTIONS),
+    (FS_MODULE, FS_FUNCTIONS),
+    (RUN_MODULE, RUN_FUNCTIONS),
+    (TERM_MODULE, TERM_FUNCTIONS),
+];
+
+/// Whether `module` is one of lengua's own.
+#[must_use]
+pub fn own_module(module: &str) -> bool {
+    OWN.iter().any(|(name, _)| *name == module)
+}
+
+/// Every function of lengua's own modules, each with its module.
+pub fn own_functions() -> impl Iterator<Item = (&'static str, &'static Function)> {
+    OWN.iter()
+        .flat_map(|(module, functions)| functions.iter().map(move |function| (*module, function)))
+}
+
 /// The function of lengua's host that `name` in `module` names: one of WASI preview 1, or one
 /// of lengua's own.
 #[must_use]
 pub fn imported(module: &str, name: &str) -> Option<&'static Function> {
-    match module {
-        MODULE => function(name),
-        NET_MODULE => NET_FUNCTIONS.iter().find(|function| function.name == name),
-        _ => None,
+    if module == MODULE {
+        return function(name);
     }
+    own_functions()
+        .find(|(from, function)| *from == module && function.name == name)
+        .map(|(_, function)| function)
 }
 
 /// The module `function` is imported from.
 #[must_use]
 pub fn module_of(function: &Function) -> &'static str {
-    if NET_FUNCTIONS.iter().any(|own| own.name == function.name) {
-        NET_MODULE
-    } else {
-        MODULE
-    }
+    own_functions()
+        .find(|(_, own)| own.name == function.name)
+        .map_or(MODULE, |(module, _)| module)
 }
 
 #[cfg(test)]
@@ -881,22 +1053,18 @@ mod tests {
     use super::*;
 
     /// The errors the functions give, WASI's and lengua's own, are the closed set: none outside
-    /// it, and every one of it given by some function, but `NOTTY`, kept for the terminal's two
-    /// functions to come.
+    /// it, and every one of it given by some function.
     #[test]
     fn the_errors_are_the_closed_set() {
         let mut used = BTreeSet::new();
-        for function in FUNCTIONS.iter().chain(NET_FUNCTIONS) {
+        let own = own_functions().map(|(_, function)| function);
+        for function in FUNCTIONS.iter().chain(own) {
             for errno in function.errors {
                 assert!(ERRNOS.contains(errno), "{} gives {errno}", function.name);
                 used.insert(*errno);
             }
         }
-        let set: BTreeSet<u16> = ERRNOS
-            .iter()
-            .copied()
-            .filter(|errno| *errno != errno::NOTTY)
-            .collect();
+        let set: BTreeSet<u16> = ERRNOS.iter().copied().collect();
         assert_eq!(used, set);
         assert!(ERRNOS.windows(2).all(|pair| pair[0] < pair[1]));
     }
@@ -931,12 +1099,17 @@ mod tests {
     /// WASI has, and each can say `NOTCAPABLE`: none is every program's.
     #[test]
     fn lenguas_own_functions_are_in_their_own_module() {
-        let names: BTreeSet<&str> = NET_FUNCTIONS.iter().map(|function| function.name).collect();
-        assert_eq!(names.len(), NET_FUNCTIONS.len());
-        for function in NET_FUNCTIONS {
-            assert_eq!(imported(NET_MODULE, function.name), Some(function));
+        let names: BTreeSet<&str> = own_functions().map(|(_, function)| function.name).collect();
+        assert_eq!(names.len(), own_functions().count());
+        assert_eq!(names.len(), 13);
+        for (module, function) in own_functions() {
+            assert!(own_module(module) && module != MODULE);
+            assert_eq!(imported(module, function.name), Some(function));
             assert_eq!(imported(MODULE, function.name), None, "{}", function.name);
-            assert_eq!(module_of(function), NET_MODULE);
+            assert_eq!(module_of(function), module);
+            for (other, _) in OWN.iter().filter(|(other, _)| *other != module) {
+                assert_eq!(imported(other, function.name), None, "{}", function.name);
+            }
             assert!(function.given && function.unasked == Unasked::Refused);
             assert_ne!(function.allowances, ALWAYS, "{}", function.name);
             assert!(function.errors.contains(&NOTCAPABLE), "{}", function.name);
@@ -945,6 +1118,9 @@ mod tests {
         assert_eq!(imported(MODULE, "fd_write"), function("fd_write"));
         assert_eq!(imported(NET_MODULE, "fd_write"), None);
         assert_eq!(imported("env", "tcp_open"), None);
+        assert_eq!(imported(FS_MODULE, "tcp_open"), None);
+        assert_eq!(imported(NET_MODULE, "file_open"), None);
+        assert!(!own_module(MODULE) && !own_module("env"));
         assert_eq!(function("fd_write").map(module_of), Some(MODULE));
     }
 
@@ -952,7 +1128,8 @@ mod tests {
     /// another.
     #[test]
     fn a_functions_lends_are_inside_its_arguments() {
-        for function in FUNCTIONS.iter().chain(NET_FUNCTIONS) {
+        let own = own_functions().map(|(_, function)| function);
+        for function in FUNCTIONS.iter().chain(own) {
             for lend in function.lends {
                 assert_eq!(
                     function.params.get(lend.argument),

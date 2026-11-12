@@ -125,8 +125,8 @@ by one concrete example in its steps, and its generated tests try that rule with
   isn't a number. Give each one its own exit code other than 0. Every limit Purpose states, such
   as the largest input, the longest line or the most rows, gets a behavior for input just past
   it, with its message and exit code: a program never quietly drops what's past a limit.
-- **Files:** a program works only on files in the folder it runs in, named relative to it; it
-  can't reach other files at all. Within it, it can read, write, list folders, read a file's
+- **Files:** by default a program works only on files in the folder it runs in, named relative
+  to it. Within it, it can read, write, list folders, read a file's
   size, make and remove folders, and delete and rename files. Purpose states the largest file it reads in backticks, like any
   other range, and what happens when a file is missing. Names are held to what every system
   takes, so a test's files must be too: no `< > : " \ | ? *`, no name ending in a dot or a
@@ -136,17 +136,22 @@ by one concrete example in its steps, and its generated tests try that rule with
   differ only in case. A program can't rename or remove a file it holds open, and its result must not
   depend on the order a folder lists in, which differs between file systems: sort what it
   lists.
+- **Files the user names, and programs to start:** a tool whose user types a path, as `cat` or
+  `cp` does, gets the file or folder each argument names with a `- Files:` line, and a program
+  that starts another names it on a `- Runs:` line. Read
+  [what a program reaches by itself](references/reach.md) before you write either.
 - **What it uses:** under `# Constraints`, ``- Uses: …`` names what the program needs beyond
   writing its output and exiting, from `standard input`, `files`, `the clock`, `random bytes` and
   `the environment` (its environment variables: only those a test, or the user's run, gives it),
   `the terminal` (keys as they're pressed, without Enter or echo, a wait for the next key, and the
   window's size: for games, menus and other interactive programs, whose tests give the keys as
-  standard input and write escape sequences with `\e`; a computation in WebAssembly can't use the
-  terminal until lengua's host gives its two imports, so don't promise it to the user yet),
-  or `- Uses: nothing`. lengua programs can't start processes or handle signals, and their memory
+  standard input and write escape sequences with `\e`; the reference above says what a test
+  can show of it),
+  or `- Uses: nothing`. lengua programs can't handle signals, and their memory
   is fixed by the idea's limits. lengua holds the program to this line when it runs, so it's a promise the user can rely
   on, and it means the same on every kind of computer. `# Constraints` holds only `- Uses:`,
-  `- Network:`, `- Secret:` and `- Builds on:` lines; anything else goes in Purpose. A program
+  `- Network:`, `- Files:`, `- Runs:`, `- Secret:` and `- Builds on:` lines; anything else goes
+  in Purpose. A program
   runs as one thread, so `check` refuses a `- Threads:` line: don't promise the user more cores.
 - **Secret inputs:** when the user says an input is secret, or the program compares or
   transforms data that is, such as a key or a token, name it under `# Constraints` with

@@ -26,7 +26,7 @@ replaces it. Values go in backticks, with `\n`, `\r`, `\t` and
 | `no arguments` | None |
 | ``standard input that contains TEXT`` | Everything it can read; then input ends |
 | `no standard input`, `empty standard input` | Input that ends at once |
-| ``a file `notes.txt` that contains TEXT``, ``an empty file `notes.txt` `` | A file in its working folder |
+| ``a file `notes.txt` that contains TEXT``, ``an empty file `notes.txt` `` | A file in its working folder, which is also where a test's arguments name files for an idea with a `- Files:` line |
 | ``no file `notes.txt` `` | Nothing: the folder starts empty, and the step says so |
 | ``an empty folder `archive` `` | A folder in its working folder, for an idea that uses `files` |
 | ``the environment variable `NAME` with the value TEXT`` | That variable, for an idea that uses `the environment`; it gets no others |
@@ -38,6 +38,7 @@ replaces it. Values go in backticks, with `\n`, `\r`, `\t` and
 | ``no server at `www.example.org` on port `80` `` | Nothing: a computer no step gives a server takes no connection, and the step says so |
 | ``a computer at `192.0.2.53` on UDP port `53` that receives TEXT and replies TEXT`` | The test's own computer for one datagram the program sends there, and the datagram it answers with |
 | ``the addresses `192.0.2.7` and `2001:db8::1` for the name `example.org` `` | What a look at that name's addresses gives, in every test of the idea |
+| ``the program `hostname` prints `box\n` and exits with code `0` ``, ``the program `tar` with the arguments `-tf` and `a.tar` prints nothing and exits with code `2` `` | For an idea with a `- Runs:` line: what that command gives when the program starts it, in every test of the idea. A test starts nothing, and a command no step gives isn't there |
 | ``a client that sends TEXT`` | The test's own client, one step a connection, for a program that serves |
 | `standard output is closed` | Standard output as a pipe nobody reads, as after `prog \| head -1` has read its line: every write to it fails with `EPIPE`, never a signal. The behavior then says only its exit code and what it prints to standard error |
 
@@ -139,9 +140,10 @@ variable as bytes, and ``the clock at `{t}` `` reads a variable.
 
 An idea that uses `the terminal` gets its keys as standard input in tests, a key a byte or an
 escape sequence of several, such as `\e[A` for up, and its tests write what it prints with `\e`
-for the escape that starts each sequence: ``it prints `\e[2J\e[H` then …``. A test's
-standard input is a pipe, so the program can't set the terminal's mode there and goes on as from
-a pipe; every wait for a key finds one, or the end of the input.
+for the escape that starts each sequence: ``it prints `\e[2J\e[H` then …``. A test has no
+terminal: the program hears that standard input is none when it asks for keys as they're
+pressed or for the terminal's size, and goes on as from a pipe; every wait for a key finds one,
+or the end of the input. [What a program reaches by itself](reach.md) has more.
 
 ## The network
 

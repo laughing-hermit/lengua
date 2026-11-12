@@ -321,13 +321,17 @@ pub struct Network {
     /// The names its tests give addresses, each with its addresses as written: ``the addresses
     /// `192.0.2.7` for the name `example.org` ``. Every test of the idea sees them all.
     pub names: Vec<(String, Vec<String>)>,
+    /// What its tests say each command it starts gives, in place of starting a program:
+    /// ``the program `hostname` prints `box` and exits with code `0` ``. Every test of the
+    /// idea sees them all, and no test starts anything.
+    pub programs: Vec<crate::starts::Stood>,
 }
 
 impl Network {
     /// Whether the program uses the network at all.
     #[must_use]
     pub fn is_used(&self) -> bool {
-        !self.connections.is_empty() || self.listens.is_some() || !self.reach.is_empty()
+        !self.connections.is_empty() || self.listens.is_some() || !self.reach.no_network()
     }
 }
 
@@ -428,6 +432,82 @@ pub fn constraints(uses: &[&str], network: &str) -> Result<(Vec<Use>, Network), 
     } else {
         Err(parser.into_problems())
     }
+}
+
+/// What the lines of `# Constraints` in `lines`, each written whole as an idea writes it
+/// (`- Files: reads the file its first argument names`), allow, for a program with no idea of
+/// its own, such as a test of the checker or of the host.
+///
+/// # Errors
+///
+/// The problems the lines have, as an idea would report them.
+pub fn constraints_of(lines: &[&str]) -> Result<(Vec<Use>, Network), Vec<Problem>> {
+    let mut parser = Parser::default();
+    for (number, line) in lines.iter().enumerate() {
+        parser.constraint_line(number + 1, line);
+    }
+    let uses = parser.uses.take().unwrap_or_default();
+    if parser.problems.is_empty() {
+        Ok((uses, parser.network))
+    } else {
+        Err(parser.into_problems())
+    }
+}
+
+/// What a step's tokens say a command gives in a test, in place of starting it: ``the
+/// program `hostname` prints `box` and exits with code `0` ``, with ``with the arguments `-s`
+/// and `x` `` after the name for a command with arguments, and `prints nothing` for one that
+/// prints nothing. The text takes the escapes a step's text takes.
+pub(crate) fn program_stood(tokens: &[Token]) -> Option<crate::starts::Stood> {
+    let word = |token: Option<&Token>, wanted: &str| matches!(token, Some(Token::Word(word)) if word == wanted);
+    let mut rest =
+        tokens.strip_prefix(&[Token::Word("the".into()), Token::Word("program".into())])?;
+    let [Token::Value(program), after @ ..] = rest else {
+        return None;
+    };
+    rest = after;
+    let mut arguments = Vec::new();
+    if word(rest.first(), "with") {
+        // `with the arguments `a` and `b``, or `with the argument `a``.
+        if !word(rest.get(1), "the")
+            || !(word(rest.get(2), "arguments") || word(rest.get(2), "argument"))
+        {
+            return None;
+        }
+        rest = &rest[3..];
+        loop {
+            match rest {
+                [Token::Value(argument), after @ ..] => {
+                    arguments.push(argument.clone());
+                    rest = after;
+                }
+                [Token::Word(and), after @ ..] if and == "and" => rest = after,
+                _ => break,
+            }
+        }
+        if arguments.is_empty() {
+            return None;
+        }
+    }
+    if !word(rest.first(), "prints") {
+        return None;
+    }
+    let (output, rest) = match &rest[1..] {
+        [Token::Word(nothing), after @ ..] if nothing == "nothing" => (String::new(), after),
+        [Token::Value(text), after @ ..] => (crate::testfile::unescape(text), after),
+        _ => return None,
+    };
+    let code = shaped(
+        rest,
+        &[Some("and"), Some("exits"), Some("with"), Some("code"), None],
+    )?;
+    let code = code.first()?.trim().parse::<u8>().ok()?;
+    (rest.len() == 5).then(|| crate::starts::Stood {
+        program: program.clone(),
+        arguments,
+        output,
+        code,
+    })
 }
 
 /// The most connections an idea may name.
@@ -2631,6 +2711,14 @@ impl Parser {
             self.threads_line(number, rest);
             return;
         }
+        if let Some(rest) = strip_prefix_ignore_case(item, "files:") {
+            self.files_line(number, rest);
+            return;
+        }
+        if let Some(rest) = strip_prefix_ignore_case(item, "runs:") {
+            self.runs_line(number, rest);
+            return;
+        }
         if let Some(rest) = strip_prefix_ignore_case(item, "network:") {
             self.network_line(number, rest);
             return;
@@ -2651,7 +2739,8 @@ impl Parser {
             self.problem(
                 Some(number),
                 "`# Constraints` lists only what the program uses, which means the same on every \
-                 computer: `- Uses: …`, `- Network: …`, `- Secret: …` and `- Builds on: …`; say \
+                 computer: `- Uses: …`, `- Network: …`, `- Files: …`, `- Runs: …`, `- Secret: …` \
+                 and `- Builds on: …`; say \
                  anything else in `# Purpose`",
             );
             return;
@@ -2690,15 +2779,38 @@ impl Parser {
                     Some(number),
                     format!(
                         "`{name}` isn't something lengua lets a program use; it may use {known} \
-                         and the network, besides writing its output. lengua programs can't \
-                         allocate memory, start processes, handle signals or change the file \
-                         system"
+                         and the network, besides writing its output. The files its arguments \
+                         name and the programs it starts have lines of their own: `- Files: reads \
+                         the file its first argument names` and ``- Runs: `hostname` with no \
+                         arguments``. lengua programs can't allocate memory or handle signals"
                     ),
                 ),
             }
         }
         uses.sort_unstable();
         self.uses = Some(uses);
+    }
+
+    /// `- Files: reads the file its first argument names`: a file or a folder the user names
+    /// when the program runs, which the program may open ([`crate::named`]).
+    fn files_line(&mut self, number: usize, rest: &str) {
+        let lower = rest.trim().replace('`', "").to_ascii_lowercase();
+        let added = crate::named::Grant::read(&lower)
+            .and_then(|grant| crate::named::add(&mut self.network.reach.files, grant));
+        if let Err(problem) = added {
+            self.problem(Some(number), problem);
+        }
+    }
+
+    /// ``- Runs: `hostname` with no arguments``: a program the program may start, with the
+    /// arguments the line bounds ([`crate::starts`]). The line is read as it is written: a
+    /// program's name and its arguments keep their case.
+    fn runs_line(&mut self, number: usize, rest: &str) {
+        let added = crate::starts::Rule::read(rest)
+            .and_then(|rule| crate::starts::add(&mut self.network.reach.runs, rule));
+        if let Err(problem) = added {
+            self.problem(Some(number), problem);
+        }
     }
 
     /// `- Network: connects to TCP ports 80 and 8080`, `- Network: connects to TCP port 443 on
@@ -3103,6 +3215,7 @@ impl Parser {
         });
         let mut stands: Vec<Stand> = Vec::new();
         let mut names: Vec<(String, Vec<String>)> = Vec::new();
+        let mut programs: Vec<crate::starts::Stood> = Vec::new();
         for step in steps {
             let tokens = step.tokens();
             if let Some(stand) = stand_named(&tokens) {
@@ -3129,10 +3242,17 @@ impl Parser {
                 && !names.iter().any(|(known, _)| *known == name)
             {
                 names.push((name, addresses));
+            } else if let Some(stood) = program_stood(&tokens)
+                && !programs.iter().any(|known| {
+                    known.program == stood.program && known.arguments == stood.arguments
+                })
+            {
+                programs.push(stood);
             }
         }
         self.network.stands = stands;
         self.network.names = names;
+        self.network.programs = programs;
         let listens = self.network.listens.is_some() || self.network.reach.receives.is_some();
         let serving: Vec<String> = self
             .behaviors
@@ -3290,8 +3410,8 @@ fn allowed_calls_rewrite(listed: &str) -> String {
         String::new()
     } else {
         format!(
-            " ({} can't be used: lengua programs can't allocate memory, start processes, handle \
-             signals or change the file system)",
+            " ({} can't be used: lengua programs can't allocate memory or handle signals, and \
+             they start a program only through a `- Runs:` line)",
             refused.join(", ")
         )
     };
@@ -4039,6 +4159,80 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         .expect("valid idea");
         assert_eq!(receives.network.reach.receives, Some((5353, true)));
         assert!(receives.behaviors[0].serves);
+    }
+
+    /// `- Files:` and `- Runs:` lines grant the files and folders a program's arguments name
+    /// and the programs it starts, each on a line of its own. What its tests say a command gives
+    /// is read from its steps, and a run reads the grants and none of that. Neither line makes
+    /// the program one that uses the network.
+    #[test]
+    fn files_and_runs_lines_grant_what_a_program_reaches_by_itself() {
+        use crate::named::Which;
+        use crate::starts::Slot;
+        let lines = "- Files: reads the file its first argument names\n- Files: writes the file \
+                     its `first` argument names.\n- Files: Reads and writes the folder its \
+                     second argument names\n- Runs: `Git` with the arguments `rev-parse`, a \
+                     value and up to 2 values, within 30 seconds";
+        let steps = "- Given the arguments `2` and `3`\n- And the program `Git` with the \
+                     arguments `rev-parse` and `HEAD` prints `abc\\n` and exits with code `0`\n- \
+                     And the program `Git` with the arguments `rev-parse` and `x` prints nothing \
+                     and exits with code `128`";
+        let granted = ADD.replace("- Uses: nothing", lines).replacen(
+            "- Given the arguments `2` and `3`",
+            steps,
+            1,
+        );
+        let idea = parse(&granted).expect("valid idea");
+        let reach = &idea.network.reach;
+        assert_eq!(reach.files.len(), 2);
+        assert!(reach.files[0].reads && reach.files[0].writes && !reach.files[0].folder);
+        assert_eq!(reach.files[1].which, Which::Argument(2));
+        assert!(reach.files[1].folder && reach.files[1].writes);
+        assert_eq!(reach.runs.len(), 1);
+        assert_eq!(reach.runs[0].program, "Git");
+        assert_eq!(
+            reach.runs[0].arguments,
+            [Slot::Text("rev-parse".to_owned()), Slot::Value]
+        );
+        assert_eq!((reach.runs[0].more, reach.runs[0].seconds), (2, 30));
+        assert!(!idea.network.is_used() && !reach.is_empty() && reach.no_network());
+        let stood = &idea.network.programs;
+        assert_eq!(stood.len(), 2);
+        assert_eq!(stood[0].arguments, ["rev-parse", "HEAD"]);
+        assert_eq!((stood[0].output.as_str(), stood[0].code), ("abc\n", 0));
+        assert_eq!((stood[1].output.as_str(), stood[1].code), ("", 128));
+        // A run reads the grants, and nothing of the tests.
+        let (_, network) = grants(&granted).expect("its grants");
+        assert_eq!(network.reach, idea.network.reach);
+        assert!(network.programs.is_empty());
+        let with = |line: &str| ADD.replace("- Uses: nothing", line);
+        assert_problem(
+            &with("- Files: reads /etc/passwd"),
+            "write `- Files: reads the file its first argument names`",
+        );
+        assert_problem(
+            &with("- Files: writes the folder its first argument names"),
+            "reads it too",
+        );
+        assert_problem(
+            &with(
+                "- Files: reads the file its first argument names\n- Files: reads the folder \
+                 its first argument names",
+            ),
+            "one of the two",
+        );
+        assert_problem(
+            &with("- Runs: `sh` with the arguments `-c` and a value"),
+            "is a shell",
+        );
+        assert_problem(
+            &with("- Runs: git status"),
+            "the program's name in backticks",
+        );
+        assert_problem(
+            &with("- Uses: files and programs"),
+            "have lines of their own",
+        );
     }
 
     #[test]
@@ -5202,6 +5396,7 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
             let granted = Network {
                 stands: Vec::new(),
                 names: Vec::new(),
+                programs: Vec::new(),
                 ..idea.network
             };
             assert_eq!(grants(&text), Ok((idea.uses, granted)), "{name}");

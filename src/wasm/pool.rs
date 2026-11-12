@@ -64,6 +64,12 @@ pub struct Spec<'a> {
     pub stands: Option<&'a [Stand]>,
     /// The names a test gives addresses, for a run with `stands`.
     pub names: &'a [(String, Vec<String>)],
+    /// What a test says each command the program starts gives, for a run with `stands`: such
+    /// a run starts nothing.
+    pub programs: &'a [crate::starts::Stood],
+    /// lengua's own folders, with their links followed, for a run that opens the files its
+    /// arguments name on the user's file system: none of them is opened.
+    pub own: &'a [std::path::PathBuf],
     /// Whether each folder lists turned round, as in a test's second run.
     pub reversed: bool,
     /// Whether its standard output is a pipe nobody reads.
@@ -99,6 +105,8 @@ impl<'a> Spec<'a> {
             listen: None,
             stands: Some(&[]),
             names: &[],
+            programs: &[],
+            own: &[],
             reversed: false,
             stdout_closed: false,
             policy,
@@ -332,6 +340,7 @@ impl Pool {
         let internet = spec.stands.map(|_| Internet {
             places,
             names: spec.names.to_vec(),
+            programs: spec.programs.to_vec(),
         });
         // A program that receives datagrams says its port as a server says its own.
         let serves = spec.listen.is_some() || spec.policy.reach.get().receives.is_some();
@@ -346,10 +355,12 @@ impl Pool {
             stdin: job::hex(spec.stdin),
             stdin_pieces: spec.stdin_pieces.to_vec(),
             stdout_closed: spec.stdout_closed,
-            folder: spec.policy.files.then_some(folder),
+            // A program whose arguments name files needs the folder they count from too.
+            folder: spec.policy.holds_files().then_some(folder),
             connections: made,
             listen: spec.listen,
             internet,
+            own: spec.own.to_vec(),
             random: spec
                 .supply
                 .and_then(|supply| supply.random.as_deref())

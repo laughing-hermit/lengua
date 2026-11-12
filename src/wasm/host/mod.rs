@@ -13,12 +13,15 @@ pub mod clock;
 pub mod fds;
 pub mod files;
 pub mod limits;
+pub mod named;
 pub mod net;
 pub mod open;
 pub mod policy;
 pub mod poll;
 pub mod random;
+pub mod start;
 pub mod stdio;
+pub mod term;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -280,6 +283,18 @@ impl Notes {
     }
 }
 
+/// What a run gives its program beyond WASI's own world, for what its idea grants it to reach
+/// by itself: the files its arguments name, the programs it starts, and the terminal.
+#[derive(Default)]
+pub struct Beyond {
+    /// Where the paths its arguments name are resolved; nowhere when `None`.
+    pub ground: Option<crate::named::Ground>,
+    /// Its working folder's path, when it has one: no program it starts lies there.
+    pub working: Option<std::path::PathBuf>,
+    /// The terminal it runs in, for a run from a shell; a test and the `run` tool have none.
+    pub terminal: Option<Box<dyn term::Terminal>>,
+}
+
 /// What a run gives its program, from which its host is made.
 pub struct World {
     /// What its idea lets it reach.
@@ -315,6 +330,8 @@ pub struct World {
     pub limits: limits::Limits,
     /// Whether a sleep ends at once, as in a test.
     pub instant_sleeps: bool,
+    /// What it gets for what its idea grants it to reach by itself.
+    pub beyond: Beyond,
     /// Where to tell the server what it does.
     pub events: Option<(u64, Sender<Event>)>,
 }
@@ -337,6 +354,20 @@ pub struct Host {
     pub stderr: stdio::Output,
     /// Its working folder, when its idea names files.
     pub files: Option<Files>,
+    /// The folders its arguments name that it opened, each a root of its own, in the order it
+    /// opened them.
+    pub named: Vec<Files>,
+    /// Which argument, from 1, each of those folders is.
+    pub named_arguments: Vec<usize>,
+    /// Where the paths its arguments name are resolved.
+    pub ground: crate::named::Ground,
+    /// Its working folder's path, when it has one.
+    pub working: Option<std::path::PathBuf>,
+    /// Whether folders list turned round, as in a test's second run.
+    pub reversed: bool,
+    /// The terminal it runs in. It is put back as it was when the host is dropped, which
+    /// every end of a run comes to.
+    pub terminal: Box<dyn term::Terminal>,
     /// Its clocks.
     pub clock: clock::Clock,
     /// Its random bytes.
@@ -351,6 +382,9 @@ pub struct Host {
     pub internet: Option<crate::wasm::job::Internet>,
     /// How lengua finds a name's addresses: the system's resolver, but in lengua's own tests.
     pub(crate) resolver: crate::reach::Resolver,
+    /// How lengua finds a program by its name: in the user's `PATH`, but in lengua's own
+    /// tests.
+    pub(crate) finder: crate::starts::Finder,
 }
 
 impl Host {
@@ -375,6 +409,7 @@ impl Host {
             limits,
             instant_sleeps,
             events,
+            beyond,
         } = world;
         // After the connections lengua made comes the port the idea receives datagrams on.
         let datagrams = datagrams.filter(|_| policy.reach.get().receives.is_some());
@@ -414,6 +449,12 @@ impl Host {
             stdout,
             stderr,
             files,
+            named: Vec::new(),
+            named_arguments: Vec::new(),
+            ground: beyond.ground.unwrap_or(crate::named::Ground::Nowhere),
+            working: beyond.working,
+            reversed,
+            terminal: beyond.terminal.unwrap_or_else(|| Box::new(term::Absent)),
             clock: clock::Clock::new(clock),
             random: random::Random::new(random),
             limits,
@@ -424,6 +465,7 @@ impl Host {
             instant_sleeps,
             internet,
             resolver: crate::reach::lookup,
+            finder: crate::starts::found,
         }
     }
 }
@@ -483,7 +525,7 @@ pub fn linker(engine: &Engine) -> Result<Linker<Host>, String> {
 }
 
 /// The linker with lengua's host for `module` alone, in its engine: the functions of WASI
-/// preview 1 and of lengua's own network module that the module imports, each the very function
+/// preview 1 and of lengua's own modules that the module imports, each the very function
 /// [`linker`] defines, and no others. A
 /// run from a shell runs one module once, and defining a function has a cost of its own (all
 /// 46 took 0.04 to 0.08 ms more of a run of 1.1 ms on Linux on x86-64, as W19 measured), so it
@@ -941,6 +983,7 @@ fn define(linker: &mut Defining<'_>) -> wasmtime::Result<()> {
     )?;
 
     define_net(linker)?;
+    define_own(linker)?;
 
     // The functions lengua doesn't give: they answer NOSYS, so a module that imports one and
     // never calls it runs.
@@ -1128,6 +1171,128 @@ fn define_net(linker: &mut Defining<'_>) -> wasmtime::Result<()> {
     Ok(())
 }
 
+/// The table's entry for `name` of `module`, one of lengua's own.
+fn own_spec(module: &str, name: &str) -> wasmtime::Result<&'static Function> {
+    wasi::imported(module, name)
+        .ok_or_else(|| wasmtime::Error::msg(format!("lengua's host has no {name}")))
+}
+
+/// Defines lengua's own functions for the files a program's arguments name, the programs it
+/// starts and the terminal, each in its own module.
+fn define_own(linker: &mut Defining<'_>) -> wasmtime::Result<()> {
+    use wasi::{FS_MODULE, RUN_MODULE, TERM_MODULE};
+    let unsigned = i32::cast_unsigned;
+
+    let f = own_spec(FS_MODULE, "file_open")?;
+    linker.func_wrap(
+        FS_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>, argument: i32, mode: i32, out: i32| {
+            answer(&mut caller, f, |memory, host| {
+                named::file_open(
+                    host,
+                    memory,
+                    unsigned(argument),
+                    unsigned(mode),
+                    unsigned(out),
+                )
+            })
+        },
+    )?;
+    let f = own_spec(FS_MODULE, "folder_open")?;
+    linker.func_wrap(
+        FS_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>, argument: i32, out: i32| {
+            answer(&mut caller, f, |memory, host| {
+                named::folder_open(host, memory, unsigned(argument), unsigned(out))
+            })
+        },
+    )?;
+    let f = own_spec(RUN_MODULE, "program_run")?;
+    linker.func_wrap(
+        RUN_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>,
+              command: i32,
+              command_len: i32,
+              input: i32,
+              input_len: i32,
+              output: i32,
+              output_len: i32,
+              size: i32,
+              code: i32| {
+            answer(&mut caller, f, |memory, host| {
+                start::program_run(
+                    host,
+                    memory,
+                    (unsigned(command), unsigned(command_len)),
+                    (unsigned(input), unsigned(input_len)),
+                    (unsigned(output), unsigned(output_len)),
+                    (unsigned(size), unsigned(code)),
+                )
+            })
+        },
+    )?;
+    let f = own_spec(TERM_MODULE, "term_is")?;
+    linker.func_wrap(
+        TERM_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>, fd: i32, out: i32| {
+            answer(&mut caller, f, |memory, host| {
+                term::term_is(host, memory, unsigned(fd), unsigned(out))
+            })
+        },
+    )?;
+    let f = own_spec(TERM_MODULE, "term_size")?;
+    linker.func_wrap(
+        TERM_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>, columns: i32, rows: i32| {
+            answer(&mut caller, f, |memory, host| {
+                term::term_size(host, memory, unsigned(columns), unsigned(rows))
+            })
+        },
+    )?;
+    let f = own_spec(TERM_MODULE, "term_raw")?;
+    linker.func_wrap(
+        TERM_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>, mode: i32| {
+            answer(&mut caller, f, |_, host| {
+                term::term_raw(host, unsigned(mode))
+            })
+        },
+    )?;
+    Ok(())
+}
+
+/// The most of what a program asked to reach by itself that a run's report holds, and the most
+/// refusals a run from a shell says on standard error.
+const NOTED: usize = 64;
+
+impl Host {
+    /// Notes what became of something the program asked to reach by itself, for the run's
+    /// report: `what` it asked for, and why it didn't get it when it didn't. A refusal by
+    /// lengua's rules, `refused`, is said on standard error too in a run from a shell.
+    pub fn note(&mut self, what: String, problem: Option<String>, refused: bool) {
+        if refused
+            && let Some(why) = &problem
+            && matches!(self.stderr, stdio::Output::Here(_))
+            && self.notes.refused < NOTED
+        {
+            self.notes.refused += 1;
+            eprintln!("lengua-mcp: the program asked for {what}, which lengua refused: {why}");
+        }
+        if self.notes.opened.len() < NOTED {
+            self.notes.opened.push(crate::wasm::job::Reached {
+                place: what,
+                problem,
+            });
+        }
+    }
+}
+
 /// `args_sizes_get` and `environ_sizes_get`: how many `strings`, and their bytes with a NUL each.
 fn strings_sizes(
     memory: &mut [u8],
@@ -1266,7 +1431,7 @@ fn fd_close(host: &mut Host, fd: u32) -> Result<(), Fail> {
         Some(Descriptor::Listener(_) | Descriptor::Socket(_) | Descriptor::Datagram(_)) => {
             policy.network()
         }
-        Some(_) => policy.files || policy.network(),
+        Some(_) => policy.holds_files() || policy.network(),
     };
     if !allowed {
         return Err(Fail::Errno(errno::NOTCAPABLE));
@@ -1319,7 +1484,7 @@ fn fd_read(
             }
         }
         Some(Descriptor::File(open)) => {
-            if !policy.files {
+            if !policy.holds_files() {
                 return Err(Fail::Errno(errno::NOTCAPABLE));
             }
             for range in buffers {
@@ -1338,7 +1503,7 @@ fn fd_read(
             }
         }
         Some(Descriptor::Folder(_)) => {
-            return Err(Fail::Errno(if policy.files {
+            return Err(Fail::Errno(if policy.holds_files() {
                 errno::ISDIR
             } else {
                 errno::NOTCAPABLE
@@ -1390,7 +1555,7 @@ fn fd_write(
             }
         }
         Some(Descriptor::File(open)) => {
-            if !policy.files {
+            if !policy.holds_files() {
                 return Err(Fail::Errno(errno::NOTCAPABLE));
             }
             for range in buffers {

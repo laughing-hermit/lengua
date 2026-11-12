@@ -1356,6 +1356,18 @@ impl Module {
                      the ones a program opens by itself, so this program is tested, not proven"
                 ));
             }
+            // Nor a file the user names when the program runs, a program it starts, or the
+            // terminal: the model's files are the working folder's, it has no other program,
+            // and its standard input is the test's bytes.
+            if wasi::own_module(module) {
+                return Err(format!(
+                    "it imports {module}.{name}, which reaches what its idea grants while it \
+                     runs: the model follows the working folder, the connections lengua makes \
+                     before a program starts and the input a test gives, not a file an argument \
+                     names, a program it starts or the terminal, so this program is tested, not \
+                     proven"
+                ));
+            }
             let host = (module.as_str() == wasi::MODULE)
                 .then(|| wasi::function(name))
                 .flatten()

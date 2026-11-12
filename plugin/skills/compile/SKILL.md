@@ -50,10 +50,12 @@ alone, by the steps below: `check` refuses any other code file and says what to 
    | [the event-loop server](assets/server-template.wat) | [idea](assets/server-template-wat-idea.md) | A server for several clients at once: `poll_oneoff`, `sock_accept`, `sock_recv`, `sock_send` |
    | [the word tally](assets/tally-template.wat) | [idea](assets/tally-template-wat-idea.md) | Counts or lookups by key: a hash table, a merge sort and buffered output, in their plain form, which step 7 makes fast |
    | [the client that follows](assets/client-template.wat) | [idea](assets/client-template-wat-idea.md) | A client that opens its own connections, with `tcp_open`, to the computers its idea grants: a request built from a name and a path, and a redirect followed |
+   | [the copy](assets/files-template.wat) | [idea](assets/files-template-wat-idea.md) | Files the user names: each opened with `file_open` by the place of the argument that names it, one to read and one to write |
+   | [the two programs](assets/program-template.wat) | [idea](assets/program-template-wat-idea.md) | Programs started with `program_run`: a command, its output, its exit code, and a program the computer does not have |
+   | [the key](assets/terminal-template.wat) | [idea](assets/terminal-template-wat-idea.md) | The terminal: keys as they are pressed with `term_raw`, put back, and the same program with no terminal |
 
-   A program for the terminal has no WebAssembly form until lengua's host gives the terminal's
-   two imports, raw mode and the window's size, and a program that needs threads has none
-   either: tell the user so rather than promise one.
+   A program that needs threads has no WebAssembly form: tell the user so rather than promise
+   one.
 3. **Plan the functions** before you write them: at most 180 operators each (rule 4), and at
    least two assertions per function on average. `$main`, exported as `_start`, checks the inputs
    and calls the functions that do the work; it never reaches its end: each path ends in

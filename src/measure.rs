@@ -926,6 +926,7 @@ impl Order for ModuleOrder<'_> {
             policy: self.policy,
             listen: self.listen,
             connections: &[],
+            own: &[],
             source: Source::Unknown,
         }
     }

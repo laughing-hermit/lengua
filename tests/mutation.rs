@@ -1,9 +1,10 @@
-//! Mutation testing of what lengua proves: for every proven WebAssembly fixture and the main
-//! template, semantic mutants of its main.wat (a number moved by one, a comparison turned to its
-//! opposite, a named constant moved by one) each go through `check`, and each must be caught, by
-//! the rules, a test, or a proof, never come out proven. A mutant that survives is a missing test
-//! or proof, or one that changes nothing an idea can see, which its report shows for a person to
-//! judge.
+//! Mutation testing of what lengua proves and tests: for every proven WebAssembly fixture, the
+//! main template, and the programs lengua tests and cannot prove, semantic mutants of its
+//! main.wat (a number moved by one, a comparison turned to its opposite, a named constant moved by
+//! one) each go through `check`, and each must be caught, by the rules, a test, or a proof, never
+//! come out proven, nor, where no proof stands behind the tests, come out done. A mutant that
+//! survives is a missing test or proof, or one that changes nothing an idea can see, which its
+//! report shows for a person to judge.
 //!
 //! Slow (a check of every mutant, its proofs included), so it's ignored: run it by hand, or on
 //! CI's dispatch, with `--ignored every_proven_programs_mutants_are_caught`, and
@@ -54,6 +55,45 @@ const EQUIVALENT: &[(&str, &str)] = &[
         "$sizes.size grows from 8 to 9: no code reads the size, args_sizes_get still writes 8 \
          bytes at 2048, and the next region, $argv, starts at 2064",
     ),
+    (
+        "examples/copy/main.wat L60:const+1",
+        "$buffer moves from 65536 to 65537: its 65,537 bytes end at 131,074, inside the three \
+         pages, it is the last region, and $fill and $write_all are both lent the same address",
+    ),
+    (
+        "examples/computer/main.wat L42:const+1",
+        "$nothing moves from 1152 to 1153: its 4 bytes end at 1157, below $results at 1160, and \
+         no byte of it is read, since a started program is given none of them",
+    ),
+    (
+        "examples/computer/main.wat L48:const+1",
+        "$said moves from 2048 to 2049: its 256 bytes end at 2305, inside the one page, it is \
+         the last region, and program_run and $write_all are both lent the same address",
+    ),
+    (
+        "examples/key/main.wat L40:const+1",
+        "$key moves from 1088 to 1089: it is one byte and the last region, $fill is lent the \
+         same address, and the program never reads the key's value",
+    ),
+];
+
+/// Mutants of a program lengua tests and can't prove that no test of its idea can reach, each
+/// with why: a test has no way to make what they change happen, so they pass every test, and
+/// no proof stands behind the tests to catch them. A run that finds another names it here,
+/// with why, or gets a test that reaches it.
+const UNREACHED: &[(&str, &str)] = &[
+    (
+        "examples/copy/main.wat L23:const+1",
+        "$EXIT_IO_FAILED moves from 4 to 5: the program exits with it only when a read, a write \
+         or a close of a file it opened fails, or a write to standard error does, and no step \
+         of a test makes one of them fail",
+    ),
+    (
+        "examples/key/main.wat L22:const+1",
+        "$AS_BEFORE moves from 0 to 1: the program gives it to term_raw only once the terminal \
+         is raw, and a test has no terminal. tests/wasm_named.rs runs the program at a \
+         pseudo-terminal on Linux and macOS, where the terminal's mode after the run shows it",
+    ),
 ];
 
 /// The programs whose mutants are checked: each idea, then its main.wat.
@@ -80,6 +120,17 @@ const PROGRAMS: &[(&str, &str)] = &[
         "plugin/skills/compile/assets/main-template-idea.md",
         "plugin/skills/compile/assets/main-template.wat",
     ),
+];
+
+/// The programs lengua tests and doesn't prove, since they reach what the model doesn't follow
+/// (a connection, a file or a program they open themselves, the terminal): each idea, then
+/// its main.wat. No proof stands behind their tests, so a mutant of one must break a rule or
+/// fail a test: one that comes out done survived.
+const TESTED: &[(&str, &str)] = &[
+    ("examples/follow/idea.md", "examples/follow/main.wat"),
+    ("examples/copy/idea.md", "examples/copy/main.wat"),
+    ("examples/computer/idea.md", "examples/computer/main.wat"),
+    ("examples/key/idea.md", "examples/key/main.wat"),
 ];
 
 fn read(path: &str) -> String {
@@ -237,10 +288,12 @@ fn fate(report: &Value) -> Fate {
     }
 }
 
-/// Every mutant of each of `programs`, checked in `session`: the survivors, described. With
+/// Every mutant of each of `programs`, checked in `session`: the survivors, described. A
+/// mutant of a program that is `proven` survives when every proof says it is right; one of a
+/// program that is only tested survives when no rule and no test caught it. With
 /// `LENGUA_MUTATE_ONLY` set to a comma-separated list, only the programs whose main.wat path
 /// contains one of its parts, so a program just added can be run alone.
-async fn survivors(session: &Session, programs: &[(&str, &str)]) -> Vec<String> {
+async fn survivors(session: &Session, programs: &[(&str, &str)], proven: bool) -> Vec<String> {
     let only = std::env::var("LENGUA_MUTATE_ONLY").ok();
     let wanted = |code: &str| {
         only.as_deref()
@@ -269,7 +322,16 @@ async fn survivors(session: &Session, programs: &[(&str, &str)]) -> Vec<String> 
             let found = fate(&report);
             eprintln!("{code} {name}: {found:?}");
             let named = format!("{code} {name}");
-            if found == Fate::Survived && !EQUIVALENT.iter().any(|(known, _)| *known == named) {
+            let caught = if proven {
+                found != Fate::Survived
+            } else {
+                matches!(found, Fate::Rules | Fate::Tests)
+            };
+            let judged = EQUIVALENT
+                .iter()
+                .chain(UNREACHED)
+                .any(|(known, _)| *known == named);
+            if !caught && !judged {
                 survived.push(named);
             }
             *tally.entry(format!("{found:?}")).or_insert(0) += 1;
@@ -283,11 +345,13 @@ async fn survivors(session: &Session, programs: &[(&str, &str)]) -> Vec<String> 
 #[ignore = "checks every mutant through to its proofs: by hand, or on CI's dispatch"]
 async fn every_proven_programs_mutants_are_caught() {
     let session = Session::proving_for(Protocol::Discover, PROOF_SECONDS).await;
-    let survived = survivors(&session, PROGRAMS).await;
+    let mut survived = survivors(&session, PROGRAMS, true).await;
+    survived.extend(survivors(&session, TESTED, false).await);
     session.service.cancel().await.expect("close the session");
     assert!(
         survived.is_empty(),
-        "mutants that came out proven: {survived:#?}"
+        "mutants that came out proven, or passed every test of a program with no proof: \
+         {survived:#?}"
     );
 }
 

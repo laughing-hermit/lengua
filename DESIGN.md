@@ -98,7 +98,15 @@ key, OKF's `tags`, `sources`, `generated` and `verified` among them, is kept and
     nothing.
   - `- Network:` the places it connects to (a TCP port of this computer, of a named computer, over
     TLS to a named computer, or of the computer an argument names), at most 16; and the one TCP
-    port it listens on, for one client at a time or for up to N at once.
+    port it listens on, for one client at a time or for up to N at once; and, each on a line of
+    its own, what it opens by itself while it runs (the host, below).
+  - `- Files:` the files and folders the user names when the program runs, by the argument that
+    names each: `reads the file its first argument names`, `writes`, `reads and writes`, `the
+    folder its second argument names`, or `the files its arguments name` for every argument. At
+    most 16.
+  - `- Runs:` a program it may start, by its name in backticks, with the arguments the line
+    bounds: each written in backticks, `a value` for one the program chooses, `up to N values`
+    last, and `, within N seconds` for its time. Never a shell. At most 16.
   - `- Secret:` the inputs whose values must not decide how it runs: standard input, a named file,
     an environment variable or an argument.
   - `- Builds on:` links to the idea.md of each part it takes functions from.
@@ -575,9 +583,11 @@ All 46 functions of preview 1 are linked, so a toolchain's module links whatever
 are given. 16 answer `NOSYS`: `fd_advise`, `fd_allocate`, `fd_datasync`, `fd_fdstat_set_flags`,
 `fd_fdstat_set_rights`, `fd_filestat_set_size`, `fd_filestat_set_times`, `fd_pread`, `fd_pwrite`,
 `fd_renumber`, `fd_sync`, `path_filestat_set_times`, `path_link`, `path_readlink`, `path_symlink`
-and `proc_raise`. Besides WASI's, lengua gives seven functions of its own, in the module
-`lengua_net_1`, for what a program opens on the network by itself (below). Every error, of
-WASI's functions and of lengua's own, is one of a closed set of 24 of WASI's numbers, and an
+and `proc_raise`. Besides WASI's, lengua gives thirteen functions of its own, each in a module of
+its own name, for what a program reaches by itself while it runs (below): seven in
+`lengua_net_1` for the network, two in `lengua_fs_1` for the files its arguments name, one in
+`lengua_run_1` to start a program, and three in `lengua_term_1` for the terminal. Every error,
+of WASI's functions and of lengua's own, is one of a closed set of 24 of WASI's numbers, and an
 error outside a function's own list becomes `IO`.
 
 Each call checks the idea first: one the idea doesn't allow answers before any of its buffers is
@@ -593,7 +603,11 @@ its work. The idea's lines decide what is allowed (`src/wasm/host/policy.rs`):
   `sock_accept` on its listener;
 - `opens TCP connections to`: `tcp_open`; `looks up the addresses of`: `dns_lookup`; `sends UDP
   datagrams to`: `udp_open`, `udp_send` and `udp_recv`; `receives UDP datagrams on`:
-  `udp_recv_from` and `udp_send_to`.
+  `udp_recv_from` and `udp_send_to`;
+- a `- Files:` line: `file_open`, and what reads, writes, seeks and closes a file; one that
+  names a folder: `folder_open`, and what `files` allows on a folder and the paths in it;
+- a `- Runs:` line: `program_run`;
+- `the terminal`: `term_is`, `term_size` and `term_raw`.
 
 A call the idea doesn't allow answers `NOTCAPABLE` and does nothing, except five that toolchains'
 startup code calls, which answer harmlessly: an empty environment, no folder, and zeros for random
@@ -707,6 +721,98 @@ test's program opens reaches a real computer. The prover refuses a module that i
 network is the connections made before the start, so such a program is tested, not proven.
 `check`'s reply and `run`'s (`may_reach`) say each grant in words, and a run from a shell says
 them on standard error before the program starts, with what lengua refused while it ran.
+
+Files the user names (W18, `src/named.rs`, `src/wasm/host/named.rs`): by default a program
+reaches files only beneath its working folder. A `- Files:` line grants a file or a folder that
+one of its arguments names, to read, to write or both:
+
+| The idea's line | What the program may do, with which import of `lengua_fs_1` |
+|---|---|
+| `reads the file its first argument names` (`writes`, `reads and writes`) | open that file: `file_open(argument, mode, out_fd)` |
+| `reads the files its arguments name` | open the file any argument names, the same way |
+| `reads the folder its first argument names` (`reads and writes`) | open that folder, and the paths in it with WASI's own functions: `folder_open(argument, out_fd)` |
+
+The program gives the argument's place, from 1, and never a path: lengua reads the argument,
+which the user typed, so no path a program builds from what it read is ever opened. `mode` adds
+1 to read, 2 to write, 4 to make the file when it isn't there, 8 to empty it and 16 to write at
+its end. Every call goes the same way:
+1. A line of the idea must cover the argument's place, as a file or as a folder, and the mode:
+   a file granted for reading isn't opened to write (`NOTCAPABLE`).
+2. lengua resolves the argument's text. In a test, beneath the test's own folder, by the
+   working folder's rules, so a path that starts at the root or climbs out is `NOTCAPABLE` and a
+   test reaches no file of the user's. In a run, on the user's file system: a path that doesn't
+   start at the root counts from the shell's current folder, or from the `run` tool's `folder`,
+   and the links of the folders on the way are followed once, as the system follows them for
+   any program the user runs.
+3. The place it found is never one of lengua's own (`named::forbidden`): a file may not lie in
+   the data folder or the folder of compiled modules, and a folder may not be one, hold one or
+   lie in one. Nor the system's: `/proc`, `/sys` and `/dev` on Linux and macOS, and on Windows
+   anything that isn't on a drive or a share, which takes the devices and the pipes.
+4. The file is opened beneath the folder lengua resolved, with every rule of a file in the
+   working folder: its last name is held to what every system takes and found byte for byte,
+   it is never a link, what opens is a regular file, and a file with more than one name isn't
+   opened, before it is emptied when it was to be. A folder is a root like the working folder,
+   with its rules; one granted for reading takes no file to write, makes nothing, removes
+   nothing and renames nothing (`NOTCAPABLE`), and nothing moves from one root to another.
+
+A named file is a descriptor like any other: the run's file limits, the descriptors' count and
+the deadline hold it. What lengua refused is in the run's report, and a run from a shell says,
+before the program starts, the place each argument names.
+
+Programs a program starts (W18, `src/starts.rs`, `src/wasm/host/start.rs`): by default a program
+starts nothing. A `- Runs:` line names one program and bounds its arguments, and the program
+starts it with `program_run(command, command_len, input, input_len, output, output_len,
+out_size, out_code)` of `lengua_run_1`: the command is the program's name and then each
+argument, each ended by a NUL. lengua starts the program, gives it the input as its standard
+input, waits until it ends, and writes what it printed, how many bytes that is, and its exit
+code. Nothing stays behind the call: no process and no descriptor. The order is the defence:
+1. A rule of the idea must cover the command (`Rule::covers`): its name, each argument the line
+   writes byte for byte, a value where the line leaves one to the program, and no argument
+   more. A value is 1 to 255 bytes of text with no control character, and never starts with
+   `-` or `/`, so it is no option on any system. Nothing is looked for otherwise.
+2. lengua finds the program itself (`starts::found`): in the absolute folders of the user's
+   `PATH`, in order; on Windows a `.exe` alone, never a `.bat` or a `.cmd`. A line never names a
+   shell or a program that only starts another (`sh`, `bash`, `cmd`, `powershell`, `env`,
+   `xargs`, `sudo` and others, `starts::SHELLS`), and the file a name resolves to, with its
+   links followed, isn't one by its own name either. The file never lies where the program
+   could have written it: its working folder, a place one of its arguments names under a
+   `- Files:` line, or the system's temporary folder.
+3. lengua starts that file with no shell between: an empty environment (on Windows the one
+   variable `SystemRoot`, with the system's own value, which Windows's libraries need to load;
+   Windows on ARM64 adds `PROCESSOR_ARCHITECTURE`, the CPU's name, to every process by itself);
+   a new empty folder of lengua's as its current folder, removed afterwards; standard input a
+   pipe with the program's bytes, standard output a pipe lengua reads, standard error nothing;
+   and no other handle of lengua's.
+4. It has its line's seconds (10, or `within N seconds`, 1 to 600) and never past the run's
+   deadline, and the program's buffer for what it prints. Past either, lengua ends it and every
+   process it started, its process group on Linux and macOS and its job on Windows, and the
+   call answers `TIMEDOUT`, or `FBIG` with the buffer full.
+
+The started program is the user's own, with the user's rights: lengua doesn't confine it, and
+what bounds it is its name and its arguments, which `check` and `run` show. A lengua program
+started this way, through `lengua-mcp run`, is held to its own lock and idea as always, and gets
+nothing of the starter's grants.
+
+The terminal (W18, `src/wasm/host/term.rs`, `lengua_os::terminal`): an idea that uses `the
+terminal` may call three functions of `lengua_term_1`. `term_is(fd, out)` writes whether
+standard input, output or error is a terminal. `term_size(out_columns, out_rows)` writes its
+size. `term_raw(mode)` with 1 makes standard input give keys as they're pressed, with no echo
+and no line editing, Enter as the byte 13 and the keys as a terminal's sequences on every
+system; with 0 the terminal is as it was. The interrupt key stays, so Ctrl-C still ends the
+program. Once raw, a thread of lengua's reads the keys, so `poll_oneoff` can wait for a key
+until a time. lengua puts the terminal back as it was when the program's host is dropped, which
+every end of a run comes to (its return, `proc_exit`, a trap, the deadline, lengua's stop), and
+from a handler when a signal ends the process (`SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT`) or
+Windows's console closes. Only a run from a shell has a terminal: in a test and in the `run`
+tool `term_is` writes 0 and the other two answer `NOTTY`.
+
+In a test nothing of these reaches the user's computer: a named path stays in the test's own
+folder, and no program is started. A step of the test says what a command gives (``the program
+`hostname` prints `box\n` and exits with code `0` ``), every test of the idea sees those, and a
+command no step gives isn't there (`NOENT`). The prover refuses a module that imports from any
+of lengua's own modules, as it does for the network: the model's files are the working folder's,
+it has no other program, and its input is the test's bytes, so such a program is tested, not
+proven. `check`'s reply and `run`'s (`may_reach`) say each grant in words, the terminal's too.
 
 The clock: both clocks are rounded down to a microsecond (`src/wasm/host/clock.rs`). In a test the
 clock and the random bytes may come from the test; otherwise random bytes come from the system.
@@ -1039,7 +1145,8 @@ listed below.
 ### What lengua defends
 
 - **A program that reaches more than its idea grants.** The checker refuses an import from outside
-  WASI preview 1 and lengua's own `lengua_net_1`, one lengua doesn't give, one the idea doesn't
+  WASI preview 1 and lengua's own modules (`lengua_net_1`, `lengua_fs_1`, `lengua_run_1`,
+  `lengua_term_1`), one lengua doesn't give, one the idea doesn't
   allow, or one with another type.
   The host checks every call against the idea's lines, and every buffer a call borrows against the
   program's memory. Every path is resolved beneath the working folder by `cap-std`, and no
@@ -1059,7 +1166,16 @@ listed below.
   between the check and the connection; more than 64 connections held, or one held with no byte
   crossing it for 300 seconds; a datagram to a group or a broadcast address, an answer to an
   address that sent nothing, and more than three times what a sender sent on a port any
-  computer may reach. It gets environment
+  computer may reach. Where the idea grants a file or a folder an argument names, or a program
+  to start, lengua holds each to the grant too (the threat cases and their tests are in
+  docs/reviews/reach-2-2026-11-11.md): a path the program chose, which it can't give, since
+  it gives an argument's place; an argument or a mode no line covers; lengua's own folders
+  and the system's; a link at the last name, and a file with two names; a test's path that
+  leaves the test's folder; a command no line covers, by one argument more or one changed; a
+  value that starts as an option does; a shell, by its name or by the file its name resolves
+  to; a program that lies where the program could have written it; the user's environment;
+  a started program that runs past its time or prints past its room, with every process it
+  started; and a terminal left raw, however the program ends. It gets environment
   variables only when its idea uses the environment, and only those its test or the user's `run`
   names. WebAssembly holds every access inside the program's own memory, of at most 1 GiB for
   main.wat, the engine's stack limit holds its calls, the engine's epochs stop it at its
@@ -1072,7 +1188,8 @@ listed below.
   read without end. Its lengua.lock fails the HMAC. `check` writes lengua.lock and idea.md in the
   folder, and index.md and log.md in the folder's bundle, each by renaming a new file over the
   old, never through a link; the attester writes nothing there. A test's files are named inside
-  its fresh working folder, and a test's program reaches only the test's own servers.
+  its fresh working folder, and a test's program reaches only the test's own servers, opens no
+  file outside that folder, and starts no program: a step says what a command gives.
 - **A lock that isn't lengua's.** A lock lengua didn't write, or one changed outside lengua, fails
   its HMAC with the user's key, and `run` refuses the folder. So does a lock of another layout, a
   format lengua doesn't read, or proofs about another module.
@@ -1139,13 +1256,16 @@ listed below.
 Programs that need these can't be written in lengua yet, and the host has no way to give them:
 - threads, until WebAssembly's threads are standard: W20 plans structured fork-join that the rules
   show free of data races;
-- starting other programs; files outside the working folder; and the terminal's raw mode and
-  window size: W18 plans each as a grant the idea declares and the host enforces, as it has
-  done for connections a program opens itself, DNS and UDP (the host, above);
+- for a started program: a current folder other than an empty one of lengua's, so a tool
+  that works on the user's folder (`git status`) can't be started usefully yet; an
+  environment variable; its standard error; more than one at a time, or one that goes on
+  while the program does; and a path as a value where it starts with `/`;
+- for the terminal: the mouse, and a signal when the window's size changes;
 - on the network: a connection a program opens to this computer (it reaches this computer only
   through a connection lengua makes before it starts); a TCP listener and a UDP port in one
   program, or more than one of either; raw sockets, ICMP and multicast; and a proof of a
-  program that opens its own connections, which is tested, not proven;
+  program that opens its own connections, files or programs, or uses the terminal's
+  functions, which is tested, not proven;
 - GUIs, and libraries for other languages to call: no plan yet.
 
 The proofs and the rules have their own limits, said above: what the model refuses is tested, not

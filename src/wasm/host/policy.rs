@@ -153,6 +153,9 @@ impl Policy {
             Allowance::Names => !reach.names.is_empty(),
             Allowance::Datagrams => !reach.datagrams.is_empty(),
             Allowance::Receives => reach.receives.is_some(),
+            Allowance::Named => !reach.files.is_empty(),
+            Allowance::NamedFolder => reach.files.iter().any(|grant| grant.folder),
+            Allowance::Runs => !reach.runs.is_empty(),
         }
     }
 
@@ -163,6 +166,13 @@ impl Policy {
             .allowances
             .iter()
             .any(|allowance| self.meets(*allowance))
+    }
+
+    /// Whether the program may hold a file or a folder open: it names files, or its idea lets
+    /// it open what its arguments name.
+    #[must_use]
+    pub fn holds_files(&self) -> bool {
+        self.files || !self.reach.get().files.is_empty()
     }
 
     /// Whether the program may read standard input: it names it, or the terminal.

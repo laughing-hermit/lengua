@@ -107,8 +107,9 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
   other four runners; it was faster only on tally, and on sort on Windows on x86-64. Its peak
   memory was 0.98 to 19.33 times the best native build's, below it on one row (sort on macOS on
   ARM64). That gap is published, not hidden ([docs/benchmarks](docs/benchmarks/README.md)).
-- Programs lengua can't express yet: threads, GUIs, network connections a program opens on its
-  own, and UDP.
+- Programs lengua can't express yet: threads and GUIs. W18 gave connections a program opens on
+  its own, UDP, files anywhere the user names, programs to start and the terminal; a started
+  program that works in the user's folder is still out ("W18's second part", below).
 - A few workloads: tally, sort and histogram, where lengua's own programs are slower; W12c is on
   those now. lengua also uses about 1 MiB more memory per run, the last of run's own overhead.
   - 2026-11-10, after W12c (bench 42756074550, at 076bcc1): on all five runners, lengua's tally,
@@ -339,7 +340,8 @@ Still open from them, for the owner:
 
 ### W18's network: what a program opens by itself (2026-11-11)
 
-The first part of W18, on the branch `wip/reach-net`, not merged. DESIGN.md ("The host") has
+The first part of W18, built on the branch `wip/reach-net` and merged to main at ea25812.
+DESIGN.md ("The host") has
 the design as built, docs/reviews/reach-2026-11-11.md the threat cases with the test that holds
 each, and the decisions are with the others ("Decisions made during the pivot", W18's network).
 
@@ -401,10 +403,23 @@ Still open from it, for the owner:
   with none, which came after that run, and `examples/follow`'s refused redirect.
 - **Not proven**: a program that imports from `lengua_net_1` has no proof at all, of anything.
 - **The real network has no test on a runner**: a test's own servers stand in for every
-  computer, and the resolver in lengua's own tests is the test's. The system's resolver runs
-  only in a real run. TLS on a connection a program opened is tested against a server of the
-  test's own, with a certificate of its own, and not through `tcp_open` in a module: in a test's
-  internet a program's bytes are plain.
+  computer, and the resolver in the tests of what a program opens is the test's. What has run
+  on a runner, and what never has:
+  - The system's own resolver: since W18's second part one test asks it for `localhost`, the
+    one name every computer knows with no network
+    (`reach::tests::the_systems_resolver_answers_and_its_answer_is_held_to_the_rules`), and
+    holds what it answers to lengua's rules. It has never been asked for a name of the
+    internet on a runner, and never through `tcp_open`, `udp_open` or `dns_lookup` in a
+    module: there `spelled` refuses `localhost` before the resolver is asked, and any other
+    name would need the real internet.
+  - TLS on a connection a program opened: tested against a server of the test's own, with a
+    certificate of its own, by lengua's own function (`reach::secure`), and never through
+    `tcp_open` in a module. A test can't do it without the real internet as lengua stands: a
+    test's internet gives a program plain bytes, and outside a test lengua never reaches the
+    loopback, where a test's server would listen, and checks certificates against Mozilla's
+    roots alone. It would take a seam for the roots and an address of the runner that isn't
+    the loopback's; neither was added, so as not to open a way round either rule.
+  - A real computer of the internet, by TCP, UDP or a lookup: never, by design of the tests.
 - **The `run` tool's time**: a client that opens connections runs within `run`'s 10 to 40
   seconds; a UDP server serves in the background as a TCP one does.
 - **No limit on how many connections in all**, or a second: 64 at once, and the other end's
@@ -538,6 +553,155 @@ Still open from it, for the owner:
 - **The library reaches a user by a copy the agent makes** from the skill's assets. Nothing
   fetches a part, and nothing tells a user that a newer lengua ships a newer part.
 - **The attester doesn't hold a program to its parts**: `lengua-mcp check` reads one folder.
+### W18's second part: files the user names, programs, the terminal (2026-11-11)
+
+On the branch `wip/reach-2`, not merged: the owner lands it. DESIGN.md ("The host") has the
+design as built, docs/reviews/reach-2-2026-11-11.md the threat cases with the test that holds
+each, written before the code, and the decisions are with the others ("Decisions made during
+the pivot", W18's second part).
+
+What was built:
+1. **The grants**: `- Files:` lines (`reads`, `writes` or `reads and writes`, of `the file its
+   first argument names`, `the folder its … argument names` or `the files its arguments name`;
+   `src/named.rs`) and `- Runs:` lines (a program's name in backticks, its arguments each in
+   backticks or `a value`, `up to N values`, `within N seconds`; `src/starts.rs`), read by
+   `src/idea.rs`. `- Uses: the terminal` was there.
+2. **The calls**, lengua's own, each in a module of its own name: `lengua_fs_1` `file_open` and
+   `folder_open`; `lengua_run_1` `program_run`; `lengua_term_1` `term_is`, `term_size` and
+   `term_raw` (`src/wasm/wasi.rs`, `src/wasm/host/named.rs`, `start.rs`, `term.rs`). `NOTTY`,
+   kept in the closed set of errors for this, is now given.
+3. **The checks before anything is opened or started**, in an order that is the defence: the
+   grant and its mode, lengua's own resolution of the argument, the place held away from
+   lengua's folders and the system's, then the open with the working folder's rules; and for a
+   program, the rule that covers the whole command, lengua's own search of `PATH`, no shell, no
+   file the starter could have written, then a start with nothing inherited.
+4. **The limits**: a named file under the run's file limits; a started program's 10 seconds
+   (1 to 600 by its line), the program's buffer for its output, one at a time; 16 lines of each
+   kind, 32 arguments, 255 bytes a value.
+5. **The checker**: the import rule takes each function only as the idea grants it; a mode of
+   `file_open` and of `term_raw`, and `term_is`'s descriptor, are named constants; the secret
+   rule refuses a secret in a command, takes a started program's input as data, and what it
+   printed after a secret was sent as secret.
+6. **The tests' own world**: a named path stays in the test's folder; a step says what a
+   command gives (``the program `hostname` prints `box\n` and exits with code `0` ``) and
+   nothing is started; a test has no terminal.
+7. **What the user is told**: `may_reach` in `check`'s and `run`'s replies has each grant, the
+   terminal's too; a shell's run says each on standard error before the program starts, with
+   the place each argument names and the file each program is, and what lengua refused.
+8. **The prover** refuses a module that imports from any of the three: tested, not proven.
+9. **lengua-os**: the terminal's size and mode on Linux, macOS and Windows, with a handler that
+   puts the mode back when a signal or the console's closing ends the process; and a Windows
+   job, which ends a started program with what it started.
+10. **The skills and three examples**: write-idea (a reference page, `reach.md`, and the test
+    format's step), compile (host.md, the dialect, three templates), and `examples/copy`,
+    `examples/computer` and `examples/key`, each from its request to done on every runner.
+11. **Part 1's loose ends**: the white paper's statements about the network say what main
+    does; the mutation test takes the programs lengua tests and can't prove, `examples/follow`
+    and the three new ones, where a mutant that passes every rule and test survives; and a test
+    asks the system's own resolver for `localhost`, which needs no network.
+
+Its runs, each a dispatch of ci.yml on the branch:
+- 43078336636 (compile; Linux on x86-64, macOS on ARM64, Windows on x86-64, at 62007ea): clippy
+  passed and the tests built on all three; the format job gave its patch.
+- 43080279871 (the tests named for the three grants, on the same three systems, at 796e2a9):
+  the library's tests of the grants, the host's calls and the terminal passed on all three (45,
+  45 and 44, the one fewer on Windows a test of a link that Linux and macOS can make), and
+  `examples/copy` and `examples/computer` ran from a shell and through the `run` tool, the
+  second with each system's own `hostname` and `whoami`. Two faults: `examples/key`'s idea
+  named a parameter from standard input, which `the terminal` doesn't give a parameter; and on
+  macOS a terminal put back as it was read back with one more flag, `PENDIN`, the system's own
+  note that typed input waits, so the two tests of lengua-os that compare modes failed there.
+- 43080274426 (the library, `tests/wasm_named.rs` and every program; Linux on x86-64, at
+  796e2a9): 566 of the library's tests passed and 2 failed, the key idea's fault and a test of
+  the checker that asked for `file_open`'s line where a folder's line was there, which lets a
+  program import it.
+- 43084292537 (the library, `tests/wasm_named.rs`, every program, the templates and the skills;
+  Linux on x86-64, at 28bd12b): every test passed: 569 of the library, every program of
+  `examples/` and `tests/fixtures` from its request to done, the nine templates, the three runs.
+- 43084696723 (the defences taken out, commit 502060c, the tag `archive/wip/reach-2-off`; Linux
+  on x86-64): 23 of the tests failed, as the review lists.
+- 43085916748 (the mutation test, `examples/follow` and the three new examples; Linux on
+  x86-64, at 28bd12b): of follow's eight mutants four broke a rule and four failed a test. The
+  three new examples had seven that passed every test, each judged: `tests/mutation.rs` names
+  two that change nothing an idea can see and two that no test can reach, and
+  `examples/computer` lost the constant the other three were of.
+- 43088347062 (the same tests, with the faults fixed; macOS on ARM64 and Windows on x86-64, at
+  7f7375a): they passed on both, lengua-os's tests of a terminal's mode on macOS and of a
+  console's mode and a job on Windows among them.
+- 43089291308 (the terminal's tests; Linux on x86-64 and macOS on ARM64, at 82ec0c1): on Linux
+  `examples/key` ran from a shell at a pseudo-terminal, got its key with no Enter and left the
+  terminal as it was, and the same on macOS. The macOS job is marked failed all the same: its
+  tests passed, and its last step, which keeps the logs, couldn't upload them (GitHub
+  answered with errors that hour).
+- 43089522661 and 43093511750 (the mutation test again; Linux on x86-64, at 9bb836a and at
+  3a759bc): the first found two more of `examples/computer` that change nothing an idea can
+  see, a region of bytes nothing reads and the last region, each moved by one byte; with them
+  named, the test passed (its job is marked failed for the same last step, the upload of its
+  logs). Of the 29 mutants of the four programs, 12 broke a rule, 11 failed
+  a test, and `tests/mutation.rs` names the other 6 with why none is caught.
+- 43096759967: never started (GitHub's own failure at the run's start).
+- 43098886771 and 43099231987 (the suite on all five systems, at 3a759bc and at 2e885a8): both
+  failed, on two faults, and nothing else failed. On every system `tests/graph.rs` found
+  `examples/index.md` not as lengua writes it: two of its lines, `count`'s and `mean`'s, had
+  lost their links when the three new examples were put in. On Windows on ARM64 the test of a
+  started program's environment found one variable, `PROCESSOR_ARCHITECTURE`: lengua gives a
+  started program no variable but `SystemRoot`, and Windows on ARM64 puts that one, the CPU's
+  name, in every process it starts. The test now names it as the system's own, and DESIGN.md
+  says so. In the second run, on each of Linux on x86-64 and ARM64, macOS on ARM64 and Windows
+  on x86-64 and ARM64, there passed: the three examples and every other program from its
+  request to done, the nine templates, and the runs of `tests/wasm_named.rs`, with each
+  system's own `hostname` and `whoami` started; on the two Linux runners and macOS, the run at
+  a pseudo-terminal too; and the library's tests, but the one on Windows on ARM64.
+- 43121534983 (the suite on all five systems at c1a6625, the branch merged with the lean runner,
+  with the two faults fixed): green. The landing on main rests on it.
+- 43109219212 (the same suite at 9b7cd87, with the two faults fixed): Linux on x86-64 and on
+  ARM64 passed, and the run was replaced before the other three ended, because main moved:
+  W19's lean runner landed, and the branch took main in. `lengua-run`, which a shell's run
+  now uses, runs a program through the same host and the same grants as `lengua-mcp run`, and
+  its linker, which defines only what a module imports, defines the three new modules too.
+  `crates/lengua-run/tests/alone.rs` holds that with the three examples: `copy` opens the
+  files its arguments name and no file of lengua's own, `computer` starts `hostname` and
+  `whoami`, `key` hears that a run with no terminal has none, and on Linux and macOS `key`
+  reads a key at a pseudo-terminal, which is afterwards as it was.
+- 43101617400 (compile; Linux and Windows on x86-64): a trial of that merge, on a branch since
+  removed, built with clippy clean before main moved.
+
+Still open from it, for the owner:
+- **A started program can't work on the user's folder.** It runs in an empty folder of
+  lengua's own, with no environment: `git status`, a compiler, a formatter of files can't be
+  started usefully. What it would take is with the decisions.
+- **No pipes, and nothing left running**: one program a call, to its end.
+- **Not confined**: a started program is the user's own, with the user's rights. Its name and
+  arguments bound it, and the list of shells is a list: an interpreter with `-c` passes it.
+- **One result a command in an idea's tests**: every test sees every step that says what a
+  command gives.
+- **Not proven**: a program that imports from `lengua_fs_1`, `lengua_run_1` or `lengua_term_1`
+  has no proof at all, of anything.
+- **A link another process plants** at a named file's last name between lengua's look and its
+  open is followed beneath the same folder, as in the working folder.
+- **A named file from a shell has no size limit**, as the working folder has none there.
+- **On Windows a process is put in its job right after it starts**, so one it starts in that
+  moment is outside the job; on Linux and macOS a started program that makes a process group
+  of its own, or closes its output and stays, is not ended.
+- **`SIGKILL` restores no terminal**, and the mouse and a change of the window's size aren't
+  given.
+- **Never run on a runner against the real thing**:
+  - The terminal on Windows, from a program: lengua-os's functions set a console's mode, put it
+    back and read its size against a new console of the test's own, but `lengua-mcp run` has
+    never run at a real console there, so `term_raw` from a program, the keys as a terminal's
+    sequences and the handler for the console's events are untested on Windows. On Linux and
+    macOS a run at a pseudo-terminal is tested (`tests/wasm_named.rs`).
+  - Of the signals, `SIGTERM` alone: `SIGINT`, `SIGHUP` and `SIGQUIT` have the same handler and
+    no test. Ctrl-C at a real keyboard was never pressed.
+  - `term_size` and `term_is` from a program at a terminal, and a wait for a key with
+    `poll_oneoff`: the size is read by lengua-os's test, and the thread that reads keys is
+    tested with keys of the test's own.
+  - A started program that starts another, and is ended with it: the tests end one process, by
+    its time and by its output, and on Windows one process in a job.
+  - Any started program but `hostname`, `whoami` and the tests' own.
+  - A file on a network share, and one of Windows's device paths by an open: the device paths
+    are refused by their shape, which a test checks.
+  - A started lengua program.
 
 ### What the permission checks refused
 
@@ -903,6 +1067,97 @@ Each can be reversed.
     nothing: it has no terminal of its own to ask on, and the user ran it.
   - **The policy carries the grants by reference**, kept once for the process, so it stays a
     small value every caller copies, and a worker gets them with its job.
+- **W18's second part: files, programs, the terminal (2026-11-11)**, each made without asking,
+  on the owner's standing word, and each the owner's to reverse:
+  - **Three more modules of lengua's own**, named as the network's is: `lengua_fs_1`
+    (`file_open`, `folder_open`), `lengua_run_1` (`program_run`) and `lengua_term_1` (`term_is`,
+    `term_size`, `term_raw`). WASI preview 1 opens paths only beneath a folder it was given,
+    starts nothing, and says only whether a descriptor is a terminal.
+  - **The grants are lines of their own**, `- Files:` and `- Runs:`; the terminal keeps its
+    word in `- Uses:`, which was there. The idea's parser keeps them with the network's
+    run-time grants (`Network::reach`), since all of them are what a program opens by itself
+    while it runs and they travel together to a run; `Network::is_used` still means the network.
+  - **A program names a file by the place of an argument, never by a path.** `file_open` and
+    `folder_open` take a number. The user typed the argument; the program can't open a path it
+    built from what it read, so there is nothing to check a program's path against. The grant
+    names the argument (`first` to `ninth`, or every argument) and says `reads`, `writes` or
+    both, as the task asked. Cost: a program can't open "the file beside the one the user
+    named" (a sidecar, an include); it would need a folder grant. No grant names the home
+    folder or system files, as ROADMAP once listed: the user names what a program opens.
+  - **Links on the way are followed, a link at the end is not.** The folders of the user's
+    path are resolved as the system resolves them for any program the user runs (`/tmp` and
+    `/home` are links on some systems), once, and the place found is shown before the program
+    starts and held away from lengua's own folders and the system's. The last name follows the
+    working folder's rules: no link, a regular file, one name, a name every system takes, found
+    byte for byte. Cost: `prog ~/.bashrc` where that is a link to a dotfiles folder is refused;
+    the user names the file itself. A file in a folder of more than 1,048,576 entries isn't
+    opened: lengua lists the folder to find the name byte for byte.
+  - **lengua's own folders are told to the run**, with their links followed (`Job::own`,
+    `Here::own`): a worker has no other way to know a `--data-dir`. `/proc`, `/sys` and `/dev`
+    are refused on macOS as on Linux, and on Windows anything that isn't on a drive or a share:
+    every system's own, by the same rule. Cost: `prog /dev/stdin` and `prog /dev/null` are
+    refused; standard input is read as standard input.
+  - **In a test a named path stays in the test's folder**, whatever the argument says, so
+    `check` of a handed folder reads and writes nothing of the user's. A run through the `run`
+    tool counts a path from `folder`, or from its own empty temporary folder, and takes a whole
+    path as it is.
+  - **A started program is named by its name alone and found on `PATH`**, since an idea names
+    no computer and a path is one computer's. Only the absolute folders of `PATH` count; on
+    Windows only a `.exe`.
+  - **A command is covered whole or not at all**: the name, each argument the line writes, byte
+    for byte, and `a value` where the line leaves one to the program. A value never starts with
+    `-` or `/`, on every system, so it is never an option, on Windows either. Cost: a value
+    can't be a path from the root on Linux and macOS. The program chooses among the idea's
+    lines, which is "exactly which set".
+  - **Never a shell: a list.** `sh`, `bash`, `dash`, `zsh`, `fish`, `ksh`, `csh`, `tcsh`, `ash`,
+    `busybox`, `cmd`, `command`, `powershell`, `pwsh`, `wsl`, `env`, `xargs`, `sudo`, `doas`,
+    `su`, `nohup`, `nice`, `time`, `timeout`, `exec`, `eval`, `start`, `ssh`, `osascript`,
+    `wscript`, `cscript`, `mshta`, `rundll32`: refused in a line, and refused again as the file
+    a name resolves to. It is a list, so it is not complete: an interpreter with `-c`, or
+    `find -exec`, is as wide as the arguments the line writes, and the user reads the line.
+  - **A started program inherits nothing**: no environment (on Windows `SystemRoot` alone,
+    which the system's libraries need; it holds the system's folder and no secret; Windows on
+    ARM64 adds `PROCESSOR_ARCHITECTURE`, the CPU's name, to every process by itself), standard
+    input from the program, standard output to the program, no standard error, no other
+    handle. Cost: a tool that needs `HOME`, `PATH` or `LANG` gets none, and there is no way to
+    give one yet.
+  - **It runs in an empty folder of lengua's own**, made for the call and removed after it. A
+    program that could also write the started program's current folder could plant what it
+    reads there (a `.git/config`, a library a Windows program loads from its folder) and so
+    choose what runs. Cost: `git status` and every tool that works on the user's folder can't
+    be started usefully. This is the largest thing the grant leaves out, and it is the
+    owner's to decide how to give it: for a program with no write grant at all, the working
+    folder would be safe.
+  - **One call, one program, to its end**: `program_run` gives the input, waits, and gives back
+    the output and the exit code. No pipe between two started programs, no program left running
+    beside the starter, so no process and no descriptor outlives a call. Cost: no pipes, which
+    ROADMAP listed, and no long-running helper.
+  - **Time and output**: 10 seconds unless the line says `within N seconds`, 1 to 600, and
+    never past the run's deadline; the output is the program's buffer at most. Past either,
+    lengua ends the whole process group (Linux, macOS) or job (Windows) and the call answers
+    `TIMEDOUT` or `FBIG`. The exit code is its low 8 bits, and 128 and the signal's number for
+    one a signal ended.
+  - **A started lengua program is not special.** `lengua-mcp run other` holds `other` to its
+    own lock and idea, whoever started it, and nothing of the starter's reaches it. With no
+    environment it finds no data folder unless the line passes `--data-dir`. Not tested.
+  - **A test starts nothing.** A step says what a command gives, every test of the idea sees
+    every such step, and a command no step gives isn't there. Cost: one command has one result
+    in an idea's tests, so a behavior for "the program failed" needs another argument or
+    another program. A step for each test would need the behavior's number carried to every
+    run, which the test format doesn't have.
+  - **Raw mode keeps the interrupt key.** Keys come as they're pressed with no echo, Enter is
+    the byte 13 and keys are a terminal's sequences on every system (Windows's console is put
+    in its virtual-terminal input mode), but Ctrl-C still ends the program: the user can always
+    stop it, and lengua's handler puts the terminal back. Cost: a full-screen editor can't
+    take Ctrl-C as a key.
+  - **The terminal is put back by the host's own end, and by a handler**: dropping the host
+    restores it, which a return, an exit, a trap, the deadline and lengua's stop all come to;
+    `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT` and Windows's console events restore it from
+    lengua-os. Only a run from a shell has a terminal: a test and the `run` tool answer `NOTTY`.
+  - **A raw terminal's keys are read by a thread of lengua's**, so `poll_oneoff` can wait for a
+    key until a time, the same on every system, with no call of the system's own `poll` or
+    console events.
+  - **The prover refuses all three**, as it refuses the network's: tested, not proven.
 
 - **W21's parts (2026-11-11)**, each made without asking, on the owner's standing word, and
   each the owner's to reverse:
@@ -1041,14 +1296,18 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
   idea may grant whatever a C, C++ or Rust program can do: each grant is declared under
   `# Constraints`, checked by lengua, shown to the user before the program runs, enforced by the
   host, and modelled by the prover.
-  - Files anywhere the user names: a folder or file an argument names, the home folder, or
-    read-only system files.
+  - Files anywhere the user names: a folder or file an argument names. **Built on 2026-11-11**
+    (branch `wip/reach-2`; "W18's second part", above). A grant of the home folder or of
+    system files by name, which this line once listed, isn't built: the user names what a
+    program opens.
   - The network chosen at run time: any computer on a declared port, over TLS, and also UDP and
     DNS. **Built on 2026-11-11** (branch `wip/reach-net`; "W18's network", above, has what was
     built, its runs and what is left, and the decisions are with the others, above).
-  - Starting named programs (`- Runs: git`), with pipes.
-  - The terminal's two imports (keys as they're pressed, the window's size), so interactive
-    tools work.
+  - Starting named programs (``- Runs: `git` …``). **Built on 2026-11-11**, with the same
+    branch: one program a call, to its end, in an empty folder of its own. Pipes between
+    started programs, and a started program that works in the user's folder, aren't built.
+  - The terminal's imports (keys as they're pressed, the window's size, and whether a stream
+    is a terminal), so interactive tools work. **Built on 2026-11-11**, with the same branch.
   - What it unlocks: shells, build tools, package managers, crawlers, proxies, and programs over
     databases on any path.
 - **W19. Native speed: a lean runner and native builds.** Most of the gap to native builds is
@@ -1346,7 +1605,8 @@ this file at the tag `native-final`.
   uses one is "tested, not proven" for memory.
 - **Processes, GUIs, libraries for other languages to call:** outside the finish line's scope;
   W15 has DESIGN say what would bring each in. UDP and any URL are built, as part of W18;
-  processes are planned as part of it; GUIs and libraries for other languages to call stay
+  starting named programs is built too, as part of it; GUIs and libraries for other languages
+  to call stay
   here.
 
 ## Stopped by the safety filter

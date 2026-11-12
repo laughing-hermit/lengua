@@ -3,7 +3,10 @@
 //! the operating system on the runner of the system they are for. On Linux, a program run in a
 //! process forked from this one, with what the system counted of its cost; on Windows, how the
 //! system describes the CPU's caches, and what a child process cost; on Windows and macOS, the
-//! memory the computer has free and in all, and what a process holds of it. And on every system,
+//! memory the computer has free and in all, and what a process holds of it; on every system, the
+//! terminal a program runs in, its size and its mode made raw and put back, by a handler too
+//! when a signal or the console's closing ends the process; and on Windows, a job that ends a
+//! started program with every process it started. And on every system,
 //! a module the engine compiled ahead of its runs, loaded into the engine only when it carries
 //! the seal of the user's key ([`load_sealed`]).
 
@@ -106,6 +109,713 @@ mod windows {
         /// `information`, a `BY_HANDLE_FILE_INFORMATION`, which is thirteen 32-bit integers.
         #[link_name = "GetFileInformationByHandle"]
         pub(super) fn file_information(file: *mut core::ffi::c_void, information: *mut u32) -> i32;
+
+        /// `GetConsoleMode`: the mode of the console `console` is a handle of, written to
+        /// `mode`; 0 when it is no console.
+        #[link_name = "GetConsoleMode"]
+        pub(super) fn console_mode(console: *mut core::ffi::c_void, mode: *mut u32) -> i32;
+
+        /// `SetConsoleMode`: sets the mode of the console `console` is a handle of.
+        #[link_name = "SetConsoleMode"]
+        pub(super) fn set_console_mode(console: *mut core::ffi::c_void, mode: u32) -> i32;
+
+        /// `GetConsoleScreenBufferInfo`: what Windows knows of the console's screen, written to
+        /// `information`, a `CONSOLE_SCREEN_BUFFER_INFO`, which is eleven 16-bit integers.
+        #[link_name = "GetConsoleScreenBufferInfo"]
+        pub(super) fn screen_information(
+            console: *mut core::ffi::c_void,
+            information: *mut i16,
+        ) -> i32;
+
+        /// `SetConsoleCtrlHandler`: adds `handler` to what Windows calls, on a thread of its
+        /// own, when the console gets Ctrl-C or Ctrl-Break, or is closed.
+        #[link_name = "SetConsoleCtrlHandler"]
+        pub(super) fn set_control_handler(
+            handler: Option<unsafe extern "system" fn(u32) -> i32>,
+            add: i32,
+        ) -> i32;
+
+        /// `CreateJobObjectW`: a new job with no name; null when Windows makes none.
+        #[link_name = "CreateJobObjectW"]
+        pub(super) fn create_job(
+            security: *mut core::ffi::c_void,
+            name: *const u16,
+        ) -> *mut core::ffi::c_void;
+
+        /// `SetInformationJobObject`: sets the limits of `job` of the class `class` from the
+        /// `length` bytes at `information`.
+        #[link_name = "SetInformationJobObject"]
+        pub(super) fn set_job_information(
+            job: *mut core::ffi::c_void,
+            class: i32,
+            information: *const core::ffi::c_void,
+            length: u32,
+        ) -> i32;
+
+        /// `AssignProcessToJobObject`: puts `process` in `job`, and with it every process it
+        /// starts from then on.
+        #[link_name = "AssignProcessToJobObject"]
+        pub(super) fn assign_to_job(
+            job: *mut core::ffi::c_void,
+            process: *mut core::ffi::c_void,
+        ) -> i32;
+
+        /// `TerminateJobObject`: ends every process of `job` with the exit code `code`.
+        #[link_name = "TerminateJobObject"]
+        pub(super) fn terminate_job(job: *mut core::ffi::c_void, code: u32) -> i32;
+
+        /// `CloseHandle`: closes a handle this process holds.
+        #[link_name = "CloseHandle"]
+        pub(super) fn close_handle(handle: *mut core::ffi::c_void) -> i32;
+    }
+}
+
+/// A Windows job: the processes put in it, and every process they start, end together when
+/// lengua ends the job or drops it. lengua puts a program it starts for a lengua program in
+/// one, so that nothing the started program left behind outlives the call.
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct Job(*mut core::ffi::c_void);
+
+// SAFETY: a job's handle is a number Windows takes from any thread, and `Job` has no other
+// state.
+#[cfg(windows)]
+unsafe impl Send for Job {}
+
+/// The class of a job's limits that holds `KILL_ON_JOB_CLOSE`:
+/// `JobObjectExtendedLimitInformation`.
+#[cfg(windows)]
+const JOB_EXTENDED_LIMITS: i32 = 9;
+
+/// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: the job's processes end when its last handle closes.
+#[cfg(windows)]
+const JOB_KILL_ON_CLOSE: u64 = 0x2000;
+
+/// How many 64-bit words a `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` takes on 64-bit Windows: 64
+/// bytes of basic limits, 48 of counters and 32 of memory limits.
+#[cfg(windows)]
+const JOB_LIMIT_WORDS: usize = 18;
+
+/// Which of those words holds `LimitFlags`, in its low half: the two time limits come first.
+#[cfg(windows)]
+const JOB_LIMIT_FLAGS: usize = 2;
+
+#[cfg(windows)]
+impl Job {
+    /// A new job that holds `process`, and ends its processes when it is dropped.
+    ///
+    /// # Errors
+    ///
+    /// What Windows says, when it makes no job or won't put the process in it.
+    pub fn holding(process: &impl std::os::windows::io::AsRawHandle) -> std::io::Result<Self> {
+        // SAFETY: both arguments may be null: a job with the default security and no name.
+        let handle = unsafe { windows::create_job(std::ptr::null_mut(), std::ptr::null()) };
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let job = Self(handle);
+        let mut limits = [0_u64; JOB_LIMIT_WORDS];
+        limits[JOB_LIMIT_FLAGS] = JOB_KILL_ON_CLOSE;
+        let length = u32::try_from(std::mem::size_of_val(&limits)).unwrap_or(u32::MAX);
+        // SAFETY: `limits` holds the 144 bytes of a JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        // aligned to 8 as its fields need, and Windows reads `length` bytes of it.
+        let set = unsafe {
+            windows::set_job_information(
+                job.0,
+                JOB_EXTENDED_LIMITS,
+                limits.as_ptr().cast::<core::ffi::c_void>(),
+                length,
+            )
+        };
+        if set == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: the job's handle is open, and the process's is for as long as `process` is
+        // borrowed.
+        let assigned = unsafe { windows::assign_to_job(job.0, process.as_raw_handle()) };
+        if assigned == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(job)
+    }
+
+    /// Ends every process of the job now.
+    pub fn end(&self) {
+        // SAFETY: the job's handle is open until `self` is dropped.
+        unsafe {
+            windows::terminate_job(self.0, 1);
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Job {
+    fn drop(&mut self) {
+        // SAFETY: the handle is the job's own, open until now, and closed once.
+        unsafe {
+            windows::close_handle(self.0);
+        }
+    }
+}
+
+/// The terminal a program runs in, on Linux and macOS: its size, and its mode made raw and put
+/// back. Raw here is keys as they're pressed: no line editing and no echo, Enter as the byte 13
+/// (as Windows gives it), Ctrl-S and Ctrl-Q as keys. The interrupt key stays, so Ctrl-C still
+/// ends the program, and output is as before.
+#[cfg(unix)]
+pub mod terminal {
+    use std::io;
+    use std::os::fd::{AsFd as _, AsRawFd as _, BorrowedFd};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Once, OnceLock};
+
+    use nix::libc;
+    use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
+    use nix::sys::termios::{
+        InputFlags, LocalFlags, SetArg, SpecialCharacterIndices, Termios, tcgetattr, tcsetattr,
+    };
+
+    nix::ioctl_read_bad!(
+        /// `TIOCGWINSZ`: the size of the terminal a descriptor is, written to a `winsize`.
+        window_size,
+        libc::TIOCGWINSZ,
+        libc::winsize
+    );
+
+    /// The mode a terminal had before lengua made it raw.
+    #[derive(Clone, Copy)]
+    pub struct Saved(libc::termios);
+
+    impl std::fmt::Debug for Saved {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("Saved")
+        }
+    }
+
+    /// The mode standard input's terminal had before lengua first made it raw.
+    static BEFORE: OnceLock<Saved> = OnceLock::new();
+
+    /// Whether standard input's terminal is raw now, by lengua's doing.
+    static RAW: AtomicBool = AtomicBool::new(false);
+
+    /// The handlers that put the mode back are set once.
+    static GUARDED: Once = Once::new();
+
+    /// The system's error as a `std::io` one.
+    fn failed(error: nix::errno::Errno) -> io::Error {
+        io::Error::from(error)
+    }
+
+    /// A number of any width as 64 bits: the system's flags are 32 bits wide on Linux and 64 on
+    /// macOS.
+    fn wide<T: Into<u64>>(number: T) -> u64 {
+        number.into()
+    }
+
+    /// The columns and rows of the terminal `terminal` is.
+    ///
+    /// # Errors
+    ///
+    /// What the system says: `terminal` is no terminal.
+    pub fn size_of(terminal: BorrowedFd<'_>) -> io::Result<(u16, u16)> {
+        let mut size = libc::winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: the descriptor is open for as long as `terminal` is borrowed, and the system
+        // writes one `winsize` to `size`, of this frame.
+        unsafe { window_size(terminal.as_raw_fd(), &raw mut size) }.map_err(failed)?;
+        Ok((size.ws_col, size.ws_row))
+    }
+
+    /// The mode of the terminal `terminal` is, as numbers: equal when the mode is the same. The
+    /// flag `PENDIN` is left out: it is no mode but the system's own note that typed input waits
+    /// to be read again, which macOS sets when a terminal goes back to lines.
+    ///
+    /// # Errors
+    ///
+    /// What the system says: `terminal` is no terminal.
+    pub fn mode_of(terminal: BorrowedFd<'_>) -> io::Result<Vec<u64>> {
+        let now: libc::termios = tcgetattr(terminal).map_err(failed)?.into();
+        let mut mode = vec![
+            wide(now.c_iflag),
+            wide(now.c_oflag),
+            wide(now.c_cflag),
+            wide(now.c_lflag & !libc::PENDIN),
+        ];
+        mode.extend(now.c_cc.iter().map(|code| u64::from(*code)));
+        Ok(mode)
+    }
+
+    /// Makes the terminal `terminal` is raw, and gives the mode it had.
+    ///
+    /// # Errors
+    ///
+    /// What the system says: `terminal` is no terminal.
+    pub fn set_raw(terminal: BorrowedFd<'_>) -> io::Result<Saved> {
+        let before: Termios = tcgetattr(terminal).map_err(failed)?;
+        let mut raw = before.clone();
+        raw.local_flags
+            .remove(LocalFlags::ICANON | LocalFlags::ECHO);
+        raw.input_flags.remove(InputFlags::ICRNL | InputFlags::IXON);
+        raw.control_chars[SpecialCharacterIndices::VMIN as usize] = 1;
+        raw.control_chars[SpecialCharacterIndices::VTIME as usize] = 0;
+        tcsetattr(terminal, SetArg::TCSANOW, &raw).map_err(failed)?;
+        Ok(Saved(before.into()))
+    }
+
+    /// Puts the mode `saved` back on the terminal `terminal` is.
+    ///
+    /// # Errors
+    ///
+    /// What the system says.
+    pub fn put_back(terminal: BorrowedFd<'_>, saved: &Saved) -> io::Result<()> {
+        tcsetattr(terminal, SetArg::TCSANOW, &Termios::from(saved.0)).map_err(failed)
+    }
+
+    /// A pseudo-terminal of the caller's own, for a test of a program at a terminal: the end a
+    /// program gets as its terminal, then the end that types its keys and reads what it shows.
+    ///
+    /// # Errors
+    ///
+    /// What the system says, when it gives none.
+    pub fn pseudo() -> io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
+        let pair = nix::pty::openpty(None, None).map_err(failed)?;
+        Ok((pair.slave, pair.master))
+    }
+
+    /// What a signal that ends the process does first: the terminal's mode goes back, then the
+    /// signal does what it does by default.
+    extern "C" fn on_signal(number: libc::c_int) {
+        if RAW.load(Ordering::SeqCst)
+            && let Some(before) = BEFORE.get()
+        {
+            // SAFETY: `tcsetattr` may be called from a signal's handler, and `before` is never
+            // written once it is set.
+            unsafe {
+                libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw const before.0);
+            }
+        }
+        // SAFETY: both may be called from a signal's handler: the signal's default action is
+        // set again, and the signal sent to this process once more, which ends it as the
+        // signal would have.
+        unsafe {
+            libc::signal(number, libc::SIG_DFL);
+            libc::raise(number);
+        }
+    }
+
+    /// Sets the handlers that put the mode back when a signal ends the process.
+    fn guard() {
+        GUARDED.call_once(|| {
+            let action = SigAction::new(
+                SigHandler::Handler(on_signal),
+                SaFlags::empty(),
+                SigSet::empty(),
+            );
+            for signal in [
+                Signal::SIGINT,
+                Signal::SIGTERM,
+                Signal::SIGHUP,
+                Signal::SIGQUIT,
+            ] {
+                // SAFETY: the handler calls only what a signal's handler may call, and reads
+                // only values that are never written while it can run.
+                let _ = unsafe { sigaction(signal, &action) };
+            }
+        });
+    }
+
+    /// The columns and rows of the terminal this process runs in: standard output's, or
+    /// standard error's, or standard input's, the first that is one.
+    #[must_use]
+    pub fn size() -> Option<(u16, u16)> {
+        size_of(io::stdout().as_fd())
+            .or_else(|_| size_of(io::stderr().as_fd()))
+            .or_else(|_| size_of(io::stdin().as_fd()))
+            .ok()
+    }
+
+    /// Makes standard input's terminal raw. The mode it had the first time is kept, and put
+    /// back by [`restore`], and by a handler when `SIGINT`, `SIGTERM`, `SIGHUP` or `SIGQUIT`
+    /// ends the process.
+    ///
+    /// # Errors
+    ///
+    /// What the system says: standard input is no terminal.
+    pub fn raw() -> io::Result<()> {
+        let stdin = io::stdin();
+        let saved = set_raw(stdin.as_fd())?;
+        BEFORE.get_or_init(|| saved);
+        RAW.store(true, Ordering::SeqCst);
+        guard();
+        Ok(())
+    }
+
+    /// Puts standard input's terminal back in the mode it had before [`raw`]; nothing when it
+    /// isn't raw.
+    ///
+    /// # Errors
+    ///
+    /// What the system says.
+    pub fn restore() -> io::Result<()> {
+        if !RAW.swap(false, Ordering::SeqCst) {
+            return Ok(());
+        }
+        match BEFORE.get() {
+            Some(before) => put_back(io::stdin().as_fd(), before),
+            None => Ok(()),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::os::fd::AsFd as _;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        use super::{mode_of, put_back, set_raw, size_of};
+
+        /// What the test's own process is started again with, to be the child of a test.
+        const CHILD: &str = "lengua-os-child";
+
+        /// A terminal of the test's own goes raw and back: its mode changes while it is raw,
+        /// and afterwards every flag and key is as before.
+        #[test]
+        fn a_terminal_goes_raw_and_back() {
+            let pair = nix::pty::openpty(None, None).expect("a pseudo-terminal");
+            let terminal = pair.slave.as_fd();
+            let before = mode_of(terminal).expect("its mode");
+            let saved = set_raw(terminal).expect("it goes raw");
+            let raw = mode_of(terminal).expect("its mode");
+            assert_ne!(raw, before);
+            put_back(terminal, &saved).expect("it goes back");
+            assert_eq!(mode_of(terminal).expect("its mode"), before);
+            // A pseudo-terminal has a size, which a pipe doesn't.
+            assert!(size_of(terminal).is_ok());
+            let (read, _write) = std::io::pipe().expect("a pipe");
+            assert!(size_of(read.as_fd()).is_err());
+            assert!(set_raw(read.as_fd()).is_err());
+        }
+
+        /// The child of the next test: makes its standard input raw, and waits to be ended.
+        /// Run by itself it does nothing.
+        #[test]
+        #[ignore = "the child of a_signal_puts_the_mode_back"]
+        fn child_goes_raw_and_waits() {
+            if !std::env::args().any(|argument| argument == CHILD) {
+                return;
+            }
+            super::raw().expect("standard input is the test's terminal");
+            std::thread::sleep(Duration::from_secs(60));
+        }
+
+        /// A process whose terminal lengua made raw, and that a signal ends, leaves the
+        /// terminal as it found it.
+        #[test]
+        fn a_signal_puts_the_mode_back() {
+            let pair = nix::pty::openpty(None, None).expect("a pseudo-terminal");
+            let before = mode_of(pair.slave.as_fd()).expect("its mode");
+            let input = pair.slave.try_clone().expect("a second descriptor");
+            let mut child = Command::new(std::env::current_exe().expect("this test"))
+                .args([
+                    "--exact",
+                    "terminal::tests::child_goes_raw_and_waits",
+                    CHILD,
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .stdin(Stdio::from(input))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("the child starts");
+            let started = Instant::now();
+            while mode_of(pair.slave.as_fd()).expect("its mode") == before {
+                assert!(
+                    started.elapsed() < Duration::from_secs(30),
+                    "the child never made the terminal raw"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let pid = nix::unistd::Pid::from_raw(i32::try_from(child.id()).expect("a pid"));
+            nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM).expect("a signal");
+            let status = child.wait().expect("the child ends");
+            assert!(!status.success());
+            assert_eq!(mode_of(pair.slave.as_fd()).expect("its mode"), before);
+        }
+    }
+}
+
+/// The terminal a program runs in, on Windows, which calls it the console: its size, and its
+/// mode made raw and put back. Raw here is keys as they're pressed: no line input and no echo,
+/// with the keys as a terminal's sequences (`ENABLE_VIRTUAL_TERMINAL_INPUT`), as Linux and macOS
+/// give them. Ctrl-C still ends the program.
+#[cfg(windows)]
+pub mod terminal {
+    use std::io;
+    use std::os::windows::io::AsRawHandle;
+    use std::sync::Once;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+    use super::windows;
+
+    /// `ENABLE_LINE_INPUT`: a read gives a whole line.
+    const LINE_INPUT: u32 = 0x2;
+    /// `ENABLE_ECHO_INPUT`: what is typed is shown.
+    const ECHO_INPUT: u32 = 0x4;
+    /// `ENABLE_VIRTUAL_TERMINAL_INPUT`: keys come as a terminal's sequences.
+    const TERMINAL_INPUT: u32 = 0x200;
+    /// `ENABLE_VIRTUAL_TERMINAL_PROCESSING`: output's sequences are obeyed.
+    const TERMINAL_OUTPUT: u32 = 0x4;
+
+    /// How many 16-bit integers a `CONSOLE_SCREEN_BUFFER_INFO` takes: the buffer's size, the
+    /// cursor, the attributes, the window's four edges and the largest window.
+    const SCREEN_INTEGERS: usize = 11;
+    /// Which of them are the window's left, top, right and bottom edges.
+    const WINDOW: [usize; 4] = [5, 6, 7, 8];
+
+    /// The mode standard input's console had before lengua first made it raw.
+    static INPUT_BEFORE: AtomicU32 = AtomicU32::new(0);
+    /// The mode standard output's console had then, when it is one.
+    static OUTPUT_BEFORE: AtomicU32 = AtomicU32::new(0);
+    /// Whether standard output's mode was kept.
+    static OUTPUT_KEPT: AtomicBool = AtomicBool::new(false);
+    /// Whether the modes were kept.
+    static KEPT: AtomicBool = AtomicBool::new(false);
+    /// Whether standard input's console is raw now, by lengua's doing.
+    static RAW: AtomicBool = AtomicBool::new(false);
+    /// The handler that puts the mode back is set once.
+    static GUARDED: Once = Once::new();
+
+    /// The mode of the console `console` is a handle of.
+    ///
+    /// # Errors
+    ///
+    /// What Windows says: `console` is no console.
+    pub fn mode_of(console: &impl AsRawHandle) -> io::Result<u32> {
+        let mut mode: u32 = 0;
+        // SAFETY: the handle is open for as long as `console` is borrowed, and Windows writes
+        // 32 bits to `mode`, of this frame.
+        let done = unsafe { windows::console_mode(console.as_raw_handle(), &raw mut mode) };
+        if done == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(mode)
+    }
+
+    /// Sets the mode of the console `console` is a handle of.
+    ///
+    /// # Errors
+    ///
+    /// What Windows says.
+    pub fn set_mode(console: &impl AsRawHandle, mode: u32) -> io::Result<()> {
+        // SAFETY: the handle is open for as long as `console` is borrowed.
+        let done = unsafe { windows::set_console_mode(console.as_raw_handle(), mode) };
+        if done == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// An input mode made raw: no line input, no echo, and keys as a terminal's sequences.
+    #[must_use]
+    pub const fn raw_input(mode: u32) -> u32 {
+        (mode & !(LINE_INPUT | ECHO_INPUT)) | TERMINAL_INPUT
+    }
+
+    /// Makes the console `input` is a handle of raw, and gives the mode it had. A console that
+    /// knows no terminal's sequences is made raw without them.
+    ///
+    /// # Errors
+    ///
+    /// What Windows says: `input` is no console's input.
+    pub fn set_raw(input: &impl AsRawHandle) -> io::Result<u32> {
+        let before = mode_of(input)?;
+        let raw = raw_input(before);
+        set_mode(input, raw).or_else(|_| set_mode(input, raw & !TERMINAL_INPUT))?;
+        Ok(before)
+    }
+
+    /// The columns and rows of the window of the console `output` is a handle of.
+    ///
+    /// # Errors
+    ///
+    /// What Windows says: `output` is no console's output.
+    pub fn size_of(output: &impl AsRawHandle) -> io::Result<(u16, u16)> {
+        let mut information = [0_i16; SCREEN_INTEGERS];
+        // SAFETY: the handle is open for as long as `output` is borrowed, and Windows writes
+        // one record of eleven 16-bit integers to `information`, of this frame.
+        let done = unsafe {
+            windows::screen_information(output.as_raw_handle(), information.as_mut_ptr())
+        };
+        if done == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let [left, top, right, bottom] = WINDOW.map(|index| i32::from(information[index]));
+        let columns = u16::try_from(right - left + 1).unwrap_or(0);
+        let rows = u16::try_from(bottom - top + 1).unwrap_or(0);
+        Ok((columns, rows))
+    }
+
+    /// Puts the kept modes back, when the console is raw.
+    fn put_back() -> io::Result<()> {
+        if !RAW.swap(false, Ordering::SeqCst) || !KEPT.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        if OUTPUT_KEPT.load(Ordering::SeqCst) {
+            let _ = set_mode(&io::stdout(), OUTPUT_BEFORE.load(Ordering::SeqCst));
+        }
+        set_mode(&io::stdin(), INPUT_BEFORE.load(Ordering::SeqCst))
+    }
+
+    /// What Windows calls when the console gets Ctrl-C or Ctrl-Break, or is closed: the mode
+    /// goes back, and the next handler, Windows's own, ends the process.
+    unsafe extern "system" fn on_control(_: u32) -> i32 {
+        let _ = put_back();
+        0
+    }
+
+    /// The columns and rows of the console this process runs in: standard output's, or
+    /// standard error's.
+    #[must_use]
+    pub fn size() -> Option<(u16, u16)> {
+        size_of(&io::stdout())
+            .or_else(|_| size_of(&io::stderr()))
+            .ok()
+    }
+
+    /// Makes standard input's console raw, and has standard output's obey a terminal's
+    /// sequences. The modes they had the first time are kept, and put back by [`restore`], and
+    /// by a handler when Ctrl-C or Ctrl-Break ends the process or the console is closed.
+    ///
+    /// # Errors
+    ///
+    /// What Windows says: standard input is no console.
+    pub fn raw() -> io::Result<()> {
+        let before = set_raw(&io::stdin())?;
+        if !KEPT.swap(true, Ordering::SeqCst) {
+            INPUT_BEFORE.store(before, Ordering::SeqCst);
+            if let Ok(output) = mode_of(&io::stdout()) {
+                OUTPUT_BEFORE.store(output, Ordering::SeqCst);
+                OUTPUT_KEPT.store(true, Ordering::SeqCst);
+            }
+        }
+        if OUTPUT_KEPT.load(Ordering::SeqCst) {
+            let output = OUTPUT_BEFORE.load(Ordering::SeqCst);
+            let _ = set_mode(&io::stdout(), output | TERMINAL_OUTPUT);
+        }
+        RAW.store(true, Ordering::SeqCst);
+        GUARDED.call_once(|| {
+            // SAFETY: the handler is a function of this program, which lives as long as it
+            // does.
+            unsafe {
+                windows::set_control_handler(Some(on_control), 1);
+            }
+        });
+        Ok(())
+    }
+
+    /// Puts standard input's console, and standard output's, back in the modes they had before
+    /// [`raw`]; nothing when the console isn't raw.
+    ///
+    /// # Errors
+    ///
+    /// What Windows says.
+    pub fn restore() -> io::Result<()> {
+        put_back()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::os::windows::process::CommandExt as _;
+        use std::process::{Command, Stdio};
+
+        use super::{mode_of, raw_input, set_mode, set_raw, size_of};
+
+        /// What the test's own process is started again with, to be the child of a test.
+        const CHILD: &str = "lengua-os-child";
+
+        /// `CREATE_NEW_CONSOLE`: the started process gets a console of its own.
+        const NEW_CONSOLE: u32 = 0x10;
+
+        /// The test's own process, started again to run the ignored test `name` as a child.
+        fn child(name: &str) -> Command {
+            let mut command = Command::new(std::env::current_exe().expect("this test"));
+            command
+                .args(["--exact", name, CHILD, "--ignored", "--nocapture"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            command
+        }
+
+        /// The child of the next test, in a console of its own: the console goes raw and back,
+        /// and has a size. Run by itself it does nothing.
+        #[test]
+        #[ignore = "the child of a_console_goes_raw_and_back"]
+        fn child_in_a_console() {
+            if !std::env::args().any(|argument| argument == CHILD) {
+                return;
+            }
+            let open = |name: &str| {
+                std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(name)
+                    .expect("the console")
+            };
+            let input = open("CONIN$");
+            let before = mode_of(&input).expect("its mode");
+            assert_eq!(set_raw(&input).expect("it goes raw"), before);
+            let raw = mode_of(&input).expect("its mode");
+            assert_eq!(raw & 0x6, 0, "line input and echo are off: {raw:#x}");
+            assert_eq!(raw | 0x200, raw_input(before));
+            set_mode(&input, before).expect("it goes back");
+            assert_eq!(mode_of(&input).expect("its mode"), before);
+            let (columns, rows) = size_of(&open("CONOUT$")).expect("its size");
+            assert!(columns > 0 && rows > 0, "{columns} by {rows}");
+            // A file is no console.
+            let file =
+                std::fs::File::open(std::env::current_exe().expect("this test")).expect("it opens");
+            assert!(mode_of(&file).is_err());
+            assert!(size_of(&file).is_err());
+        }
+
+        /// A console goes raw and back, and has a size: shown in a console of the child's own,
+        /// since a test's own streams are pipes.
+        #[test]
+        fn a_console_goes_raw_and_back() {
+            let status = child("terminal::tests::child_in_a_console")
+                .creation_flags(NEW_CONSOLE)
+                .status()
+                .expect("the child starts");
+            assert!(status.success(), "{status:?}");
+        }
+
+        /// The child of the next test: waits to be ended. Run by itself it does nothing.
+        #[test]
+        #[ignore = "the child of a_job_ends_its_process"]
+        fn child_waits() {
+            if !std::env::args().any(|argument| argument == CHILD) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+
+        /// A job ends the process it holds when it is told to.
+        #[test]
+        fn a_job_ends_its_process() {
+            let mut waiting = child("terminal::tests::child_waits")
+                .spawn()
+                .expect("the child starts");
+            let job = crate::Job::holding(&waiting).expect("a job");
+            job.end();
+            let status = waiting.wait().expect("the child ends");
+            assert!(!status.success(), "{status:?}");
+        }
     }
 }
 
