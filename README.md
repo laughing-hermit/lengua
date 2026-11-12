@@ -501,8 +501,8 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
   proven for every input in their ranges; `sort64` for two numbers and `crc32` for 2
   characters of text, each tested beyond.
 - **W22, scale; W23, working with other code; W24, tools:** what a programming language has
-  that lengua still lacks ([todo.md](todo.md)). One part of W23 is built, on the branch
-  `wip/outside`: a module that a compiler made from Rust, C or another language, run as the
+  that lengua still lacks ([todo.md](todo.md)). One part of W23 is built, on main:
+  a module that a compiler made from Rust, C or another language, run as the
   program itself under an idea's grants and tests, and marked "trusted, not proven" (above).
   The rest of W23, a lengua program as a library and an outside module that a lengua program
   calls, isn't started.

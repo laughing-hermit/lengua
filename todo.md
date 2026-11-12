@@ -729,7 +729,7 @@ Still open from it, for the owner:
 
 ### W23's first part: an outside module (2026-11-12)
 
-On the branch `wip/outside`, not merged: the owner lands it. DESIGN.md ("An outside module") has
+On main since 3fd8a3a (2026-11-12; run 43172439582 on all five runners). DESIGN.md ("An outside module") has
 the design as built, docs/reviews/outside-2026-11-12.md the threat cases with the test of each,
 and the decisions are with the others ("Decisions made during the pivot", W23's first part).
 
@@ -1671,7 +1671,7 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
       exactly as it holds a module of lengua's own. The reason: what is useful to the most
       people today is a safe way to run code an agent wrote, in any language, and the host
       with its grants gives that already. The rest of W23 keeps its place.
-    - **Built on `wip/outside` (2026-11-12)**, for the owner to land: "W23's first part: an
+    - **Built, and on main since 3fd8a3a (2026-11-12):** "W23's first part: an
       outside module", above, says what was built, what is refused and what was never run.
   - **W24. Tools.** `check`'s reply is the only tool there is. W24 adds what a programmer
     expects: a run that stops at a line of main.wat and shows its values (through the `run`
@@ -1710,7 +1710,7 @@ Runs, as they land:
 | Proof depth (2026-11-11) | 42961610246 (the goldens at main 1508847, twice: identical); 42976169988 (the vowel count's proof by its buffer's size, at fd20338: every length in 15 s with 1,024 bytes and in 191 s with 4,096; with 64 KiB bounded at 4,635 bytes); at 7ad6530: 43022877257 (the suite on all five runners, green), 43022883114 (the slow tests on all five, green), 43022887884 (the golden ledger against main: count's and words' steps hold, mean's three blocks proven where they ran out of time, five lines with another reason for no induction, vowels new; no proof lost) and 43022892954 (the runners view: 161 proof lines, the same verdict on all five) |
 | The gate's margin (the owner's decision, 2026-11-11) | On the branch `wip/gate-margin`: 42962012528 (the gate's unit tests on Linux on x86-64 at f87c47c, green, with clippy; the format job's layout applied at b4eb385); 42964220148 (format, the suite on Linux on x86-64 and the gate job at cd54e79, green); 42964232679 (the bench on all five runners at cd54e79, against the list from before the margin: the gate failed on each; 139 rows KNOWN_BEHIND named are level or ahead, 127 and 12, taken out, which leaves 898; 6 rows behind by more than the margin that it doesn't name, 1 on Linux on x86-64, 2 on Linux on ARM64, 2 on macOS on ARM64 and 1 on Windows on x86-64; no build failed, every native C++ version built with `-std=gnu++17`). The reports are in [docs/benchmarks](docs/benchmarks/README.md). No run has measured the new list yet |
 | W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](docs/history/PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
-| W23, its first part: an outside module (on `wip/outside`) | 43158638831 (at e6d96e5 on Linux on x86-64: tests/outside.rs for the first time, 13 of 14 passing, with rustc's and clang's modules built by the outside-wasm job; the one failure was the count idea's own generated range, fixed at 7312377); 43158958049 (the library's tests of the idea's lines, the state and `check`'s reading, green); 43161754287 and 43161756923 (the defences out at 5260953, tag `archive/wip/outside-off`: 9 of tests/outside.rs's 14 tests and 4 of the library's fail); 43161759761 (at 7312377, with main's W21 merged in: format, the suite on all five runners, green but for `two_checks_at_once_leave_a_consistent_index` on Windows on ARM64, the known race in log.md) |
+| W23, its first part: an outside module (on main since 3fd8a3a) | 43158638831 (at e6d96e5 on Linux on x86-64: tests/outside.rs for the first time, 13 of 14 passing, with rustc's and clang's modules built by the outside-wasm job; the one failure was the count idea's own generated range, fixed at 7312377); 43158958049 (the library's tests of the idea's lines, the state and `check`'s reading, green); 43161754287 and 43161756923 (the defences out at 5260953, tag `archive/wip/outside-off`: 9 of tests/outside.rs's 14 tests and 4 of the library's fail); 43161759761 (at 7312377, with main's W21 merged in: format, the suite on all five runners, green but for `two_checks_at_once_leave_a_consistent_index` on Windows on ARM64, the known race in log.md); 43172439582 (at 3fd8a3a, with main's W20 merged in too: format, the outside-wasm job, the suite on all five runners and the gate, all green; the landing on main rests on it) |
 
 ## Superseded by the pivot
 

@@ -642,7 +642,7 @@ One part moved up beside W22 on 2026-11-12, by the owner's word: a module a comp
 Rust, C or another language, run as the program itself under an idea's grants and tests, held by
 the host as any module is and marked "trusted, not proven" (todo.md).
 
-That part is built on the branch `wip/outside`, for the owner to land:
+That part is built and on main since 3fd8a3a (2026-11-12, run 43172439582 on all five runners):
 
 - **The shape.** A folder holds `idea.md` and `main.wasm`. The idea says `computation:
   main.wasm` and has a line `- Module: main.wasm, built from …` in its own words. Its tests and
