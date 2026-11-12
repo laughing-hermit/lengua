@@ -1288,27 +1288,33 @@ async fn main_wat_exports_what_its_idea_offers_and_takes_no_address() {
     );
     let problems = problems_of(unlisted).await;
     assert!(problems.contains("main.wat exports `text`"), "{problems}");
-    // An exported function that reads through a number its caller passes. Its own `_start`
-    // doesn't call it here, so no caller of this module lends it a region: the only callers
-    // are other programs.
-    let lent = LIBRARY_CODE
-        .replace(
-            "(i32.load8_u (i32.add (global.get $text) (local.get $i)))",
-            "(i32.load8_u (i32.add (local.get $length) (local.get $i)))",
-        )
-        .replace(
-            "(local.set $crc (call $crc32 (local.get $got)))",
-            "(local.set $crc (local.get $got))",
-        );
-    let problems = problems_of(lent).await;
-    assert!(
-        problems.contains("$crc32 uses its parameter $length as an address"),
-        "{problems}"
-    );
     // The library as it is goes to done, and offers its functions.
     program.write("main.wat", LIBRARY_CODE);
     let reply = session.settle(&program).await;
     assert_eq!(reply["state"], "done", "{reply}");
+    // An exported function that reads through a number its caller passes: the idea offers one
+    // more function, which takes an address. No caller in this module lends it a region, and
+    // a caller in another module can't.
+    let offers = LIBRARY_IDEA.replace(
+        "- Exports: buffer() -> i32, crc32(i32) -> i32",
+        "- Exports: buffer() -> i32, crc32(i32) -> i32, peek(i32) -> i32",
+    );
+    assert_ne!(offers, LIBRARY_IDEA);
+    let peeks = LIBRARY_CODE.replace(
+        "  ;; Gives the address of the text in this program's memory",
+        "  (func $peek (export \"peek\") (param $at i32) (result i32)\n    (i32.load8_u \
+         (local.get $at)))\n\n  ;; Gives the address of the text in this program's memory",
+    );
+    assert_ne!(peeks, LIBRARY_CODE);
+    program.write("idea.md", &offers);
+    program.write("main.wat", &peeks);
+    let reply = session.call_ok("check", program.request(REQUEST)).await;
+    assert_eq!(reply["state"], "code_problems", "{reply}");
+    let problems = strings(&reply["problems"]).join("\n");
+    assert!(
+        problems.contains("$peek uses its parameter $at as an address"),
+        "{problems}"
+    );
     session.service.cancel().await.expect("close the session");
 }
 
