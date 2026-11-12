@@ -23,6 +23,8 @@
 //!   name's addresses gives
 //! - ``a client that sends TEXT``, and `the clients connect at once` for clients that overlap
 //! - `standard output is closed`, a pipe nobody reads, so every write to it fails with `EPIPE`
+//! - `the program is a piece`, for an idea with a `- Splits:` line: the run is a piece of the
+//!   program's split work, with standard input as its bytes and what it prints as its answer
 //!
 //! When: `the program runs`.
 //!
@@ -62,7 +64,7 @@ const GIVEN_PHRASES: &str = "`Given the arguments `…` and `…``, `Given no ar
      receives `…` and replies `…``, `Given the addresses `192.0.2.7` for the name \
      `example.org``, `Given the program `hostname` prints `…` and exits with code `0``, `Given \
      a client that sends `…``, `And the clients connect at once`, `And \
-     standard output is closed`";
+     standard output is closed`, `And the program is a piece`";
 const THEN_PHRASES: &str = "`Then it prints `…``, `Then it prints `…` to standard error`, \
      `Then it prints nothing`, `Then it prints text that matches `rule``, `Then the file `name` \
      contains `…``, `Then there is no file `name``, `Then there is a folder `name``, `Then the \
@@ -266,6 +268,8 @@ struct Reading {
     clients_at_once: bool,
     /// Whether its standard output is closed, so every write to it fails.
     stdout_closed: bool,
+    /// Whether the run is a piece of the program's split work.
+    piece: bool,
     answers: Vec<Text>,
     /// A generated test's exit code as written: a number or a formula.
     exit_code: Option<String>,
@@ -303,6 +307,21 @@ impl Reading {
         if at.words(&["standard", "output", "is", "closed"]) {
             self.wrote("stdout_closed".into());
             self.stdout_closed = true;
+            return at.end();
+        }
+        // `the program is a piece`: the run is a piece of the program's split work, as a call
+        // that splits runs one, with its bytes as its standard input.
+        if at.words(&["the", "program", "is", "a", "piece"]) {
+            self.wrote("piece".into());
+            self.piece = true;
+            if self.reach.split.is_none() {
+                self.found.push((
+                    self.line,
+                    "idea.md grants no split of the program's work: a test runs a piece only \
+                     for an idea with a `- Splits:` line"
+                        .to_owned(),
+                ));
+            }
             return at.end();
         }
         if at.words(&["no", "arguments"])
@@ -752,6 +771,7 @@ impl Reading {
             client,
             clients_at_once: self.clients_at_once,
             stdout_closed: self.stdout_closed,
+            piece: self.piece,
         }
     }
 
@@ -823,6 +843,7 @@ impl Reading {
                 .collect(),
             clients_at_once: self.clients_at_once,
             stdout_closed: self.stdout_closed,
+            piece: self.piece,
             exit_code: self.exit_code.map(|code| Written {
                 text: code,
                 line: at("exit_code"),

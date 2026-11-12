@@ -2774,6 +2774,10 @@ impl Parser {
             self.files_line(number, rest);
             return;
         }
+        if let Some(rest) = strip_prefix_ignore_case(item, "splits:") {
+            self.splits_line(number, rest);
+            return;
+        }
         if let Some(rest) = strip_prefix_ignore_case(item, "runs:") {
             self.runs_line(number, rest);
             return;
@@ -2802,7 +2806,8 @@ impl Parser {
             self.problem(
                 Some(number),
                 "`# Constraints` lists only what the program uses, which means the same on every \
-                 computer: `- Uses: …`, `- Network: …`, `- Files: …`, `- Runs: …`, `- Secret: …` \
+                 computer: `- Uses: …`, `- Network: …`, `- Files: …`, `- Runs: …`, `- Splits: …`, \
+                 `- Secret: …` \
                  and `- Builds on: …`, and `- Module: …` for an outside module; say \
                  anything else in `# Purpose`",
             );
@@ -2873,6 +2878,47 @@ impl Parser {
             .and_then(|rule| crate::starts::add(&mut self.network.reach.runs, rule));
         if let Err(problem) = added {
             self.problem(Some(number), problem);
+        }
+    }
+
+    /// `- Splits: its work into up to 8 pieces, each of up to 1048576 bytes, each gives back 32
+    /// bytes`: the work the program may split into pieces that run at once, each a run of the
+    /// same program ([`crate::split`]).
+    fn splits_line(&mut self, number: usize, rest: &str) {
+        if self.network.reach.split.is_some() {
+            self.problem(
+                Some(number),
+                "the pieces are given twice; keep one `- Splits:` line",
+            );
+            return;
+        }
+        match crate::split::Grant::read(rest) {
+            Ok(grant) => self.network.reach.split = Some(grant),
+            Err(problem) => self.problem(Some(number), problem),
+        }
+    }
+
+    /// A program that splits its work reads standard input, since a piece gets its bytes
+    /// there, and names no secret: its pieces run at once, beside each other, where one
+    /// piece's work can change how long another's takes.
+    fn check_split(&mut self, uses: &[Use]) {
+        if self.network.reach.split.is_none() {
+            return;
+        }
+        if !uses.contains(&Use::StandardInput) {
+            self.problem(
+                None,
+                "a program that splits its work names `standard input` in its `- Uses:` line: \
+                 a piece gets its bytes as its standard input",
+            );
+        }
+        if self.secrets.is_some() {
+            self.problem(
+                None,
+                "a program that splits its work names no secret: its pieces run at once, and \
+                 lengua doesn't show that a secret in one changes nothing another can time; \
+                 remove the `- Secret:` line or the `- Splits:` line",
+            );
         }
     }
 
@@ -3203,6 +3249,16 @@ impl Parser {
                 ),
             );
         }
+        if self.network.reach.split.is_some() {
+            self.problem(
+                Some(line),
+                format!(
+                    "an outside module doesn't split its work: the rules of {code} bound a piece's \
+                     memory, times the pieces, and say that each piece ends, and {file} is held \
+                     to no rule. Remove the `- Splits:` line"
+                ),
+            );
+        }
     }
 
     /// ``- Secret: standard input, a file `key.txt` and argument `2` ``: the inputs whose values
@@ -3305,6 +3361,7 @@ impl Parser {
         let uses = self.uses.take().unwrap_or_default();
         let syscalls = self.syscalls_for(&uses);
         self.check_network();
+        self.check_split(&uses);
         self.sources_used(&uses);
         let secret_line = self.secrets.as_ref().map(|(line, _)| *line);
         let secrets = self.secrets_used(&uses);
@@ -5019,6 +5076,13 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         assert_problem(
             &outside_idea(&format!("{line}\n- Secret: argument `1`")),
             "an outside module keeps no secret that lengua can check",
+        );
+        assert_problem(
+            &outside_idea(&format!(
+                "{line}\n- Splits: its work into up to 8 pieces, each of up to 1024 bytes, each gives \
+                 back 32 bytes"
+            )),
+            "an outside module doesn't split its work",
         );
         assert_problem(
             &outside_idea(&format!("{line}\n- Builds on: [sort](../sort/idea.md)")),

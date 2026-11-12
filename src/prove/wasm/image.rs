@@ -1359,7 +1359,10 @@ impl Module {
             // Nor a file the user names when the program runs, a program it starts, or the
             // terminal: the model's files are the working folder's, it has no other program,
             // and its standard input is the test's bytes.
-            if wasi::own_module(module) {
+            // Work split into pieces is its own: the model follows a run that is a piece, and
+            // stops at a call that splits (host.rs).
+            let splits = module.as_str() == wasi::SPLIT_MODULE;
+            if wasi::own_module(module) && !splits {
                 return Err(format!(
                     "it imports {module}.{name}, which reaches what its idea grants while it \
                      runs: the model follows the working folder, the connections lengua makes \
@@ -1368,8 +1371,8 @@ impl Module {
                      proven"
                 ));
             }
-            let host = (module.as_str() == wasi::MODULE)
-                .then(|| wasi::function(name))
+            let host = (module.as_str() == wasi::MODULE || splits)
+                .then(|| wasi::imported(module, name))
                 .flatten()
                 .ok_or_else(|| {
                     format!("it imports {module}.{name}, which lengua's host doesn't give")

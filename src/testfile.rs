@@ -83,6 +83,10 @@ pub struct Example {
     /// Whether the program's standard output is closed, a pipe nobody reads: every write to it
     /// fails with `EPIPE`, as after `prog | head -1` has read its line.
     pub stdout_closed: bool,
+    /// Whether the run is a piece of the program's split work, as a call that splits runs one:
+    /// it reaches standard input and its output alone, and what it prints is held to the bytes
+    /// the idea's `- Splits:` line gives back.
+    pub piece: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
     /// How many connections the idea names: lengua hands the program each, at descriptors 4
@@ -171,6 +175,10 @@ pub struct Generated {
     /// Whether the program's standard output is closed, a pipe nobody reads: every write to it
     /// fails with `EPIPE`, as after `prog | head -1` has read its line.
     pub stdout_closed: bool,
+    /// Whether the run is a piece of the program's split work, as a call that splits runs one:
+    /// it reaches standard input and its output alone, and what it prints is held to the bytes
+    /// the idea's `- Splits:` line gives back.
+    pub piece: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
     /// How many connections the idea names: lengua hands the program each, at descriptors 4
@@ -234,6 +242,10 @@ pub struct Case {
     /// Whether the program's standard output is closed, a pipe nobody reads: every write to it
     /// fails with `EPIPE`, as after `prog | head -1` has read its line.
     pub stdout_closed: bool,
+    /// Whether the run is a piece of the program's split work, as a call that splits runs one:
+    /// it reaches standard input and its output alone, and what it prints is held to the bytes
+    /// the idea's `- Splits:` line gives back.
+    pub piece: bool,
     /// Whether the program must still be serving at the end, instead of exiting.
     pub serves: bool,
     /// How many connections the idea names: lengua hands the program each, at descriptors 4
@@ -453,6 +465,7 @@ impl Generated {
             client,
             clients_at_once: self.clients_at_once,
             stdout_closed: self.stdout_closed,
+            piece: self.piece,
             serves: self.serves,
             connections: self.connections,
         })
@@ -699,6 +712,8 @@ struct ExampleTable {
     client: Vec<ClientTable<Text>>,
     clients_at_once: bool,
     stdout_closed: bool,
+    /// Whether the run is a piece of the program's split work.
+    piece: bool,
 }
 
 /// What the test's own server does on one connection: it receives exactly this, then replies.
@@ -829,6 +844,8 @@ struct OutlineSteps {
     client: Vec<(Written, Written)>,
     clients_at_once: bool,
     stdout_closed: bool,
+    /// Whether the run is a piece of the program's split work.
+    piece: bool,
     /// The exit code as written: a number or a formula.
     exit_code: Option<Written>,
     serves: bool,
@@ -1247,6 +1264,7 @@ impl<'a> Checker<'a> {
                 client,
                 clients_at_once: table.clients_at_once,
                 stdout_closed: table.stdout_closed,
+                piece: table.piece,
                 serves: behavior.serves,
                 connections: self.idea.network.connections.len(),
             });
@@ -1512,6 +1530,7 @@ impl<'a> Checker<'a> {
             client: client?,
             clients_at_once: steps.clients_at_once,
             stdout_closed: steps.stdout_closed,
+            piece: steps.piece,
             serves: steps.serves,
             connections: self.idea.network.connections.len(),
         })

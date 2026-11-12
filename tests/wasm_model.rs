@@ -516,6 +516,7 @@ fn as_sample(example: &Example) -> Sample {
         client: example.client.clone(),
         clients_at_once: example.clients_at_once,
         stdout_closed: example.stdout_closed,
+        piece: example.piece,
         serves: example.serves,
         connections: example.connections,
     }

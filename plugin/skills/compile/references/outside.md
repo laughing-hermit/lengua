@@ -37,6 +37,7 @@ table below), and go on only when they still want it.
 | Proofs for every input | where the prover reaches | none: tests only |
 | lengua's entry in `verified`, and `lengua-mcp check` attests it | yes | no |
 | Parts (`- Builds on:`) | yes | no: `check` refuses the line |
+| Work split into pieces (`- Splits:`) | yes | no: `check` refuses the line, since the rules that bound the pieces read `main.wat` |
 | `check`'s last state | `done` | `trusted_not_proven` |
 
 So an outside module is safe to run in this sense: it can't read the user's files, open a
@@ -103,7 +104,7 @@ a newline to standard error. Then it exits with code 3.
 ````
 
 Write the tests as carefully as for `main.wat`: they are all that shows the program does what the
-idea says. An idea with a `- Secret:` line or a `- Builds on:` line can't have an outside module.
+idea says. An idea with a `- Secret:`, `- Splits:` or `- Builds on:` line can't have an outside module.
 
 ## Building the module
 

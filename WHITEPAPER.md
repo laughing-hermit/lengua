@@ -267,12 +267,13 @@ outside it, and then none of the checks above stand behind it [47]. Within lengu
   its own answers, with one closed set of errors and the file names every system takes, so one
   operating system's extra freedom never makes an idea behave differently on it [56].
 
-What lengua doesn't cover yet: threads and GUIs; and, of what a program reaches by itself, a
+What lengua doesn't cover yet: threads that share memory, and GUIs; and, of what a program reaches by itself, a
 started program that works in the user's folder, a connection it opens to this computer, and a
 proof of any program that opens its own connections, files or programs, which is tested, not
 proven [57]. W18 gave each of those grants, each declared in
-the idea and shown to the user before the program runs; W20 plans threads, as structured fork-join
-that the rules show free of data races; GUIs aren't planned [51]. And lengua isn't a security
+the idea and shown to the user before the program runs; W20 gave work split into pieces that run
+at once and share no memory, so that no rule has to show
+the absence of a data race; GUIs aren't planned [51]. And lengua isn't a security
 product: its examples show algorithms, such as AES-128 and SHA-256, and aren't built to resist
 an attacker [58].
 
@@ -403,7 +404,8 @@ https://github.com/laughing-hermit/lengua.
 55. `src/graph/mod.rs` and `src/graph/okf.rs`.
 56. `src/wasm/host/mod.rs` (lengua's own semantics: the closed error set, the names every system
     takes, byte-exact names); `src/names.rs`.
-57. `src/server/wat.rs` (an idea with a `- Threads:` line is refused); [todo.md](todo.md), the
+57. `src/server/wat.rs` (an idea with a `- Threads:` line is refused); `src/wasm/host/split.rs`
+    (work split into pieces); [todo.md](todo.md), the
     finish line's point 5 and "Deferred, and why".
 58. [todo.md](todo.md), "Stopped by the safety filter".
 59. Run 42947303258, at main 33ed7fe (each runner's archive built, installed and checked);

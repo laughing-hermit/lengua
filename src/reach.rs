@@ -231,6 +231,10 @@ pub struct Grants {
     /// The programs it may start, which its `- Runs:` lines grant ([`crate::starts`]).
     #[serde(default)]
     pub runs: Vec<crate::starts::Rule>,
+    /// The work it may split into pieces that run at once, which its `- Splits:` line grants
+    /// ([`crate::split`]).
+    #[serde(default)]
+    pub split: Option<crate::split::Grant>,
 }
 
 /// How an idea writes its run-time grants, for a line that doesn't read as one.
@@ -285,6 +289,7 @@ impl Grants {
         receives: None,
         files: Vec::new(),
         runs: Vec::new(),
+        split: None,
     };
 
     /// Whether the idea grants nothing on the network at run time.
@@ -300,7 +305,7 @@ impl Grants {
     /// arguments name, and no program to start.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.no_network() && self.files.is_empty() && self.runs.is_empty()
+        self.no_network() && self.files.is_empty() && self.runs.is_empty() && self.split.is_none()
     }
 
     /// Reads a `- Network:` line's words, in lower case, as a run-time grant, and adds it:
@@ -417,6 +422,7 @@ impl Grants {
         }
         lines.extend(self.files.iter().map(crate::named::Grant::describe));
         lines.extend(self.runs.iter().map(crate::starts::Rule::describe));
+        lines.extend(self.split.iter().map(crate::split::Grant::describe));
         lines
     }
 

@@ -291,6 +291,8 @@ pub enum Allowance {
     /// A program whose idea lets it open a folder one of its arguments names: `- Files: reads
     /// the folder its first argument names`.
     NamedFolder,
+    /// A program whose idea lets it split its work into pieces: a `- Splits:` line.
+    Splits,
     /// A program whose idea lets it start a program: a `- Runs:` line.
     Runs,
 }
@@ -1005,6 +1007,40 @@ pub const TERM_FUNCTIONS: &[Function] = &[
     ),
 ];
 
+/// The module lengua's own functions for work split into pieces are imported from: WASI
+/// preview 1 has no threads, and lengua's pieces share no memory.
+pub const SPLIT_MODULE: &str = "lengua_split_1";
+
+/// A program whose idea lets it split its work.
+const SPLITS: &[Allowance] = &[Allowance::Splits];
+
+/// lengua's own functions for work split into pieces that run at once, for an idea with a
+/// `- Splits:` line ([`crate::split`]).
+///
+/// - `split(input, input_len, pieces, output, output_len)`: cuts the `input_len` bytes at
+///   `input` into `pieces` pieces that follow each other and differ in length by a byte at
+///   most, runs the same module once for each, from `_start`, with memory of its own and the
+///   piece's bytes as its standard input, at once on as many cores as the computer has, waits
+///   for all, and writes what each printed to `output`, in the pieces' order, each at the
+///   start of its `output_len / pieces` bytes, with zeros after it. `INVAL` when the idea's
+///   line doesn't cover the call: more pieces than it grants or none, a piece longer than its
+///   bytes, or an `output_len` other than the pieces times the bytes each gives back. A piece
+///   that doesn't exit with code 0 ends the whole run as it ended, the first such piece in
+///   the pieces' order, and nothing is written. In a piece it answers `NOTCAPABLE`: a piece
+///   doesn't split.
+/// - `piece()`: 0 in a run that is a piece of the work, and `NOENT` in the run that is the
+///   whole program.
+pub const SPLIT_FUNCTIONS: &[Function] = &[
+    given(
+        "split",
+        &[I32, I32, I32, I32, I32],
+        SPLITS,
+        &[read(0, Bytes::Argument(1)), written(3, Bytes::Argument(4))],
+        &[INVAL, NOTCAPABLE],
+    ),
+    given("piece", &[], SPLITS, NO_LENDS, &[NOENT, NOTCAPABLE]),
+];
+
 /// lengua's own modules, each with its functions: what a program imports besides WASI preview
 /// 1's, for what its idea grants it to reach by itself while it runs.
 pub const OWN: &[(&str, &[Function])] = &[
@@ -1012,6 +1048,7 @@ pub const OWN: &[(&str, &[Function])] = &[
     (FS_MODULE, FS_FUNCTIONS),
     (RUN_MODULE, RUN_FUNCTIONS),
     (TERM_MODULE, TERM_FUNCTIONS),
+    (SPLIT_MODULE, SPLIT_FUNCTIONS),
 ];
 
 /// Whether `module` is one of lengua's own.
@@ -1101,7 +1138,7 @@ mod tests {
     fn lenguas_own_functions_are_in_their_own_module() {
         let names: BTreeSet<&str> = own_functions().map(|(_, function)| function.name).collect();
         assert_eq!(names.len(), own_functions().count());
-        assert_eq!(names.len(), 13);
+        assert_eq!(names.len(), 15);
         for (module, function) in own_functions() {
             assert!(own_module(module) && module != MODULE);
             assert_eq!(imported(module, function.name), Some(function));

@@ -94,6 +94,11 @@ pub struct Policy {
     /// What it may reach at run time, which it opens itself.
     #[serde(default)]
     pub reach: Reach,
+    /// Whether this run is a piece of a program's split work ([`crate::split`]): a run of the
+    /// same module that reads its share of the bytes on standard input, prints its answer, and
+    /// reaches nothing else.
+    #[serde(default)]
+    pub piece: bool,
 }
 
 impl Policy {
@@ -111,6 +116,7 @@ impl Policy {
             listens: network.listens.is_some(),
             at_once: network.at_once.is_some(),
             reach: Reach::of(&network.reach),
+            piece: false,
         }
     }
 
@@ -156,6 +162,7 @@ impl Policy {
             Allowance::Named => !reach.files.is_empty(),
             Allowance::NamedFolder => reach.files.iter().any(|grant| grant.folder),
             Allowance::Runs => !reach.runs.is_empty(),
+            Allowance::Splits => reach.split.is_some(),
         }
     }
 
@@ -166,6 +173,24 @@ impl Policy {
             .allowances
             .iter()
             .any(|allowance| self.meets(*allowance))
+    }
+
+    /// What a piece of this program's split work may reach: standard input, which holds its
+    /// share of the bytes, its output, and nothing else of what the idea grants the program.
+    /// It keeps the grant of the split itself, by which it asks whether it is a piece and
+    /// which bounds what it prints, and it can't split in its turn.
+    #[must_use]
+    pub fn for_a_piece(self) -> Self {
+        let split = Grants {
+            split: self.reach.get().split,
+            ..Grants::NONE
+        };
+        Self {
+            standard_input: true,
+            reach: Reach::of(&split),
+            piece: true,
+            ..Self::default()
+        }
     }
 
     /// Whether the program may hold a file or a folder open: it names files, or its idea lets

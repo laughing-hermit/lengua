@@ -18,7 +18,8 @@ reads the folder's `idea.md` and `main.wat`, then, in order:
    SHA-256 of `idea.md` with its `verified` and `generated` keys left out, and `code`, the
    SHA-256 of `main.wat`;
 2. reads the idea as `check` does: it must parse, be an Attested Computation with no
-   `- Threads:` line, and hold tests that check;
+   `- Threads:` line, and hold tests that check; an idea may split its work with a `- Splits:`
+   line, and a test of a piece runs as a piece;
 3. builds `main.wat` into its WebAssembly module, as [`run`](run.md) does;
 4. checks the module against every rule of lengua's WebAssembly dialect and, for an idea with a
    `- Secret:` line, the secret rule: no value computed from an input the line names decides a
@@ -103,7 +104,7 @@ lengua's `check` tool takes such a folder as far as its tests. In place of steps
    doesn't grant; a memory that isn't exported as `memory`, declares no maximum, or may hold
    more than 16,384 pages (1 GiB); and a module with no `_start` that takes and gives nothing.
    `main.wat` beside it is one code file too many, and so is a `# Contract` section, since an
-   outside module offers no function to another program. An idea with a `- Secret:` line or a
+   outside module offers no function to another program. An idea with a `- Secret:` line, a `- Splits:` line or a
    `- Builds on:` line is refused at the idea;
 2. runs every test the idea holds against the module, in its workers, as step 5 above;
 3. stamps the module in `lengua.lock`: the stamp's two hashes, of the code file and of the

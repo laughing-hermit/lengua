@@ -23,6 +23,7 @@ use crate::wasm::host::limits::{self, Limits};
 use crate::wasm::host::net::{self, Link, Listener, Socket};
 use crate::wasm::host::open::Datagrams;
 use crate::wasm::host::policy::Policy;
+use crate::wasm::host::split::{Halt, Splitting};
 use crate::wasm::host::stdio::{Input, Output, Stream};
 use crate::wasm::host::term::{Own, Terminal};
 use crate::wasm::host::{Beyond, Host, Stop, World};
@@ -124,7 +125,7 @@ fn ending_of(error: &wasmtime::Error) -> (Ending, Option<String>) {
             Stop::Exit(code) => (Ending::Exited(*code), None),
             Stop::OutputTooLarge => (Ending::OutputTooLarge, None),
             Stop::TimedOut => (Ending::TimedOut, None),
-            Stop::Stopped => (Ending::Stopped, None),
+            Stop::Stopped | Stop::Piece => (Ending::Stopped, None),
             Stop::OutsideMemory => (Ending::Trapped(Trap::OutOfBounds, offsets_of(error)), None),
             Stop::NoMemory => (
                 Ending::Trapped(Trap::Other, offsets_of(error)),
@@ -165,12 +166,36 @@ pub fn execute(
     linker: &Linker<Host>,
     module: &Module,
     setup: Setup,
-    mut host: Host,
+    host: Host,
     timeout: Option<Duration>,
 ) -> Executed {
+    let deadline = timeout.map(|timeout| Instant::now() + timeout);
+    execute_until(engine, linker, module, setup, host, deadline, None)
+}
+
+/// [`execute`]'s work, with the deadline as a time: a piece of a program's split work runs
+/// until the program's own deadline, and is stopped as well once `halt` says its answer can't
+/// matter any more. A run whose idea lets it split its work gets what its pieces run with: its
+/// own module and linker. What its pieces executed counts as its own.
+#[must_use]
+pub(crate) fn execute_until(
+    engine: &Engine,
+    linker: &Linker<Host>,
+    module: &Module,
+    setup: Setup,
+    mut host: Host,
+    deadline: Option<Instant>,
+    halt: Option<Halt>,
+) -> Executed {
     host.limits.store = limits::store_limits(limits::memory_limit(module));
-    host.limits.deadline = timeout.map(|timeout| Instant::now() + timeout);
-    let deadline = host.limits.deadline;
+    host.limits.deadline = deadline;
+    if host.policy.reach.get().split.is_some() && !host.policy.piece {
+        host.splitting = Some(Splitting {
+            module: module.clone(),
+            linker: linker.clone(),
+            setup,
+        });
+    }
     let stop = Arc::clone(&host.limits.stop);
     let mut store = Store::new(engine, host);
     store.limiter(|host| &mut host.limits.store);
@@ -180,7 +205,7 @@ pub fn execute(
     if setup.interrupts() {
         store.set_epoch_deadline(1);
         store.epoch_deadline_callback(move |_| {
-            if stop.load(Ordering::SeqCst) {
+            if stop.load(Ordering::SeqCst) || halt.as_ref().is_some_and(Halt::halted) {
                 return Err(wasmtime::Error::new(Stop::Stopped));
             }
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
@@ -191,7 +216,7 @@ pub fn execute(
     }
     let started = Instant::now();
     let instantiated = linker.instantiate(&mut store, module);
-    let (ending, problem) = match instantiated {
+    let (mut ending, mut problem) = match instantiated {
         Err(error)
             if error.downcast_ref::<Stop>().is_none()
                 && error.downcast_ref::<wasmtime::Trap>().is_none() =>
@@ -221,11 +246,20 @@ pub fn execute(
     } else {
         None
     };
+    let mut host = store.into_data();
+    // What its pieces executed is the run's own work; and a run that a piece ended, ended as
+    // that piece did.
+    let instructions = instructions.map(|own| own.saturating_add(host.notes.counted));
+    if let Some((piece, said)) = host.notes.piece.take() {
+        ending = piece;
+        problem = said;
+    }
+    host.splitting = None;
     Executed {
         ending,
         instructions,
         wall_time_ns,
-        host: store.into_data(),
+        host,
         problem,
     }
 }
@@ -353,6 +387,12 @@ pub fn world(
         ),
         _ => None,
     };
+    // A test of a piece of split work: what it prints is its answer, held to the bytes its
+    // idea's line gives back, as the call that runs it holds it.
+    let room = match job.policy.reach.get().split {
+        Some(grant) if job.policy.piece => usize::try_from(grant.back).unwrap_or(usize::MAX),
+        _ => job.limits.max_output,
+    };
     let limits = Limits::new(
         None,
         stop,
@@ -369,7 +409,7 @@ pub fn world(
         stdout: if job.stdout_closed {
             Output::Closed
         } else {
-            Output::kept(job.limits.max_output)
+            Output::kept(room)
         },
         stderr: Output::kept(job.limits.max_output),
         folder,
@@ -421,6 +461,7 @@ pub fn unstarted(id: u64, problem: String, connections: Vec<Reached>) -> Done {
         wall_time_ns: 0,
         random_asked: None,
         listed: false,
+        split: false,
         connections,
         problem: Some(problem),
     }
@@ -441,6 +482,7 @@ pub fn done(id: u64, executed: Executed, connections: Vec<Reached>) -> Done {
     let stderr = std::mem::replace(&mut host.stderr, Output::Closed).into_bytes();
     let random_asked = host.random.asked();
     let listed = host.notes.listed;
+    let split = host.notes.split;
     // After the connections lengua made, what the program asked to open itself.
     let mut connections = connections;
     connections.append(&mut host.notes.opened);
@@ -454,6 +496,7 @@ pub fn done(id: u64, executed: Executed, connections: Vec<Reached>) -> Done {
         wall_time_ns,
         random_asked,
         listed,
+        split,
         connections,
         problem,
     }
@@ -496,6 +539,7 @@ pub fn run_of(done: Done, left: Left, line: impl Fn(u64) -> Option<usize>) -> Ru
             })
             .collect(),
         listed: done.listed,
+        split: done.split,
     }
 }
 

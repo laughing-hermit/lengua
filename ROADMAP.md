@@ -516,9 +516,72 @@ WebAssembly's semantics, and main.wat stays the one shared artifact.
 
 ## W20. Parallelism
 
-WebAssembly's threads (shared memory and atomics), as structured fork-join alone. The rules show
-that a program has no data race, so its results stay the same on every run, which free threads in
-C, C++ and Rust can't promise.
+*Built on the branch `wip/threads`.* A program uses more cores by splitting its work into
+pieces that run at once and share no memory, so that no rule has to show the absence of a data
+race, and a result is the same on every run and every computer, which free threads in C, C++
+and Rust can't promise.
+
+The plan was WebAssembly's threads (shared memory and atomics) as structured fork-join, with a
+rule that shows the parts share no writable memory. What was built instead gives each part a
+memory of its own (DESIGN.md, "The host", has the two designs weighed):
+
+- an idea's `- Splits:` line grants it and bounds it: how many pieces at most, how many bytes
+  a piece gets at most, and how many bytes each gives back;
+- `split`, of `lengua_split_1`, cuts the bytes into pieces by arithmetic, runs the same module
+  once for each from `_start` in a store of its own, at once on as many cores as the computer
+  has, and writes the answers in the pieces' order; `piece` says which run is one;
+- a piece reads its share as standard input, prints its answer, reaches nothing else of what
+  the idea grants, and can't split;
+- `check` refuses a main.wat outside the line, and an idea with a `- Splits:` line and a
+  `- Secret:` line;
+- a test of a program that split runs again with the pieces one at a time, the last first;
+  a test with the step `the program is a piece` runs as a piece, and the prover proves it as
+  it proves any program that reads standard input. The step that joins the answers is tested,
+  not proven.
+
+`examples/histogram-split` counts the byte values of standard input 8 MiB at a time, each
+buffer-full in eight pieces. Measured by lengua-run on 64 MiB, the best of seven runs on the
+clock (`split_work_is_measured`, crates/lengua-run/tests/alone.rs; run 43148133679, at 92dec35), against
+tests/fixtures/histogram, which does the same work on one core:
+
+| Runner | Cores | One core (tests/fixtures/histogram) | Split, one piece at a time | Two at once | One for each core |
+|---|---|---|---|---|---|
+| Linux on x86-64 | 4 | 29.4 ms | 67.6 ms | 47.0 ms | 45.8 ms |
+| Linux on ARM64 | 4 | 37.7 ms | 75.2 ms | 46.9 ms | 39.6 ms |
+| macOS on ARM64 | 3 | 33.8 ms | 49.8 ms | 34.0 ms | 36.5 ms |
+| Windows on x86-64 | 4 | 66.7 ms | 140.6 ms | 112.7 ms | 102.8 ms |
+| Windows on ARM64 | 4 | 71.4 ms | 105.5 ms | 80.3 ms | 60.8 ms |
+
+**For this work the split does not pay.** With a piece for each core the example is 1.4 to 1.9
+times as fast as itself with one piece at a time, so the pieces do run at once. But against
+the program that does the same work on one core it is slower on Linux on x86-64 and on Windows
+on x86-64 (1.5 times the time), level on Linux on ARM64 and on macOS on ARM64 (1.05 and 1.08
+times), and faster only on Windows on ARM64 (0.85 times). The run before it (43141059631, at
+55443fd, where a piece still read its share 4 KiB a read) gave the same picture: 35.1 ms
+against 19.0 ms on Linux on x86-64, 38.3 against 37.3 on Linux on ARM64, 78.5 against 40.2 on
+macOS, 55.3 against 45.5 on Windows on x86-64, and 66.9 against 75.4 on Windows on ARM64. The
+runners are shared machines of 3 or 4 cores, and a time moves by a third from run to run.
+
+Why: the count takes about 0.3 ms a mebibyte on one core, and a piece costs more than that
+before it counts: its bytes are copied twice, into lengua's memory and then into the piece's,
+both into pages the system hands over for the first time, and each call starts its threads
+and its stores anew. One piece at a time, the split program takes 1.5 to 2.3 times the
+one-core program's time, and 3 or 4 cores, some of them two threads of one core, don't win
+that back. A split pays where a piece's work on a byte costs several times a copy of it,
+which none of lengua's examples yet does. What would cut the cost: threads kept through a
+run, and a piece's bytes handed over without a copy.
+
+What it leaves: pieces of another program than the program itself; a piece with arguments,
+files or a clock of its own; a piece that splits; a proof of the join, and of the whole
+program; a secret in a program that splits; a template in the compile skill; a workload in
+the benchmark's gate, with C, C++ and Rust native builds that use threads beside it; and a
+stop for a piece in a run from a shell, whose engine stops nothing. todo.md, "W20: work split
+into pieces", has each with why.
+
+*Verified by:* the suite on all five runners at 6790d4c, with main's W21 merged in (43160037821); the
+example from its idea to done, with its proofs' lines (43136507348, Linux on x86-64); 7 of the
+8 tests of tests/wasm_split.rs failing on the commit that took the defences out (43148079519,
+at 3729579, which never reaches main); and the two measurements above, each on all five.
 
 ## W21. A library of proven parts
 

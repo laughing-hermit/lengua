@@ -47,9 +47,11 @@ its own memory, and it reaches the computer only through the calls its idea allo
 
 - **Imports** come only from `wasi_snapshot_preview1`, and, for what a program reaches by itself
   while it runs (the network, the files its arguments name, a program it starts, the terminal),
-  from lengua's own modules, `lengua_net_1`, `lengua_fs_1`, `lengua_run_1` and `lengua_term_1`;
+  from lengua's own modules, `lengua_net_1`, `lengua_fs_1`, `lengua_run_1` and `lengua_term_1`,
+  and `lengua_split_1` for work split into pieces;
   and only the functions the idea allows:
-  [the host](host.md) says which each `- Uses:`, `- Network:`, `- Files:` and `- Runs:` line
+  [the host](host.md) says which each `- Uses:`, `- Network:`, `- Files:`, `- Runs:` and
+  `- Splits:` line
   grants. `check` refuses any
   other import, so a program can't even name a call it isn't allowed.
 - **Exports** are exactly the function `_start` and the memory `memory`.
@@ -209,7 +211,11 @@ stays inside its own region is tested, not proven, and `check`'s memory line lis
   sees.
 - **M6, immutability.** A read-only region (`$x.rosize`, filled by `data` segments) is never
   written, through any address. Code is never data: WebAssembly keeps them apart.
-- **M7, threads.** There are none, so no data race.
+- **M7, threads.** A program has none. The pieces it splits its work into (`lengua_split_1`,
+  [the host](host.md)) are runs of their own, each with a memory of its own, so no data race.
+  For an idea with a `- Splits:` line, rule 3 also holds a call of `split` to a named number of
+  pieces the line covers, the memory to 16,384 pages for the program and every piece the line
+  grants together, and a module that splits to a call of `piece`.
 - **M8, stack.** The deepest call path's locals and operands fit within the engine's stack; large
   buffers are regions sized from the idea.
 - **Borrowed buffers.** Every buffer a host call reads or writes (an iovec array and the buffers
