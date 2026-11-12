@@ -431,6 +431,150 @@ Still open from it, for the owner:
 - **One listener or one UDP port** in a program, and one of each kind at most.
 - **IPv6 for what lengua binds**: the UDP port, as the TCP listener, is IPv4 only.
 
+### W21's parts: functions a program takes, already checked (2026-11-11)
+
+The first parts of W21, on the branch `wip/parts`, not merged. DESIGN.md ("Parts") has the
+design as built, the compile skill's references/parts.md what an agent does, and the decisions
+are with the others ("Decisions made during the pivot", W21's parts).
+
+What was there before: an idea's `- Builds on:` line, the graph's edges and its cycle check,
+and a first form of the copy: a function under a `;; from: <part>` line had to match the
+function of that name in a checked program, comments and spacing aside. Nothing said what a part
+offers, what its function reaches, or which of the program's own globals and functions the copy
+then used; the lock recorded no part; `check`'s reply named none; and no part existed.
+
+What was built:
+1. **The contract**, a `# Contract` section in a part's idea.md (`src/wasm/contract.rs`): each
+   function a program may take, with `reads N bytes at`, `writes N bytes at` or `uses no
+   memory`. The checker now gives what the memory rules find each function does through each
+   address it is lent (`Report::lends`), and `check` holds the section to it, in the server and
+   in the attester.
+2. **What a program can take** (`src/server/parts.rs`): a function the part defines itself,
+   that names no region and no global that changes, names functions and globals by name, and
+   calls no function of the part that the contract doesn't offer.
+3. **The copy, held with what it names**: the function word for word, each constant it reads
+   exactly as the part defines it, each function of the part it calls taken too, each host
+   function it calls imported the same way; a part that isn't checked, has no contract, or was
+   found wrong by a proof is refused. The check runs at every `check`.
+4. **The lock**: `[code]` records each part's folder, the hashes of its idea.md and its
+   main.wat, and the functions taken (`src/lock.rs`, both of its readers).
+5. **The reply**: `parts`, a line for each part with what main.wat takes from it, whether it is
+   the library's, unchanged, and what the part's own lock records of its proofs; `contract`,
+   for a part, each function it offers.
+6. **The library**, in the compile skill's `assets/parts` and in `examples/`: `decimal`
+   (`$decimal_parse`, `$decimal_format`), `lines` (`$lines_read`, `$lines_end`), `crc32`
+   (`$crc32_update`), `bytes` (`$bytes_equal`) and `sort64` (`$sort64`). lines and crc32 are
+   themselves built on decimal, bytes on lines, and sort64 on lines and decimal.
+7. **Two programs built on them**: `examples/sum`, on lines and decimal, and
+   `examples/checksums`, on lines, crc32 and decimal.
+8. **The skills**: write-idea and compile teach the agent to look for a part before it writes a
+   routine, to name it and place it, and how to write a part; each has a parts.md.
+9. **The tests** (`tests/wasm_parts.rs`, and the library's own): the skill's parts are the
+   examples'; a part's contract as the rules hold it; a program on two parts from its parts
+   unchecked to done, its reply, its lock and a run; a changed operator, a changed constant, a
+   part the idea doesn't name, a part nothing is taken from, a function the contract doesn't
+   offer and a part changed after its check, each refused; a change to a part caught by the
+   part's own tests; a region with less room than the contract states and a read-only region,
+   each refused by the memory rules; a contract that isn't what main.wat does, refused. The
+   five parts joined the mutation test, and every program built on parts goes from its
+   request to done with the others.
+
+What the proofs cover, each part checked alone on Linux on x86-64 with a minute for all of a
+build's proofs (runs 43093485583, 43099955038 and 43099968034), and each question's "impossible"
+counted only where both solvers gave it, or the terms settled it with no solver:
+
+| Program | Proven for every input in its range | Proven to a length, or tested |
+|---|---|---|
+| decimal (part) | every generated test: a number of up to 19 digits read, negated and written | |
+| lines (part) | every generated test: two lines of up to 40 bytes each | |
+| bytes (part) | every generated test: two lines of up to 40 bytes, and every pair of up to 3 | |
+| sort64 (part) | the tests of its errors and of a write that fails | with numbers from -999 to 999 and five minutes: two numbers in order proven, both solvers; three numbers tested, not proven (time ran out at 55 of 216 input combinations) |
+| crc32 (part) | the test of input that is too long | its CRC: a text of 1 byte in a minute, and of 2 characters in five minutes, both solvers; tested beyond |
+| sum | every generated test: two and three numbers of up to ten digits | |
+| checksums | the test of input that is too long | each line's CRC: a line of 1 byte of 24, tested beyond |
+
+A proof of a part is of the part's own program. Where a line says "the proof never ran" a
+function, as the tests of errors do, that function isn't in what the test proves.
+
+Its runs, each a dispatch of ci.yml on the branch, on Linux on x86-64 unless it says more:
+- 43093477020 (the new tests and the library's, at b6944a1): clippy passed and the library's 45
+  tests of the contract, the fields and the lock passed; two of the four tests of
+  `tests/wasm_parts.rs` failed, on lines.
+- 43093485583 (decimal, lines and crc32 checked alone, at b6944a1): decimal and crc32 done;
+  lines refused, since `check` took its functions' parameter `$text` for the part's region
+  `$text`. Fixed at 07ecbf6: a function's globals and calls are read from its instructions.
+- 43097214788, 43097220490, 43097226620, 43097993778 and 43098018741: none started. GitHub
+  ended each as a startup failure with no job, between 20:38 and 20:50 UTC, as it did a run of
+  another branch; runs dispatched from 21:04 on started.
+- 43099945232 (the new tests and the library's, at ad1e8f3): the library's 50 tests and the six
+  of `tests/wasm_parts.rs` passed.
+- 43099955038 (lines, bytes and sort64 checked alone, at ad1e8f3) and 43099968034 (sum and
+  checksums): all five done. sort64's two tests of numbers in order ran out of time, at 29 of
+  8,000 and 98 of 400 input combinations, with numbers of up to ten digits; its idea now takes
+  numbers from -999 to 999.
+- 43101505066 (crc32's proofs with five minutes, as shipped and by columns, at 6b720ff): both
+  forms done and both proven as far, 2 characters; the measure is with what is still open.
+- 43105850263: ran no test, since it was dispatched before its commit reached GitHub.
+- 43109375110 (sort64's proofs with five minutes, at b33ba00): two numbers in order proven,
+  three not, as the table says.
+- 43112852852 (the suite, at 2bfb3f3): cancelled by the next dispatch, before its tests.
+- 43116222005 (the suite, at de12275, with main's lean runner merged in and a run held to the
+  lock's parts): every test passed, lengua-run's among them; the format job's layout is
+  applied at 488881f.
+- At d1fe52a, with main's W18 second part and lean runner merged in (main at 7336b5c):
+  43131739478 (the suite on all five systems): format, the five test jobs and the gate passed,
+  on Linux on x86-64 and ARM64, macOS on ARM64 and Windows on x86-64 and ARM64.
+  43131749430 (the golden runners view on all five): the checker's reports and the model's runs
+  are the same text on the five, and all 192 proof blocks, the seven new programs' among
+  them, have the same verdict on the five, none out of time on one alone.
+  43131758993 (the five parts' mutants, Linux on x86-64): of 40 mutants, 19 broke a rule or the
+  copy check, 18 failed a test, one of bytes was tested and not all proven, and two came out
+  proven, which the run failed on. Both change nothing a program does (`$argv.size` one
+  larger in decimal, `$out` one byte along in lines), and tests/mutation.rs now names each
+  with why.
+- At 6f29d62, which adds those two mutants' names and this list to d1fe52a: 43143045047 (the
+  five parts' mutants, Linux on x86-64): green, no mutant came out proven but the two named.
+  43143036339 (the suite on all five systems): green on its second attempt. On the first,
+  Windows on ARM64 failed one test that W21 doesn't touch,
+  `two_checks_at_once_leave_a_consistent_index` of tests/graph.rs: of two ideas recorded at
+  once in one bundle, log.md held one entry, not two. The same job passed at d1fe52a and
+  when it was run again, so it is a race, and it is open (below).
+- After them, main's two commits of todo.md and ROADMAP.md alone (to aa429a9) are merged
+  in; the head they give is held by a compile run, as documents are.
+
+Still open from it, for the owner:
+- **A part's proof isn't used in the programs built on it.** The prover follows each taken
+  function again in each program. What it would take is with the decisions (W21's parts): a
+  contract that states what a function computes, a proof of the body against it for every
+  argument and every memory, and the prover's use of it at each call.
+- **crc32 is tested, not proven, past two characters.** The program's CRC, made by shifts and
+  xors, and the formula's, a chain of CRC steps, are two terms of one number, and each is
+  printed in decimal. In a minute the proof covers a text of 1 byte. In five minutes (run
+  43101505066) it covers 2 characters of the short test's 64, each question confirmed by z3
+  and cvc5, and 1 byte of the long test's 4096; past that z3 runs out of time. The same
+  function written as the eight columns of the CRC's table, in place of eight shifts, got
+  exactly as far in that run, so the part keeps its shifts. A rule in the model that reads
+  a CRC step out of a program's operations, as it reads a count, would make the two one
+  term.
+- **sort64 is proven for two numbers and tested for more.** Three numbers from -999 to 999
+  ran out of five minutes at 55 of 216 input combinations (run 43109375110): each takes the
+  solvers through the six orders three numbers can have. Arrays of 4 to 256 numbers have no
+  test with a formula at all, since the test format has no formula for a sorted list of
+  numbers: the part's tests sort two and three.
+- **Parts not written**: a hash table, SHA-256 (the prover doesn't model it, so it would be
+  tested, not proven), the lines of an HTTP request, a sort faster than by selection, JSON,
+  compression and dates.
+- **Fixed limits**: 20 bytes for a number, 4096 for a text, 256 numbers for a sort. A part
+  whose sizes its caller sets needs a contract with a size in it, and rules that follow one.
+- **A table inside a part**: a taken function names no region, so a part can't bring read-only
+  data with it. crc32 pays for that with eight steps a byte.
+- **Parts of parts**: a function a part took from another part can't be offered on. A program
+  names every part it takes from.
+- **The library reaches a user by a copy the agent makes** from the skill's assets. Nothing
+  fetches a part, and nothing tells a user that a newer lengua ships a newer part.
+- **The attester doesn't hold a program to its parts**: `lengua-mcp check` reads one folder.
+- **log.md can lose an entry when two programs of one bundle are recorded at once.** Seen
+  once, on Windows on ARM64 (run 43143036339, first attempt); not from W21, and not fixed.
 ### W18's second part: files the user names, programs, the terminal (2026-11-11)
 
 On the branch `wip/reach-2`, not merged: the owner lands it. DESIGN.md ("The host") has the
@@ -1175,6 +1319,76 @@ Each can be reversed.
     runners without them fails, so no such run passes having skipped them; elsewhere the two
     tests note that they skipped. No compiled module is committed.
 
+- **W21's parts (2026-11-11)**, each made without asking, on the owner's standing word, and
+  each the owner's to reverse:
+  - **A program takes a part's functions by copying them, and `check` holds each copy to the
+    part.** The other way was for `check` to link modules itself. Copying keeps main.wat the
+    one text lengua builds, checks, tests, proves and runs, so every guarantee is still one
+    statement about main.wat: the rules, the memory rules, the secret rule and the proofs go
+    through a taken function as through any other, with nothing new to trust. Linking would
+    have added a second artifact, a linker inside lengua's trusted code, and rules, a secret
+    rule and a prover that cross a module's edge. Cost: a program built on parts is as long as
+    one that wrote the functions itself, and is proven as slowly.
+  - **A part is a whole program, with a `# Contract` section in its idea.** The section lists
+    each function a program may take, with what it reads and writes through the addresses it
+    is lent: `reads N bytes at`, `writes N bytes at`, `uses no memory`. Those clauses are what
+    the memory rules already compute for every function, so `check` holds the section to
+    main.wat exactly, and the rules hold every call to it. What a function's other arguments
+    must be, and what it gives, are the idea's own words after the clauses: lengua reads them
+    no further, and the function checks its arguments itself, with assertions.
+  - **A contract is needed to take from a part.** Before W21, main.wat could take a function
+    from any checked program. Now the part's idea must offer the function. Cost: a program
+    someone built that way must add the section to the part.
+  - **A taken function means in the program what it means in the part.** `check` holds, word
+    for word, the function, each constant it reads, each function of the part it calls (taken
+    the same way) and each host function it imports. A function a contract offers names no
+    region and no global that changes, and names nothing by its number. So its result depends
+    only on its arguments, the bytes it is lent and the host. Cost: a part's function can't
+    keep a table in a region of its own, so crc32 computes a bit at a time, eight steps a
+    byte, where the benchmark's crc32c reads sixteen tables; and a function a part took from
+    another part can't be offered on.
+  - **main.wat is held to its parts at every `check`**, not only when its two files change: a
+    job on the same files may be older than a change to a part. A part that changed is no
+    longer checked, so the program is refused until the part is checked again.
+  - **The prover proves a taken function again in each program.** It follows main.wat's
+    module, the taken functions with it, for the program's own generated tests. A part's
+    proofs aren't used: they are of the part's own program, for its inputs, and say nothing of
+    another caller's arguments. To use a contract in place of a body, the contract would have
+    to state what the function computes, as a formula over its arguments and the bytes it is
+    lent, and the prover would have to prove the body against it once, for every argument and
+    every memory, then assume it at each call and hold each call's arguments to it. None of
+    that is built, and `check` claims none of it: a program's `proofs` say what the solvers
+    showed of that program, and its `parts` lines repeat what each part's own lock records.
+  - **A run holds the parts to the lock.** `run`, `lengua-mcp run` and lengua-run refuse a
+    program when a part its lock records changed or is gone, by the hashes of the part's
+    idea.md and main.wat: the program's own module didn't change, but it is no longer what
+    the lock says it is, functions of that part. `check` on the program stamps it again once
+    the part is checked again. Cost: a run of a program built on parts reads two files more
+    for each part, and a part's folder must stay beside the program.
+  - **lengua.lock records the parts in `[code]`**: each part's folder, the hashes of its
+    idea.md and its main.wat, and the functions taken, in a `parts` line written only for a
+    program that takes from a part. The lock's format stays 7: a lock with no parts is byte
+    for byte what it was, so no lock made before changes, and a lengua from before W21
+    refuses a lock that has the line, as one with a field it doesn't write.
+  - **The library is in the compile skill's `assets/parts`, and each part is checked on the
+    user's computer.** The agent copies a part's folder beside the program's and checks it
+    like any program; lengua-mcp carries the parts' text only to say whether a part is the
+    library's, unchanged. lengua trusts no part for being its own. The same files are in
+    `examples/`, where the suite, the model's test and the golden ledger take them with every
+    other program, and a test holds the two copies to each other. Cost: each part's tests and
+    proofs run once on each computer that builds on it.
+  - **A part's limits are fixed.** The rules compute one reach for each parameter, whatever
+    length a call passes, so `decimal` reaches 20 bytes, `lines`, `crc32` and `bytes` 4096,
+    and `sort64` 256 numbers, and a caller's region needs that room after the last place it
+    lends. A program that needs more writes its own function. A part whose sizes its caller
+    sets isn't built.
+  - **The library's assertions are numbered from 800**, each part its own range, and its
+    names carry the part's name (`$decimal_parse`, `$DECIMAL_TEN`), since a program's
+    assertion numbers and names are one set. Cost: a program built on the library numbers its
+    own assertions from 1 to 799.
+  - **The attester holds a part's contract to its main.wat, and holds no program to its
+    parts**: it reads one folder, and a part is checked where it is used.
+
 ## Roadmap: the pivot's milestones (2026-11-06)
 
 Each merges to main when green on the runners it names; [ROADMAP.md](ROADMAP.md) has the detail.
@@ -1289,6 +1503,9 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
   HTTP, compression, dates) that programs build on with `- Builds on:`. The agent assembles
   programs from verified pieces instead of writing everything new, which makes them faster to
   build and to prove.
+  **The mechanism and the first five parts were built on 2026-11-11** (branch `wip/parts`;
+  "W21's parts", above, has what was built, its runs and what is left, and the decisions are
+  with the others, above).
 - **Nothing missing** (the owner, 2026-11-11: "that evolution needs to function better than a
   programming language. Not have stuff missing"; "yes add them to todo.md"). A programming
   language gives more than W18 to W21 cover. Three more, after them:

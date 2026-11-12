@@ -23,7 +23,9 @@ They run a folder whose `lengua.lock`, signed with this user's key, records `ide
 `main.wat` as they are. `check` writes that record on this computer once `main.wat` builds,
 follows every rule of lengua's WebAssembly dialect and passes every test of its idea. The proofs
 may still be running then. A proof that finds inputs where `main.wat` is wrong is recorded in the
-lock, and from then on `run` refuses that build.
+lock, and from then on `run` refuses that build. For a program built on parts, the lock records
+each part's `idea.md` and `main.wat` too, and no run starts once one of them changed or is gone,
+until `check` holds the program to the part again.
 
 Given such a folder, a run:
 

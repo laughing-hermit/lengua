@@ -6,6 +6,7 @@
 //! runs in place ([`runner::run_here`]). How a run went is a [`crate::runner::Run`], which
 //! everything that compares results reads.
 
+pub mod contract;
 pub mod engine;
 pub mod host;
 pub mod job;

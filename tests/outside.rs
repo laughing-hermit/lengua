@@ -402,6 +402,31 @@ async fn check_refuses_what_the_host_can_t_hold() {
         "{both}"
     );
     std::fs::remove_file(program.file("main.wat")).expect("remove main.wat");
+    // An outside module is no part: it offers no function, and builds on none.
+    let part = format!("{idea}\n# Contract\n- `$print`: uses no memory.\n");
+    program.write("idea.md", &part);
+    let reply = session.check(&program).await;
+    assert_eq!(reply["state"], "code_problems", "{reply}");
+    assert!(
+        strings(&reply["problems"])
+            .join("\n")
+            .contains("offers no function to another program"),
+        "{reply}"
+    );
+    let builds = printing_idea(
+        "refused",
+        "ok",
+        "- Uses: nothing\n- Builds on: [sort](../sort/idea.md)",
+    );
+    program.write("idea.md", &builds);
+    let reply = session.check(&program).await;
+    assert_eq!(reply["state"], "idea_problems", "{reply}");
+    assert!(
+        strings(&reply["problems"])
+            .join("\n")
+            .contains("builds on no part"),
+        "{reply}"
+    );
     // An outside module keeps no secret that lengua can check.
     let secret = printing_idea("refused", "ok", "- Uses: nothing\n- Secret: argument `1`");
     program.write("idea.md", &secret);

@@ -85,6 +85,26 @@ impl LenguaServer {
             .map(|named| named.built_from.clone())
             .unwrap_or_default();
         let unread = || outside::said(&built_from, None);
+        // An outside module is no part: a contract offers functions of main.wat's text, which
+        // the memory rules measure, and main.wasm has neither. (That it builds on no part is
+        // the idea's own problem, said at the idea.)
+        if !matches!(crate::wasm::contract::read(idea_text), Ok(None)) {
+            let problem = format!(
+                "{IDEA_FILE} has a `# Contract` section, and its program is {OUTSIDE_FILE}, an \
+                 outside module, which offers no function to another program: a part's \
+                 functions are taken from its {CODE_FILE}, word for word, and held to the \
+                 memory rules. Remove the section; or, for a part, remove the `- Module:` line \
+                 and compile the idea to {CODE_FILE}"
+            );
+            let next = format!(
+                "Next: remove `# Contract` from {folder}/{IDEA_FILE}, then call check with path \
+                 {folder}."
+            );
+            return Ok(CheckReport {
+                outside: unread(),
+                ..CheckReport::problems("code_problems", vec![problem], next)
+            });
+        }
         if folder.file(CODE_FILE).exists() {
             let problem = format!(
                 "{folder} holds {CODE_FILE} beside an idea whose `- Module:` line names \
@@ -152,6 +172,7 @@ impl LenguaServer {
                     max_stack_bytes: 0,
                     unsafe_blocks: 0,
                     obligations: Vec::new(),
+                    parts: Vec::new(),
                     machine_code: None,
                     outside: Some(said),
                 };

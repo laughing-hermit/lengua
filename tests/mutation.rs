@@ -56,6 +56,16 @@ const EQUIVALENT: &[(&str, &str)] = &[
          bytes at 2048, and the next region, $argv, starts at 2064",
     ),
     (
+        "examples/decimal/main.wat L61:const+1",
+        "$argv.size grows from 8 to 9: no code reads the size, args_get still writes 8 bytes at \
+         2064, and the next region, $args, starts at 2080",
+    ),
+    (
+        "examples/lines/main.wat L52:const+1",
+        "$out moves from 6208 to 6209: its 21 bytes end at 6230, inside the one page, it is the \
+         last region, and $decimal_format and $write_all are both lent the same address",
+    ),
+    (
         "examples/copy/main.wat L60:const+1",
         "$buffer moves from 65536 to 65537: its 65,537 bytes end at 131,074, inside the three \
          pages, it is the last region, and $fill and $write_all are both lent the same address",
@@ -99,6 +109,12 @@ const UNREACHED: &[(&str, &str)] = &[
 /// The programs whose mutants are checked: each idea, then its main.wat.
 const PROGRAMS: &[(&str, &str)] = &[
     ("tests/fixtures/add/idea.md", "tests/fixtures/add/main.wat"),
+    // The library's parts: a mutant of a part must not come out proven either.
+    ("examples/decimal/idea.md", "examples/decimal/main.wat"),
+    ("examples/lines/idea.md", "examples/lines/main.wat"),
+    ("examples/crc32/idea.md", "examples/crc32/main.wat"),
+    ("examples/bytes/idea.md", "examples/bytes/main.wat"),
+    ("examples/sort64/idea.md", "examples/sort64/main.wat"),
     ("examples/upcase/idea.md", "examples/upcase/main.wat"),
     ("examples/fetch/idea.md", "examples/fetch/main.wat"),
     (
@@ -297,12 +313,22 @@ async fn survivors(session: &Session, programs: &[(&str, &str)], proven: bool) -
     for (idea, code) in programs.iter().filter(|(_, code)| wanted(code)) {
         let (idea_text, code_text) = (read(idea), read(code));
         let mut tally = std::collections::BTreeMap::new();
+        // A program built on parts keeps one bundle for all its mutants, its parts checked once
+        // beside it: each part's own tests and proofs take their time.
+        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(code);
+        let folder = folder.parent().expect("main.wat stands in a folder");
+        let built_on_parts = !common::parts_of(folder).is_empty();
+        let bundle = Program::new();
+        if let Err(problem) = session.settle_parts(&bundle, folder).await {
+            panic!("{code}: {problem}");
+        }
         for (name, mutant) in mutants(&code_text) {
-            let program = Program::new();
+            let fresh = Program::new();
+            let program = if built_on_parts { &bundle } else { &fresh };
             program.write("idea.md", &idea_text);
             program.write("main.wat", &mutant);
-            session.record(&program).await;
-            let report = session.settle(&program).await;
+            session.record(program).await;
+            let report = session.settle(program).await;
             let found = fate(&report);
             eprintln!("{code} {name}: {found:?}");
             let named = format!("{code} {name}");

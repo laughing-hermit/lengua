@@ -144,6 +144,12 @@ Describe a program to your agent: "Use lengua to write a program that ...". Then
 3. At `done`, the agent tells you where the program is, what its idea promises, that it passed
    every test, what is proven, and any change made to the idea after your words.
 
+A program can build on parts: programs whose ideas offer some of their functions, each with a
+stated contract. lengua ships five (`decimal`, `lines`, `crc32`, `bytes` and `sort64`), and a
+program of your own can be one. The agent names the part in the idea (`- Builds on:`), copies
+the functions it takes into `main.wat` word for word, and `check` holds each copy to the part
+at every check and says what the program takes ([DESIGN.md](DESIGN.md), Parts).
+
 Run it with the `run` tool, which gives it 10 seconds by default (up to 40) and 8 MiB of each
 output stream, in a fresh folder or in one you name. A server keeps serving in the background
 until `run` stops it, ten minutes pass, or the session ends. From your own shell, scripts and
@@ -210,6 +216,11 @@ Within lengua, for a program at `done`:
   they can follow to its owner. What they can't follow is left to the proofs, which keep it
   inside the program's memory but follow no region, so whether it stays inside its own region
   is tested, not proven. The reply's memory line says which is which.
+- **A function taken from a part is the part's own.** A function `main.wat` says it takes from a
+  part is that part's function word for word, with the constants it reads and the functions it
+  calls, or `check` refuses the program. The part is checked on this computer, states what
+  each function reaches through the addresses it is lent, and the memory rules hold every call
+  to that. lengua.lock records the parts with their hashes, and no run starts once a part changed.
 - **The same bits on every computer.** NaNs are made canonical, there are no threads, and relaxed
   SIMD, whose results differ between computers, is off.
 - **Every proof says what it covers.** With both solvers installed, as the archive ships them, a
@@ -248,13 +259,18 @@ What it doesn't promise:
   module, which another runtime can run when the program reaches only standard streams and
   files, with none of these checks behind it.
 - **Not every proof finishes.** Some tests stay "tested, not proven": sorts and word tallies over
-  8 bytes, SHA-256 and AES-128 (the proof doesn't model them), a server that waits on its
-  connections with `poll_oneoff`, a program that opens its own connections, sends datagrams,
+  8 bytes, SHA-256 and AES-128 (the proof doesn't model them), a CRC-32 a program computes
+  itself past two characters of text (the library's `crc32` among them), a server that waits on
+  its connections with `poll_oneoff`, a program that opens its own connections, sends datagrams,
   looks up names, opens a file an argument names, starts a program or uses the terminal's
   functions (the model follows only what lengua gives a program before it starts), and whatever
   runs out of time. A stream is proven for every length by induction over its read loop only
   where every final piece of up to a buffer-full is proven in the proof's time; otherwise it is
   proven up to a length, which its line says.
+- **A part's proof isn't the program's.** A part is proven through its own program, for the
+  inputs its idea gives. The prover doesn't carry that into a program built on the part: it
+  follows each taken function again, inside the program, for the program's own tests. So a
+  program's proofs say what holds of it, and a part's say only what was shown of the part.
 - **Not what the other end is.** A grant names computers and ports. What a granted computer
   sends back, and who answers for a name, are that computer's and its DNS's: lengua checks the
   addresses a name resolves to and, over TLS, the certificate, and nothing more of them. An
@@ -401,7 +417,9 @@ with rows the list can't take back is the owner's ([todo.md](todo.md)).
 - `crates/lengua-os/`: the one crate allowed unsafe code, each call in a safe function.
 - `plugin/`: the plugin as it ships: its manifests, the two skills with their references and
   templates, its [README](plugin/README.md) and licence.
-- `examples/`: 19 programs, each a folder of `idea.md` and `main.wat`.
+- `examples/`: 26 programs, each a folder of `idea.md` and `main.wat`. Five are the library's
+  parts, `decimal`, `lines`, `crc32`, `bytes` and `sort64`, the same files the compile skill
+  ships in its `assets/parts`, and `sum` and `checksums` are built on them.
 - `tests/`: the suite, the 29 programs of `tests/fixtures`, the host's 109 cases in
   `tests/host-cases`, the Rust and C programs of `tests/outside`, which CI compiles to outside
   modules, and the vendored schemas.
@@ -472,7 +490,13 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
   the proven `main.wat` through wasm2c.
 - **W20, parallelism:** WebAssembly's threads, as structured fork-join that the rules show free
   of data races.
-- **W21, a library of proven parts** that programs build on with `- Builds on:`.
+- **W21, a library of proven parts** that programs build on with `- Builds on:`. Built: the
+  mechanism (a part's contract, the copy `check` holds to the part, the lock's record) and five
+  parts, `decimal`, `lines`, `crc32`, `bytes` and `sort64`, with two programs on them. Left:
+  the prover proves a taken function again in each program, and hash tables, SHA-256, HTTP, a
+  faster sort, JSON, compression and dates have no part. `decimal`, `lines` and `bytes` are
+  proven for every input in their ranges; `sort64` for two numbers and `crc32` for 2
+  characters of text, each tested beyond.
 - **W22, scale; W23, working with other code; W24, tools:** what a programming language has
   that lengua still lacks ([todo.md](todo.md)). One part of W23 is built, on the branch
   `wip/outside`: a module that a compiler made from Rust, C or another language, run as the
