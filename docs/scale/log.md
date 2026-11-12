@@ -125,3 +125,21 @@ every example of the three ideas to its generated test by hand and found eight m
 same kind in httpd's idea: five examples that lacked the `?query` their generated steps have,
 one whose two queries used letters outside the generator's, and a key, `color`, outside its
 generator's letters. Without that pass, each could have cost a cycle.
+
+### Cycle 3 (runs 43170808554 and 43170812099, at 5370ddf)
+
+| Folder | Lines | What `check` said |
+|---|---|---|
+| http | 691 | **`done` at its first check of the code**: every rule holds, 278 test runs pass. First reply after 20.2 s, all of it with its proofs 60.2 s |
+| httpd | 3,610 | `idea_problems`, three at once: B20's six runs all expect the same output; B6's file `{a}{b}{c}` can't be matched to its example (three placeholders with no text between them); B23's example has a `2` its generator doesn't draw (a slip of the agent's own fix in cycle 2) |
+
+http's proofs in 60 seconds: 7 of its 9 generated tests proven for every input in range (the
+few-texts row of B1, B3 to B8), "settled by the terms themselves"; B1's wide row proven for
+texts up to 3 of 100 bytes (z3 and cvc5 both), and B2 up to 15 of 40 bytes. The contract's 12
+clauses were what the agent had written. The four parts of httpd took 180.8 s to settle
+before httpd's own idea was read.
+
+Two of the three problems are rules of the test format that write-idea's reference states
+only in part: that neighbouring placeholders need text between them is not in it, and neither
+is how few runs can leave an output the same (six runs over a choice of six and a string drew
+the string's first boundary value each time).
