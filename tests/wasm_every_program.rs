@@ -70,6 +70,12 @@ async fn from_request_to_done(session: &Session, name: &str, folder: &Path) -> R
     program.write("idea.md", &idea);
     // The parts it builds on stand beside it, each checked first.
     session.settle_parts(&program, folder).await?;
+    // The modules it calls stand ready too: a called program beside it, checked first, and an
+    // outside module in its folder, as CI built it from the source beside the example.
+    let calls = !common::calls_of(folder).is_empty();
+    if !session.settle_calls(&program, folder).await? {
+        return Ok(());
+    }
     let recorded = session.record(&program).await;
     if recorded["state"] != "write_code" {
         return Err(format!("{name}: its idea wasn't recorded: {recorded}"));
@@ -81,6 +87,18 @@ async fn from_request_to_done(session: &Session, name: &str, folder: &Path) -> R
     }
     if !any_line(&done["tests"], "main.wat follows every rule and passed all") {
         return Err(format!("{name}: its tests didn't all pass: {done}"));
+    }
+    // A program that calls a module gets no entry: the entry names an idea and its main.wat,
+    // and such a program rests on a third file. Its reply names each module it calls.
+    if calls {
+        let written = program.read("idea.md").unwrap_or_default();
+        if !trust::lengua_entries(&written).is_empty() {
+            return Err(format!("{name}: it calls a module and has an entry in `verified`"));
+        }
+        if done["calls"].as_array().is_none_or(Vec::is_empty) {
+            return Err(format!("{name}: its reply names no module it calls: {done}"));
+        }
+        return Ok(());
     }
     // lengua's entry in `verified` names the main.wat it checked.
     let written = program.read("idea.md").unwrap_or_default();

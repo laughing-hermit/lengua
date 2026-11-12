@@ -555,6 +555,12 @@ async fn the_model_does_what_the_engine_does_on_every_test_of_the_fixtures() {
         let wat = std::fs::read_to_string(wat_path).expect("the program reads");
         let idea = lengua::idea::parse(&idea_text)
             .unwrap_or_else(|problems| panic!("{shown}: {problems:?}"));
+        // A program that calls a module runs with the module beside it, and the model follows
+        // no other module: tests/calls.rs runs such a program, and its proofs stop at the call.
+        if !idea.network.reach.calls.is_empty() {
+            not_modelled.push(format!("{shown}: it calls a module"));
+            continue;
+        }
         let suite = lengua::testfile::check(&idea)
             .unwrap_or_else(|problems| panic!("{shown}: {problems:?}"));
         let program = Program::of_text(&wat).unwrap_or_else(|problem| panic!("{shown}: {problem}"));

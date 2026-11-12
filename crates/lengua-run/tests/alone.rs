@@ -93,6 +93,7 @@ impl Checked {
                 unsafe_blocks: 0,
                 features: engine::features_used(&wasm),
                 parts: Vec::new(),
+                calls: Vec::new(),
             }),
             proofs: None,
         };

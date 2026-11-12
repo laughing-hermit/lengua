@@ -142,7 +142,12 @@ pub fn wasm(arguments: &[String]) -> Result<u8, String> {
         let name = folder.file_name().unwrap_or_default().to_string_lossy();
         for source in sources {
             let stem = source.file_stem().unwrap_or_default().to_string_lossy();
-            build(&sdk, &source, &out.join(format!("{name}.{stem}.wasm")), true)?;
+            build(
+                &sdk,
+                &source,
+                &out.join(format!("{name}.{stem}.wasm")),
+                true,
+            )?;
             built += 1;
         }
     }
