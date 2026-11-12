@@ -37,7 +37,8 @@ These are the limits:
 
 - The head of a request has at most `4096` bytes, and its body at most `4096` bytes. The tests
   give a body length of `4097` to `999999` to a request that is too large.
-- The target of a request has at most `1024` bytes.
+- The target of a request has at most `1024` bytes. A path can have text in UTF-8, which a
+  request writes with percent signs.
 - The server holds a file in memory to send it, so a file has at most `1048576` bytes.
 - A folder has at most `256` names in a list.
 - A key has `1` to `64` letters, digits, hyphens, points and underscores.
@@ -286,7 +287,7 @@ The names that start with a point, and the folder itself, are not files that the
 
 | target | runs |
 |---|---|
-| `choice("/files/other.txt", "/", "/health/", "/healthy", "/files", "/files/notes.txt/", "/files/none/", "/files/../store.json", "/files/%2e%2e/store.json", "/files/.hidden", "/files/sub/.x", "/kvs", "/kv/missing", "/public/notes.txt")` | 15 |
+| `choice("/files/other.txt", "/", "/health/", "/healthy", "/files", "/files/notes.txt/", "/files/none/", "/files/../store.json", "/files/%2e%2e/store.json", "/files/.hidden", "/files/sub/.x", "/kvs", "/kv/missing", "/public/notes.txt", "/%e9", "/files/caf%c3%a9.txt")` | 40 |
 
 ## B10: Names the methods of a route when the method is not one of them
 - Given a client that sends `POST /health HTTP/1.1\r\n\r\n`
@@ -352,7 +353,7 @@ The names that start with a point, and the folder itself, are not files that the
 
 | target | field | runs |
 |---|---|---|
-| `choice("/files/%zz", "/files/%4", "/files/a%00b", "/%e9", "/kv/a%20b", "/kv/", "/kv/a/b", "/kv/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")` | `choice("", "Host: localhost\r\n")` | 16 |
+| `choice("/files/%zz", "/files/%4", "/files/a%00b", "/%7f", "/kv/a%20b", "/kv/", "/kv/a/b", "/kv/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")` | `choice("", "Host: localhost\r\n")` | 16 |
 | `choice("/health", "/files/notes.txt", "/kv")` | `choice("No colon\r\n", ": empty\r\n", " folded: x\r\n", "A: b\nC: d\r\n", "Content-Length: x\r\n", "Content-Length: -1\r\n", "Content-Length: 1 2\r\n", "Content-Length:\r\n")` | 16 |
 
 ## B13: Answers status 431 when the head of a request is too long

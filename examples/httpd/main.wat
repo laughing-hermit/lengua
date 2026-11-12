@@ -315,12 +315,11 @@
   (global $HTTP_BIG_A i32 (i32.const 65))
   (global $HTTP_SMALL_A i32 (i32.const 97))
   (global $HTTP_DELETE i32 (i32.const 127))
-  ;; The first visible character, and how far the last one is from it; how far the last
-  ;; character that prints is from the space; how far Z is from A, 9 from 0 and f from a; the
-  ;; bit that makes a letter small; ten; and the bits of a hexadecimal digit.
+  ;; The first visible character, and how far the last one is from it; how far Z is from A, 9
+  ;; from 0 and f from a; the bit that makes a letter small; ten; and the bits of a
+  ;; hexadecimal digit.
   (global $HTTP_FIRST_VISIBLE i32 (i32.const 33))
   (global $HTTP_VISIBLE i32 (i32.const 93))
-  (global $HTTP_PRINTS i32 (i32.const 94))
   (global $HTTP_LETTERS i32 (i32.const 25))
   (global $HTTP_NINE i32 (i32.const 9))
   (global $HTTP_FIVE i32 (i32.const 5))
@@ -3046,7 +3045,7 @@
   ;; request's target: the bytes up to a question mark, each percent sign and its two
   ;; hexadecimal digits as the byte they name. Writes the path at $into and gives its length,
   ;; at most HTTP_PATH. Gives HTTP_NO when an escape isn't two hexadecimal digits, when a
-  ;; byte of the path, decoded, is not a character that prints, or when the path is longer
+  ;; byte of the path, decoded, is a control character, or when the path is longer
   ;; than HTTP_PATH. $from is at most $end, and $end at most HTTP_HEAD. Its caller lends
   ;; $into with room for HTTP_PATH bytes.
   ;; from: ../http
@@ -3089,10 +3088,9 @@
                 (i32.or (i32.shl (local.get $high) (global.get $HTTP_HEX_SHIFT))
                   (local.get $low)))
               (local.set $i (i32.add (local.get $i) (global.get $HTTP_PAIR)))))
-          ;; Only a character that prints, from the space to the tilde.
-          (br_if $bad
-            (i32.gt_u (i32.sub (local.get $c) (global.get $HTTP_SPACE))
-              (global.get $HTTP_PRINTS)))
+          ;; No control character: a byte from 128 up is a part of a character of UTF-8.
+          (br_if $bad (i32.lt_u (local.get $c) (global.get $HTTP_SPACE)))
+          (br_if $bad (i32.eq (local.get $c) (global.get $HTTP_DELETE)))
           (br_if $bad (i32.ge_u (local.get $o) (global.get $HTTP_PATH)))
           (i32.store8 (i32.add (local.get $into) (local.get $o)) (local.get $c))
           (local.set $o (i32.add (local.get $o) (i32.const 1)))
