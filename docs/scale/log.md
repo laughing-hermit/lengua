@@ -185,3 +185,60 @@ shape), one at one rule (cycle 4), and the fifth passed. No cycle was spent on a
 or on text that didn't build. From the first dispatch (05:33 UTC) to `done` (08:40 UTC): 3
 hours 7 minutes, nearly all of it the runners' builds; `check` itself took 0.1 s for the rules
 and 3.2 s with the tests.
+
+## The three changes
+
+Each was made as a user would ask for it: the idea first, then the code, then `check`.
+
+### Change (a): a feature that cuts across. "Answer HEAD on every route that takes GET"
+
+What changed in the idea: one paragraph of `# Purpose`; the `Allow` field of four answers in
+B10, and HEAD out of the methods that B10 refuses; one new behavior, B23, of six clients (the
+health route, a file, a list, the store, a key, and a path that names nothing).
+
+What changed in the code (33fd8ce, then eccb139):
+
+| What | Lines of main.wat |
+|---|---|
+| The two `Allow` texts are six bytes longer each, so every text after them in `$texts` moves: 45 constants and 45 `data` lines get new numbers | 180 (90 out, 90 in) |
+| The method HEAD, a flag for "no body" and the place where the head ends, kept in `$logged`; a new function `$head_end` at the nine places that end a head; `$send` and the four places that send a body from a region of their own; the log's length | 62 in, 12 out |
+| Cycle 2's fix to `$send` | 13 in, 5 out |
+
+- **Cycle a1 (run 43186041980, at 33fd8ce):** `code_problems`, one: `rule 9 (no indirection)
+  main.wat:1202: the buffer $write_all borrows in argument 2 is as long as a number nothing
+  checks, so it may reach past $out`. In `$send` the length was the parameter on one path and
+  a number loaded from `$logged` on the other, and one check after the two paths met bounded
+  neither for the rules. Fix: each path checks its own length and makes its own call.
+- **Cycle a2 (run 43191117225, at c15e321, together with change (b)):** `done`, 290 test
+  runs.
+
+What else broke: nothing in the tests. Two things in the work itself:
+- The re-laying of `$texts` was done with `awk` from the list of texts, and `awk` dropped the
+  one text that is a single space. The agent's own comparison of the old and the new `data`
+  lines showed it before the dispatch. By hand, 90 numbers would have been 90 chances.
+- An answer to a request that `examine` refuses before the method is known (a head that is not
+  valid, 431, 413) still has its body when the method was HEAD. The idea doesn't speak of it.
+
+### Change (b): a bug in the middle of the parser. "A file whose name has a letter outside ASCII is refused"
+
+No test found a bug in the parser, so none was fixed that a test had found. The agent read
+`$http_path` again as a user would use it, and found one: a decoded byte had to be a character
+that prints, from the space to the tilde, so `/files/caf%c3%a9.txt` got status 400 and a file
+with such a name could never be served. The idea of the part said so too ("only characters
+that print"), so the bug was in the idea first.
+
+What changed: http's idea (one item of `# Purpose`, the texts B3 refuses, a new behavior B8
+with a path in UTF-8) and three lines of `$http_path` and one constant fewer (7b37ee8: 28
+lines in, 13 out). Then the server: the function and the part's constants copied again, the
+idea's list of refused paths, and two targets more in B9, which now get 404 (c15e321: 11 in,
+12 out).
+
+- **Cycle b1 (run 43186160469, http at 7b37ee8):** `done`, 299 test runs; the new B8 proven
+  for every input in range.
+- **Cycle b2 (run 43191117225, httpd at c15e321):** `done`, 290 test runs.
+
+What else broke: the order of the work. The part's change was committed and pushed while the
+server still held the old copy of `$http_path`. The next dispatch of the server (43191063742,
+for change (a)'s fix alone) would have been refused by the copy check, so it was cancelled
+after a minute and the server's side of (b) went into the same run. A part and the programs
+that copy from it have to move in one step, and nothing but the copy check says so.
