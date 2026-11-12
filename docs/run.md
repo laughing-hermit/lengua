@@ -48,8 +48,8 @@ Given such a folder, a run:
 2. runs it on Wasmtime, in lengua's own WASI host, in this process, with this shell's standard
    input, output and error. The working folder is the current one, or the existing folder `--in`
    names, from the current folder when it isn't absolute, never `/`. For a program whose idea uses
-   `files`, it is never lengua's data folder or its folder of compiled modules, a folder that
-   holds one of them, such as the home folder, or one inside them, and on Linux never `/proc`,
+   `files`, it is never lengua's data folder, which holds the compiled modules too, a folder that
+   holds it, such as the home folder, or one inside it, and on Linux never `/proc`,
    `/sys` or `/dev` or a folder beneath them: such a program reads and writes everything in its
    working folder. The words after the program
    folder are the program's arguments, and one that starts with `-` goes after `--`.
@@ -137,8 +137,8 @@ Only what its idea's `- Uses:`, `- Network:`, `- Files:` and `- Runs:` lines nam
   the root, and the folders on the way are followed as the system follows them. The program
   never gives a path: it tells lengua which argument to open. Before the program starts,
   `lengua-mcp run` says each grant and the place each such argument names, as `lengua-mcp: its
-  argument 1 names /home/you/notes/in.txt`. lengua opens no file in its own data folder or its
-  folder of compiled modules, and no folder that is one, holds one or lies in one; nothing in
+  argument 1 names /home/you/notes/in.txt`. lengua opens no file in its own data folder,
+  and no folder that is it, holds it or lies in it; nothing in
   `/proc`, `/sys` or `/dev`, and on Windows nothing that isn't on a drive or a share; no link at
   the last name; and no file with a second name. The program gets an error for each
   (`NOTCAPABLE`, or `ACCES` for a link), and lengua says why on standard error;
@@ -182,6 +182,17 @@ background until `run` stops it, ten minutes pass, or the session ends. Its repl
 says what the idea grants the program to reach by itself, as `check`'s reply does, and its
 `connections` what the program asked to open or start and what lengua refused. The `run` tool
 has no terminal, and it counts the paths of a `- Files:` line from `folder`, or takes them whole.
+
+The `run` tool loads compiled code the same way a shell's run does. `check` compiles the module
+a second time, for the tool, whose engine can stop a program at its deadline, and keeps that
+form in the data folder under the same seal, bound to the module's SHA-256 and to that kind of
+run. The tool's process loads the file only when the seal holds. Where it doesn't, or there is
+no file, the process compiles the module the server built and held to the lock, seals and
+keeps it for the next run, and says so on the server's standard error. A test's process
+compiles its module itself and keeps it in memory. lengua has no other store of compiled
+code: Wasmtime's own cache is not built in, and the folder an agent's harness gives the
+plugin (`PLUGIN_DATA`) is not used. A `cache` folder that an older lengua left in the data
+folder or there is read by nothing, and may be deleted.
 
 ## The tools of a run
 

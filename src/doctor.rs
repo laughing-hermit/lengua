@@ -4,11 +4,11 @@
 //! a module that uses the WebAssembly features lengua turns on; the CPU, as the `machine` line
 //! names it; z3 and cvc5, where the prover finds them ([`smt::find`]: the release archive's
 //! solvers folder beside the server first, then PATH), and their versions against the ones
-//! lengua pins; whether the data folder and `PLUGIN_DATA` can be written; and how fine the
+//! lengua pins; whether the data folder can be written; and how fine the
 //! clocks are. `lengua-mcp doctor` exits 0 only when nothing is wrong.
 
 use std::io::Read as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -98,7 +98,6 @@ pub fn doctor(data_dir: Option<&DataDir>) -> Report {
             solver(Kind::Z3),
             solver(Kind::Cvc5),
             data_folder(data_dir),
-            plugin_data(),
             clocks(),
         ],
     }
@@ -210,7 +209,7 @@ fn engine_runs() -> Finding {
 /// engine that only runs, and runs it there: it must compute [`PROBED`].
 fn probe() -> Result<(), String> {
     let built = crate::wasm::text::build(PROBE).map_err(|problem| problem.to_string())?;
-    let compiler = engine::engine(Setup::Shell, None)?;
+    let compiler = engine::engine(Setup::Shell)?;
     let key = crate::lock::Key::from_bytes([0; 32]);
     let hash = crate::hash::Sha256Hex::of(&built.wasm);
     let sealed = key
@@ -374,39 +373,6 @@ fn data_folder(data_dir: Option<&DataDir>) -> Finding {
             ),
             "lengua keeps its signing key and checked copies there: give your user write access \
              to it, or start lengua-mcp with --data-dir and a folder it can write."
-                .to_owned(),
-        ),
-    }
-}
-
-/// `PLUGIN_DATA`, the folder an agent harness gives the plugin, where lengua keeps compiled
-/// modules as [`engine::cache_folder`] does: whether it can be written.
-fn plugin_data() -> Finding {
-    let Some(value) = crate::wasm::engine::plugin_data() else {
-        return Finding::fine(
-            "PLUGIN_DATA: not set, so compiled modules are kept in the data folder".to_owned(),
-        );
-    };
-    let folder = PathBuf::from(value);
-    if !folder.is_absolute() {
-        return Finding::fine(format!(
-            "PLUGIN_DATA: {}, not an absolute path, so compiled modules are kept in the data \
-             folder",
-            folder.display()
-        ));
-    }
-    match writable(&folder) {
-        Ok(()) => Finding::fine(format!(
-            "PLUGIN_DATA: {}, writable, where compiled modules are kept",
-            folder.display()
-        )),
-        Err(error) => Finding::wrong(
-            format!(
-                "PLUGIN_DATA: {}, which lengua can't write: {error}",
-                folder.display()
-            ),
-            "lengua keeps compiled modules there: the agent harness that sets PLUGIN_DATA must \
-             name a folder lengua can write, or leave it unset."
                 .to_owned(),
         ),
     }

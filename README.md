@@ -107,7 +107,7 @@ The install:
 3. adds it to Claude Code when the `claude` command is installed, or prints the two commands
    that do;
 4. runs `lengua-mcp doctor`, which checks the server, the engine, the CPU, both solvers, the
-   data folder, `PLUGIN_DATA` and the clock. The install exits with doctor's code: 0 when
+   data folder and the clock. The install exits with doctor's code: 0 when
    nothing is wrong.
 
 `--check` only checks. `--prefix <folder>` installs into another marketplace folder, and replaces
@@ -491,7 +491,9 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
 - **W19, native speed:** step 1 is built: lengua-run, lengua
   without Wasmtime's compiler, runs a checked program from the module `check` compiled and
   sealed with your key. On Linux on x86-64 the empty program went from 2.20 ms and 11.4 MiB to
-  1.33 ms and 5.50 MiB ([ROADMAP.md](ROADMAP.md)). Step 2 is an optional native build of
+  1.33 ms and 5.50 MiB ([ROADMAP.md](ROADMAP.md)). The `run` tool loads a sealed module the
+  same way, and lengua has no other store of compiled code: Wasmtime's own cache is not built
+  in. Step 2 is an optional native build of
   the proven `main.wat` through wasm2c.
 - **W20, parallelism:** built: a program splits its work into pieces that run at
   once and share no memory, so the result is the same on every computer. Measured on two

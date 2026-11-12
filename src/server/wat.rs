@@ -49,8 +49,8 @@ use crate::platform::{Cache, CacheHolds, Machine};
 use crate::prove::{self, Verdict};
 use crate::runner::{End, Limits};
 use crate::state::{
-    CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, OUTSIDE_FILE, ProgramFolder, State, compiled_module,
-    tested_module, wrong_record,
+    CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, OUTSIDE_FILE, ProgramFolder, State, compiled_for,
+    compiled_module, tested_module, wrong_record,
 };
 use crate::testfile::{self, TestSuite};
 use crate::testrun;
@@ -592,7 +592,6 @@ fn leaks(folder: &ProgramFolder, refused: &[String]) -> String {
 /// computer checked the folder. A program whose idea names no secret is checked for nothing,
 /// and nothing is compiled for it here.
 fn keeps_secrets(
-    data_dir: &DataDir,
     folder: &ProgramFolder,
     ready: &Runnable,
     built: &Built,
@@ -602,8 +601,7 @@ fn keeps_secrets(
         return Ok(());
     }
     let operators = secret_operators(folder, ready, built)?;
-    let cache = engine::cache_folder(data_dir);
-    match machine::check(&built.wasm, &operators, &[setup], Some(cache.as_path())) {
+    match machine::check(&built.wasm, &operators, &[setup]) {
         Ok(_) => Ok(()),
         Err(refused) => {
             let refused: Vec<String> = refused.iter().map(ToString::to_string).collect();
@@ -820,12 +818,7 @@ impl From<String> for NotRun {
 
 /// Compiles `wasm`, the module whose SHA-256 is `module`, for a run from a shell on this
 /// computer, seals it with `key`, and keeps it in the data folder ([`compiled_module`]), written
-/// atomically: what later runs load in place of compiling. Gives the sealed bytes, kept or not:
-/// a run never fails for a compiled module it couldn't keep. `cache` is where the process's
-/// engine that compiles for a run from a shell keeps compiled modules, if it is made here: the
-/// server gives its cache's folder, as its check of a secret idea's machine code does, and a
-/// run from a shell gives none, so it reads and writes no cache. What is sealed goes through no
-/// cache either way.
+/// atomically: what later runs load in place of compiling ([`compile_and_keep_for`]).
 ///
 /// # Errors
 ///
@@ -835,12 +828,31 @@ pub fn compile_and_keep(
     key: &Key,
     module: &Sha256Hex,
     wasm: &[u8],
-    cache: Option<&Path>,
+) -> Result<Vec<u8>, String> {
+    compile_and_keep_for(Setup::Shell, data_dir, key, module, wasm)
+}
+
+/// Compiles `wasm`, the module whose SHA-256 is `module`, for `setup` on this computer, a run
+/// from a shell's configuration or the `run` tool's, seals it with `key` as that module compiled
+/// for that configuration, and keeps it in the data folder ([`compiled_for`]), written
+/// atomically: what later runs load in place of compiling. Gives the sealed bytes, kept or not:
+/// a run never fails for a compiled module it couldn't keep. The engine that compiles has no
+/// cache: what is sealed is what its compiler made in this call.
+///
+/// # Errors
+///
+/// When the engine doesn't compile the module, or this process has no compiler.
+pub(crate) fn compile_and_keep_for(
+    setup: Setup,
+    data_dir: &DataDir,
+    key: &Key,
+    module: &Sha256Hex,
+    wasm: &[u8],
 ) -> Result<Vec<u8>, String> {
     use std::io::Write as _;
-    let compiler = engine::engine(Setup::Shell, cache)?;
-    let sealed = key.compile_sealed(&compiler, module, wasm)?;
-    let path = compiled_module(data_dir.path(), text::BUILDER, module);
+    let compiler = engine::engine(setup)?;
+    let sealed = key.compile_sealed_for(setup, &compiler, module, wasm)?;
+    let path = compiled_for(data_dir.path(), text::BUILDER, module, setup);
     if let Some(folder) = path.parent()
         && std::fs::create_dir_all(folder).is_ok()
         && let Ok(mut file) = tempfile::NamedTempFile::new_in(folder)
@@ -875,7 +887,7 @@ pub(crate) fn loaded_or_compiled(
     if !engine::compiles() {
         return Err(NotRun::NotCompiled(why));
     }
-    let sealed = compile_and_keep(data_dir, key, module, &wasm()?, None)
+    let sealed = compile_and_keep(data_dir, key, module, &wasm()?)
         .map_err(|error| format!("the engine couldn't compile the module: {error}"))?;
     key.load_sealed(&runner, module, &sealed)
         .map_err(|unsealed| {
@@ -1252,12 +1264,10 @@ impl LenguaServer {
         let machine_code = if idea.secrets.is_empty() {
             None
         } else {
-            let cache = engine::cache_folder(&self.data_dir);
             let passed = machine::check(
                 &built.wasm,
                 &report.secret_operators,
                 &[Setup::Run, Setup::Shell],
-                Some(cache.as_path()),
             )
             .map_err(|refused| refused.iter().map(ToString::to_string).collect::<Vec<_>>())?;
             Some(passed.line())
@@ -1375,20 +1385,18 @@ impl LenguaServer {
         if let Err(error) = keep_tested(&self.data_dir, &checking.module, tested) {
             return fail(vec![error]);
         }
-        // And compiled for this computer ahead of its runs, sealed with the user's key: a run
-        // from a shell loads that and compiles nothing. A module that couldn't be compiled or
-        // kept here still runs, since its first run from lengua-mcp compiles it.
-        let cache = engine::cache_folder(&self.data_dir);
-        if let Ok(Some(key)) = Key::load(&self.data_dir)
-            && let Err(error) = compile_and_keep(
-                &self.data_dir,
-                &key,
-                &checking.module,
-                tested,
-                Some(cache.as_path()),
-            )
-        {
-            tracing::warn!("couldn't compile the module ahead of its runs: {error}");
+        // And compiled for this computer ahead of its runs, sealed with the user's key, once for
+        // a run from a shell and once for the `run` tool, whose engine can stop a program: each
+        // loads its own and compiles nothing. A module that couldn't be compiled or kept here
+        // still runs, since its first run compiles it.
+        if let Ok(Some(key)) = Key::load(&self.data_dir) {
+            for setup in [Setup::Shell, Setup::Run] {
+                if let Err(error) =
+                    compile_and_keep_for(setup, &self.data_dir, &key, &checking.module, tested)
+                {
+                    tracing::warn!("couldn't compile the module ahead of its runs: {error}");
+                }
+            }
         }
         // An outside module's stamp says what it is in the lock's own text: its two hashes are
         // one, and its engine's line ends in the note.
@@ -1627,7 +1635,7 @@ impl LenguaServer {
         // main.wat, held to the module check tested.
         let built = built_as_tested(folder, &ready)?;
         // An idea that names a secret: the code this computer runs is checked first.
-        keeps_secrets(&self.data_dir, folder, &ready, &built, Setup::Run)?;
+        keeps_secrets(folder, &ready, &built, Setup::Run)?;
         // The tools the run asks for: a stop runs a copy of main.wat built for this run.
         let asked = crate::wasm::tools::Asked {
             trace: params.trace,
@@ -1663,6 +1671,8 @@ impl LenguaServer {
             }
             (Some(name), Some(folder)) => read_stdin_file(folder, name)?,
         };
+        // A copy with a stop is compiled for this one run: no compiled form of it is loaded or kept.
+        let checked_module = instead.is_none();
         let assertions = built.assertions.clone();
         let program = Arc::new(
             Program::new(instead.unwrap_or(built))
@@ -1684,6 +1694,8 @@ impl LenguaServer {
             stands: None,
             own: &own,
             setup: Setup::Run,
+            // Its worker loads the compiled form check kept, under the user's seal.
+            sealed: checked_module,
             max_written,
             alone: true,
             tools: run_tools,
@@ -1913,7 +1925,7 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     // keeps the secret rule too, compiled here with nothing kept.
     if !idea.secrets.is_empty() {
         let setups = [Setup::Run, Setup::Shell];
-        match machine::check(&built.wasm, &report.secret_operators, &setups, None) {
+        match machine::check(&built.wasm, &report.secret_operators, &setups) {
             Ok(passed) => lines.push(format!("{CODE_FILE}: {}", passed.line())),
             Err(refused) => {
                 lines.extend(refused.iter().map(ToString::to_string));
@@ -1942,7 +1954,7 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
             return false;
         }
     };
-    // Workers of its own, with no cache: the attester writes nothing.
+    // Workers of its own, with no data folder: the attester writes nothing.
     let pool = Pool::new(launcher, None);
     match testrun::run_wasm_tests(
         &suite,

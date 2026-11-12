@@ -1077,7 +1077,7 @@ fn module_compiled(run: &ModuleRun) -> Result<wasmtime::Module, NotRun> {
                 "measure has no data folder to keep its compiled form in".to_owned(),
             ));
         }
-        let compiler = engine::engine(Setup::Shell, None)?;
+        let compiler = engine::engine(Setup::Shell)?;
         return engine::compile(&compiler, &read()?)
             .map_err(|error| NotRun::Refused(format!("the module doesn't compile: {error}")));
     };

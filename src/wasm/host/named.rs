@@ -602,7 +602,7 @@ mod tests {
         let folder = notes();
         let ran = |lines: &[&str]| {
             let host = host_with(lines, &["."], anywhere(folder.path(), &[]));
-            let engine = engine::engine(Setup::Test, None).expect("the engine");
+            let engine = engine::engine(Setup::Test).expect("the engine");
             let linker = crate::wasm::host::linker(&engine).expect("the host");
             let built = crate::wasm::text::build(text).unwrap_or_else(|why| panic!("{why}"));
             let module = wasmtime::Module::from_binary(&engine, &built.wasm).expect("it compiles");

@@ -37,12 +37,13 @@ use crate::prove;
 use crate::runner::{self, End, Limits};
 use crate::state::{
     CODE_FILE, Files, IDEA_FILE, LEGACY_IDEA_FILE, LEGACY_TESTS_FILE, OUTSIDE_FILE, ProgramFolder,
-    Snapshot, State, compiled_module, stamped_copy, tested_module, wrong_record,
+    Snapshot, State, compiled_for, stamped_copy, tested_module, wrong_record,
 };
 use crate::testdiff;
 use crate::testfile::{self, TestSuite};
 use crate::testrun;
 use crate::trust;
+use crate::wasm::engine::Setup;
 
 /// Server-wide guidance sent to every client at startup.
 ///
@@ -144,7 +145,7 @@ pub struct LenguaServer {
 }
 
 /// A server's pool of WebAssembly workers, made at its first use: its launcher is this binary,
-/// and it keeps compiled modules in the data folder's cache.
+/// and its workers load the compiled modules the data folder keeps under the user's seal.
 #[derive(Default)]
 struct Workers(std::sync::OnceLock<crate::wasm::Pool>);
 
@@ -340,7 +341,7 @@ impl LenguaServer {
             .get_or_init(|| {
                 crate::wasm::Pool::new(
                     PathBuf::clone(&self.launcher),
-                    Some(crate::wasm::engine::cache_folder(&self.data_dir)),
+                    Some(self.data_dir.path().to_path_buf()),
                 )
             })
             .clone()
@@ -1811,7 +1812,9 @@ impl LenguaServer {
             let builder = crate::wasm::text::BUILDER;
             let data = self.data_dir.path();
             let _ = std::fs::remove_file(tested_module(data, builder, &module));
-            let _ = std::fs::remove_file(compiled_module(data, builder, &module));
+            for setup in [Setup::Shell, Setup::Run] {
+                let _ = std::fs::remove_file(compiled_for(data, builder, &module, setup));
+            }
         }
         Ok(())
     }
@@ -2545,8 +2548,7 @@ pub fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i32, Str
 /// Runs a checked program as [`run_from_shell`] does, in a process that only runs what was
 /// compiled before, lengua-run: every check `run` makes, then the compiled form of the module
 /// check tested, loaded only when it carries the seal of the user's key, on the process's main
-/// thread where its stack holds a program. It compiles nothing and never reads the engine's
-/// cache.
+/// thread where its stack holds a program. It compiles nothing.
 ///
 /// # Errors
 ///
@@ -2608,10 +2610,9 @@ fn canonical(path: &Path) -> PathBuf {
 /// Why `folder`, a working folder as [`working_folder`] gives it, can't be the folder of a run
 /// that reads or writes files there, when it can't. A program that uses files reaches everything
 /// beneath its working folder, so the folder is never one of lengua's own, a folder that holds
-/// one, or a folder inside one: the data folder, whose key signs every lock, and the folder of
-/// compiled modules, the data folder's or the one the agent's harness gives the plugin, whose
-/// machine code the engine runs as it finds it. On Linux it is never `/proc`, `/sys` or `/dev`
-/// or anything beneath them either, where the system shows its processes, their memory and its
+/// one, or a folder inside one: the data folder, whose key signs every lock and seals every
+/// compiled module lengua keeps there. On Linux it is never `/proc`, `/sys` or `/dev` or
+/// anything beneath them either, where the system shows its processes, their memory and its
 /// devices as files. Paths are compared with their links followed. The program's own folder is
 /// a working folder like any other: what a program changes there, its own idea.md, main.wat or
 /// lengua.lock, only stops its next run, since lengua.lock is signed with a key the program
@@ -2629,16 +2630,6 @@ fn own_folder_problem(data_dir: &DataDir, folder: &Path) -> Option<String> {
             data.display()
         ));
     }
-    let cache = canonical(&crate::wasm::engine::cache_folder(data_dir));
-    if overlaps(&cache) {
-        return Some(format!(
-            "folder {} is, holds or lies inside {}, where lengua keeps compiled modules, which \
-             the engine runs as it finds them, and a program reaches everything in its working \
-             folder: name a folder that holds only the files the program is for",
-            folder.display(),
-            cache.display()
-        ));
-    }
     if cfg!(target_os = "linux")
         && let Some(system) = ["/proc", "/sys", "/dev"]
             .into_iter()
@@ -2653,14 +2644,11 @@ fn own_folder_problem(data_dir: &DataDir, folder: &Path) -> Option<String> {
     None
 }
 
-/// lengua's own folders, with their links followed as far as they exist: the data folder and
-/// the folder of compiled modules. No file or folder an argument of a program names is one
-/// of them, lies in one or holds one ([`crate::named::forbidden`]).
+/// lengua's own folders, with their links followed as far as they exist: the data folder, which
+/// holds the compiled modules lengua keeps. No file or folder an argument of a program names is
+/// it, lies in it or holds it ([`crate::named::forbidden`]).
 fn own_folders(data_dir: &DataDir) -> Vec<PathBuf> {
-    vec![
-        canonical(data_dir.path()),
-        canonical(&crate::wasm::engine::cache_folder(data_dir)),
-    ]
+    vec![canonical(data_dir.path())]
 }
 
 /// What the terminal's grant lets a program do, in words, as [`may_reach`] says it.
@@ -2752,8 +2740,7 @@ mod tests {
 
     /// A working folder is none of lengua's own: not the data folder, not a folder inside it,
     /// there yet or not, and not a folder that holds it, such as the user's home; a folder beside
-    /// it is one. (The folder of compiled modules is the data folder's `cache` here, unless the
-    /// harness that runs this test gives the plugin a folder of its own.)
+    /// it is one.
     #[test]
     fn a_working_folder_is_none_of_lengua_s_own() {
         let home = tempfile::tempdir().expect("a home");

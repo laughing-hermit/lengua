@@ -281,6 +281,29 @@ async fn an_outside_module_is_trusted_not_proven_wherever_it_is_named() {
             .is_some_and(|line| line.starts_with(TRUST)),
         "{ran}"
     );
+    // check kept the module compiled for the `run` tool too, under the user's seal, which the
+    // tool's worker loads: with other bytes in its place, `run` compiles the module again,
+    // gives the same sum and keeps what it compiled.
+    let module = std::fs::read(program.file("main.wasm")).expect("main.wasm");
+    let kept = lengua::state::compiled_for(
+        session.data_dir.path(),
+        lengua::wasm::text::BUILDER,
+        &lengua::hash::Sha256Hex::of(&module),
+        Setup::Run,
+    );
+    assert!(kept.is_file(), "check kept no {}", kept.display());
+    let planted = b"not a compiled module".to_vec();
+    std::fs::write(&kept, &planted).expect("plant it");
+    let again = session
+        .call_ok("run", with_args(&program, &["2", "3"]))
+        .await;
+    assert_eq!(again["stdout"], "5\n", "{again}");
+    let now = std::fs::read(&kept).unwrap_or_default();
+    assert!(
+        now != planted && now.len() > planted.len(),
+        "the run didn't keep the module it compiled"
+    );
+    assert!(!session.data_dir.path().join("cache").exists());
     let folder = program.path().as_os_str();
     let words = [OsStr::new("run"), folder, OsStr::new("2"), OsStr::new("3")];
     let shell = from_shell(&launcher(), &session, &words);

@@ -1071,6 +1071,89 @@ idea: a sentence of 30 words, 43173745273, and a range without its example, 4317
 goldens (43188485844); and the first two runs, which a lint stopped (43173164260,
 43173168343). The commit that writes this paragraph changes documents alone.
 
+### W19's leftovers: the `run` tool loads the sealed module, and no engine has a cache (2026-11-12)
+
+W19's first step left two users of Wasmtime's own cache of compiled modules: the MCP `run`
+tool and the tests' workers. That cache loads a file's machine code as it finds it. Both are
+gone, on main since 08597b1 (2026-11-13).
+
+What was built:
+- **`check` keeps a second compiled form.** Once the tests pass it compiles the module for a
+  run from a shell, as before, and for the `run` tool: `<sha256>.run.cwasm` beside
+  `<sha256>.shell.cwasm`. The two differ because the tool's engine can stop a program at its
+  deadline, and Wasmtime refuses a module compiled for other settings. Each seal now names its
+  kind of run with the module's SHA-256 (`shell sha256:…`, `run sha256:…`). The shell's name is
+  the one it had, so the files W19 kept still load.
+- **The tool's worker loads it.** The server gives its workers the data folder in place of the
+  cache's folder. For a job that asks (`Job::sealed`, which only the `run` tool sets), the
+  worker reads the user's key and loads the file once its seal holds. It adds no unsafe code:
+  the load is `load_sealed` of `crates/lengua-os`.
+- **Where no form loads, the worker compiles, as `lengua-mcp run` does from a shell.** It takes
+  the module the server built and held to the lock's hash, compiles it, seals it, keeps it for
+  the next run, and says why on standard error: `lengua-mcp: the program's module has no
+  compiled form to load here (…), so this run compiles it and keeps it for the next`. That
+  matches a shell's run, where lengua-run says the same and leaves the run to lengua-mcp.
+- **Outside modules and split work** go the same way with no code of their own: `check` keeps
+  both forms for `main.wasm`, and every piece of a split run starts from the run's one loaded
+  module (`Splitting::new` takes it).
+- **Wasmtime's cache is not built in.** The `cache` feature is out of Cargo.toml, and
+  Cargo.lock lost 16 crates with it, among them zstd, whose C code DESIGN.md no longer lists.
+  `engine`, `config`, `machine::check`, `run_here` and `compile_and_keep` lost their cache
+  argument. A unit test reads the manifests and Cargo.lock and fails if the feature or its
+  crate comes back.
+
+Decisions, each one the owner may reverse:
+- **The cache went for the tests too, with nothing in its place.** A test's worker compiles its
+  module in its own process and keeps it in memory. The reason it costs `check` nothing that
+  the suite could show: every test of `check` in the suite starts with a new data folder, so
+  an empty cache, and compiled every module already; and Wasmtime's cache never kept two
+  workers from compiling the same module at once. What is lost is the warm case alone: a
+  second `check` of an unchanged module in a later session compiles it again in each worker.
+  Measured on Linux on x86-64, the whole suite, each on one runner: its tests took 27 min 10 s
+  without the cache (43230322720, at 6a30b13) and 35 min 5 s with it (43209689066, main at
+  08a196b); the tests' build took 13 min 57 s and 19 min 12 s. Two runs on two runners don't
+  show a gain, since runners differ by that much, but they show no loss, and every test
+  that holds `check` to its time limits passed. The warm case was not measured.
+  A sealed form for tests (`.test.cwasm`) would bring the warm case back; it was left out
+  because it would be written before the tests pass, for every mutant and every edit.
+- **`PLUGIN_DATA` is no longer read.** It held only the cache. doctor's `PLUGIN_DATA:` line is
+  gone, and a run no longer refuses a working folder inside `$PLUGIN_DATA/cache`: nothing of
+  lengua's is there. A `cache` folder an older lengua left, there or in the data folder, is
+  read by nothing; lengua does not delete it.
+- **`check` compiles each module one more time** (the `run` form), in the server, after the
+  tests pass. For add that is milliseconds. For a large outside module it is one more
+  Cranelift compile of up to 16 MiB of WebAssembly, not measured here.
+- **A secret idea's machine code is still read from the server's own compile** for the `run`
+  tool (`keeps_secrets`), not from the bytes the worker loads, as it was before. The two are
+  the same engine and settings. Reading the loaded form, as a shell's run does
+  (`loaded_keeps_secrets`), is open.
+- **The worker says why it compiled on standard error only.** The `run` tool's reply has no
+  field for it: a field would change the reply's schema, which W24's branch is changing too.
+
+Not done, and why:
+- **No bench leg.** The bench measures a run from a shell, by lengua-run, which this change
+  does not touch; nothing in `lengua-mcp measure` times the MCP tool. KNOWN_BEHIND is as it
+  was.
+- **wasm2c** (W19's step 2): not planned unless the owner asks.
+
+Never exercised on a runner:
+- the line the worker writes on standard error when it compiles: the tests see that the run
+  gives the right answer and that the sealed file is back, not the words;
+- a `run` in a server whose data folder has no key yet, and one whose worker gets no data
+  folder (`--wasm-worker none`) with a job that asks for a sealed form: both compile as a test
+  does, by the code's reading, and no test runs them;
+- a background server (`run` of a program that listens) with a planted file: it takes the
+  same path, and only the plain run was tested with planted files;
+- an old data folder with a `cache` folder left in it, and a harness that sets `PLUGIN_DATA`,
+  outside the release check, which runs only in release mode and was not dispatched here;
+- `check`'s time for a large outside module with the second compile.
+
+The runs: 43226059048 (the first compile check, which gave the Cargo.lock without the cache
+and rustfmt's patch); 43226203574 (a compile check that failed: six tests of the machine
+code's check still passed a cache); 43227042186 (the compile check, with clippy, green, on
+Linux on x86-64); 43230322720 (the suite on Linux on x86-64 at 6a30b13, green, with the new
+tests in it). The suite on all five runners at 08597b1, which the landing on main rests on: 43244553691, green.
+
 ### W24: the tools of a run (2026-11-12)
 
 On the branch `wip/tools`, for the owner to land. DESIGN.md ("The tools of a run") has the design
@@ -1128,6 +1211,10 @@ Decisions, each for the owner to reverse:
   run that a signal stops, as a server's is, says none.
 - **lengua-run traces by itself and leaves a profile and a stop to lengua-mcp**, as it leaves
   what else takes the compiler: a new `NotRun::Tool`.
+- **Tools and the sealed compiled code** (after the sealed-run work landed): a trace and the
+  `run` tool's profile run the sealed module every run loads. A stop's copy is compiled in the
+  worker for the one run with the seal off, so no compiled form of it is loaded or kept. A
+  profile or a stop from a shell compiles in memory and neither reads nor writes a sealed file.
 - **A profile from a shell compiles the module again for that run**, for the engine whose
   clock moves, and keeps nothing. For a secret idea, that compiled code is the code read
   before the run.
@@ -1351,7 +1438,8 @@ Each can be reversed.
   web): the archives are unsigned, so trusting one is the user's choice, and the scripts and
   doctor only say how. Signing and notarizing the archives are the owner's, with publishing.
 - **The signing key stays in the per-user data folder**, so a lock made in one agent harness
-  verifies in another; `PLUGIN_DATA` holds only caches.
+  verifies in another; `PLUGIN_DATA` held only the engine's cache, and holds nothing since
+  W19's leftovers (2026-11-12).
 - **Memory regions** in `main.wat`: a region `$x` is an immutable global holding its address,
   with `$x.size` (writable) or `$x.rosize` (read-only); addresses 0 to 1023 are lengua's. Rule 4,
   a function's size, starts at 180 operators, to be calibrated on the templates.
@@ -1433,8 +1521,9 @@ Each can be reversed.
   The one call that needs unsafe code, Wasmtime's `Module::deserialize`, is in
   `crates/lengua-os` behind `load_sealed`, which checks the seal itself; `compile_sealed`,
   beside it, is the only function that makes a seal, over what `Engine::precompile_module` gave
-  it. Wasmtime's cache stays where a process compiles many modules: the tests' workers and the
-  `run` tool. A sealed module is copied into the engine's own memory, never mapped from its
+  it. Wasmtime's cache stayed, at first, where a process compiles many modules: the tests'
+  workers and the `run` tool. It went on 2026-11-12 (W19's leftovers, above).
+  A sealed module is copied into the engine's own memory, never mapped from its
   file: mapping saved about 0.05 ms on Linux on x86-64 (42962697250), and a mapped file can
   change after its seal was checked.
 - **The seal is ring's HMAC, and the files' hashes stay the sha2 crate's** (W19). A run computes
@@ -2001,7 +2090,7 @@ Runs, as they land:
 | The gate's margin (the owner's decision, 2026-11-11) | On the branch `wip/gate-margin`: 42962012528 (the gate's unit tests on Linux on x86-64 at f87c47c, green, with clippy; the format job's layout applied at b4eb385); 42964220148 (format, the suite on Linux on x86-64 and the gate job at cd54e79, green); 42964232679 (the bench on all five runners at cd54e79, against the list from before the margin: the gate failed on each; 139 rows KNOWN_BEHIND named are level or ahead, 127 and 12, taken out, which leaves 898; 6 rows behind by more than the margin that it doesn't name, 1 on Linux on x86-64, 2 on Linux on ARM64, 2 on macOS on ARM64 and 1 on Windows on x86-64; no build failed, every native C++ version built with `-std=gnu++17`). The reports are in [docs/benchmarks](docs/benchmarks/README.md). No run has measured the new list yet |
 | W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](docs/history/PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
 | W23, its first part: an outside module (on main since 3fd8a3a) | 43158638831 (at e6d96e5 on Linux on x86-64: tests/outside.rs for the first time, 13 of 14 passing, with rustc's and clang's modules built by the outside-wasm job; the one failure was the count idea's own generated range, fixed at 7312377); 43158958049 (the library's tests of the idea's lines, the state and `check`'s reading, green); 43161754287 and 43161756923 (the defences out at 5260953, tag `archive/wip/outside-off`: 9 of tests/outside.rs's 14 tests and 4 of the library's fail); 43161759761 (at 7312377, with main's W21 merged in: format, the suite on all five runners, green but for `two_checks_at_once_leave_a_consistent_index` on Windows on ARM64, the known race in log.md); 43172439582 (at 3fd8a3a, with main's W20 merged in too: format, the outside-wasm job, the suite on all five runners and the gate, all green; the landing on main rests on it) |
-| W24, the tools of a run (on `wip/tools`) | 43228046587 (clippy for the three tools, at b411f2a on Linux on x86-64); 43230047911 (at bacf6a5 on Linux on x86-64: `tests/tools.rs`, 6 of 6, and the tools' unit tests, green); 43230111360 (the language server compiles, at a0e4961); 43233706608 (at 6860c47 on Linux on x86-64: `tests/tools.rs`, 8 of 8, with the language server's test and the server's refusal, and 22 unit tests, green, the format job too) |
+| W24, the tools of a run (on `wip/tools`) | 43228046587 (clippy for the three tools, at b411f2a on Linux on x86-64); 43230047911 (at bacf6a5 on Linux on x86-64: `tests/tools.rs`, 6 of 6, and the tools' unit tests, green); 43230111360 (the language server compiles, at a0e4961); 43233706608 (at 6860c47 on Linux on x86-64: `tests/tools.rs`, 8 of 8, with the language server's test and the server's refusal, and 22 unit tests, green, the format job too); 43244554648 (at 6eb8d78, with main ac3a6fd in it: the suite on all five runners and the gate, green, before the sealed-run work landed on main) |
 
 ## Superseded by the pivot
 

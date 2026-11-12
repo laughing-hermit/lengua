@@ -954,6 +954,7 @@ fn a_worker_ends_when_its_server_does() {
         module: looping.file().to_path_buf(),
         hash: looping.hash().to_owned(),
         setup: Setup::Test,
+        sealed: false,
         policy: Policy::default(),
         args: Vec::new(),
         env: BTreeMap::new(),

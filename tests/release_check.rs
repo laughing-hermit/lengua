@@ -24,7 +24,8 @@
 //! - runs `lengua-mcp --version`, and `lengua-mcp doctor`, which must find nothing wrong and the
 //!   solvers beside the server, where the archive keeps them;
 //! - starts the archive's own lengua-mcp as an MCP server over stdio with rmcp's client, as an
-//!   agent harness does, giving it a `PLUGIN_DATA`, lists its tools, `check` and `run`, and takes
+//!   agent harness does, giving it a `PLUGIN_DATA`, where it must keep nothing, lists its tools,
+//!   `check` and `run`, and takes
 //!   add (tests/fixtures/add) from the user's request to done through `check`: its idea.md,
 //!   then its main.wat, with the archive's solvers proving it in the background;
 //! - runs add through `run`, through `lengua-mcp run` from a shell, through the archive's
@@ -596,8 +597,8 @@ async fn the_archive_works_as_a_user_gets_it() {
     }
     service.cancel().await.expect("close the session");
     assert!(
-        plugin_data.path().join("cache").is_dir(),
-        "the server kept no compiled module in PLUGIN_DATA"
+        std::fs::read_dir(plugin_data.path()).is_ok_and(|mut entries| entries.next().is_none()),
+        "the server kept something in PLUGIN_DATA, where lengua keeps nothing"
     );
 
     // The attester, as a consumer of add would run it, with no data folder.

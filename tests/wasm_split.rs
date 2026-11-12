@@ -447,7 +447,7 @@ fn a_run_from_a_shell_runs_its_pieces() {
         own: &[],
         source: Source::Built(&built),
     };
-    let ended = run_here(&built.wasm, &here, None).expect("it runs");
+    let ended = run_here(&built.wasm, &here).expect("it runs");
     assert_eq!(ended, End::Exited(0));
     // A piece that traps ends that run as well.
     let trapping = Shape {
@@ -459,7 +459,7 @@ fn a_run_from_a_shell_runs_its_pieces() {
         source: Source::Built(&built),
         ..here
     };
-    let ended = run_here(&built.wasm, &here, None).expect("it runs");
+    let ended = run_here(&built.wasm, &here).expect("it runs");
     assert!(
         matches!(ended, End::Trapped(Trap::Unreachable, _)),
         "{ended:?}"
@@ -651,6 +651,20 @@ async fn the_run_tool_runs_a_program_that_splits_its_work() {
     program.write("main.wat", CODE);
     let done = session.settle(&program).await;
     assert_eq!(done["state"], "done", "{done}");
+    // check kept the module compiled for the `run` tool, under the user's seal: the tool's
+    // worker loads it, and every piece of the run starts from that one loaded module.
+    let tested = session
+        .data_dir
+        .path()
+        .join("tested")
+        .join(format!("{:016x}", lengua::wasm::text::BUILDER));
+    let kept = std::fs::read_dir(&tested)
+        .expect("the modules check kept")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| path.to_string_lossy().ends_with(".run.cwasm"))
+        .expect("check compiled the module for the tool");
+    let sealed = std::fs::read(&kept).expect("check compiled the module for the tool");
     let mut arguments = program.arguments();
     arguments["stdin"] = serde_json::json!("\n aa a\n");
     let ran = session.call_ok("run", arguments).await;
@@ -666,5 +680,10 @@ async fn the_run_tool_runs_a_program_that_splits_its_work() {
     arguments["stdin"] = serde_json::json!(long);
     let ran = session.call_ok("run", arguments).await;
     assert_eq!(ran["stdout"], "10 100000\n97 100000\n98 100000\n", "{ran}");
+    assert_eq!(
+        std::fs::read(&kept).ok(),
+        Some(sealed),
+        "a run that loaded its module wrote it again"
+    );
     session.service.cancel().await.expect("close the session");
 }

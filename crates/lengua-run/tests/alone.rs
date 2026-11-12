@@ -130,7 +130,7 @@ impl Checked {
 
     /// Compiles the module and seals it, as check does once its tests pass: the sealed bytes.
     fn compile(&self) -> Vec<u8> {
-        lengua::server::compile_and_keep(&self.data, &self.key, &self.module, &self.wasm, None)
+        lengua::server::compile_and_keep(&self.data, &self.key, &self.module, &self.wasm)
             .expect("the module compiles")
     }
 
@@ -210,7 +210,7 @@ fn only_a_module_under_the_user_s_key_is_loaded() {
     let sealed = checked.compile();
     let file = checked.compiled();
     assert_eq!(std::fs::read(&file).ok().as_ref(), Some(&sealed));
-    let compiler = engine::engine(Setup::Shell, None).expect("the engine that compiles");
+    let compiler = engine::engine(Setup::Shell).expect("the engine that compiles");
     let other = lengua::wasm::text::build(OTHER).expect("it builds").wasm;
     let six = checked
         .key

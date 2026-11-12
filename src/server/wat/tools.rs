@@ -205,7 +205,7 @@ pub(super) fn for_shell(
         .instead
         .as_ref()
         .map_or(&built.wasm, |copy| &copy.wasm);
-    let compiler = engine::engine(setup, None)?;
+    let compiler = engine::engine(setup)?;
     let module = engine::compile(&compiler, wasm)
         .map_err(|error| format!("the engine couldn't compile the module: {error:#}"))?;
     let equipment = Equipment {

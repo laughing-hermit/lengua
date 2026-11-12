@@ -116,7 +116,7 @@ fn main() -> ExitCode {
 }
 
 /// Logs to stderr, at the level `LENGUA_LOG` says, or warnings: stdout carries the MCP protocol,
-/// and the `log` records of the engine and its cache come here too.
+/// and the `log` records of the engine come here too.
 fn log_to_stderr() {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
