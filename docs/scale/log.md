@@ -242,3 +242,47 @@ server still held the old copy of `$http_path`. The next dispatch of the server 
 for change (a)'s fix alone) would have been refused by the copy check, so it was cancelled
 after a minute and the server's side of (b) went into the same run. A part and the programs
 that copy from it have to move in one step, and nothing but the copy check says so.
+
+### Change (c): a refactor. "Move the reading of numbers and of the Range field into the part http"
+
+The server had two functions of its own that read the request's text: `$digits`, which read a
+number with decimal's `$decimal_parse`, and `$range_read`, which read a Range field. Neither
+could be tested or proven but through the server, whose tests are not proven. The refactor
+moves both into the part http as `$http_number` and `$http_range`, where the part's own
+program prints what they read and its proofs go through them.
+
+What changed (12a8e4b: 459 lines in, 161 out, in three files):
+
+| File | What |
+|---|---|
+| http/idea.md | A paragraph of `# Purpose`; four behaviors, B10 to B13 (a range, a range with no last byte, one with no first byte, a field that is not one range); two items of `# Contract`; `- Builds on:` decimal (79 lines in) |
+| http/main.wat | The two functions and their 10 constants; in the part's own program, `$report_range` and `$number_out`, and decimal's `$decimal_format` taken to print the numbers (247 in, 8 out) |
+| httpd/main.wat | `$digits` and `$range_read` out; `$http_number` and `$http_range` taken in; `$content_length`, `$same_tag` and `$range_of` call them; `$decimal_parse`, six of decimal's constants, six constants of the server's own and the region `$number` out (133 in, 153 out) |
+| httpd/idea.md | nothing: no behavior of the server changed |
+
+- **Cycle c1 (runs 43197275115 and 43197280226, at 12a8e4b):** http `done`, 463 test runs,
+  its four new generated tests proven for every input in range; httpd `done`, 290 test runs.
+  One cycle, nothing refused.
+
+What else broke: nothing that a test sees. One thing no test sees: `$decimal_parse` took 19
+digits and `$http_number` takes 18, so a `Content-Length` of 19 digits now gets status 400
+where it got 413. A refactor changed an answer, and `check` stayed green, since the server's
+idea gives lengths up to `999999` only.
+
+The gain is what the refactor was for: the reading of a Range field went from "tested through
+a server that is not proven" to "proven for every input in range" in the part's own program.
+
+## The cycles, counted
+
+| | Cycles | Stopped by the idea | By a rule | By a test | By text that doesn't build |
+|---|---|---|---|---|---|
+| The build, to `done` | 5 | 3 | 1 | 0 | 0 |
+| Change (a), HEAD | 2 | 0 | 1 | 0 | 0 |
+| Change (b), the path in UTF-8 | 1 (the part) and 1 shared with (a) | 0 | 0 | 0 | 0 |
+| Change (c), the refactor | 1 | 0 | 0 | 0 | 0 |
+| All | 9 rounds, 15 dispatches, two of them cancelled | 3 | 2 | 0 | 0 |
+
+No cycle was lost to a slip that a compiler catches (a name that isn't defined, a type that
+doesn't fit, text that doesn't parse), and none to a wrong answer of the program. Three were
+lost to the form of an idea's tests, and two to rules: one real slip (rule 7), and one place
+where the rules can't follow a number that comes from two paths (rule 9).
