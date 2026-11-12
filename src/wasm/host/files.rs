@@ -81,10 +81,22 @@ pub struct Entry {
     pub kind: Kind,
 }
 
-/// A folder the program holds open, by its names from the working folder.
+/// The root the working folder is: the folder every path of an idea that uses `files` is
+/// resolved beneath.
+pub const WORKING: u32 = 0;
+
+/// The root of a file an argument names: it was opened by itself, with no folder of the
+/// program's around it, so no path of the program's ever leads to it.
+pub const OUTSIDE: u32 = u32::MAX;
+
+/// A folder the program holds open, by its names from its root: the working folder, or a
+/// folder one of its arguments names.
 #[derive(Debug, Default)]
 pub struct Folder {
-    /// Its names from the working folder: none for the working folder itself.
+    /// Its root: [`WORKING`], or the place, from 1, of a folder an argument names among those
+    /// the program opened.
+    pub root: u32,
+    /// Its names from its root: none for the root itself.
     pub path: Vec<String>,
     /// Its entries as `fd_readdir` last began listing them, sorted by name: shared with every
     /// other descriptor that began listing the folder while it was the same.
@@ -103,7 +115,9 @@ pub const LISTED: usize = 1 << 20;
 pub struct Open {
     /// The file.
     pub file: File,
-    /// Its names from the working folder.
+    /// Its root, as a folder's: [`OUTSIDE`] for a file an argument names.
+    pub root: u32,
+    /// Its names from its root.
     pub path: Vec<String>,
     /// Whether the program may read it.
     pub read: bool,
@@ -113,7 +127,7 @@ pub struct Open {
     pub append: bool,
 }
 
-/// The program's working folder.
+/// A folder a program reaches into: its working folder, or one an argument names.
 #[derive(Debug)]
 pub struct Files {
     /// The folder, beneath which every path is resolved.
@@ -121,6 +135,8 @@ pub struct Files {
     /// The entries of each folder read since the program last changed one, by its path: at most
     /// [`LISTED`] in all.
     listings: BTreeMap<String, Arc<Vec<Entry>>>,
+    /// Whether the program may change anything in it: always, in the working folder.
+    writes: bool,
     /// Whether folders list turned round, as in a test's second run.
     reversed: bool,
 }
@@ -247,12 +263,14 @@ fn read_folder(root: &Dir, folder: &[String]) -> Result<Vec<Entry>, u16> {
     Ok(found)
 }
 
-/// Whether the program holds a file or folder open at `names` or beneath it: the working folder
-/// itself, descriptor 3, is never one.
-fn busy(fds: &Table, names: &[String]) -> bool {
+/// Whether the program holds a file or folder open at `names` of the root `root`, or beneath
+/// it: the working folder itself, descriptor 3, is never one.
+fn busy(fds: &Table, root: u32, names: &[String]) -> bool {
     fds.iter().any(|(fd, descriptor)| match descriptor {
-        Descriptor::File(open) => open.path.starts_with(names),
-        Descriptor::Folder(folder) => fd != FOLDER && folder.path.starts_with(names),
+        Descriptor::File(open) => open.root == root && open.path.starts_with(names),
+        Descriptor::Folder(folder) => {
+            fd != FOLDER && folder.root == root && folder.path.starts_with(names)
+        }
         _ => false,
     })
 }
@@ -264,7 +282,18 @@ impl Files {
         Self {
             root,
             listings: BTreeMap::new(),
+            writes: true,
             reversed,
+        }
+    }
+
+    /// The folder `root`, which the program may read and may not change, listing turned round
+    /// when `reversed`: a folder an argument names, under a grant that says `reads` alone.
+    #[must_use]
+    pub fn read_only(root: Dir, reversed: bool) -> Self {
+        Self {
+            writes: false,
+            ..Self::new(root, reversed)
         }
     }
 
@@ -380,40 +409,79 @@ fn held(fds: &Table, but: u32, new: &Arc<Vec<Entry>>) -> usize {
     total
 }
 
-/// The working folder, which a path call needs, or `NOTCAPABLE`.
-fn files(host: &mut Host) -> Result<&mut Files, Fail> {
-    host.files.as_mut().ok_or(Fail::Errno(errno::NOTCAPABLE))
+/// The folder of the root `root`, which a path call needs: the working folder, or one an
+/// argument names, of `files` and `named`. `NOTCAPABLE` when the program has no such folder.
+fn rooted<'h>(
+    files: &'h mut Option<Files>,
+    named: &'h mut [Files],
+    root: u32,
+) -> Result<&'h mut Files, Fail> {
+    let found = if root == WORKING {
+        files.as_mut()
+    } else {
+        usize::try_from(root - 1)
+            .ok()
+            .and_then(|place| named.get_mut(place))
+    };
+    found.ok_or(Fail::Errno(errno::NOTCAPABLE))
 }
 
-/// The working folder, as [`files`] gives it, and the run's limits, which count each file and
-/// folder a call makes there.
-fn files_and_limits(host: &mut Host) -> Result<(&mut Files, &mut Limits), Fail> {
-    let Host { files, limits, .. } = host;
-    let files = files.as_mut().ok_or(Fail::Errno(errno::NOTCAPABLE))?;
-    Ok((files, limits))
+/// The folder of the root `root`, as [`rooted`] gives it.
+fn files(host: &mut Host, root: u32) -> Result<&mut Files, Fail> {
+    rooted(&mut host.files, &mut host.named, root)
 }
 
-/// The names of the folder `fd` is, which a path is resolved from.
-fn base(fds: &Table, fd: u32) -> Result<Vec<String>, Fail> {
+/// The folder of the root `root`, as [`files`] gives it, and the run's limits, which count each
+/// file and folder a call makes there.
+fn files_and_limits(host: &mut Host, root: u32) -> Result<(&mut Files, &mut Limits), Fail> {
+    let Host {
+        files,
+        named,
+        limits,
+        ..
+    } = host;
+    Ok((rooted(files, named, root)?, limits))
+}
+
+/// The root and the names of the folder `fd` is, which a path is resolved from.
+fn base(fds: &Table, fd: u32) -> Result<(u32, Vec<String>), Fail> {
     match fds.get(fd) {
-        Some(Descriptor::Folder(folder)) => Ok(folder.path.clone()),
+        Some(Descriptor::Folder(folder)) => Ok((folder.root, folder.path.clone())),
         Some(_) => Err(Fail::Errno(errno::NOTDIR)),
         None => Err(Fail::Errno(errno::BADF)),
     }
 }
 
-/// The names a path argument leads to from the folder `fd`.
-fn resolve(host: &Host, memory: &[u8], fd: u32, path: u32, len: u32) -> Result<Vec<String>, Fail> {
+/// The root of the folder `fd` and the names a path argument leads to from it.
+fn resolve(
+    host: &Host,
+    memory: &[u8],
+    fd: u32,
+    path: u32,
+    len: u32,
+) -> Result<(u32, Vec<String>), Fail> {
     let text = memory::bytes(memory, path, len)?;
-    let base = base(&host.fds, fd)?;
-    names_in(&base, text).map_err(Fail::Errno)
+    let (root, base) = base(&host.fds, fd)?;
+    Ok((root, names_in(&base, text).map_err(Fail::Errno)?))
+}
+
+/// What a change to a folder the program may only read comes to.
+fn changes(files: &Files) -> Result<(), Fail> {
+    if files.writes {
+        Ok(())
+    } else {
+        Err(Fail::Errno(errno::NOTCAPABLE))
+    }
 }
 
 /// Whether `fd` is the working folder, descriptor 3, still open.
 fn preopened(host: &Host, fd: u32) -> bool {
     fd == FOLDER
         && host.policy.files
-        && matches!(host.fds.get(fd), Some(Descriptor::Folder(folder)) if folder.path.is_empty())
+        && matches!(
+            host.fds.get(fd),
+            Some(Descriptor::Folder(folder)) if folder.root == WORKING && folder.path.is_empty()
+        )
 }
 
 /// `fd_prestat_get(fd, out)`: the working folder, descriptor 3, is a preopen named `.`; any other
@@ -482,6 +550,84 @@ pub struct Opening {
     pub fdflags: u16,
 }
 
+/// How a file is opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct How {
+    /// To read.
+    pub read: bool,
+    /// To write.
+    pub write: bool,
+    /// With every write at its end.
+    pub append: bool,
+    /// Made when it isn't there.
+    pub create: bool,
+    /// Only when it isn't there yet.
+    pub new: bool,
+    /// Emptied.
+    pub empty: bool,
+}
+
+/// Opens the file at `names` of `files`' folder, of the root `root`, as `how` says: `there`
+/// says whether the folder's listing has it, as a file. A new name that differs from one of its
+/// folder only in case or normalization is `EXIST`, a new file counts against the run's total,
+/// and a file with more than one name isn't opened: `ACCES`, before it is emptied when it was to
+/// be.
+///
+/// # Errors
+///
+/// An error number for the program, or a stop of it.
+pub(super) fn open_file(
+    files: &mut Files,
+    limits: &mut Limits,
+    root: u32,
+    names: Vec<String>,
+    there: bool,
+    how: How,
+) -> Result<Open, Fail> {
+    // Every system makes these the same way only when they're asked for consistently.
+    if (how.empty && how.append) || (how.create && !how.write) {
+        return Err(Fail::Errno(errno::INVAL));
+    }
+    if !there && files.clashes(&names).map_err(Fail::Errno)? {
+        return Err(Fail::Errno(errno::EXIST));
+    }
+    // A new file counts against the total.
+    if !there {
+        limits.make()?;
+    }
+    // Opened as it is, and emptied below once it is known to have one name: a file with
+    // more may be one outside the folder.
+    let mut options = OpenOptions::new();
+    options
+        .read(how.read)
+        .write(how.write)
+        .append(how.append)
+        .truncate(false)
+        .create(how.create && !how.new)
+        .create_new(how.create && how.new);
+    let file = files
+        .root
+        .open_with(path_of(&names), &options)
+        .map_err(|error| failed(&error))?;
+    if !there {
+        files.changed();
+    }
+    if link_count(&file).map_err(|error| failed(&error))? > 1 {
+        return Err(Fail::Errno(errno::ACCES));
+    }
+    if how.empty {
+        file.set_len(0).map_err(|error| failed(&error))?;
+    }
+    Ok(Open {
+        file,
+        root,
+        path: names,
+        read: how.read,
+        write: how.write,
+        append: how.append,
+    })
+}
+
 /// `path_open(fd, dirflags, path, len, oflags, rights, inheriting, fdflags, out)`.
 ///
 /// # Errors
@@ -496,7 +642,7 @@ pub fn path_open(
     out: u32,
 ) -> Result<(), Fail> {
     memory::check(memory, out, 4)?;
-    let names = resolve(host, memory, fd, path.0, path.1)?;
+    let (root, names) = resolve(host, memory, fd, path.0, path.1)?;
     let create = opening.oflags & oflags::CREAT != 0;
     let folder = opening.oflags & oflags::DIRECTORY != 0;
     let new = opening.oflags & oflags::EXCL != 0;
@@ -504,13 +650,18 @@ pub fn path_open(
     let append = opening.fdflags & fdflags::APPEND != 0;
     let write = opening.rights & rights::FD_WRITE != 0 || append || empty;
     let read = opening.rights & rights::FD_READ != 0 || !write;
-    let (files, limits) = files_and_limits(host)?;
+    let (files, limits) = files_and_limits(host, root)?;
+    // A folder the program may only read takes no file to write and makes none.
+    if write || create {
+        changes(files)?;
+    }
     let found = files.find(&names).map_err(Fail::Errno)?;
     let descriptor = match found {
         Some(Kind::Link | Kind::Other) => return Err(Fail::Errno(errno::ACCES)),
         Some(Kind::Folder) if create && new => return Err(Fail::Errno(errno::EXIST)),
         Some(Kind::Folder) if write => return Err(Fail::Errno(errno::ISDIR)),
         Some(Kind::Folder) => Descriptor::Folder(Folder {
+            root,
             path: names,
             listing: None,
         }),
@@ -519,51 +670,70 @@ pub fn path_open(
         None if folder && create => return Err(Fail::Errno(errno::INVAL)),
         None if !create => return Err(Fail::Errno(errno::NOENT)),
         Some(Kind::File) | None => {
-            // Every system makes these the same way only when they're asked for consistently.
-            if (empty && append) || (create && !write) {
-                return Err(Fail::Errno(errno::INVAL));
-            }
-            if found.is_none() && files.clashes(&names).map_err(Fail::Errno)? {
-                return Err(Fail::Errno(errno::EXIST));
-            }
-            // A new file counts against the total.
-            if found.is_none() {
-                limits.make()?;
-            }
-            // Opened as it is, and emptied below once it is known to have one name: a file with
-            // more may be one outside the working folder.
-            let mut options = OpenOptions::new();
-            options
-                .read(read)
-                .write(write)
-                .append(append)
-                .truncate(false)
-                .create(create && !new)
-                .create_new(create && new);
-            let file = files
-                .root
-                .open_with(path_of(&names), &options)
-                .map_err(|error| failed(&error))?;
-            if found.is_none() {
-                files.changed();
-            }
-            if link_count(&file).map_err(|error| failed(&error))? > 1 {
-                return Err(Fail::Errno(errno::ACCES));
-            }
-            if empty {
-                file.set_len(0).map_err(|error| failed(&error))?;
-            }
-            Descriptor::File(Box::new(Open {
-                file,
-                path: names,
+            let how = How {
                 read,
                 write,
                 append,
-            }))
+                create,
+                new,
+                empty,
+            };
+            let open = open_file(files, limits, root, names, found.is_some(), how)?;
+            Descriptor::File(Box::new(open))
         }
     };
     let opened = host.fds.add(descriptor).map_err(Fail::Errno)?;
     memory::write_u32(memory, out, opened)
+}
+
+/// Opens the file `leaf` of the folder `folder`, which an argument of the program names, as
+/// `how` says, with every rule of a file in the working folder: the name is found byte for
+/// byte, it is no link and nothing but a file, and the file that opens has one name. The file
+/// has no folder of the program's around it: its root is [`OUTSIDE`].
+///
+/// # Errors
+///
+/// An error number for the program, or a stop of it.
+pub(super) fn open_named(
+    folder: Dir,
+    leaf: &str,
+    limits: &mut Limits,
+    how: How,
+) -> Result<Open, Fail> {
+    let mut files = Files::new(folder, false);
+    let names = vec![leaf.to_owned()];
+    let there = match files.find(&names).map_err(Fail::Errno)? {
+        Some(Kind::Link | Kind::Other) => return Err(Fail::Errno(errno::ACCES)),
+        Some(Kind::Folder) => return Err(Fail::Errno(errno::ISDIR)),
+        Some(Kind::File) if how.create && how.new => return Err(Fail::Errno(errno::EXIST)),
+        Some(Kind::File) => true,
+        None if !how.create => return Err(Fail::Errno(errno::NOENT)),
+        None => false,
+    };
+    let mut open = open_file(&mut files, limits, OUTSIDE, names, there, how)?;
+    // What opened is a file: a name swapped since the look is held to it too.
+    if !open
+        .file
+        .metadata()
+        .map_err(|error| failed(&error))?
+        .is_file()
+    {
+        return Err(Fail::Errno(errno::ACCES));
+    }
+    // No path of the program's leads to it.
+    open.path = Vec::new();
+    Ok(open)
+}
+
+/// The folder `folder`, which an argument of the program names, as a root the program reaches
+/// into: one it may change when `writes`.
+#[must_use]
+pub(super) fn named_root(folder: Dir, writes: bool, reversed: bool) -> Files {
+    if writes {
+        Files::new(folder, reversed)
+    } else {
+        Files::read_only(folder, reversed)
+    }
 }
 
 /// Reads from `open` into `buffer`.
@@ -684,8 +854,8 @@ pub fn path_filestat_get(
     out: u32,
 ) -> Result<(), Fail> {
     memory::check(memory, out, size::FILESTAT)?;
-    let names = resolve(host, memory, fd, path.0, path.1)?;
-    let files = files(host)?;
+    let (root, names) = resolve(host, memory, fd, path.0, path.1)?;
+    let files = files(host, root)?;
     let (kind, bytes) = match files.find(&names).map_err(Fail::Errno)? {
         None => return Err(Fail::Errno(errno::NOENT)),
         Some(Kind::Link) if flags & SYMLINK_FOLLOW != 0 => return Err(Fail::Errno(errno::ACCES)),
@@ -720,14 +890,17 @@ pub fn fd_readdir(
 ) -> Result<(), Fail> {
     memory::check(memory, used, 4)?;
     let range = memory::range(memory, buffer.0, buffer.1)?;
-    let Some(files) = host.files.as_mut() else {
+    if host.files.is_none() && host.named.is_empty() {
         return Err(Fail::Errno(errno::NOTCAPABLE));
-    };
-    let (path, begun) = match host.fds.get(fd) {
-        Some(Descriptor::Folder(folder)) => (folder.path.clone(), folder.listing.is_some()),
+    }
+    let (root, path, begun) = match host.fds.get(fd) {
+        Some(Descriptor::Folder(folder)) => {
+            (folder.root, folder.path.clone(), folder.listing.is_some())
+        }
         Some(_) => return Err(Fail::Errno(errno::NOTDIR)),
         None => return Err(Fail::Errno(errno::BADF)),
     };
+    let files = rooted(&mut host.files, &mut host.named, root)?;
     if cookie == 0 || !begun {
         // The folder's one listing, shared with every descriptor that lists it as it is now,
         // within the entries lengua holds for a program.
@@ -786,8 +959,9 @@ pub fn path_create_directory(
     fd: u32,
     path: (u32, u32),
 ) -> Result<(), Fail> {
-    let names = resolve(host, memory, fd, path.0, path.1)?;
-    let (files, limits) = files_and_limits(host)?;
+    let (root, names) = resolve(host, memory, fd, path.0, path.1)?;
+    let (files, limits) = files_and_limits(host, root)?;
+    changes(files)?;
     if files.find(&names).map_err(Fail::Errno)?.is_some()
         || files.clashes(&names).map_err(Fail::Errno)?
     {
@@ -814,12 +988,13 @@ pub fn path_remove_directory(
     fd: u32,
     path: (u32, u32),
 ) -> Result<(), Fail> {
-    let names = resolve(host, memory, fd, path.0, path.1)?;
+    let (root, names) = resolve(host, memory, fd, path.0, path.1)?;
     if names.is_empty() {
         return Err(Fail::Errno(errno::INVAL));
     }
-    let held = busy(&host.fds, &names);
-    let files = files(host)?;
+    let held = busy(&host.fds, root, &names);
+    let files = files(host, root)?;
+    changes(files)?;
     match files.find(&names).map_err(Fail::Errno)? {
         None => return Err(Fail::Errno(errno::NOENT)),
         Some(Kind::Folder) => {}
@@ -850,12 +1025,13 @@ pub fn path_unlink_file(
     fd: u32,
     path: (u32, u32),
 ) -> Result<(), Fail> {
-    let names = resolve(host, memory, fd, path.0, path.1)?;
+    let (root, names) = resolve(host, memory, fd, path.0, path.1)?;
     if names.is_empty() {
         return Err(Fail::Errno(errno::INVAL));
     }
-    let held = busy(&host.fds, &names);
-    let files = files(host)?;
+    let held = busy(&host.fds, root, &names);
+    let files = files(host, root)?;
+    changes(files)?;
     match files.find(&names).map_err(Fail::Errno)? {
         None => return Err(Fail::Errno(errno::NOENT)),
         Some(Kind::Folder) => return Err(Fail::Errno(errno::ISDIR)),
@@ -884,16 +1060,21 @@ pub fn path_rename(
     from: (u32, u32, u32),
     to: (u32, u32, u32),
 ) -> Result<(), Fail> {
-    let source = resolve(host, memory, from.0, from.1, from.2)?;
-    let target = resolve(host, memory, to.0, to.1, to.2)?;
+    let (root, source) = resolve(host, memory, from.0, from.1, from.2)?;
+    let (other, target) = resolve(host, memory, to.0, to.1, to.2)?;
+    // From one folder the program was given to another, nothing moves.
+    if root != other {
+        return Err(Fail::Errno(errno::NOTCAPABLE));
+    }
     if source.is_empty() || target.is_empty() {
         return Err(Fail::Errno(errno::INVAL));
     }
     if target.len() > source.len() && target.starts_with(&source) {
         return Err(Fail::Errno(errno::INVAL));
     }
-    let held = busy(&host.fds, &source) || busy(&host.fds, &target);
-    let files = files(host)?;
+    let held = busy(&host.fds, root, &source) || busy(&host.fds, root, &target);
+    let files = files(host, root)?;
+    changes(files)?;
     let Some(moving) = files.find(&source).map_err(Fail::Errno)? else {
         return Err(Fail::Errno(errno::NOENT));
     };

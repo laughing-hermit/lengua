@@ -87,6 +87,10 @@ pub struct Internet {
     pub places: Vec<(Stand, u16)>,
     /// The names the test gives addresses, each with its addresses. Any other name has none.
     pub names: Vec<(String, Vec<String>)>,
+    /// What the test says each command gives, in place of starting a program: a test starts
+    /// nothing, and a command none of these names isn't there.
+    #[serde(default)]
+    pub programs: Vec<crate::starts::Stood>,
 }
 
 /// How far a job may go.
@@ -135,6 +139,10 @@ pub struct Job {
     /// `None` for a run that reaches the real one.
     #[serde(default)]
     pub internet: Option<Internet>,
+    /// lengua's own folders, with their links followed, which no file or folder an argument
+    /// names may be, lie in or hold: the data folder and the folder of compiled modules.
+    #[serde(default)]
+    pub own: Vec<PathBuf>,
     /// The random bytes a test supplies, in hex.
     pub random: Option<String>,
     /// The clock readings a test supplies: seconds and nanoseconds.
@@ -349,7 +357,14 @@ mod tests {
                         4001,
                     )],
                     names: vec![("example.org".to_owned(), vec!["192.0.2.7".to_owned()])],
+                    programs: vec![crate::starts::Stood {
+                        program: "hostname".to_owned(),
+                        arguments: vec!["-s".to_owned()],
+                        output: "box\n".to_owned(),
+                        code: 0,
+                    }],
                 }),
+                own: vec![PathBuf::from("data")],
                 random: Some(hex(&[1, 2])),
                 clock: vec![(1, 2)],
                 reversed: true,

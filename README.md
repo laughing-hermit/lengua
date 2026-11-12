@@ -77,7 +77,8 @@ files, and ends with `attested` or `not attested` ([docs/check.md](docs/check.md
 
 The other examples are in [examples/index.md](examples/index.md): files, the environment,
 random bytes, a server, a client, a client that follows a redirect to a computer it learns
-while it runs, a sort, SHA-256, AES-128 and a comparison that keeps its input secret.
+while it runs, a copy of a file the user names, a program that starts two others, a key read
+from the terminal, a sort, SHA-256, AES-128 and a comparison that keeps its input secret.
 
 ## Install
 
@@ -173,14 +174,22 @@ Within lengua, for a program at `done`:
   only the module `check` tested, by the SHA-256 the signed lock records, and refuses a build a
   proof found wrong.
 - **It reaches only what its idea grants.** The checker refuses any import the idea's `- Uses:`
-  and `- Network:` lines don't allow, and the host checks every call against those lines again.
+  `- Network:`, `- Files:` and `- Runs:` lines don't allow, and the host checks every call
+  against those lines again.
   Every path is resolved beneath the working folder; a path that would leave it is refused. By
   default a program makes no connection itself: lengua makes the ones its idea names before it
   starts, and does TLS for it. An idea may grant more, a line for each grant: connections the
   program opens itself, the addresses of names, UDP datagrams, each to the computers and ports
   the line names. lengua then resolves each name itself, checks every address, and never lets
   such a connection reach this computer, or a private network the line doesn't name
-  ([DESIGN.md](DESIGN.md), the host). `check` and `run` say what an idea grants before the
+  ([DESIGN.md](DESIGN.md), the host). The same way, a line may grant a file or a folder that
+  one of the program's arguments names, anywhere the user says, to read or to write: the
+  program gives the argument's place and never a path, and lengua opens nothing in its own
+  folders or the system's. A line may name a program to start, with the arguments the line
+  bounds: never a shell, with no environment and no file of the program's, for a stated
+  time. lengua doesn't confine a program started this way: it is the user's own. And an
+  idea that uses the terminal may set its mode, which lengua puts back however the program
+  ends. `check` and `run` say what an idea grants before the
   program runs.
 - **Its memory stays its own.** WebAssembly traps any access outside the program's own memory,
   which can't grow past what the module declares. The memory rules M1 to M8 hold every address
@@ -206,8 +215,9 @@ What it doesn't promise:
   files, with none of these checks behind it.
 - **Not every proof finishes.** Some tests stay "tested, not proven": sorts and word tallies over
   8 bytes, SHA-256 and AES-128 (the proof doesn't model them), a server that waits on its
-  connections with `poll_oneoff`, a program that opens its own connections, sends datagrams or
-  looks up names (the model follows only the connections made before the start), and whatever
+  connections with `poll_oneoff`, a program that opens its own connections, sends datagrams,
+  looks up names, opens a file an argument names, starts a program or uses the terminal's
+  functions (the model follows only what lengua gives a program before it starts), and whatever
   runs out of time. A stream is proven for every length by induction over its read loop only
   where every final piece of up to a buffer-full is proven in the proof's time; otherwise it is
   proven up to a length, which its line says.
@@ -227,10 +237,11 @@ What it doesn't promise:
 - **No security product.** The examples show algorithms, such as AES-128 and SHA-256. They
   aren't built to resist an attacker, and lengua isn't presented as covering security because
   of them.
-- **Not every kind of program yet.** No threads, no GUIs, no files outside the working folder,
-  no keys as they are pressed, and no starting other programs. W18 has given the network chosen
-  at run time, DNS and UDP, and plans files anywhere the user names, starting programs and the
-  terminal; W20 plans threads; GUIs aren't planned.
+- **Not every kind of program yet.** No threads and no GUIs. W18 has given the network chosen
+  at run time, DNS and UDP, files anywhere the user names, starting named programs, and the
+  terminal's mode and size, each as a grant the idea states. A program that uses one of
+  those grants is tested, not proven; a started program runs in an empty folder of its own,
+  so it can't work on the user's folder yet. W20 plans threads; GUIs aren't planned.
 
 ## Against C, C++ and Rust
 
@@ -356,7 +367,7 @@ with rows the list can't take back is the owner's ([todo.md](todo.md)).
 - `crates/lengua-os/`: the one crate allowed unsafe code, each call in a safe function.
 - `plugin/`: the plugin as it ships: its manifests, the two skills with their references and
   templates, its [README](plugin/README.md) and licence.
-- `examples/`: 16 programs, each a folder of `idea.md` and `main.wat`.
+- `examples/`: 19 programs, each a folder of `idea.md` and `main.wat`.
 - `tests/`: the suite, the 29 programs of `tests/fixtures`, the host's 109 cases in
   `tests/host-cases`, and the vendored schemas.
 - `benches/`: the gate, and the C, C++ and Rust versions of its workloads.
@@ -417,8 +428,8 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
 
 - **W18, reach:** every grant a C, C++ or Rust program can have, each declared in the idea and
   shown before the program runs. Built: the network chosen at run time (connections a program
-  opens itself, over TLS too, DNS and UDP). Left: files anywhere the user names, starting named
-  programs, and the terminal.
+  opens itself, over TLS too, DNS and UDP), files and folders anywhere the user names, starting
+  named programs, and the terminal's mode and size.
 - **W19, native speed:** step 1 is built: lengua-run, lengua
   without Wasmtime's compiler, runs a checked program from the module `check` compiled and
   sealed with your key. On Linux on x86-64 the empty program went from 2.20 ms and 11.4 MiB to

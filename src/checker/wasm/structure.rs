@@ -37,6 +37,13 @@ pub fn needs(host: &wasi::Function) -> String {
                 Some("`- Network: sends UDP datagrams to port N on …`".to_owned())
             }
             Allowance::Receives => Some("`- Network: receives UDP datagrams on port N`".to_owned()),
+            Allowance::Named => {
+                Some("`- Files: reads the file its first argument names`".to_owned())
+            }
+            Allowance::NamedFolder => {
+                Some("`- Files: reads the folder its first argument names`".to_owned())
+            }
+            Allowance::Runs => Some("``- Runs: `program` with no arguments``".to_owned()),
         })
         .collect::<Vec<_>>()
         .join(" or ")
@@ -150,19 +157,24 @@ impl Checker<'_, '_, '_> {
                 continue;
             };
             let line = function.line;
-            if from != wasi::MODULE && from != wasi::NET_MODULE {
+            if from != wasi::MODULE && !wasi::own_module(from) {
+                let own: Vec<String> = wasi::OWN
+                    .iter()
+                    .map(|(module, _)| format!("`{module}`"))
+                    .collect();
                 self.violation(
                     Rule::Resources,
                     line,
                     format!(
                         "{} is imported from `{from}`; a program imports only from `{}`, and \
-                         from `{}` what its idea grants it to open itself",
+                         from lengua's own modules ({}) what its idea grants it to reach by \
+                         itself",
                         function.shown(),
                         wasi::MODULE,
-                        wasi::NET_MODULE
+                        own.join(", ")
                     ),
                     "import only the WASI preview 1 functions the idea allows, and lengua's own \
-                     network functions the idea grants",
+                     functions the idea grants",
                 );
                 continue;
             }

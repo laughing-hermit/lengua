@@ -1027,6 +1027,7 @@ mod tests {
                 local,
             )],
             names: Vec::new(),
+            programs: Vec::new(),
         }
     }
 
@@ -1392,6 +1393,7 @@ mod tests {
                 ("inside.example.org".to_owned(), vec!["10.0.0.1".to_owned()]),
                 ("here.example.org".to_owned(), vec!["127.0.0.1".to_owned()]),
             ],
+            programs: Vec::new(),
         };
         let mut host = host_with(
             &["looks up the addresses of any subdomain of example.org"],

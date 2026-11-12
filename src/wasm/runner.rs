@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use wasmtime::{Engine, Linker, Module, Store, UpdateDeadline, WasmBacktrace};
 
 use crate::connect::{CONNECT_TIMEOUT, CONNECT_TOTAL, Made, Reach};
+use crate::named::Ground;
 use crate::runner::{End, Run, Trap};
 use crate::supply::Time;
 use crate::wasm::engine::Setup;
@@ -23,7 +24,8 @@ use crate::wasm::host::net::{self, Link, Listener, Socket};
 use crate::wasm::host::open::Datagrams;
 use crate::wasm::host::policy::Policy;
 use crate::wasm::host::stdio::{Input, Output, Stream};
-use crate::wasm::host::{Host, Stop, World};
+use crate::wasm::host::term::{Own, Terminal};
+use crate::wasm::host::{Beyond, Host, Stop, World};
 use crate::wasm::job::{self, Connection, Done, Ending, Event, Job, Reached};
 
 /// The exit code a run that never started is given, as a shell gives a command it can't find:
@@ -376,6 +378,21 @@ pub fn world(
         connections,
         datagrams,
         internet: job.internet.clone(),
+        beyond: Beyond {
+            // A test's paths stay in the test's own folder; a run's are the user's.
+            ground: job.folder.as_ref().map(|folder| {
+                if job.internet.is_some() {
+                    Ground::Beneath(folder.clone())
+                } else {
+                    Ground::Anywhere {
+                        from: folder.clone(),
+                        own: job.own.clone(),
+                    }
+                }
+            }),
+            working: job.folder.clone(),
+            terminal: None,
+        },
         clock: job
             .clock
             .iter()
@@ -566,6 +583,9 @@ pub struct Here<'a> {
     pub listen: Option<(u16, bool)>,
     /// The connections lengua makes for it, in order.
     pub connections: &'a [job::Made],
+    /// lengua's own folders, with their links followed: no file or folder an argument of
+    /// the program names is one of them, lies in one or holds one.
+    pub own: &'a [std::path::PathBuf],
     /// What places a trap on its line of main.wat.
     pub source: Source<'a>,
 }
@@ -710,6 +730,43 @@ pub fn run_once_checked<O: Order, E>(
     Ok(ended.unwrap_or_else(Err))
 }
 
+/// Says on standard error, before the program starts, where lengua found what its idea grants
+/// it by name: the file or folder each argument names that a `- Files:` line of its own
+/// covers, or why lengua won't open it, and the file each program of a `- Runs:` line is.
+fn say_places(here: &Here<'_>, ground: &Ground, lengua: &str) {
+    let reach = here.policy.reach.get();
+    for (index, text) in (1_usize..).zip(here.args) {
+        for folder in [false, true] {
+            let Some(grant) = crate::named::granted(&reach.files, index, folder) else {
+                continue;
+            };
+            match crate::named::resolve(ground, text, folder) {
+                Ok(place) if grant.which != crate::named::Which::Every => {
+                    eprintln!("{lengua}: its argument {index} names {}", place.shown());
+                }
+                Err(unplaced) if unplaced.refused => eprintln!(
+                    "{lengua}: its argument {index} names what lengua won't open: {}",
+                    unplaced.why
+                ),
+                _ => {}
+            }
+        }
+    }
+    let mut said: Vec<&str> = Vec::new();
+    for rule in &reach.runs {
+        if said.contains(&rule.program.as_str()) {
+            continue;
+        }
+        said.push(&rule.program);
+        match crate::starts::found(&rule.program, &[]) {
+            Ok(file) => eprintln!("{lengua}: `{}` is {}", rule.program, file.display()),
+            Err(crate::starts::Unfound::Missing(why) | crate::starts::Unfound::Refused(why)) => {
+                eprintln!("{lengua}: {why}");
+            }
+        }
+    }
+}
+
 /// [`run_once_checked`]'s work, on the program's thread, once the checks pass: `module` run with
 /// what `here` gives, in its own engine, through a linker with the functions it imports, with
 /// room made for the files a program may hold.
@@ -749,6 +806,23 @@ fn run_on_this_thread(module: &Module, here: &Here<'_>) -> io::Result<End> {
     for line in reach.describe() {
         eprintln!("{lengua}: {line}");
     }
+    if here.policy.terminal {
+        eprintln!("{lengua}: {}", crate::server::TERMINAL_GRANT);
+    }
+    // The paths its arguments name count from the shell's own folder, as any command's do. A
+    // program whose idea names no such file has nowhere to count from, and nothing is asked
+    // of the system for it.
+    let ground = if reach.files.is_empty() {
+        Ground::Nowhere
+    } else {
+        Ground::Anywhere {
+            from: std::env::current_dir().unwrap_or_else(|_| here.folder.to_path_buf()),
+            own: here.own.to_vec(),
+        }
+    };
+    if !reach.files.is_empty() || !reach.runs.is_empty() {
+        say_places(here, &ground, lengua);
+    }
     let datagrams = match reach.receives {
         Some((port, anywhere)) => Some(Datagrams::bind(port, anywhere)?),
         None => None,
@@ -774,6 +848,14 @@ fn run_on_this_thread(module: &Module, here: &Here<'_>) -> io::Result<End> {
         connections,
         datagrams,
         internet: None,
+        beyond: Beyond {
+            ground: Some(ground),
+            working: Some(here.folder.to_path_buf()),
+            terminal: here
+                .policy
+                .terminal
+                .then(|| Box::new(Own) as Box<dyn Terminal>),
+        },
         clock: Vec::new(),
         random: None,
         limits: Limits::new(
@@ -846,6 +928,7 @@ mod tests {
                 policy: Policy::default(),
                 listen: None,
                 connections: &[],
+                own: &[],
                 source: Source::Text {
                     text: TRAPS,
                     module,
@@ -882,6 +965,7 @@ mod tests {
             policy: Policy::default(),
             listen: None,
             connections: &[],
+            own: &[],
             source: Source::Built(&built),
         };
         let refused = run_once_checked(On::Own, || {

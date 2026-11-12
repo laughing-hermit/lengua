@@ -6,6 +6,7 @@
 
 use std::collections::VecDeque;
 use std::io::{IsTerminal as _, Read as _, Write as _};
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 use super::{Fail, Stop};
 use crate::runner::PIPE_WRITE;
@@ -27,6 +28,16 @@ pub enum Input {
     },
     /// This process's own standard input, for a run from a shell.
     Here,
+    /// This process's own standard input, read by a thread of lengua's: what a terminal the
+    /// program made raw gives, so that a wait for a key can end at its time.
+    Keys {
+        /// What the thread read, a read at a time; it ends with the input.
+        from: Receiver<Vec<u8>>,
+        /// The bytes read and not yet given to the program.
+        waiting: VecDeque<u8>,
+        /// Whether the input has ended.
+        ended: bool,
+    },
 }
 
 impl Input {
@@ -74,6 +85,27 @@ impl Input {
                 Ok(count)
             }
             Self::Here => std::io::stdin().lock().read(buffer).map_err(|_| errno::IO),
+            Self::Keys {
+                from,
+                waiting,
+                ended,
+            } => {
+                if buffer.is_empty() {
+                    return Ok(0);
+                }
+                // A read waits for the first byte, as a read of the terminal does.
+                if waiting.is_empty() && !*ended {
+                    match from.recv() {
+                        Ok(bytes) => waiting.extend(bytes),
+                        Err(_) => *ended = true,
+                    }
+                }
+                let count = buffer.len().min(waiting.len());
+                for (place, byte) in buffer.iter_mut().zip(waiting.drain(..count)) {
+                    *place = byte;
+                }
+                Ok(count)
+            }
         }
     }
 
@@ -87,13 +119,72 @@ impl Input {
                 (u64::try_from(left).unwrap_or(u64::MAX), left == 0)
             }
             Self::Here => (1, false),
+            Self::Keys { waiting, ended, .. } => {
+                (u64::try_from(waiting.len()).unwrap_or(u64::MAX), *ended)
+            }
+        }
+    }
+
+    /// What a wait for input finds now: how many bytes a read would give without waiting,
+    /// and whether the input has ended, or `None` when a read would wait. Only input a thread
+    /// of lengua's reads can say that it would wait.
+    pub fn pending(&mut self) -> Option<(u64, bool)> {
+        if let Self::Keys {
+            from,
+            waiting,
+            ended,
+        } = self
+        {
+            while !*ended {
+                match from.try_recv() {
+                    Ok(bytes) => waiting.extend(bytes),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => *ended = true,
+                }
+            }
+            if waiting.is_empty() && !*ended {
+                return None;
+            }
+        }
+        Some(self.ready())
+    }
+
+    /// Has a thread of lengua's read this process's own standard input from now on, so that
+    /// a wait for a key can end at its time; nothing for input given up front. The thread
+    /// ends with the input, or with the process.
+    pub fn watch(&mut self) {
+        if !matches!(self, Self::Here) {
+            return;
+        }
+        let (read, from) = std::sync::mpsc::channel();
+        let started = std::thread::Builder::new()
+            .name("lengua keys".to_owned())
+            .spawn(move || {
+                let mut buffer = [0_u8; 1024];
+                loop {
+                    match std::io::stdin().lock().read(&mut buffer) {
+                        Ok(0) | Err(_) => return,
+                        Ok(count) => {
+                            if read.send(buffer[..count].to_vec()).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            });
+        if started.is_ok() {
+            *self = Self::Keys {
+                from,
+                waiting: VecDeque::new(),
+                ended: false,
+            };
         }
     }
 
     /// Whether this is a terminal.
     #[must_use]
     pub fn terminal(&self) -> bool {
-        matches!(self, Self::Here) && std::io::stdin().is_terminal()
+        matches!(self, Self::Here | Self::Keys { .. }) && std::io::stdin().is_terminal()
     }
 }
 
@@ -218,6 +309,38 @@ mod tests {
         let mut long = Input::given(vec![7; PIPE_WRITE + 10], &[]);
         assert_eq!(read_all(&mut long, PIPE_WRITE * 2), [PIPE_WRITE, 10]);
         assert_eq!(long.ready(), (0, true));
+    }
+
+    /// Keys a thread of lengua's reads, as a raw terminal's are: a wait finds nothing until a
+    /// key is there, then what is there, and the end once the thread has ended and every key
+    /// was read. A read gives what has come, and never more than the buffer holds.
+    #[test]
+    fn keys_wait_until_one_is_there_and_end_with_their_thread() {
+        let (keys, from) = std::sync::mpsc::channel();
+        let mut input = Input::Keys {
+            from,
+            waiting: VecDeque::new(),
+            ended: false,
+        };
+        assert_eq!(input.pending(), None);
+        keys.send(b"ab".to_vec()).expect("the input takes keys");
+        keys.send(b"\x1b[A".to_vec()).expect("the input takes keys");
+        assert_eq!(input.pending(), Some((5, false)));
+        let mut one = [0_u8; 1];
+        assert_eq!(input.read(&mut one), Ok(1));
+        assert_eq!(&one, b"a");
+        let mut rest = [0_u8; 16];
+        assert_eq!(input.read(&mut rest), Ok(4));
+        assert_eq!(&rest[..4], b"b\x1b[A");
+        assert_eq!(input.pending(), None);
+        drop(keys);
+        assert_eq!(input.pending(), Some((0, true)));
+        assert_eq!(input.read(&mut rest), Ok(0));
+        // Input given up front never waits, and watching it changes nothing.
+        let mut given = Input::given(b"x".to_vec(), &[]);
+        given.watch();
+        assert_eq!(given.pending(), Some((1, false)));
+        assert!(matches!(given, Input::Given { .. }));
     }
 
     #[test]

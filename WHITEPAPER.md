@@ -146,12 +146,19 @@ agent.
   So "the line count is proven" doesn't mean every streaming program is. lengua says which
   programs, never that all are.
 - **The host holds every run to what the idea names.** An idea names what its program uses:
-  standard input, files, the environment, the clock, random bytes, the terminal and the network
+  standard input, files, the environment, the clock, random bytes, the terminal, the network,
+  the files the user names, and the programs it starts
   [35]. Every run, in tests and for the person, gets only that: lengua's own host checks the idea
   before every call, and resolves every path beneath the working folder through `cap-std`
-  [5][36]. A program that names no network has none. A program that connects doesn't connect at
+  [5][36]. A program that names no network has none. By default a program doesn't connect at
   all: lengua makes each connection its idea names before it starts, does TLS itself for HTTPS,
-  and hands the program a plain stream, so the program holds no network and no crypto [37]. The
+  and hands the program a plain stream, so the program holds no network and no crypto. An idea
+  may grant more, a line for each grant: connections the program opens itself, the addresses
+  of names and UDP datagrams, each to the computers and ports the line names, with every
+  address checked by lengua and this computer never reached; a file or a folder one of its
+  arguments names, opened by the argument's place and never by a path the program built; a
+  program it starts, by its name and the arguments the line bounds, never a shell; and the
+  terminal's mode, put back however the program ends [37]. The
   clock is rounded down to a microsecond, so it can't carry finer timing [38]. What holds a
   program in is WebAssembly's own bounds, the host and `cap-std`: no operating system sandbox
   wraps the engine, and that second wall is deferred [39].
@@ -260,9 +267,11 @@ outside it, and then none of the checks above stand behind it [47]. Within lengu
   its own answers, with one closed set of errors and the file names every system takes, so one
   operating system's extra freedom never makes an idea behave differently on it [56].
 
-What lengua doesn't cover yet: threads, GUIs, connections a program opens itself, UDP, and
-starting other programs [57]. W18 plans every grant a program can need, each declared in the
-idea and shown to the user before the program runs, and W20 threads, as structured fork-join
+What lengua doesn't cover yet: threads and GUIs; and, of what a program reaches by itself, a
+started program that works in the user's folder, a connection it opens to this computer, and a
+proof of any program that opens its own connections, files or programs, which is tested, not
+proven [57]. W18 gave each of those grants, each declared in
+the idea and shown to the user before the program runs; W20 plans threads, as structured fork-join
 that the rules show free of data races; GUIs aren't planned [51]. And lengua isn't a security
 product: its examples show algorithms, such as AES-128 and SHA-256, and aren't built to resist
 an attacker [58].
@@ -357,8 +366,12 @@ https://github.com/laughing-hermit/lengua.
     `poll_oneoff` for its connections).
 35. `src/idea.rs` (the `- Uses:` and `- Network:` lines); `src/wasm/host/policy.rs`.
 36. `src/wasm/host/files.rs` and `Cargo.toml` (`cap-std` 4.0.3).
-37. `src/connect.rs` and `src/wasm/host/net.rs` (a program never connects by itself; lengua does
-    the TLS).
+37. `src/connect.rs` and `src/wasm/host/net.rs` (the connections lengua makes before a program
+    starts, and the TLS it does); `src/reach.rs` and `src/wasm/host/open.rs` (what a program
+    opens on the network by itself, where its idea grants it); `src/named.rs`, `src/starts.rs`
+    and `src/wasm/host/` (the files its arguments name, the programs it starts, the terminal);
+    docs/reviews/reach-2026-11-11.md and docs/reviews/reach-2-2026-11-11.md (the threat cases
+    and the test that holds each).
 38. `src/wasm/host/clock.rs`.
 39. [todo.md](todo.md), the decisions ("An OS sandbox as a second wall is deferred") and
     "Deferred, and why"; `src/wasm/pool.rs` (workers are child processes of `lengua-mcp`).

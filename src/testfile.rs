@@ -991,7 +991,7 @@ pub fn generated_tables(idea: &Idea) -> Vec<toml::Table> {
 
 /// An idea's backtick value with `\r`, `\n`, `\t` and `\\` read as the characters they name, as
 /// people write line breaks and tabs in a protocol.
-fn unescape(written: &str) -> String {
+pub(crate) fn unescape(written: &str) -> String {
     let mut text = String::with_capacity(written.len());
     let mut characters = written.chars();
     while let Some(character) = characters.next() {

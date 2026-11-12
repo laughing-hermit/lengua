@@ -18,11 +18,12 @@ templates' plain forms.
 | `server-template.wat` | `server-template-wat-idea.md` | A server for several clients at once: `poll_oneoff`, `sock_accept`, `sock_recv`, `sock_send` |
 | `tally-template.wat` | `tally-template-wat-idea.md` | A hash table, a merge sort and buffered output, in regions of several megabytes, in their plain form: the section on speed makes them fast |
 | `client-template.wat` | `client-template-wat-idea.md` | A client that opens its connections itself, with `tcp_open`, and goes where a response sends it: a computer's name and a path taken from a response, each byte checked |
+| `files-template.wat` | `files-template-wat-idea.md` | Files the user names, each opened with `file_open` by the place of its argument: one read whole, one made or emptied and written |
+| `program-template.wat` | `program-template-wat-idea.md` | Two programs started with `program_run`: each one's output, its exit code, and what the program does when the computer has no such program |
+| `terminal-template.wat` | `terminal-template-wat-idea.md` | A key read with the terminal raw, `term_raw`, and put back; with no terminal, the first byte of the input |
 
-Start from the template closest to the idea, and keep its shape. Two kinds of program have no
-template: one that reads keys from the terminal waits for lengua's host to give the terminal's
-two imports, raw mode and the window's size; one that needs threads has none, since a
-WebAssembly program has no threads.
+Start from the template closest to the idea, and keep its shape. A program that needs threads
+has none, since a WebAssembly program has no threads.
 
 ## The module's layout
 

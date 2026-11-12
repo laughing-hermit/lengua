@@ -209,7 +209,8 @@ impl Rule {
     }
 }
 
-/// What an idea's `- Network:` lines grant a program at run time.
+/// What an idea grants a program at run time, which the program opens by itself: its
+/// `- Network:` lines, and with them its `- Files:` and `- Runs:` lines.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Grants {
     /// The TCP connections it may open: `opens TCP connections to port 443 on example.com`.
@@ -222,6 +223,14 @@ pub struct Grants {
     /// The UDP port it receives datagrams on, which lengua binds, and whether other computers
     /// may send to it: `receives UDP datagrams on port 5353`, with `for any computer`.
     pub receives: Option<(u16, bool)>,
+    /// The files and folders its arguments name that it may open, which its `- Files:` lines
+    /// grant ([`crate::named`]): they travel with the network's grants, as everything a
+    /// program opens by itself at run time does.
+    #[serde(default)]
+    pub files: Vec<crate::named::Grant>,
+    /// The programs it may start, which its `- Runs:` lines grant ([`crate::starts`]).
+    #[serde(default)]
+    pub runs: Vec<crate::starts::Rule>,
 }
 
 /// How an idea writes its run-time grants, for a line that doesn't read as one.
@@ -274,15 +283,24 @@ impl Grants {
         names: Vec::new(),
         datagrams: Vec::new(),
         receives: None,
+        files: Vec::new(),
+        runs: Vec::new(),
     };
 
-    /// Whether the idea grants nothing at run time.
+    /// Whether the idea grants nothing on the network at run time.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub fn no_network(&self) -> bool {
         self.opens.is_empty()
             && self.names.is_empty()
             && self.datagrams.is_empty()
             && self.receives.is_none()
+    }
+
+    /// Whether the idea grants nothing at run time: nothing on the network, no file its
+    /// arguments name, and no program to start.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.no_network() && self.files.is_empty() && self.runs.is_empty()
     }
 
     /// Reads a `- Network:` line's words, in lower case, as a run-time grant, and adds it:
@@ -397,6 +415,8 @@ impl Grants {
             )),
             None => {}
         }
+        lines.extend(self.files.iter().map(crate::named::Grant::describe));
+        lines.extend(self.runs.iter().map(crate::starts::Rule::describe));
         lines
     }
 
@@ -1120,6 +1140,27 @@ mod tests {
         let told =
             opens("opens TCP connections to port 8080 on any computer, private addresses too");
         assert!(told.reaches_private(&computer("192.168.1.20")));
+    }
+
+    /// The system's own resolver, which a run uses and a test's own internet stands in for,
+    /// asked here for the one name every computer knows without a network: this computer's.
+    /// It answers, with addresses of this computer alone, and lengua's rules then refuse the
+    /// name whatever a grant says. A program never gets that far: `spelled` refuses the name
+    /// before the resolver is asked.
+    #[test]
+    fn the_systems_resolver_answers_and_its_answer_is_held_to_the_rules() {
+        let found = lookup("localhost", Duration::from_secs(10)).expect("the resolver answers");
+        assert!(!found.is_empty());
+        for address in &found {
+            assert_eq!(class(*address), Class::ThisComputer, "{address}");
+        }
+        for private in [false, true] {
+            match vetted("localhost", &found, private) {
+                Err(Refusal::NotGranted(why)) => assert!(why.contains("this computer"), "{why}"),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(spelled("localhost"), Err(Unspelled::ThisComputer));
     }
 
     /// A place that takes no connection is said so, and nothing is tried past the time given.

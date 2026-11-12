@@ -399,9 +399,10 @@ pub struct CheckReport {
     /// the shell's own input and output, and files read and written in the folder it starts in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
-    /// What the idea grants the program to reach on the network by itself while it runs, each
-    /// grant in words, when it grants any: the computers and ports it may open TCP connections
-    /// to, look up, or send UDP datagrams to. Tell the user before they run it.
+    /// What the idea grants the program to reach by itself while it runs, each grant in words,
+    /// when it grants any: the computers and ports it may open TCP connections to, look up, or
+    /// send UDP datagrams to; the files and folders its arguments name that it may open; the
+    /// programs it may start; and the terminal. Tell the user before they run it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub may_reach: Vec<String>,
     /// How the graph of program folders that this one belongs to stands: its bundle, what
@@ -500,11 +501,13 @@ pub struct RunReport {
     /// Where a server is taking connections, while it runs in the background.
     pub serving: Option<String>,
     /// The connections lengua made for the program before it started, when its idea names any,
-    /// and then what the program asked to open by itself while it ran, the first 64, each with
+    /// and then what the program asked to reach by itself while it ran (a connection, a file
+    /// or folder an argument names, a program to start), the first 64, each with
     /// why lengua refused it or couldn't make it, when it didn't.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<ConnectionReport>,
-    /// What the program's idea grants it to reach on the network by itself, each grant in
+    /// What the program's idea grants it to reach by itself, on the network, among the user's
+    /// files, by a program it starts, or at the terminal, each grant in
     /// words: tell the user before a run that matters to them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub may_reach: Vec<String>,
@@ -704,9 +707,9 @@ impl LenguaServer {
         // What the idea grants at run time is said at every stage, so the user hears it before
         // any run.
         if let Ok(Some(idea_text)) = read_optional(&folder, IDEA_FILE)
-            && let Ok((_, network)) = idea::grants(&idea_text)
+            && let Ok((uses, network)) = idea::grants(&idea_text)
         {
-            report.may_reach = network.reach.describe();
+            report.may_reach = may_reach(&uses, &network);
         }
         Ok(Json(report))
     }
@@ -726,7 +729,12 @@ impl LenguaServer {
             files only inside its working folder: `folder`, where it may fill the user's disk, \
             or else an empty temporary folder, where a file holds at most 64 MiB and its files \
             256 MiB in all. lengua's own folders, and on Linux /proc, /sys and /dev, are no \
-            working folder. A server starts in the background on its \
+            working folder. An idea with a `- Files:` line also lets the program open the \
+            file or folder an argument names, anywhere but lengua's own folders and the \
+            system's: give such an argument as an absolute path, or as a path in folder. \
+            An idea with a `- Runs:` line lets it start the programs the line names, which \
+            lengua doesn't confine; may_reach says each such grant. \
+            A server starts in the background on its \
             idea's port and run returns its address; call run with stop: true to stop it and get \
             what it printed (it also stops after ten minutes or when the session ends). path: \
             absolute path of the program folder; args: the program's arguments; stdin: text for \
@@ -2541,6 +2549,32 @@ fn own_folder_problem(data_dir: &DataDir, folder: &Path) -> Option<String> {
         ));
     }
     None
+}
+
+/// lengua's own folders, with their links followed as far as they exist: the data folder and
+/// the folder of compiled modules. No file or folder an argument of a program names is one
+/// of them, lies in one or holds one ([`crate::named::forbidden`]).
+fn own_folders(data_dir: &DataDir) -> Vec<PathBuf> {
+    vec![
+        canonical(data_dir.path()),
+        canonical(&crate::wasm::engine::cache_folder(data_dir)),
+    ]
+}
+
+/// What the terminal's grant lets a program do, in words, as [`may_reach`] says it.
+pub const TERMINAL_GRANT: &str = "it may read the terminal's size and set the terminal to give \
+                                  its keys as they're pressed; lengua puts the terminal back \
+                                  as it was when the program ends";
+
+/// What an idea grants a program to reach by itself while it runs, each grant in words, for
+/// the user who is about to run it: the network it opens, the files and folders its
+/// arguments name, the programs it starts, and the terminal.
+fn may_reach(uses: &[idea::Use], network: &idea::Network) -> Vec<String> {
+    let mut lines = network.reach.describe();
+    if uses.contains(&idea::Use::Terminal) {
+        lines.push(TERMINAL_GRANT.to_owned());
+    }
+    lines
 }
 
 fn random_seed() -> Result<u64, String> {
