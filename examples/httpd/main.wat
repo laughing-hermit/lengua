@@ -320,10 +320,12 @@
   (global $HTTP_CASE_BIT i32 (i32.const 32))
   (global $HTTP_TEN i32 (i32.const 10))
   (global $HTTP_HEX_SHIFT i32 (i32.const 4))
-  ;; The most digits a number has; ten, as 64 bits; and what $http_number gives for no digits
+  ;; The most digits a number has; ten, as 64 bits; the most that $http_number gives, which is
+  ;; the most that 64 signed bits hold; and what $http_number gives for no digits
   ;; and for text that is no number.
-  (global $HTTP_DIGITS i32 (i32.const 18))
+  (global $HTTP_DIGITS i32 (i32.const 19))
   (global $HTTP_TEN_64 i64 (i64.const 10))
+  (global $HTTP_MOST_NUMBER i64 (i64.const 0x7fffffffffffffff))
   (global $HTTP_NO_NUMBER i64 (i64.const -1))
   (global $HTTP_BAD_NUMBER i64 (i64.const -2))
   ;; The value of a Range field: bytes=, as the bytes two loads give, the first lowest, and
@@ -536,7 +538,7 @@
   (global $sizes.size i32 (i32.const 16))
   ;; The answer's status and its body's length, for the log; whether the answer goes out with
   ;; no body, as a HEAD asks; and where the answer's head ends in $out. 4 bytes each.
-  (global $logged i32 (i32.const 3232))  ;; shared: head_start, head_end and route write them, send and log read them
+  (global $logged i32 (i32.const 3232))  ;; shared: head_start, head_end and examine write them, send and log read them
   (global $logged.size i32 (i32.const 16))
   ;; A part of a file: the first and last byte $http_range reads, 8 bytes each, then the first
   ;; byte and count, 4 bytes each.
@@ -853,6 +855,12 @@
     (i64.store (global.get $sizes) (i64.const 0))
     (i64.store offset=8 (global.get $sizes) (i64.const 0))
     (i32.store offset=8 (global.get $logged) (i32.const 0))
+    ;; A request that starts with HEAD and a space gets no body, whatever its answer is: also
+    ;; an answer that refuses it before the rest of its request line is read.
+    (if (i32.gt_u (local.get $length) (global.get $HEAD_LENGTH))
+      (then
+        (if (i32.eq (call $method_of (global.get $HEAD_LENGTH)) (global.get $HEAD))
+          (then (i32.store offset=8 (global.get $logged) (i32.const 1))))))
     (local.set $limit (local.get $length))
     (if (i32.gt_u (local.get $limit) (global.get $HTTP_HEAD))
       (then (local.set $limit (global.get $HTTP_HEAD))))
@@ -937,11 +945,9 @@
     (if (i32.gt_u (local.get $length) (global.get $HTTP_METHOD))
       (then (call $assert_fail (i32.const 26)) unreachable))
     (local.set $method (call $method_of (local.get $length)))
-    ;; A HEAD is answered as a GET, and the answer goes out with no body.
+    ;; A HEAD is answered as a GET: examine noted that its answer goes out with no body.
     (if (i32.eq (local.get $method) (global.get $HEAD))
-      (then
-        (i32.store offset=8 (global.get $logged) (i32.const 1))
-        (local.set $method (global.get $GET))))
+      (then (local.set $method (global.get $GET))))
     (local.set $start (i32.load offset=4 (global.get $line)))
     (local.set $length (i32.load offset=8 (global.get $line)))
     (if (i32.gt_u (local.get $start) (global.get $HTTP_HEAD))
@@ -3043,9 +3049,9 @@
     (local.get $result))
 
   ;; Gives the number that the bytes from place $from to place $end of the text at $text write
-  ;; in decimal digits. Gives HTTP_NO_NUMBER when $from is $end, and HTTP_BAD_NUMBER when a
-  ;; byte is no digit or there are more than HTTP_DIGITS of them. $from is at most $end, and
-  ;; $end at most HTTP_HEAD.
+  ;; in decimal digits, or HTTP_MOST_NUMBER when they write a larger number than that. Gives
+  ;; HTTP_NO_NUMBER when $from is $end, and HTTP_BAD_NUMBER when a byte is no digit or there are
+  ;; more than HTTP_DIGITS of them. $from is at most $end, and $end at most HTTP_HEAD.
   ;; from: ../http
   (func $http_number (param $text i32) (param $from i32) (param $end i32) (result i64)
     (local $i i32)
@@ -3066,7 +3072,7 @@
         (i32.gt_u (i32.sub (local.get $end) (local.get $from)) (global.get $HTTP_DIGITS)))
       (block $read
         (local.set $left (global.get $HTTP_DIGITS))
-        (loop $digit  ;; bound: 18
+        (loop $digit  ;; bound: 19
           (br_if $read (i32.ge_u (local.get $i) (local.get $end)))
           ;; Below '0' wraps to a large number, so one unsigned test catches both sides.
           (local.set $c
@@ -3079,6 +3085,10 @@
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (local.set $left (i32.sub (local.get $left) (i32.const 1)))
           (br_if $digit (local.get $left))))
+      ;; HTTP_DIGITS digits write a number below 2 to the 64th, so the sum does not wrap: a
+      ;; number from 2 to the 63rd up is negative here, and is given as the most.
+      (if (i64.lt_s (local.get $value) (i64.const 0))
+        (then (local.set $value (global.get $HTTP_MOST_NUMBER))))
       (local.set $result (local.get $value)))
     (local.get $result))
 

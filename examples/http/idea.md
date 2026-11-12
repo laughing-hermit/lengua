@@ -25,6 +25,10 @@ two numbers of the range. It prints a hyphen in place of a number that the range
 have. It prints a question mark when the field is not one range of bytes. The tests give
 numbers from `0` to `999999`.
 
+A number has at most 19 digits. For a larger number of 19 digits, the program prints
+`9223372036854775807`. The tests also give numbers from `1000000000000000000` to
+`9223372036854775807`.
+
 - The head has at most `4096` bytes. Input of `4097` to `5000` bytes is too long.
 - The request line is a method, a space, a target, a space and the version, 1.0 or 1.1.
 - A method has 1 to 16 capital letters.
@@ -253,7 +257,23 @@ The second row has few texts, so that a proof can cover all of them.
 
 | path | value | runs |
 |---|---|---|
-| `string(0, 100, "abcdefghijklmnopqrstuvwxyz0189/._-~")` | `choice("bytes=0-4,10-14", "lines=1-2", "bytes=a-b", "bytes=", "bytes=-", "bytes=5", "bytes=1-2x", "bytes=1234567890123456789-", "bytes=1-1234567890123456789", "bytes 1-2", "BYTES=1-2", "")` | 40 |
+| `string(0, 100, "abcdefghijklmnopqrstuvwxyz0189/._-~")` | `choice("bytes=0-4,10-14", "lines=1-2", "bytes=a-b", "bytes=", "bytes=-", "bytes=5", "bytes=1-2x", "bytes=12345678901234567890-", "bytes=1-12345678901234567890", "bytes 1-2", "BYTES=1-2", "")` | 40 |
+
+## B14: Takes a number of 19 digits in a Range field
+- Given standard input that contains `GET / HTTP/1.1\r\nRange: bytes=1234567890123456789-9999999999999999999\r\n\r\n`
+- When the program runs
+- Then it prints `GET /\n\nrange 1234567890123456789 9223372036854775807\n`
+- And it exits with code `0`
+
+### For any first number of 19 digits
+- Given standard input that contains `GET / HTTP/1.1\r\nRange: bytes={a}-{b}\r\n\r\n`
+- When the program runs
+- Then it prints `GET /\n\nrange {a} 9223372036854775807\n`
+- And it exits with code `0`
+
+| a | b | runs |
+|---|---|---|
+| `int(1000000000000000000, 9223372036854775807)` | `choice("9223372036854775807", "9223372036854775808", "9999999999999999999")` | 20 |
 
 # Constraints
 - Uses: standard input
@@ -299,8 +319,8 @@ In each function, `$text` is the head and `$length` its length, at most 4096 byt
   not valid or has more than 1024 bytes.
 - `$http_number`: reads 4096 bytes at `$text`. Its arguments are `$text`, `$from` and `$end`.
   It gives, as 64 bits, the number that the digits from place `$from` to place `$end` write.
-  It gives -1 when there is no byte there, and -2 when a byte is not a digit or there are more
-  than 18 digits.
+  It gives 9223372036854775807 for a larger number. It gives -1 when there is no byte there,
+  and -2 when a byte is not a digit or there are more than 19 digits.
 - `$http_range`: reads 4096 bytes at `$text`; writes 16 bytes at `$into`. Its arguments are
   `$text`, `$from`, `$end` and `$into`. It reads the value of a Range field from place `$from`
   to place `$end`: `bytes=`, digits, a hyphen and digits. It gives 1 and writes the two

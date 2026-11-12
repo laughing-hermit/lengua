@@ -28,7 +28,8 @@ The server has these routes:
 - `DELETE /kv/` and a key removes that key from the store.
 
 The server answers a `HEAD` request as it answers a `GET` request, but it does not send the
-body. The line of the log then has the length 0.
+body. The line of the log then has the length 0. It also sends no body when it refuses a
+request that starts with `HEAD` and a space.
 
 The server keeps the store in the file `store.json`, with one member on each line and the keys
 in byte order. When there is no such file, the store is empty.
@@ -37,6 +38,8 @@ These are the limits:
 
 - The head of a request has at most `4096` bytes, and its body at most `4096` bytes. The tests
   give a body length of `4097` to `999999` to a request that is too large.
+- A body length has at most 19 digits. A length of 19 digits that is too large gets status 413,
+  and a length with more digits is not valid.
 - The target of a request has at most `1024` bytes. A path can have text in UTF-8, which a
   request writes with percent signs.
 - The server holds a file in memory to send it, so a file has at most `1048576` bytes.
@@ -354,7 +357,7 @@ The names that start with a point, and the folder itself, are not files that the
 | target | field | runs |
 |---|---|---|
 | `choice("/files/%zz", "/files/%4", "/files/a%00b", "/%7f", "/kv/a%20b", "/kv/", "/kv/a/b", "/kv/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")` | `choice("", "Host: localhost\r\n")` | 16 |
-| `choice("/health", "/files/notes.txt", "/kv")` | `choice("No colon\r\n", ": empty\r\n", " folded: x\r\n", "A: b\nC: d\r\n", "Content-Length: x\r\n", "Content-Length: -1\r\n", "Content-Length: 1 2\r\n", "Content-Length:\r\n")` | 16 |
+| `choice("/health", "/files/notes.txt", "/kv")` | `choice("No colon\r\n", ": empty\r\n", " folded: x\r\n", "A: b\nC: d\r\n", "Content-Length: x\r\n", "Content-Length: -1\r\n", "Content-Length: 1 2\r\n", "Content-Length:\r\n", "Content-Length: 12345678901234567890\r\n")` | 18 |
 
 ## B13: Answers status 431 when the head of a request is too long
 - Given a client that sends `GET /health HTTP/1.1\r\nX-Pad: ` then `a` `4096` times then `\r\n\r\n`
@@ -391,6 +394,7 @@ The names that start with a point, and the folder itself, are not files that the
 | n | runs |
 |---|---|
 | `int(4097, 999999)` | 8 |
+| `choice("1234567890123456789", "9223372036854775807", "9223372036854775808", "9999999999999999999", "0000000000000004097")` | 5 |
 
 ## B15: Says which requests it cannot serve
 - Given a client that sends `GET /health HTTP/2.0\r\n\r\n`
@@ -669,6 +673,36 @@ The names that start with a point, and the folder itself, are not files that the
 | a | b | runs |
 |---|---|---|
 | `string(0, 20, "abcxyz019=&")` | `string(0, 20, "abcxyz019=&")` | 8 |
+
+## B25: Sends no body when it refuses a HEAD request
+- Given a client that sends `HEAD /health HTTP/2.0\r\n\r\n`
+- And a client that sends `HEAD /kv/color HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n`
+- And a client that sends `HEAD /kv/color HTTP/1.1\r\nContent-Length: 4097\r\n\r\n`
+- And a client that sends `HEAD /health HTTP/1.1\r\nNo colon\r\n\r\n`
+- When the program runs
+- Then the client receives `HTTP/1.1 505 HTTP Version Not Supported\r\nContent-Type: text/plain\r\nContent-Length: 31\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 501 Not Implemented\r\nContent-Type: text/plain\r\nContent-Length: 20\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 413 Content Too Large\r\nContent-Type: text/plain\r\nContent-Length: 22\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 16\r\nConnection: close\r\n\r\n`
+- And it prints `- - 505 0\nHEAD /kv/color 501 0\nHEAD /kv/color 413 0\nHEAD /health 400 0\n`
+- And it does not stop
+
+### For any key and length
+- Given a client that sends `HEAD /health HTTP/2.0\r\n\r\n`
+- And a client that sends `HEAD /kv/{k} HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n`
+- And a client that sends `HEAD /kv/{k} HTTP/1.1\r\nContent-Length: {n}\r\n\r\n`
+- And a client that sends `HEAD /health HTTP/1.1\r\nNo colon\r\n\r\n`
+- When the program runs
+- Then the client receives `HTTP/1.1 505 HTTP Version Not Supported\r\nContent-Type: text/plain\r\nContent-Length: 31\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 501 Not Implemented\r\nContent-Type: text/plain\r\nContent-Length: 20\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 413 Content Too Large\r\nContent-Type: text/plain\r\nContent-Length: 22\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 16\r\nConnection: close\r\n\r\n`
+- And it prints `- - 505 0\nHEAD /kv/{k} 501 0\nHEAD /kv/{k} 413 0\nHEAD /health 400 0\n`
+- And it does not stop
+
+| k | n | runs |
+|---|---|---|
+| `string(1, 64, "abcdefghijklmnopqrstuvwxyzXYZ019-._")` | `int(4097, 999999)` | 6 |
 
 # Constraints
 - Uses: files

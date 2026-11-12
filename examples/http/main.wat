@@ -89,10 +89,12 @@
   (global $HTTP_CASE_BIT i32 (i32.const 32))
   (global $HTTP_TEN i32 (i32.const 10))
   (global $HTTP_HEX_SHIFT i32 (i32.const 4))
-  ;; The most digits a number has; ten, as 64 bits; and what $http_number gives for no digits
+  ;; The most digits a number has; ten, as 64 bits; the most that $http_number gives, which is
+  ;; the most that 64 signed bits hold; and what $http_number gives for no digits
   ;; and for text that is no number.
-  (global $HTTP_DIGITS i32 (i32.const 18))
+  (global $HTTP_DIGITS i32 (i32.const 19))
   (global $HTTP_TEN_64 i64 (i64.const 10))
+  (global $HTTP_MOST_NUMBER i64 (i64.const 0x7fffffffffffffff))
   (global $HTTP_NO_NUMBER i64 (i64.const -1))
   (global $HTTP_BAD_NUMBER i64 (i64.const -2))
   ;; The value of a Range field: bytes=, as the bytes two loads give, the first lowest, and
@@ -791,9 +793,9 @@
     (local.get $result))
 
   ;; Gives the number that the bytes from place $from to place $end of the text at $text write
-  ;; in decimal digits. Gives HTTP_NO_NUMBER when $from is $end, and HTTP_BAD_NUMBER when a
-  ;; byte is no digit or there are more than HTTP_DIGITS of them. $from is at most $end, and
-  ;; $end at most HTTP_HEAD.
+  ;; in decimal digits, or HTTP_MOST_NUMBER when they write a larger number than that. Gives
+  ;; HTTP_NO_NUMBER when $from is $end, and HTTP_BAD_NUMBER when a byte is no digit or there are
+  ;; more than HTTP_DIGITS of them. $from is at most $end, and $end at most HTTP_HEAD.
   (func $http_number (param $text i32) (param $from i32) (param $end i32) (result i64)
     (local $i i32)
     (local $c i32)
@@ -813,7 +815,7 @@
         (i32.gt_u (i32.sub (local.get $end) (local.get $from)) (global.get $HTTP_DIGITS)))
       (block $read
         (local.set $left (global.get $HTTP_DIGITS))
-        (loop $digit  ;; bound: 18
+        (loop $digit  ;; bound: 19
           (br_if $read (i32.ge_u (local.get $i) (local.get $end)))
           ;; Below '0' wraps to a large number, so one unsigned test catches both sides.
           (local.set $c
@@ -826,6 +828,10 @@
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (local.set $left (i32.sub (local.get $left) (i32.const 1)))
           (br_if $digit (local.get $left))))
+      ;; HTTP_DIGITS digits write a number below 2 to the 64th, so the sum does not wrap: a
+      ;; number from 2 to the 63rd up is negative here, and is given as the most.
+      (if (i64.lt_s (local.get $value) (i64.const 0))
+        (then (local.set $value (global.get $HTTP_MOST_NUMBER))))
       (local.set $result (local.get $value)))
     (local.get $result))
 
