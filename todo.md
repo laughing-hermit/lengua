@@ -505,7 +505,7 @@ Still open from it, for the owner:
 ### After the scale test: `check`'s reply and the skills (2026-11-12)
 
 W22's conditions named what the agent lacked. The ones that live in `check`'s reply and in the
-skills are built, on the branch `wip/scale-next`.
+skills are built, on main since 7247c16 (2026-11-13).
 
 What was built:
 - **One check, every problem of an idea.** `idea::read` gives the idea with its problems when
@@ -617,6 +617,9 @@ Its runs, each a dispatch of ci.yml on the branch:
   merge with no conflict): format, the five test jobs and the gate passed, on Linux on x86-64
   and on ARM64, macOS on ARM64, and Windows on x86-64 and on ARM64. This record's last lines
   were written after it.
+- 43279029552 (a compile check at a80cb76): green.
+- 43279811923 (the suite on all five systems, at 7247c16, with main's b070fd6 merged in): format,
+  the five test jobs and the gate passed. The landing on main rests on it.
 
 ### W21's parts: functions a program takes, already checked (2026-11-11)
 

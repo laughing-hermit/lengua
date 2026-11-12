@@ -714,7 +714,7 @@ one session. [docs/scale/README.md](docs/scale/README.md) has the measures and t
 [docs/scale/log.md](docs/scale/log.md) every check cycle.
 
 After the test, on 2026-11-12, what its conditions asked of `check`'s reply and of the skills
-was built (the branch `wip/scale-next`; [todo.md](todo.md) has the runs and the decisions):
+was built (on main since 7247c16; [todo.md](todo.md) has the runs and the decisions):
 
 - **One check, every problem of an idea**, in the order of its lines: an idea whose problems
   are of its words alone still reads, so its tests' problems come in the same reply.
