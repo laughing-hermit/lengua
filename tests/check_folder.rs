@@ -30,6 +30,13 @@ async fn check_one_folder() {
     for folder in folder.split(',') {
         let folder = std::path::PathBuf::from(folder);
         let program = Program::new();
+        // The parts the folder builds on stand beside it, each checked first.
+        if let Err(problem) = session.settle_parts(&program, &folder).await {
+            println!("PORT folder: {}", folder.display());
+            println!("PORT problems: {problem}");
+            failed.push(folder.display().to_string());
+            continue;
+        }
         for file in ["idea.md", "main.wat"] {
             let text = std::fs::read_to_string(folder.join(file)).expect("the file");
             program.write(file, &text);
@@ -38,9 +45,13 @@ async fn check_one_folder() {
         let report = session.settle(&program).await;
         println!("PORT folder: {}", folder.display());
         println!("PORT state: {}", report["state"]);
-        for field in ["problems", "tests", "proofs"] {
-            for line in report[field].as_array().into_iter().flatten() {
-                println!("PORT {field}: {}", text(line));
+        for field in ["problems", "tests", "proofs", "parts", "contract", "memory"] {
+            let lines = match &report[field] {
+                Value::String(line) => vec![line.as_str()],
+                lines => lines.as_array().into_iter().flatten().map(text).collect(),
+            };
+            for line in lines {
+                println!("PORT {field}: {line}");
             }
         }
         if report["state"] != "done" {

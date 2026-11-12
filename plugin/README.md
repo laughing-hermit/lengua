@@ -19,7 +19,9 @@ is built for.
   and the test format, and its asset is an idea's template.
 - `skills/compile`: compiles `idea.md` into `main.wat`, and ends when `check` says done. Its
   references give the dialect's rules, lengua's host, WebAssembly text, constant time and the
-  CPU's caches, and its assets are templates of whole programs, each with its idea.
+  CPU's caches, and how to build on parts; its assets are templates of whole programs, each
+  with its idea, and lengua's library of parts (`assets/parts`), each a program whose idea
+  states what its functions offer.
 - `server/lengua-mcp` (`lengua-mcp.exe` on Windows): the MCP server, with two tools. `check`
   records the idea, builds `main.wat`, holds it to every rule, runs every test and proves the
   tests in the background. `run` runs a program `check` checked.

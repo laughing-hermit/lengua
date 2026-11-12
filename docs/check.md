@@ -48,8 +48,15 @@ reads the folder's `idea.md` and `main.wat`, then, in order:
    a proof finds where `main.wat` is wrong are run for real before it says so. It doesn't prove
    on from where a proof stopped: that is the `check` tool's, which keeps a lock.
 
+For a part, an idea with a `# Contract` section, it holds the section to `main.wat`: each
+function the section offers, with what the memory rules find it reads and writes through the
+addresses it is lent. A section that says anything else, or offers a function no program
+could take, leaves the folder not attested, and each function that holds is a line of the
+output, `idea.md: its contract holds: …`.
+
 It doesn't hold `main.wat` to the parts its idea's `- Builds on:` line names, as the `check` tool
-does.
+does: it reads one folder, and a part is checked on the computer that builds on it. What it
+attests of a program built on parts is the program itself, the functions it took included.
 
 It prints one line for each thing it finds, then `attested` or `not attested`, and exits 0 when
 the folder is attested and 1 when it isn't:

@@ -347,8 +347,8 @@ fn params(tool: &'static str, arguments: Value) -> CallToolRequestParams {
 /// A temporary program folder.
 pub struct Program {
     /// Deletes the folder when the program is dropped, with the bundle it stands in when it has
-    /// one of its own.
-    _dir: TempDir,
+    /// one of its own; none for a folder beside another program, whose bundle it is in.
+    _dir: Option<TempDir>,
     /// The folder.
     path: PathBuf,
 }
@@ -360,7 +360,10 @@ impl Program {
         let dir = tempfile::tempdir().expect("create a temporary folder");
         let path = dir.path().join("bundle").join("program");
         std::fs::create_dir_all(&path).expect("create a program folder");
-        Self { _dir: dir, path }
+        Self {
+            _dir: Some(dir),
+            path,
+        }
     }
 
     /// An empty program folder named for `name` inside `parent`, beside the others there, as the
@@ -371,7 +374,22 @@ impl Program {
             .tempdir_in(parent)
             .expect("create a program folder");
         let path = dir.path().to_path_buf();
-        Self { _dir: dir, path }
+        Self {
+            _dir: Some(dir),
+            path,
+        }
+    }
+
+    /// An empty program folder named `name` beside this one, in its bundle, as a part its idea
+    /// links to with `../name/idea.md` stands. It lasts as long as this program's bundle does.
+    pub fn beside(&self, name: &str) -> Self {
+        let path = self
+            .path()
+            .parent()
+            .expect("a program folder stands in a bundle")
+            .join(name);
+        std::fs::create_dir_all(&path).expect("create a program folder");
+        Self { _dir: None, path }
     }
 
     /// The folder's own name.
@@ -422,5 +440,57 @@ impl Program {
     /// Reads a file in the folder, if it exists.
     pub fn read(&self, name: &str) -> Option<String> {
         std::fs::read_to_string(self.file(name)).ok()
+    }
+}
+
+/// The folders of the parts that the program in `folder` builds on, each before the programs
+/// that build on it, none twice: the folders its idea's `- Builds on:` links name, and theirs.
+/// A folder whose idea doesn't parse has none.
+pub fn parts_of(folder: &Path) -> Vec<PathBuf> {
+    fn walk(folder: &Path, found: &mut Vec<PathBuf>) {
+        let Ok(idea) = std::fs::read_to_string(folder.join("idea.md")) else {
+            return;
+        };
+        let Ok(idea) = lengua::idea::parse(&idea) else {
+            return;
+        };
+        for part in &idea.parts {
+            let joined = folder.join(part.folder());
+            let part = std::fs::canonicalize(&joined).unwrap_or(joined);
+            if !found.contains(&part) {
+                walk(&part, found);
+                found.push(part);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(folder, &mut found);
+    found
+}
+
+impl Session {
+    /// Lays out beside `program` each part that the program in `folder` builds on, a folder of
+    /// the repository with its idea.md and main.wat, under the part's own folder name, and takes
+    /// each to done, the parts a part builds on first: what an agent does before it builds a
+    /// program on parts. Gives the first part that isn't done, with check's reply.
+    pub async fn settle_parts(&self, program: &Program, folder: &Path) -> Result<(), String> {
+        for part in parts_of(folder) {
+            let name = part
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("a part's folder has a UTF-8 name");
+            let beside = program.beside(name);
+            for file in ["idea.md", "main.wat"] {
+                let text = std::fs::read_to_string(part.join(file))
+                    .map_err(|error| format!("{}/{file}: {error}", part.display()))?;
+                beside.write(file, &text);
+            }
+            self.record(&beside).await;
+            let done = self.settle(&beside).await;
+            if done["state"] != "done" {
+                return Err(format!("the part {name} isn't done: {done}"));
+            }
+        }
+        Ok(())
     }
 }

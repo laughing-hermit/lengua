@@ -2,6 +2,7 @@
 //! the code of an idea that is an Attested Computation, checked and run as WebAssembly the same
 //! way on every system ([`wat`]).
 
+mod parts;
 mod wat;
 
 pub use self::wat::{Attestation, NotRun, attest, compile_and_keep};
@@ -380,6 +381,16 @@ pub struct CheckReport {
     /// proving, how far it has got.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proofs: Vec<String>,
+    /// The parts the program builds on, one a line, once main.wat holds to them: the functions
+    /// it takes from each, word for word; whether the part is one of lengua's library,
+    /// unchanged; and what the part's own lock records of its proofs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<String>,
+    /// For a part, an idea with a `# Contract` section: each function it offers to the
+    /// programs that build on it, with what the rules found it reads and writes through the
+    /// addresses it is lent, which is what the section states.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contract: Vec<String>,
     /// What's known of memory safety, once the tests pass: what the rules settle, and the runs
     /// the proofs hold to the rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2802,6 +2813,7 @@ mod tests {
             max_stack_bytes: 16,
             unsafe_blocks: 0,
             features: Vec::new(),
+            parts: Vec::new(),
         };
         let proofs = |module: &[u8]| {
             Box::new(ProofStamp {
@@ -2871,6 +2883,7 @@ mod tests {
                 max_stack_bytes: 16,
                 unsafe_blocks: 0,
                 features: Vec::new(),
+                parts: Vec::new(),
             }),
             proofs: proofs.map(Box::new),
         };

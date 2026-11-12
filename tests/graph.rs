@@ -353,6 +353,7 @@ fn a_stale_program_is_reported() {
             max_stack_bytes: 16,
             unsafe_blocks: 0,
             features: Vec::new(),
+            parts: Vec::new(),
         }),
         ..Lock::requested(
             Sha256Hex::of(ADD_IDEA.as_bytes()),

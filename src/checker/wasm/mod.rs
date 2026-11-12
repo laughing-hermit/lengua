@@ -67,6 +67,50 @@ pub struct Obligation {
     pub division: bool,
 }
 
+/// What one of main.wat's own functions does through the addresses its parameters lend it, as
+/// the memory rules found it ([`memory::Summary`]): what a part's contract states.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Lends {
+    /// The function's name, without the `$`; empty when it has none.
+    pub function: String,
+    /// Each parameter it uses as an address, in order: its name without the `$` (`local N` for
+    /// one with no name), whether the function writes through it, and how many bytes from the
+    /// address it may touch, or `None` where the rules can't say.
+    pub borrows: Vec<(String, bool, Option<u64>)>,
+}
+
+/// [`Lends`] for each of `module`'s own functions, from what following them found.
+fn lends(module: &model::Module<'_>, analysis: &memory::Analysis) -> Vec<Lends> {
+    module
+        .own()
+        .map(|function| Lends {
+            function: function.name.clone().unwrap_or_default(),
+            borrows: analysis
+                .summaries
+                .get(&function.index)
+                .map(|summary| {
+                    summary
+                        .borrows
+                        .iter()
+                        .map(|(param, borrow)| {
+                            let name = function
+                                .local_names
+                                .get(param)
+                                .cloned()
+                                .unwrap_or_else(|| format!("local {param}"));
+                            let reach = match borrow.reach {
+                                memory::Reach::Bytes(bytes) => Some(bytes),
+                                memory::Reach::Unsettled => None,
+                            };
+                            (name, borrow.written, reach)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
 /// What the rules learned about the program.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Facts {
@@ -98,6 +142,9 @@ pub struct Report {
     /// The operators that take a secret operand, for an idea with a `- Secret:` line: what the
     /// check of the machine code holds the engine's code to ([`machine`]).
     pub secret_operators: Vec<secret::Taken>,
+    /// What each of main.wat's own functions does through the addresses it is lent: what a
+    /// part's contract states.
+    pub lends: Vec<Lends>,
 }
 
 impl Report {
@@ -119,6 +166,7 @@ impl Report {
             facts,
             unsafe_blocks,
             secret_operators: Vec::new(),
+            lends: Vec::new(),
         }
     }
 
@@ -181,6 +229,7 @@ pub fn check(text: &str, built: &Built, context: &Context<'_>) -> Report {
     let flows = flow::analyze(&module, &policy, &mut violations);
     split::check(&module, &flows, &policy, &mut violations);
     let analysis = memory::analyze(&module, &flows);
+    let lends = lends(&module, &analysis);
     memory::check(&module, &flows, &analysis, &mut violations, &mut facts);
     rules::check(&module, &flows, &analysis, &mut violations, &mut facts);
     determinism::check(&module, &analysis, &mut violations, &mut facts);
@@ -188,6 +237,7 @@ pub fn check(text: &str, built: &Built, context: &Context<'_>) -> Report {
         secret::check(&module, &flows, &analysis, context.secrets, &mut violations);
     Report {
         secret_operators,
+        lends,
         ..Report::new(violations, facts, module.unsafe_blocks.clone())
     }
 }

@@ -64,11 +64,17 @@ alone, by the steps below: `check` refuses any other code file and says what to 
    least two assertions per function on average. `$main`, exported as `_start`, checks the inputs
    and calls the functions that do the work; it never reaches its end: each path ends in
    `$proc_exit` or `$assert_fail` followed by `unreachable`, and a server's one loop that takes
-   connections goes on forever. When the idea builds on parts (`- Builds on:`), call
-   `check` on each part's folder until it is done first. Then take the functions you use from the
-   part's `main.wat` word for word, each with a `;; from: ../sort` line above its `(func`: `check`
-   holds each to the part's current code, and says which to copy again when the part changes. A
-   part must be in WebAssembly too. Never rewrite what a part already does.
+   connections goes on forever. **Look for a part before you write a routine**:
+   [parts](references/parts.md) lists lengua's library, in `assets/parts`: `decimal` reads and
+   writes whole numbers, `lines` reads an input and finds its lines, `crc32` computes a
+   CRC-32, `bytes` compares bytes, and `sort64` sorts numbers. To take from a part, the idea
+   names it (`- Builds on:`), its folder stands beside the program's, and `check` on the part's
+   folder says done. Then copy each function you use from the part's `main.wat` word for word,
+   under a `;; from: ../decimal` line above its `(func`, with the constants it reads, and lend
+   it regions with the room its contract states. `check` holds each copy to the part at every
+   check, and its `parts` lines say what main.wat takes and what the part's own proofs cover.
+   Never rewrite what a part already does, and number your own assertions from 1 to 799: the
+   library's are 800 and up.
 4. **Write `<path>/main.wat` to the dialect**, in the template's layout: the imports, the memory,
    the named constants, the regions, then the functions. [Writing main.wat](references/wasm.md)
    gives each idiom with its snippet, [the dialect](references/power-of-10-webassembly.md) the
@@ -99,11 +105,11 @@ alone, by the steps below: `check` refuses any other code file and says what to 
    | `state` | What it means, and what to do |
    |---|---|
    | `write_code` | The idea is recorded and there's no main.wat yet: write it. |
-   | `code_problems` | Every problem, each on its line: one the build finds as `main.wat line N: …`, text that doesn't parse or validate, and each broken rule as `rule N (name) main.wat:LINE: problem. Fix: …` (`rule M2 (bounds)` for a memory rule), or as `dialect main.wat:LINE: …` for what the dialect doesn't allow, such as a trapping float conversion, the bits of a float that may be NaN, relaxed SIMD or a division by a value that may be zero; or a part's function that differs from the part's, or a second code file. At most 20 broken rules are listed, then `…and N more`. Fix them all, then call `check` again. |
+   | `code_problems` | Every problem, each on its line: one the build finds as `main.wat line N: …`, text that doesn't parse or validate, and each broken rule as `rule N (name) main.wat:LINE: problem. Fix: …` (`rule M2 (bounds)` for a memory rule), or as `dialect main.wat:LINE: …` for what the dialect doesn't allow, such as a trapping float conversion, the bits of a float that may be NaN, relaxed SIMD or a division by a value that may be zero; or a function taken from a part that is not the part's own, word for word with the constants it reads, a part that is not checked, a part's `# Contract` that is not what its main.wat does ([parts](references/parts.md)), or a second code file. At most 20 broken rules are listed, then `…and N more`. Fix them all, then call `check` again. |
    | `testing` | The tests are running: call `check` again; nothing needs to change. |
    | `tests_failed` | Each failure gives the test, its inputs and the seed, what was expected and what happened, as `example B1 (idea.md line 20): stdout should be "5\n", but was "-1\n"`, with `assertion 9 failed at main.wat:LINE` when an assertion fires. Decide from `idea.md` whether main.wat or the test is wrong: fix main.wat, or fix the test by the write-idea skill's rules, and call `check` again. |
    | `proving` | Every test passed, and the proofs are running: call `check` again. |
-   | `done` | Every rule holds and every test passed: the reply has `tests`, `proofs`, `memory`, `example`, `performance`, `shell`, and `changes` when the idea changed after the user's request. |
+   | `done` | Every rule holds and every test passed: the reply has `tests`, `proofs`, `memory`, `example`, `performance`, `shell`, `parts` when the idea builds on parts, `contract` when it is a part, and `changes` when the idea changed after the user's request. |
 
    Boundary values run first on every check; the other generated inputs are new each time. Keep
    going until every test passes: never stop to ask the user, and never weaken a test to make
@@ -230,7 +236,9 @@ alone, by the steps below: `check` refuses any other code file and says what to 
    passed all its test runs; which behaviors are proven for every input, which up to a length,
    such as "proven for every input up to 4889 of 1048576 bytes, tested beyond; I can prove on",
    which are tested, not proven, and why in a line, and which proofs are still running; what
-   `memory` says, in one line; what the idea's first example did (`example`); that they can ask
+   `memory` says, in one line; the parts it is built on, each function taken word for word
+   from a part that has its own tests and proofs (`parts`); what the idea's first example did
+   (`example`); that they can ask
    you to run it on their own inputs or files with `run`, or to change what it does; and the
    command that runs it from their own terminal, scripts and services, `shell`, as it is,
    followed by the program's arguments. A server isn't running after `check`: offer to start it

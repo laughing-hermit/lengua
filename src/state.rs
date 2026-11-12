@@ -376,6 +376,7 @@ mod tests {
                 max_stack_bytes: 16,
                 unsafe_blocks: 0,
                 features: Vec::new(),
+                parts: Vec::new(),
             }),
             ..recorded()
         }

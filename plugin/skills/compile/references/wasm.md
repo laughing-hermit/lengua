@@ -47,7 +47,8 @@ In this order, as every template has it:
 
 Comments on a line carry the markers the rules read: `;; bound: N` on a loop's line,
 `;; shared: <reason>` on a region's or a changing global's line, `;; returns: result` on a
-function's line, and `;; unsafe: <reason>` … `;; end unsafe` around accesses whose checks are
+function's line, `;; from: <part>` on a line of its own above a function taken from a part
+([parts](parts.md)), and `;; unsafe: <reason>` … `;; end unsafe` around accesses whose checks are
 provably unneeded. A template uses no unsafe block; neither should a program that can check.
 
 ## Regions and their sizes

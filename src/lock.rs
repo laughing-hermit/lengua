@@ -104,6 +104,24 @@ pub struct CodeStamp {
     pub unsafe_blocks: u32,
     /// The WebAssembly features its module uses beyond WebAssembly 1.0, in order.
     pub features: Vec<String>,
+    /// The parts the code takes functions from, in the idea's order: none for a program that
+    /// builds on no part.
+    pub parts: Vec<PartStamp>,
+}
+
+/// A part the checked code builds on, as it was when the code's tests passed: `check` held each
+/// function the code takes from it to the part's own, word for word.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartStamp {
+    /// The part's folder as the idea's `- Builds on:` link names it, relative to the program's:
+    /// `../decimal`.
+    pub part: String,
+    /// lengua's hash of the part's idea.md, its contract and its tests included.
+    pub idea: Sha256Hex,
+    /// SHA-256 of the part's main.wat.
+    pub code: Sha256Hex,
+    /// The functions the code takes from it, without the `$`, in main.wat's order.
+    pub functions: Vec<String>,
 }
 
 /// A generated test proven for every input with texts up to a length.
@@ -243,6 +261,27 @@ impl Lock {
                 toml_string(WASM_TARGET),
                 features.join(", ")
             );
+            if !code.parts.is_empty() {
+                let parts: Vec<String> = code
+                    .parts
+                    .iter()
+                    .map(|part| {
+                        let functions: Vec<String> = part
+                            .functions
+                            .iter()
+                            .map(|name| toml_string(name))
+                            .collect();
+                        format!(
+                            "{{ part = {}, idea = \"{}\", code = \"{}\", functions = [{}] }}",
+                            toml_string(&part.part),
+                            part.idea,
+                            part.code,
+                            functions.join(", ")
+                        )
+                    })
+                    .collect();
+                let _ = writeln!(text, "parts = [{}]", parts.join(", "));
+            }
         }
         if let Some(proofs) = &self.proofs {
             let proven: Vec<String> = proofs.proven.iter().map(|id| toml_string(id)).collect();
@@ -412,7 +451,19 @@ struct CodeTable {
     target: String,
     features: Vec<String>,
     #[serde(default)]
+    parts: Vec<PartTable>,
+    #[serde(default)]
     emulator: Option<String>,
+}
+
+/// One of `[code]`'s `parts`: a part the code builds on.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PartTable {
+    part: String,
+    idea: String,
+    code: String,
+    functions: Vec<String>,
 }
 
 impl CodeTable {
@@ -501,6 +552,18 @@ pub(crate) fn parse_toml(body: &str) -> Result<Lock, LockError> {
                     max_stack_bytes: code.max_stack_bytes,
                     unsafe_blocks: code.unsafe_blocks,
                     features: code.features,
+                    parts: code
+                        .parts
+                        .into_iter()
+                        .map(|part| {
+                            Ok::<_, LockError>(PartStamp {
+                                part: part.part,
+                                idea: digest(&part.idea)?,
+                                code: digest(&part.code)?,
+                                functions: part.functions,
+                            })
+                        })
+                        .collect::<Result<_, _>>()?,
                 })
             })
             .transpose()?,
@@ -603,6 +666,14 @@ pub(crate) fn as_written(body: &str) -> Option<Lock> {
         text.eat("features = ")?;
         let features = text.list(Written::string)?;
         text.eat("\n")?;
+        // The parts the code builds on, when it builds on any.
+        let parts = if text.eat("parts = ").is_some() {
+            let parts = text.list(Written::part)?;
+            text.eat("\n")?;
+            parts
+        } else {
+            Vec::new()
+        };
         Some(CodeStamp {
             sha256,
             module_sha256,
@@ -610,6 +681,7 @@ pub(crate) fn as_written(body: &str) -> Option<Lock> {
             max_stack_bytes,
             unsafe_blocks,
             features,
+            parts,
         })
     } else {
         None
@@ -773,6 +845,26 @@ impl Written<'_> {
             bytes,
             of,
             more,
+        })
+    }
+
+    /// One of `[code]`'s `parts` tables: `{ part = "../decimal", idea = "…", code = "…",
+    /// functions = ["decimal_parse"] }`.
+    fn part(&mut self) -> Option<PartStamp> {
+        self.eat("{ part = ")?;
+        let part = self.string()?;
+        self.eat(", idea = ")?;
+        let idea = self.sha256()?;
+        self.eat(", code = ")?;
+        let code = self.sha256()?;
+        self.eat(", functions = ")?;
+        let functions = self.list(Written::string)?;
+        self.eat(" }")?;
+        Some(PartStamp {
+            part,
+            idea,
+            code,
+            functions,
         })
     }
 
@@ -1183,6 +1275,7 @@ mod tests {
                 max_stack_bytes: 1184,
                 unsafe_blocks: 1,
                 features: vec!["bulk-memory".into(), "simd".into()],
+                parts: Vec::new(),
             }),
             proofs: None,
         }
@@ -1592,6 +1685,31 @@ mod tests {
             "\u{0}\u{1f}\u{7f}\u{80}\u{9f} é \u{1f600} \\u0041 \\\" [] , { }".into(),
             String::new(),
         ];
+        let mut built = full_lock();
+        if let Some(code) = &mut built.code {
+            code.parts = vec![
+                PartStamp {
+                    part: "../decimal".into(),
+                    idea: Sha256Hex::of(b"the part's idea"),
+                    code: Sha256Hex::of(b"the part's main.wat"),
+                    functions: vec!["decimal_parse".into(), "decimal_format".into()],
+                },
+                PartStamp {
+                    part: "parts/a \"quoted\" name".into(),
+                    idea: Sha256Hex::of(b"another idea"),
+                    code: Sha256Hex::of(b"another main.wat"),
+                    functions: Vec::new(),
+                },
+            ];
+        }
+        assert!(
+            built.body().contains(concat!(
+                "\nfeatures = [\"bulk-memory\", \"simd\"]\nparts = [{ part = \"../decimal\", ",
+                "idea = \""
+            )),
+            "{}",
+            built.body()
+        );
         let mut largest = full_lock();
         if let Some(code) = &mut largest.code {
             code.max_stack_bytes = u64::try_from(i64::MAX).expect("an i64's largest is a u64");
@@ -1606,6 +1724,7 @@ mod tests {
                 ..full_lock()
             },
             proven,
+            built,
             odd,
             largest,
         ];
@@ -1718,6 +1837,14 @@ mod tests {
                 _ => rng.random(),
             },
             features: random_texts(rng, 4),
+            parts: (0..rng.random_range(0..=2))
+                .map(|_| PartStamp {
+                    part: random_text(rng),
+                    idea: random_hash(rng),
+                    code: random_hash(rng),
+                    functions: random_texts(rng, 3),
+                })
+                .collect(),
         });
         let proofs = match &code {
             Some(code) if rng.random_bool(0.75) => Some(Box::new(ProofStamp {

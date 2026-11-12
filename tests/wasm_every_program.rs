@@ -68,6 +68,8 @@ async fn from_request_to_done(session: &Session, name: &str, folder: &Path) -> R
     let code = read(name, folder, "main.wat")?;
     let program = Program::new();
     program.write("idea.md", &idea);
+    // The parts it builds on stand beside it, each checked first.
+    session.settle_parts(&program, folder).await?;
     let recorded = session.record(&program).await;
     if recorded["state"] != "write_code" {
         return Err(format!("{name}: its idea wasn't recorded: {recorded}"));
