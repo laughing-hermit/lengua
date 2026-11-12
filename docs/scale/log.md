@@ -104,7 +104,7 @@ sentence's words with `awk` before a dispatch, which found two more in httpd's i
 for httpd dispatched beside this one (43164618516) was cancelled, since it would have stopped
 at the same part. Cost: one cycle for two sentences.
 
-### Cycle 2 (runs 43166298467 and 43166302283, at 5a2b0b5)
+### Cycle 2 (runs 43166298467 and 43166302283, at cd86533)
 
 | Folder | Lines | What `check` said |
 |---|---|---|
@@ -112,7 +112,7 @@ at the same part. Cost: one cycle for two sentences.
 | http | 691 | `idea_problems`: B1's example isn't in its generated test's ranges (`hello.txt` has letters the generator of `path` doesn't draw) |
 | httpd | 3,610 | not reached: its part http isn't done |
 
-json's proofs, with 60 seconds for all of them: 5 of its 10 generated tests proven for every
+json's proofs, with 60 seconds for all of them: 6 of its 10 generated tests proven for every
 input in range (B3, B4, B5, B7, B8, B9: the values alone, the texts that are refused, 33
 levels, input too long, output closed), each "settled by the terms themselves"; 4 tested, not
 proven, out of time (B1 at 9 of 12 input combinations with one path cvc5 couldn't confirm in
@@ -144,7 +144,7 @@ only in part: that neighbouring placeholders need text between them is not in it
 is how few runs can leave an output the same (six runs over a choice of six and a string drew
 the string's first boundary value each time).
 
-### Cycle 4 (run 43175796873, at 01d0b0b): httpd's code is read for the first time
+### Cycle 4 (run 43175796873, at e40cbe3): httpd's code is read for the first time
 
 | Folder | Lines | What `check` said |
 |---|---|---|
@@ -161,7 +161,7 @@ without its bound, no region shared without its mark, no bare number, no functio
 operators. Nothing here is a slip that a compiler's type check would have caught: the text
 parsed and validated at its first build.
 
-### Cycle 5 (run 43180086861, at 5b4e6bd): httpd is done
+### Cycle 5 (run 43180086861, at 4d24d80): httpd is done
 
 | Folder | Lines | What `check` said |
 |---|---|---|
@@ -201,7 +201,7 @@ What changed in the code (33fd8ce, then eccb139):
 | What | Lines of main.wat |
 |---|---|
 | The two `Allow` texts are six bytes longer each, so every text after them in `$texts` moves: 45 constants and 45 `data` lines get new numbers | 180 (90 out, 90 in) |
-| The method HEAD, a flag for "no body" and the place where the head ends, kept in `$logged`; a new function `$head_end` at the nine places that end a head; `$send` and the four places that send a body from a region of their own; the log's length | 62 in, 12 out |
+| The method HEAD, a flag for "no body" and the place where the head ends, kept in `$logged`; a new function `$head_end` at the nine places that end a head; `$send` and the four places that send a body from a region of their own; the log's length | 57 in, 17 out |
 | Cycle 2's fix to `$send` | 13 in, 5 out |
 
 - **Cycle a1 (run 43186041980, at 33fd8ce):** `code_problems`, one: `rule 9 (no indirection)
@@ -256,8 +256,8 @@ What changed (12a8e4b: 459 lines in, 161 out, in three files):
 | File | What |
 |---|---|
 | http/idea.md | A paragraph of `# Purpose`; four behaviors, B10 to B13 (a range, a range with no last byte, one with no first byte, a field that is not one range); two items of `# Contract`; `- Builds on:` decimal (79 lines in) |
-| http/main.wat | The two functions and their 10 constants; in the part's own program, `$report_range` and `$number_out`, and decimal's `$decimal_format` taken to print the numbers (247 in, 8 out) |
-| httpd/main.wat | `$digits` and `$range_read` out; `$http_number` and `$http_range` taken in; `$content_length`, `$same_tag` and `$range_of` call them; `$decimal_parse`, six of decimal's constants, six constants of the server's own and the region `$number` out (133 in, 153 out) |
+| http/main.wat | The two functions and their 10 constants; in the part's own program, `$report_range` and `$number_out`, and decimal's `$decimal_format` taken to print the numbers (244 in, 3 out) |
+| httpd/main.wat | `$digits` and `$range_read` out; `$http_number` and `$http_range` taken in; `$content_length`, `$same_tag` and `$range_of` call them; `$decimal_parse`, six of decimal's constants, six constants of the server's own and the region `$number` out (136 in, 158 out) |
 | httpd/idea.md | nothing: no behavior of the server changed |
 
 - **Cycle c1 (runs 43197275115 and 43197280226, at 12a8e4b):** http `done`, 463 test runs,
