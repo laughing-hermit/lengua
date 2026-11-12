@@ -239,6 +239,64 @@ never by a path: lengua reads the argument and opens what it names, so the progr
 
 `terminal-template.wat` is a whole program.
 
+## The layouts the host writes
+
+Numbers are little-endian. What a layout doesn't name is zero.
+
+**`path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)`**: the folder's
+descriptor (3, or one `folder_open` gave), `dirflags`, the path's address, the path's length,
+`oflags`, the rights, the inheriting rights, `fdflags`, and where the new descriptor is written,
+4 bytes. lengua's host reads these and nothing else of them:
+
+| Argument | Bit | Value | What it asks |
+|---|---|---|---|
+| `oflags` | CREAT | 1 | make the file when it isn't there |
+| | DIRECTORY | 2 | it must be a folder: a file gives `NOTDIR` |
+| | EXCL | 4 | with CREAT: it must not be there yet, or `EXIST` |
+| | TRUNC | 8 | empty the file |
+| rights | FD_READ | 2 | read |
+| | FD_WRITE | 64 | write |
+| `fdflags` | APPEND | 1 | every write goes at the file's end |
+
+A file opens to write when the rights have FD_WRITE or the flags say APPEND or TRUNC; it opens
+to read when the rights have FD_READ, or when it doesn't open to write. So `oflags` 0 with rights
+2 reads a file, and `oflags` 9 with rights 64 makes or empties a file to write. `dirflags` and
+the inheriting rights are not read: pass 0. A folder opens with `oflags` 0 or 2 and rights 2, to
+list it; to write, a folder gives `ISDIR`. A path is a name inside the folder, as Descriptors
+says; a name that isn't there gives `NOENT`.
+
+**`fd_filestat_get (param i32 i32) (result i32)`** and **`path_filestat_get (param i32 i32 i32
+i32 i32) (result i32)`** write 64 bytes, of which two say something:
+
+| At | Bytes | What |
+|---|---|---|
+| 16 | 1 | the kind: 4 a file, 3 a folder, 7 a link, 6 a connection or the listener, 5 a datagram socket, 2 a terminal, 0 anything else |
+| 32 | 8 | the size in bytes, for a file; 0 for anything else |
+
+The other 54 bytes are zero: no time, no owner, no count of names. So a program can't print when
+a file changed.
+
+**`fd_readdir (param i32 i32 i32 i64 i32) (result i32)`**: the folder's descriptor, a buffer and
+its length, the cookie, and where the count of bytes written goes, 4 bytes. It writes the
+folder's entries from the cookie's on, one after another, each 24 bytes and then its name:
+
+| At | Bytes | What |
+|---|---|---|
+| 0 | 8 | the cookie of the next entry: this entry's place, counted from 1 |
+| 8 | 8 | the same number again (the entry's inode number: never 0, the same on every system) |
+| 16 | 4 | the name's length in bytes |
+| 20 | 1 | the kind, as above: 4 a file, 3 a folder, 7 a link, 0 anything else |
+| 21 | 3 | zero |
+| 24 | the length | the name, with no NUL after it |
+
+Cookie 0 starts the listing. `.` and `..` are not in it. The last entry is cut short when the
+buffer ends, its name or even its 24 bytes: an entry is whole only when its 24 bytes and its
+name lie below the count written. When the count written is less than the buffer's length, the
+listing is complete; else call again with the last whole entry's cookie. A folder of more than
+1,048,576 entries gives `IO`. The entries come sorted by name, byte for byte, and in a test's
+second run of the same inputs they come turned round, last name first: a program whose idea
+states an order sorts the names itself.
+
 ## What a call borrows
 
 A call reads or writes only the memory its arguments name, and every byte of it must lie inside

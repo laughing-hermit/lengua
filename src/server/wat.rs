@@ -1163,11 +1163,7 @@ impl LenguaServer {
                     return Ok(CheckReport {
                         functions: refused.functions,
                         data: refused.data,
-                        ..CheckReport::problems(
-                            "code_problems",
-                            refused.problems,
-                            fix_code(folder),
-                        )
+                        ..CheckReport::problems("code_problems", refused.problems, fix_code(folder))
                     });
                 }
             },

@@ -2615,7 +2615,12 @@ fn the_report_says_how_full_the_functions_are() {
     // 80 more: 188, over the limit, which the rule reports and the count still shows.
     let over = with(first, &format!("{}{first}", "(nop)\n".repeat(80)));
     let report = check_text(&over);
-    assert_violation(&report, Rule::Functions, largest, "$parse_i64 has 188 operators");
+    assert_violation(
+        &report,
+        Rule::Functions,
+        largest,
+        "$parse_i64 has 188 operators",
+    );
     let lines = report.size_lines();
     assert!(
         lines[1].ends_with(&format!("$parse_i64 188 ({FILE}:{largest})")),
@@ -2744,8 +2749,10 @@ fn marked_numbers_are_held_to_their_named_texts() {
     assert_eq!((table.right, table.wrong, table.unused), (5, 0, 0));
     assert_eq!(
         table.lines(),
-        ["3 named texts: every number marked `;; at:`, `;; offset:` or `;; len:` is its text's \
-          (5 marked)"]
+        [
+            "3 named texts: every number marked `;; at:`, `;; offset:` or `;; len:` is its text's \
+          (5 marked)"
+        ]
     );
 
     // One text gets two bytes shorter: every number after it is wrong, and each is told the
@@ -2854,6 +2861,32 @@ fn a_marker_of_named_data_that_names_nothing_is_reported() {
     assert_eq!(found.len(), 1, "{found:#?}");
     assert!(
         found[0].contains("this `;; at:` marks nothing: no global is defined on its line"),
+        "{found:#?}"
+    );
+}
+
+/// Two named texts of two segments that share bytes are reported: a text that grew is written
+/// over by the segment after it, which kept its address.
+#[test]
+fn named_texts_of_two_segments_that_overlap_are_reported() {
+    let usage = "(data (i32.const 1024) \"usage: negate <n>\\0a\")";
+    let nan = "(data (i32.const 1056) \"error: not a number\\0a\")";
+    let apart = with(usage, &format!("{usage}  ;; text: usage"))
+        .replacen(nan, &format!("{nan}  ;; text: nan"), 1);
+    let report = check_text(&apart);
+    assert_eq!(constants(&report), Vec::<String>::new());
+    assert_eq!(report.texts.texts.len(), 2);
+
+    let moved = apart.replacen("(data (i32.const 1056)", "(data (i32.const 1040)", 1);
+    let report = check_text(&moved);
+    let found = constants(&report);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert!(
+        found[0].contains(&format!(
+            "{FILE}:{}: the text `nan` starts at address 1040, inside the text `usage`, which \
+             ends before 1042",
+            line_of(&moved, "(data (i32.const 1040)")
+        )),
         "{found:#?}"
     );
 }

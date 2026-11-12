@@ -120,6 +120,22 @@ so this is about 60 of a CPU's instructions, the 60 lines NASA's rule allows a f
 calibrated on the templates). A function ends once, at its `end`: no `return` before it; leave a
 block with `br` instead.
 
+**How the operators are counted.** `check` counts the operators of the function's body as the
+module holds them, its last `end` aside. So every one of these is one operator: each `local.get`,
+`local.set`, `global.get` and constant; each `block`, `loop` and `if`, and the `end` that closes
+it; each `else`; each `br`, `br_if` and `call`; each arithmetic operator, comparison, load and
+store. A folded `(if (cond) (then …))` is the condition's operators, `if`, the body's, and `end`.
+An assertion, `(if (i32.ge_u (local.get $i) (global.get $MAX)) (then (call $assert_fail
+(i32.const 4)) unreachable))`, is 8; with the store of a byte at that index it is 13, and with the
+step of the index, 17: five such stores are half of a function.
+
+`check`'s reply has `functions`, when main.wat builds, whether or not the rules pass: how many
+functions it has, the largest with its count and the average; each function with 135 operators
+or more (75% of the limit) by name, the largest first; and rule 5's assertions a function with
+how many the rule needs. Read it at each check, and split a function it names before it grows:
+a loop, or the code of one block, can be a function of its own
+([a large program](large-programs.md)).
+
 ### 5. Assertions
 
 ```wat
@@ -162,6 +178,13 @@ exit statuses (0 to 255, never 134), sizes and loop bounds are named: immutable 
 `(global $STDOUT i32 (i32.const 1))`, never bare numbers. A region `$x` has its size in
 `$x.size` or `$x.rosize`, and they must match what the region holds.
 
+**Named data.** A number that says where a text of the program's data is, or how long it is, can
+carry the text's name, and `check` then holds it to the data: `;; text: NAME` on the line of a
+string of a `data` segment names it, and `;; at: NAME`, `;; offset: NAME` or `;; len: NAME` on a
+constant global's line says the number is that text's address, its offset in its region, or its
+length in bytes. A number that differs breaks this rule, with the right number in the message.
+[Literal texts](texts.md) shows how to use it.
+
 ### 9. No indirection, checked indexes
 
 No tables, so no indirect calls. An address is made only from a region's global plus offsets
@@ -179,6 +202,26 @@ destination and length stay inside their regions. A `br_table`'s index needs no 
 default), but the default must lead to an assertion or an error (rule 1). Where a check is
 provably unnecessary, mark the access `;; unsafe: <reason>` … `;; end unsafe`: only bounds checks
 can be skipped this way, and `check` reports every unsafe block.
+
+**A number from two paths is checked on each path.** The rules follow each value by where it
+comes from. A length or an index that is a parameter on one path and a number loaded from memory
+on another is, after the paths meet, neither: one check after the `if` bounds neither, and
+`check` says so: `… is as long as a number nothing checks …: the length comes from more than one
+path, as the parameter $length on one and a value loaded from memory on another`. Check the
+number on each path before the paths meet, or make the call on each path:
+
+```wat
+    (if (local.get $whole)
+      (then
+        (local.set $n (i32.load (global.get $kept)))
+        (if (i32.gt_u (local.get $n) (global.get $out.size))
+          (then (call $assert_fail (i32.const 7)) unreachable)))
+      (else
+        (local.set $n (local.get $length))
+        (if (i32.gt_u (local.get $n) (global.get $out.size))
+          (then (call $assert_fail (i32.const 8)) unreachable))))
+    (call $write_all (local.get $fd) (global.get $out) (local.get $n))
+```
 
 ### 10. Checked by tools
 

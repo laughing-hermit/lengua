@@ -55,9 +55,12 @@ pub struct Text {
     pub line: usize,
     /// Its first byte's address.
     pub address: u64,
-    /// The region it is in, by name without the `$`, with how many bytes it is from the region's
-    /// start; `None` for data outside every region, which rule M6 reports.
+    /// Its region, the one that starts nearest at or below its address, by name without the `$`,
+    /// with how many bytes it is from the region's start; `None` for data below every region. Data
+    /// that a read-only region doesn't hold is rule M6's to report.
     pub region: Option<(String, u64)>,
+    /// The data segment it is in, by index.
+    pub segment: u32,
     /// How many bytes it has.
     pub len: u64,
 }
@@ -131,11 +134,14 @@ fn named(module: &Module<'_>, violations: &mut Vec<Violation>, wrong: &mut usize
             fix: fix.to_owned(),
         });
     };
-    let region_of = |address: u64, len: u64| {
+    // The region a text is in: the one that starts nearest at or below its address, whether or
+    // not its size holds the text yet, since the size may be a number still to write.
+    let region_of = |address: u64| {
         module
             .regions
             .iter()
-            .find(|region| address >= region.start && address.saturating_add(len) <= region.end())
+            .filter(|region| region.start <= address)
+            .max_by_key(|region| region.start)
             .map(|region| (region.name.clone(), address - region.start))
     };
     let marked = |line: usize| {
@@ -186,7 +192,8 @@ fn named(module: &Module<'_>, violations: &mut Vec<Violation>, wrong: &mut usize
                     name,
                     line,
                     address: start,
-                    region: region_of(start, data.len),
+                    region: region_of(start),
+                    segment: data.index,
                     len: data.len,
                 });
             }
@@ -202,7 +209,8 @@ fn named(module: &Module<'_>, violations: &mut Vec<Violation>, wrong: &mut usize
                     name,
                     line,
                     address,
-                    region: region_of(address, *len),
+                    region: region_of(address),
+                    segment: data.index,
                     len: *len,
                 });
             } else {
@@ -254,6 +262,28 @@ fn named(module: &Module<'_>, violations: &mut Vec<Violation>, wrong: &mut usize
         } else {
             first.insert(text.name.clone(), text.line);
             kept.push(text);
+        }
+    }
+    // Two named texts of two segments that share bytes: one segment is written over the other,
+    // as when a text grew and the segment after it kept its address.
+    for (at, text) in kept.iter().enumerate() {
+        let end = text.address.saturating_add(text.len);
+        for next in kept.iter().skip(at + 1) {
+            if next.address >= end {
+                break;
+            }
+            if next.segment != text.segment {
+                problem(
+                    next.line,
+                    format!(
+                        "the text `{}` starts at address {}, inside the text `{}`, which ends \
+                         before {end}",
+                        next.name, next.address, text.name
+                    ),
+                    "start its segment where the text before it ends, or write the strings in \
+                     one `data` segment, where each starts where the one before it ends",
+                );
+            }
         }
     }
     kept
@@ -369,7 +399,7 @@ pub fn check(module: &Module<'_>, violations: &mut Vec<Violation>) -> Table {
                     }
                 ),
                 Some(_) => "mark a global that is a constant and never changes".to_owned(),
-                None => "place the text's data inside a read-only region".to_owned(),
+                None => "place the text's data in a read-only region".to_owned(),
             };
             problem(line, differs(kind, global, held, text), fix);
         }

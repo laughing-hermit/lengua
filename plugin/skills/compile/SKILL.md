@@ -79,7 +79,10 @@ exception is [an outside module](#a-program-in-another-language), which the user
 4. **Write `<path>/main.wat` to the dialect**, in the template's layout: the imports, the memory,
    the named constants, the regions, then the functions. [Writing main.wat](references/wasm.md)
    gives each idiom with its snippet, [the dialect](references/power-of-10-webassembly.md) the
-   rules, and [the host](references/host.md) the calls, the descriptors and the error numbers.
+   rules, and [the host](references/host.md) the calls, the descriptors, the error numbers and
+   the layouts the host writes. A program with many literal texts names them, and `check`
+   computes their places ([literal texts](references/texts.md)); one of 60 functions or more is
+   laid out as [a large program](references/large-programs.md) says.
    What first checks most often find:
    - an import the idea doesn't allow or the code never calls; each import has WASI's own type;
    - a memory whose minimum isn't its maximum, or isn't exported as `memory`; no `memory.grow`;
@@ -106,11 +109,11 @@ exception is [an outside module](#a-program-in-another-language), which the user
    | `state` | What it means, and what to do |
    |---|---|
    | `write_code` | The idea is recorded and there's no main.wat yet: write it. |
-   | `code_problems` | Every problem, each on its line: one the build finds as `main.wat line N: …`, text that doesn't parse or validate, and each broken rule as `rule N (name) main.wat:LINE: problem. Fix: …` (`rule M2 (bounds)` for a memory rule), or as `dialect main.wat:LINE: …` for what the dialect doesn't allow, such as a trapping float conversion, the bits of a float that may be NaN, relaxed SIMD or a division by a value that may be zero; or a function taken from a part that is not the part's own, word for word with the constants it reads, a part that is not checked, a part's `# Contract` that is not what its main.wat does ([parts](references/parts.md)), or a second code file. At most 20 broken rules are listed, then `…and N more`. Fix them all, then call `check` again. |
+   | `code_problems` | Every problem, each on its line: one the build finds as `main.wat line N: …`, text that doesn't parse or validate, and each broken rule as `rule N (name) main.wat:LINE: problem. Fix: …` (`rule M2 (bounds)` for a memory rule), or as `dialect main.wat:LINE: …` for what the dialect doesn't allow, such as a trapping float conversion, the bits of a float that may be NaN, relaxed SIMD or a division by a value that may be zero; or a function taken from a part that is not the part's own, word for word with the constants it reads, a part that is not checked, a part's `# Contract` that is not what its main.wat does ([parts](references/parts.md)), or a second code file. At most 20 broken rules are listed, then `…and N more`. Fix them all, then call `check` again. Once main.wat builds, the reply also has `functions`, how full the functions are by rule 4's count, with each one near the limit by name, and `data`, the named texts with their places, whether or not the rules pass. |
    | `testing` | The tests are running: call `check` again; nothing needs to change. |
    | `tests_failed` | Each failure gives the test, its inputs and the seed, what was expected and what happened, as `example B1 (idea.md line 20): stdout should be "5\n", but was "-1\n"`, with `assertion 9 failed at main.wat:LINE` when an assertion fires. Decide from `idea.md` whether main.wat or the test is wrong: fix main.wat, or fix the test by the write-idea skill's rules, and call `check` again. |
    | `proving` | Every test passed, and the proofs are running: call `check` again. |
-   | `done` | Every rule holds and every test passed: the reply has `tests`, `proofs`, `memory`, `example`, `performance`, `shell`, `parts` when the idea builds on parts, `contract` when it is a part, and `changes` when the idea changed after the user's request. |
+   | `done` | Every rule holds and every test passed: the reply has `tests`, `proofs`, `memory`, `example`, `performance`, `shell`, `functions`, `data` when main.wat names texts, `parts` when the idea builds on parts, `contract` when it is a part, and `changes` when the idea changed after the user's request. |
 
    Boundary values run first on every check; the other generated inputs are new each time. Keep
    going until every test passes: never stop to ask the user, and never weaken a test to make

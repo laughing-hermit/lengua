@@ -111,6 +111,32 @@ Small ranges run in full instead: when a row's generators are all ranges (`int`,
 the whole idea stays within 20000 runs. `check` then reports that the row tried every value in
 its range: for those inputs the program is checked, not sampled.
 
+### The example and its generated test agree
+
+`check` reads each example's values back through its generated steps, and makes every run's
+expected output before any code exists. Three things follow, each a problem `check` reports:
+
+- **The example is a run the generated test can draw.** Each value of the example is one its
+  generator draws: a number inside the limits of its `int` or `decimal`, a text of its
+  `string`'s length that holds only its characters, one of its `choice`'s values. An example
+  with `hello.txt` where the generator is `string(1, 8, "abc")` is refused: `no values of its
+  vars turn what it gives the program into what the steps give it`. The fixed text around the
+  placeholders is the same in both too: a request with no `?q=` in the example can't be read
+  through generated steps that have one.
+- **Fixed text stands between two placeholders** in what a test gives the program. `{a}{b}`
+  can be read back in more than one way, so `check` refuses it: `the steps' inputs fit its
+  placeholders in more than one way`. Write `{a}/{b}` or `{a} {b}`, with text between them that
+  neither generator draws. What the program prints may hold any formula.
+- **A row has enough runs to tell two outputs apart.** While the columns have 64 or fewer
+  combinations of boundary values, the runs take them in order, the first column changing
+  fastest: a later column keeps its first boundary value until every column before it has had
+  all of its own. So a row of a `choice` of six values and a `string` needs more than six runs
+  before the string is anything but its first boundary value, the shortest text of its first
+  character. When the output depends on that string alone, all six runs expect the same output
+  and the row is refused: `all 6 runs expect the same output`. Give `runs` at least the product
+  of the columns' boundary values ([Generators](#generators) lists them), or put first the
+  column that the output depends on.
+
 ## Random bytes and the clock
 
 A test can give the program its random bytes and clock readings, so output that depends on them
@@ -190,6 +216,12 @@ program starts and for everything the program opens itself.
   until it closes the connection. So a server must answer once the request is complete, by its
   newline, blank line or length, never by waiting for the client to close. A behavior that ends
   with ``it does not stop`` leaves the program to wait for the next connection; lengua stops it.
+- **Two seconds for a test, a server's too:** a run of a test is stopped 2 seconds after the
+  program starts, so every client of one behavior is answered within those 2 seconds together,
+  and each wait of the test's client or server on the program ends after 2 seconds. Give a
+  behavior the few clients that show it. What the program prints is compared in a server's test
+  too, also when it ends with ``it does not stop``: a server that prints a line of a log for
+  each request states those lines in each behavior, with ``- And it prints …``.
 - **Clients at once:** a server whose `- Network:` line ends with `, up to N clients at once`
   shows it in a behavior with two or more ``a client that sends …`` steps and ``- And the
   clients connect at once``, at most N of them. Its test opens every connection; all but the
@@ -347,6 +379,15 @@ adds two prices in cents, and any rounding rule the idea states is whole-number 
 8. Given the inputs of each behavior's example, its formulas produce the example's results. Where
    the example has a rule, the generated output must have the same rule, or exact text the rule
    allows.
+9. Each example is a run its generated test can draw, and what a test gives the program has
+   fixed text between two placeholders ([above](#the-example-and-its-generated-test-agree)).
+
+One `check` reports every problem it finds without running code, in the order of the idea's
+lines: the sentences' problems ([STE](ste.md)) and the tests' problems together, and with them a
+part the idea links to that is not there. Only a problem in the idea's own form (its
+frontmatter, a section that is missing, a step that can't be read, a `# Constraints` line that
+is wrong) hides the tests' problems until it is fixed, since the tests can't be read before.
+At most 20 problems of the idea and 20 of its tests are listed, then `…and N more problems`.
 
 A problem in a step is reported on the step's line, and one in a generator on its row's. When
 everything passes, `lengua.lock` records the idea, its tests included, and the server keeps a

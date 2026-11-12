@@ -151,9 +151,8 @@ async fn check_counts_operators_and_places_named_texts() {
     );
     let functions = lines(&report, "functions");
     assert!(
-        functions.first().is_some_and(|line| line.starts_with(
-            "rule 4: 3 functions, at most 180 operators in each; the largest is $"
-        )),
+        functions.first().is_some_and(|line| line
+            .starts_with("rule 4: 3 functions, at most 180 operators in each; the largest is $")),
         "the count comes with the problems: {report}"
     );
 
@@ -163,16 +162,17 @@ async fn check_counts_operators_and_places_named_texts() {
     assert_eq!(report["state"], "done", "{report}");
     assert_eq!(
         lines(&report, "data"),
-        ["1 named text: every number marked `;; at:`, `;; offset:` or `;; len:` is its text's \
-          (1 marked)"],
+        [
+            "1 named text: every number marked `;; at:`, `;; offset:` or `;; len:` is its text's \
+          (1 marked)"
+        ],
         "{report}"
     );
     let functions = lines(&report, "functions");
     assert_eq!(functions.len(), 2, "{report}");
     assert!(
-        functions[0].starts_with(
-            "rule 4: 3 functions, at most 180 operators in each; the largest is $"
-        ),
+        functions[0]
+            .starts_with("rule 4: 3 functions, at most 180 operators in each; the largest is $"),
         "{report}"
     );
     assert!(
@@ -187,4 +187,89 @@ async fn check_counts_operators_and_places_named_texts() {
     assert!(report["data"].is_null(), "{report}");
     assert_eq!(lines(&report, "functions").len(), 2, "{report}");
     session.service.cancel().await.expect("close the session");
+}
+
+/// The web server of the scale test, examples/httpd, as the rules read it.
+fn httpd(code: &str) -> lengua::checker::wasm::Report {
+    let idea = lengua::idea::parse(include_str!("../examples/httpd/idea.md"))
+        .unwrap_or_else(|problems| panic!("httpd's idea: {problems:#?}"));
+    let built = lengua::wasm::text::build(code).unwrap_or_else(|problem| panic!("{problem}"));
+    lengua::checker::wasm::check(
+        code,
+        &built,
+        &lengua::checker::wasm::Context {
+            uses: &idea.uses,
+            network: &idea.network,
+            secrets: &idea.secrets,
+        },
+    )
+}
+
+/// The scale test's web server names its 54 literal texts and marks the number of each: the
+/// rules hold every number to its text. Its largest function is near rule 4's limit, and the
+/// count says so. And the change that cost the scale test 180 lines by hand, a text that grows,
+/// is now a list of the numbers to write: each number after the text is told its new value, and
+/// the table has every text's.
+#[test]
+fn the_web_server_s_texts_are_named_and_their_numbers_hold() {
+    let code = include_str!("../examples/httpd/main.wat");
+    let report = httpd(code);
+    assert!(report.passed(), "{:#?}", report.lines());
+    let table = &report.texts;
+    // The 54 texts, and the segment that holds them all.
+    assert_eq!(table.texts.len(), 55, "{:#?}", table.lines());
+    // Each text's offset, and the region's size.
+    assert_eq!((table.right, table.wrong, table.unused), (55, 0, 0));
+    assert_eq!(
+        table.lines(),
+        [
+            "55 named texts: every number marked `;; at:`, `;; offset:` or `;; len:` is its \
+             text's (55 marked)"
+        ]
+    );
+    let sizes = report.size_lines();
+    assert_eq!(sizes.len(), 3, "{sizes:#?}");
+    assert!(
+        sizes[0].starts_with("rule 4: 85 functions, at most 180 operators in each; the "),
+        "{sizes:#?}"
+    );
+    assert!(
+        sizes[1].starts_with("rule 4: with 135 operators or more, 75% of the limit: $"),
+        "{sizes:#?}"
+    );
+    assert!(
+        sizes[2].starts_with("rule 5: 199 assertions in 85 functions, 2.34 a function on average"),
+        "{sizes:#?}"
+    );
+
+    // One text grows by 9 bytes: the 44 texts after it move, and the region grows.
+    let short = "\"Allow: GET, HEAD\\0d\\0a\\00\"";
+    let long = "\"Allow: GET, HEAD, OPTIONS\\0d\\0a\\00\"";
+    assert!(code.contains(short));
+    let grown = code.replacen(short, long, 1);
+    let report = httpd(&grown);
+    let table = &report.texts;
+    assert_eq!((table.right, table.wrong), (10, 45), "{:#?}", report.lines());
+    let lines = table.lines();
+    assert_eq!(lines.len(), 56, "{lines:#?}");
+    assert!(
+        lines.contains(&"m_gif: at 1741, offset 717 in $texts, len 10".to_owned()),
+        "{lines:#?}"
+    );
+    assert!(
+        lines.contains(&"texts: at 1024, offset 0 in $texts, len 727".to_owned()),
+        "{lines:#?}"
+    );
+    let problems = report.lines();
+    assert!(
+        problems.iter().any(|line| line.contains(
+            "$T_ALLOW_ALL is 127, and the text `t_allow_all` is 136 bytes into $texts. Fix: write \
+             `(i32.const 136)`"
+        )),
+        "{problems:#?}"
+    );
+    assert!(
+        problems.iter().any(|line| line.starts_with("…and ")),
+        "more than 20 numbers moved: {problems:#?}"
+    );
 }
