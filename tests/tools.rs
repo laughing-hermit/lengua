@@ -661,3 +661,39 @@ fn the_language_server_publishes_the_findings_of_a_saved_file() {
     assert!(said.contains("\"source\":\"lengua\""), "{said}");
     assert!(said.contains(&format!("\"uri\":\"{uri}\"")), "{said}");
 }
+
+/// The example that serves.
+const ECHO_IDEA: &str = include_str!("../examples/echo/idea.md");
+
+/// Its code.
+const ECHO_CODE: &str = include_str!("../examples/echo/main.wat");
+
+/// A server, which `run` leaves serving in the background, gets no tool: each is refused, and
+/// no server is left running by the refused call.
+#[tokio::test]
+async fn a_background_server_gets_no_tool() {
+    let session = Session::start(Protocol::Handshake).await;
+    let program = checked(&session, ECHO_IDEA, ECHO_CODE).await;
+    for more in [
+        json!({ "trace": true }),
+        json!({ "profile": true }),
+        json!({ "stop_at": "1" }),
+    ] {
+        let refused = session
+            .call_error("run", asking(&program, &[], &more))
+            .await;
+        assert!(
+            refused.contains("serves in the background") || refused.contains("starts on line 1"),
+            "{more}: {refused}"
+        );
+    }
+    let refused = session
+        .call_error("run", asking(&program, &[], &json!({ "trace": true })))
+        .await;
+    assert!(refused.contains("serves in the background"), "{refused}");
+    let none = session
+        .call_error("run", asking(&program, &[], &json!({ "stop": true })))
+        .await;
+    assert!(none.contains("no server that run started"), "{none}");
+    session.service.cancel().await.expect("close the session");
+}

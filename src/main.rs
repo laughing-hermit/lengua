@@ -143,10 +143,7 @@ fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> ExitCode {
 /// the findings of a folder's idea.md and main.wat, each on its line. Exits 0 when the editor
 /// said `shutdown` first, as the protocol asks, and 1 otherwise.
 fn lsp() -> ExitCode {
-    let served = lengua::lsp::serve(
-        &mut std::io::stdin().lock(),
-        &mut std::io::stdout().lock(),
-    );
+    let served = lengua::lsp::serve(&mut std::io::stdin().lock(), &mut std::io::stdout().lock());
     match served {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(1),

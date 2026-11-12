@@ -200,11 +200,7 @@ fn write_message(output: &mut impl Write, message: &Value) -> io::Result<()> {
 /// Publishes the findings of the folder of `uri`, when `uri` names an idea.md or a main.wat:
 /// for each of the two files that is there, its findings, or none. A file's text is the one
 /// the editor has open, else the one on disk.
-fn publish(
-    output: &mut impl Write,
-    open: &BTreeMap<String, String>,
-    uri: &str,
-) -> io::Result<()> {
+fn publish(output: &mut impl Write, open: &BTreeMap<String, String>, uri: &str) -> io::Result<()> {
     let Some((base, name)) = uri.rsplit_once('/') else {
         return Ok(());
     };
@@ -213,9 +209,9 @@ fn publish(
     }
     let text_of = |file: &str| {
         let uri = format!("{base}/{file}");
-        open.get(&uri).cloned().or_else(|| {
-            path_of(&uri).and_then(|path| std::fs::read_to_string(path).ok())
-        })
+        open.get(&uri)
+            .cloned()
+            .or_else(|| path_of(&uri).and_then(|path| std::fs::read_to_string(path).ok()))
     };
     let idea_text = text_of(IDEA_FILE);
     let code = text_of(CODE_FILE);
@@ -395,7 +391,10 @@ mod tests {
         let (of_idea, of_code) = findings(Some(&no_purpose), Some(CODE));
         assert!(!of_idea.is_empty());
         assert_eq!(of_code.len(), 1, "{of_code:#?}");
-        assert!(of_code[0].message.contains("aren't checked"), "{of_code:#?}");
+        assert!(
+            of_code[0].message.contains("aren't checked"),
+            "{of_code:#?}"
+        );
     }
 
     /// An editor opens a folder's main.wat with text that doesn't build, then changes it to
