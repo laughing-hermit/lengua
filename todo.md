@@ -826,7 +826,16 @@ Where the work left the brief: the design (b381dfe) and the review were written 
 by its author, not before it; and the example was to be one where the split pays, which the
 measurements don't show.
 
-The runs: FINAL_RUNS
+The runs: the suite, green on all five runners at 6790d4c, the branch with main's W21 merged in
+(43160037821); before the merge, at 92dec35, green on four and failed on Windows on ARM64 by
+`two_checks_at_once_leave_a_consistent_index` alone, the race in tests/graph.rs noted under
+W19 (43148136973), and green on Linux on x86-64 at 55443fd (43141098911); the example from its
+idea to done (43136507348); the tests of tests/wasm_split.rs and of lengua-run alone
+(43136504390); the defences taken out (43148079519, at 3729579, kept as the tag
+`archive/threads-bite`); the measurements (43141059631, 43148133679; in the first, macOS's job
+failed after its tests, where GitHub didn't take its log); and the first compile, which
+found a test's missing field (43134989066). The commit that writes this paragraph changes
+documents alone.
 
 ### What the permission checks refused
 

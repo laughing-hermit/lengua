@@ -578,7 +578,7 @@ the benchmark's gate, with C, C++ and Rust native builds that use threads beside
 stop for a piece in a run from a shell, whose engine stops nothing. todo.md, "W20: work split
 into pieces", has each with why.
 
-*Verified by:* the suite on all five runners at the branch's head, which todo.md names; the
+*Verified by:* the suite on all five runners at 6790d4c, with main's W21 merged in (43160037821); the
 example from its idea to done, with its proofs' lines (43136507348, Linux on x86-64); 7 of the
 8 tests of tests/wasm_split.rs failing on the commit that took the defences out (43148079519,
 at 3729579, which never reaches main); and the two measurements above, each on all five.
