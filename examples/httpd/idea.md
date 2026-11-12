@@ -49,7 +49,8 @@ These are the limits:
 
 The server answers a request for a part of a file with that part, when the request has one
 `Range` field of one range. It answers status 304 when the `If-None-Match` field of the request
-is the `ETag` of the file. The `ETag` is the CRC-32 of the file, in decimal.
+is the `ETag` of the file. The `ETag` is the CRC-32 of the file, in decimal. The tests of another
+`ETag` send a number from `4294967296` to `4295967295`, which is not a CRC-32.
 
 For each request, the server prints one line to standard output. The line has the method, the
 target, the status and the length of the body of the answer. It has two hyphens in place of
