@@ -276,7 +276,7 @@ pub fn split(
     let back = usize::try_from(grant.back).unwrap_or(usize::MAX).max(1);
     let work = Work {
         splitting,
-        policy: host.policy.as_piece(),
+        policy: host.policy.for_a_piece(),
         bytes: &memory[from],
         pieces,
         back,

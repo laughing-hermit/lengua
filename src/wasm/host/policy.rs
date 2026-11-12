@@ -180,7 +180,7 @@ impl Policy {
     /// It keeps the grant of the split itself, by which it asks whether it is a piece and
     /// which bounds what it prints, and it can't split in its turn.
     #[must_use]
-    pub fn as_piece(self) -> Self {
+    pub fn for_a_piece(self) -> Self {
         let split = Grants {
             split: self.reach.get().split,
             ..Grants::NONE

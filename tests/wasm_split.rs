@@ -102,7 +102,7 @@ fn text(shape: Shape<'_>) -> String {
     (i32.store (i32.const 8) (i32.const 0))
     (drop (call $read (i32.const 0) (i32.const 0) (i32.const 1) (i32.const 8)))
     (i32.load (i32.const 8)))
-  (func $as_piece
+  (func $for_a_piece
     (local $n i32)
     (local $first i32)
     (local.set $n (call $take (i32.const 4096) (i32.const 64)))
@@ -134,7 +134,7 @@ fn text(shape: Shape<'_>) -> String {
   (func (export "_start")
     (local $n i32)
     (local $err i32)
-    (if (i32.eqz (call $piece)) (then (call $as_piece)))
+    (if (i32.eqz (call $piece)) (then (call $for_a_piece)))
     (i32.store8 (i32.const 1500) (i32.const 88))
     (local.set $n {taken})
     (local.set $err

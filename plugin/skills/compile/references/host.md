@@ -3,7 +3,8 @@
 A `main.wat` program reaches the computer only through WASI preview 1's functions
 (`wasi_snapshot_preview1`) and, for what it reaches by itself while it runs, lengua's own
 (`lengua_net_1` for the network, `lengua_fs_1` for the files its arguments name,
-`lengua_run_1` to start a program, `lengua_term_1` for the terminal), and only those its idea
+`lengua_run_1` to start a program, `lengua_term_1` for the terminal, `lengua_split_1` for work it
+splits into pieces that run at once), and only those its idea
 allows. lengua implements them itself, the same way on
 every computer, so a program does the same thing everywhere. `check` refuses any other import
 (rule 3 of [the WebAssembly dialect](power-of-10-webassembly.md)).
@@ -27,6 +28,7 @@ every computer, so a program does the same thing everywhere. `check` refuses any
 | `- Files: reads the file its first argument names` (any `- Files:` line) | from `lengua_fs_1`: `file_open`; and `fd_read`, `fd_write`, `fd_seek`, `fd_tell`, `fd_filestat_get`, `fd_close` on what it opened |
 | `- Files: reads the folder its first argument names` (a line that names a folder) | from `lengua_fs_1`: `folder_open`; and on the folder it gives, what `- Uses: files` allows on descriptor 3: `path_open`, `path_filestat_get`, `fd_readdir`, `path_create_directory`, `path_remove_directory`, `path_unlink_file`, `path_rename` |
 | ``- Runs: `hostname` with no arguments`` (any `- Runs:` line) | from `lengua_run_1`: `program_run` |
+| `- Splits: its work into up to 8 pieces, …` | from `lengua_split_1`: `split`, `piece` |
 
 ## Descriptors
 
@@ -153,6 +155,66 @@ never by a path: lengua reads the argument and opens what it names, so the progr
   the output's region before a write of it, as after `$fill`.
 
 `program-template.wat` is a whole program.
+
+## Work split into pieces: `lengua_split_1`
+
+| Import, with its type | What it does |
+|---|---|
+| `split (param i32 i32 i32 i32 i32) (result i32)`: input, its length, pieces, output, its length | Cuts the input into `pieces` pieces that follow each other and differ in length by a byte at most, runs each, waits for all, and writes what each printed at the start of its share of `output` (its length divided by `pieces`), in the pieces' order, with zeros after it |
+| `piece (result i32)` | 0 in a run that is a piece of the work, `NOENT` (44) in the run that is the whole program |
+
+- **A piece is one more run of this same main.wat, from `_start`**, with a memory of its own
+  as the module declares it. Its standard input is its share of the bytes, and what it prints
+  to standard output is its answer. It reaches nothing else: every other call answers
+  `NOTCAPABLE`, `split` too. So `_start` calls `piece` first. Where it gives 0, the run reads
+  standard input with `$fill`, does the work and prints the answer with `$write_all`; where
+  it gives `NOENT`, the run is the whole program, which reads its input, calls `split`, and
+  joins the answers.
+- **The pieces run at once**, on as many cores as the computer has, and the result is the
+  same on every computer: the answers are in the pieces' order, whichever ended first. Write
+  the join so that it needs nothing else, such as a sum of counts. Where a piece's work
+  depends on the bytes before it (a word that crosses the cut), the whole program has every
+  byte in its own memory and corrects for the cut after the join.
+- **Hold the call to the idea's line**, `- Splits: its work into up to 8 pieces, each of up
+  to 1048576 bytes, each gives back 8192 bytes`: give `pieces` as a named constant of 1 to
+  the line's pieces (`check` refuses any other), the input's length at most `pieces` times
+  the line's bytes, and the output's length exactly `pieces` times the bytes each gives back.
+  A call the line doesn't cover answers `INVAL`.
+- **A piece prints at most the bytes the line gives back**, and exits with code 0. A piece
+  that prints more, exits with another code, traps or fails an assertion ends the whole run
+  as it ended, and nothing is written to `output`: test the error `split` returns, and expect
+  none.
+- **Size the memory for every run at once**: the module's pages, times the line's pieces and
+  one more for the program, are at most 16,384. Read a large input a buffer-full at a time,
+  and split each buffer-full.
+- **Read in one loop for both kinds of run**, as `examples/histogram-split` does: one call of
+  `$fill` in a loop, whose body counts when the run is a piece and calls `split` when it is
+  the whole program. A program that reads in one place is proven by induction as a piece.
+- **It pays for work that takes longer than a copy of its bytes**: each piece's bytes are
+  copied twice and a piece starts in about a tenth of a millisecond. Split megabytes, not
+  kilobytes.
+
+```wat
+(import "lengua_split_1" "split" (func $split (param i32 i32 i32 i32 i32) (result i32)))
+(import "lengua_split_1" "piece" (func $piece (result i32)))
+;; What `piece` answers in the run that is the whole program: NOENT.
+(global $NOT_A_PIECE i32 (i32.const 44))
+(global $PIECES i32 (i32.const 8))
+…
+    ;; First in _start: 0 in a piece, NOT_A_PIECE in the whole program.
+    (local.set $whole (call $piece))
+    (if (local.get $whole)
+      (then
+        (if (i32.ne (local.get $whole) (global.get $NOT_A_PIECE))
+          (then (call $assert_fail (i32.const 1)) unreachable))))
+…
+    ;; In the whole program, for the $len bytes read into the buffer:
+    (local.set $err
+      (call $split (global.get $buffer) (local.get $len) (global.get $PIECES)
+        (global.get $answers) (global.get $answers.size)))
+    (if (local.get $err)
+      (then (call $assert_fail (i32.const 2)) unreachable))
+```
 
 ## The terminal: `lengua_term_1`
 

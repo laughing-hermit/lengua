@@ -403,7 +403,7 @@ fn proofs(
         return ("uses now".to_owned(), [Duration::ZERO; 2]);
     }
     let policy = if block.piece {
-        policy.as_piece()
+        policy.for_a_piece()
     } else {
         policy
     };

@@ -18,7 +18,8 @@ reads the folder's `idea.md` and `main.wat`, then, in order:
    SHA-256 of `idea.md` with its `verified` and `generated` keys left out, and `code`, the
    SHA-256 of `main.wat`;
 2. reads the idea as `check` does: it must parse, be an Attested Computation with no
-   `- Threads:` line, and hold tests that check;
+   `- Threads:` line, and hold tests that check; an idea may split its work with a `- Splits:`
+   line, and a test of a piece runs as a piece;
 3. builds `main.wat` into its WebAssembly module, as [`run`](run.md) does;
 4. checks the module against every rule of lengua's WebAssembly dialect and, for an idea with a
    `- Secret:` line, the secret rule: no value computed from an input the line names decides a

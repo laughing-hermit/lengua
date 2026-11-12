@@ -729,7 +729,7 @@ async fn check_one_way(
         );
     // A test of a piece runs as a call that splits runs one: with what a piece may reach.
     let policy = if test.piece {
-        target.policy.as_piece()
+        target.policy.for_a_piece()
     } else {
         target.policy
     };

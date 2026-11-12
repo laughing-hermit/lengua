@@ -41,6 +41,7 @@ replaces it. Values go in backticks, with `\n`, `\r`, `\t` and
 | ``the program `hostname` prints `box\n` and exits with code `0` ``, ``the program `tar` with the arguments `-tf` and `a.tar` prints nothing and exits with code `2` `` | For an idea with a `- Runs:` line: what that command gives when the program starts it, in every test of the idea. A test starts nothing, and a command no step gives isn't there |
 | ``a client that sends TEXT`` | The test's own client, one step a connection, for a program that serves |
 | `standard output is closed` | Standard output as a pipe nobody reads, as after `prog \| head -1` has read its line: every write to it fails with `EPIPE`, never a signal. The behavior then says only its exit code and what it prints to standard error |
+| `the program is a piece` | For an idea with a `- Splits:` line: the run is a piece of the program's split work, as a call that splits runs one. Standard input is the piece's share of the bytes, what it prints is its answer, held to the bytes the line gives back, and it reaches nothing else |
 
 **When:** `the program runs`, once.
 

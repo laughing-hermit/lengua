@@ -196,7 +196,8 @@ Within lengua, for a program at `done`:
   they can follow to its owner. What they can't follow is left to the proofs, which keep it
   inside the program's memory but follow no region, so whether it stays inside its own region
   is tested, not proven. The reply's memory line says which is which.
-- **The same bits on every computer.** NaNs are made canonical, there are no threads, and relaxed
+- **The same bits on every computer.** NaNs are made canonical, a program has no threads (the
+  pieces it splits its work into share no memory, and their answers come in a fixed order), and relaxed
   SIMD, whose results differ between computers, is off.
 - **Every proof says what it covers.** With both solvers installed, as the archive ships them, a
   solver's "no counterexample" counts only when z3 and cvc5 both give it. Questions about floats
@@ -237,11 +238,12 @@ What it doesn't promise:
 - **No security product.** The examples show algorithms, such as AES-128 and SHA-256. They
   aren't built to resist an attacker, and lengua isn't presented as covering security because
   of them.
-- **Not every kind of program yet.** No threads and no GUIs. W18 has given the network chosen
+- **Not every kind of program yet.** No threads that share memory and no GUIs. W18 has given the network chosen
   at run time, DNS and UDP, files anywhere the user names, starting named programs, and the
   terminal's mode and size, each as a grant the idea states. A program that uses one of
   those grants is tested, not proven; a started program runs in an empty folder of its own,
-  so it can't work on the user's folder yet. W20 plans threads; GUIs aren't planned.
+  so it can't work on the user's folder yet. W20 gave work split into pieces that run at once,
+  each a run of the same program with memory of its own; GUIs aren't planned.
 
 ## Against C, C++ and Rust
 
@@ -367,7 +369,7 @@ with rows the list can't take back is the owner's ([todo.md](todo.md)).
 - `crates/lengua-os/`: the one crate allowed unsafe code, each call in a safe function.
 - `plugin/`: the plugin as it ships: its manifests, the two skills with their references and
   templates, its [README](plugin/README.md) and licence.
-- `examples/`: 19 programs, each a folder of `idea.md` and `main.wat`.
+- `examples/`: 20 programs, each a folder of `idea.md` and `main.wat`.
 - `tests/`: the suite, the 29 programs of `tests/fixtures`, the host's 109 cases in
   `tests/host-cases`, and the vendored schemas.
 - `benches/`: the gate, and the C, C++ and Rust versions of its workloads.

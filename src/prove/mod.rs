@@ -2676,7 +2676,7 @@ fn attempt_wasm(
     }
     // A block about a piece of split work is proven on a piece's own world.
     let policy = if block.piece {
-        policy.as_piece()
+        policy.for_a_piece()
     } else {
         policy
     };
@@ -4508,7 +4508,7 @@ pub fn agrees_wasm(
             return Ok(found);
         }
     }
-    let module = wasm::Module::new(built, policy.as_piece())?;
+    let module = wasm::Module::new(built, policy.for_a_piece())?;
     agrees_with(&module, pieces, listens, deadline)
 }
 
