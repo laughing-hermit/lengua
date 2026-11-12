@@ -23,11 +23,19 @@ pub enum Input {
         at: usize,
         /// The lengths of the pieces still to come after the current one.
         pieces: VecDeque<usize>,
-        /// The most bytes one read gives: what one pipe write holds, or for a piece of split
-        /// work, which reads its share from lengua's memory and no pipe, any number.
+        /// The most bytes one read gives: what one pipe write holds.
         most: usize,
         /// What's left of the current piece.
         piece: usize,
+    },
+    /// A piece's share of the bytes its program split, lent for the call that runs it.
+    Share {
+        /// What the program lent.
+        bytes: lengua_os::lent::Lent,
+        /// How far the piece has read, among them.
+        at: usize,
+        /// Where its share ends, among them.
+        end: usize,
     },
     /// This process's own standard input, for a run from a shell.
     Here,
@@ -62,17 +70,16 @@ impl Input {
         }
     }
 
-    /// A piece's share of the bytes its program split, all there at once: a read gives as
-    /// much as its buffer holds, since no pipe carries them.
+    /// A piece's share of the bytes its program split: the bytes from `at` to `end` of what
+    /// the program lent for the call, read straight from the program's memory, so a read is
+    /// their one copy and gives as much as its buffer holds.
     #[must_use]
-    pub fn share(bytes: Vec<u8>) -> Self {
-        let piece = bytes.len();
-        Self::Given {
+    pub fn share(bytes: lengua_os::lent::Lent, at: usize, end: usize) -> Self {
+        let end = end.min(bytes.len());
+        Self::Share {
             bytes,
-            at: 0,
-            pieces: VecDeque::new(),
-            most: usize::MAX,
-            piece,
+            at: at.min(end),
+            end,
         }
     }
 
@@ -97,6 +104,12 @@ impl Input {
                 buffer[..count].copy_from_slice(&bytes[*at..*at + count]);
                 *at += count;
                 *piece -= count;
+                Ok(count)
+            }
+            Self::Share { bytes, at, end } => {
+                let room = buffer.len().min(*end - *at);
+                let count = bytes.copy_to(*at, &mut buffer[..room]);
+                *at += count;
                 Ok(count)
             }
             Self::Here => std::io::stdin().lock().read(buffer).map_err(|_| errno::IO),
@@ -131,6 +144,10 @@ impl Input {
         match self {
             Self::Given { bytes, at, .. } => {
                 let left = bytes.len() - *at;
+                (u64::try_from(left).unwrap_or(u64::MAX), left == 0)
+            }
+            Self::Share { at, end, .. } => {
+                let left = *end - *at;
                 (u64::try_from(left).unwrap_or(u64::MAX), left == 0)
             }
             Self::Here => (1, false),

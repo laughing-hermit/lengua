@@ -5,7 +5,7 @@
 ;; the bytes as its standard input and a memory of its own: it counts them, eight bytes a step,
 ;; each byte loaded on its own and counted in one of four tables, and prints its counts as the
 ;; program prints the input's. The program adds what the eight pieces printed to its first
-;; table. `piece` says which of the two a run is, and both read in the one loop.
+;; table. `piece` says which of the two a run is. A piece reads its share 64 KiB at a time.
 (module
   (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
   (import "lengua_split_1" "split" (func $split (param i32 i32 i32 i32 i32) (result i32)))
@@ -26,8 +26,10 @@
   (global $NOT_A_PIECE i32 (i32.const 44))
   ;; The pieces a buffer-full is split into, as the idea's line grants.
   (global $PIECES i32 (i32.const 8))
-  ;; The buffer-fulls it takes at most: 2147483647 of 8 MiB.
+  ;; The buffer-fulls it takes at most: 2147483647 of 8 MiB. A piece reads PIECE_READ bytes at a
+  ;; time.
   (global $MAX_FULLS i32 (i32.const 2147483647))
+  (global $PIECE_READ i32 (i32.const 65536))
   ;; A buffer-full's steps of eight bytes, and the bytes after them.
   (global $STEP i32 (i32.const 8))
   (global $STEPS i32 (i32.const 1048576))
@@ -87,27 +89,45 @@
           (then (call $assert_fail (i32.const 15)) unreachable))))
     (block $write_failed
       (block $read_failed
-        (block $counted
-          (local.set $left (global.get $MAX_FULLS))
-          (loop $full  ;; bound: 2147483647
-            (local.set $got
-              (call $fill (global.get $STDIN) (global.get $buffer) (global.get $buffer.size)
-                (global.get $READ_TO_END)))
-            (br_if $read_failed (i32.lt_s (local.get $got) (i32.const 0)))
-            (if (i32.gt_u (local.get $got) (global.get $buffer.size))
-              (then (call $assert_fail (i32.const 1)) unreachable))
-            (if (local.get $whole)
-              (then (call $split_full (local.get $got)))
-              (else
+        (if (local.get $whole)
+          (then
+            (block $counted
+              (local.set $left (global.get $MAX_FULLS))
+              (loop $full  ;; bound: 2147483647
+                (local.set $got
+                  (call $fill (global.get $STDIN) (global.get $buffer) (global.get $buffer.size)
+                    (global.get $READ_TO_END)))
+                (br_if $read_failed (i32.lt_s (local.get $got) (i32.const 0)))
+                (if (i32.gt_u (local.get $got) (global.get $buffer.size))
+                  (then (call $assert_fail (i32.const 1)) unreachable))
+                (call $split_full (local.get $got))
+                ;; A buffer-full that isn't full is the input's last.
+                (br_if $counted (i32.lt_u (local.get $got) (global.get $buffer.size)))
+                (local.set $left (i32.sub (local.get $left) (i32.const 1)))
+                (br_if $full (local.get $left)))
+              ;; 16 PiB is all it takes.
+              (call $assert_fail (i32.const 2))
+              unreachable))
+          (else
+            ;; A piece reads its share 64 KiB at a time, at the buffer's start, so what it
+            ;; counts stays in a core's cache and it touches little of its memory.
+            (block $shared
+              (local.set $left (global.get $MAX_FULLS))
+              (loop $some  ;; bound: 2147483647
+                (local.set $got
+                  (call $fill (global.get $STDIN) (global.get $buffer) (global.get $PIECE_READ)
+                    (global.get $READ_TO_END)))
+                (br_if $read_failed (i32.lt_s (local.get $got) (i32.const 0)))
+                (if (i32.gt_u (local.get $got) (global.get $PIECE_READ))
+                  (then (call $assert_fail (i32.const 24)) unreachable))
                 (call $count_piece (local.get $got) (global.get $first) (global.get $second)
-                  (global.get $third) (global.get $fourth))))
-            ;; A buffer-full that isn't full is the input's last.
-            (br_if $counted (i32.lt_u (local.get $got) (global.get $buffer.size)))
-            (local.set $left (i32.sub (local.get $left) (i32.const 1)))
-            (br_if $full (local.get $left)))
-          ;; 16 PiB is all it takes.
-          (call $assert_fail (i32.const 2))
-          unreachable)
+                  (global.get $third) (global.get $fourth))
+                ;; A read that isn't full is the share's last.
+                (br_if $shared (i32.lt_u (local.get $got) (global.get $PIECE_READ)))
+                (local.set $left (i32.sub (local.get $left) (i32.const 1)))
+                (br_if $some (local.get $left)))
+              (call $assert_fail (i32.const 25))
+              unreachable)))
         (br_if $write_failed (call $emit))
         (call $proc_exit (global.get $EXIT_OK))
         unreachable)

@@ -713,70 +713,119 @@ impl Checked {
     }
 }
 
-/// A program that splits its work runs from what check compiled, by lengua-run alone, and
-/// gives the same bytes with one piece at a time, with three at once and with one for each
-/// core: the counts of 20 MiB and 5 bytes, which is two buffer-fulls and a part of one, each
-/// split into eight pieces.
-#[test]
-fn split_work_gives_the_same_on_one_core_and_on_many() {
-    let checked = Checked::new(SPLIT_IDEA, SPLIT_CODE);
-    checked.compile();
-    let input = every_value(20 * 1024 * 1024 + 5);
-    let file = checked.root.path().join("input");
-    std::fs::write(&file, &input).expect("the input is written");
-    let expected = histogram_of(&input);
-    for at_once in [None, Some(1), Some(3)] {
-        let (ran, _) = checked.run_on(&file, at_once);
-        assert_eq!(ran.status.code(), Some(0), "{at_once:?}: {}", said(&ran));
-        assert!(ran.stdout == expected, "{at_once:?}: other counts");
-        assert!(
-            said(&ran).contains("it may split its work into up to 8 pieces"),
-            "{at_once:?}: {}",
-            said(&ran)
-        );
+/// The second example that splits its work, whose work on a byte is heavier, and its code.
+const CRC_SPLIT_IDEA: &str = include_str!("../../../examples/crc32c-split/idea.md");
+
+/// The code of [`CRC_SPLIT_IDEA`].
+const CRC_SPLIT_CODE: &str = include_str!("../../../examples/crc32c-split/main.wat");
+
+/// The program that takes the same CRC on one core, and its code.
+const CRC_IDEA: &str = include_str!("../../../tests/fixtures/crc32c/idea.md");
+
+/// The code of [`CRC_IDEA`].
+const CRC_CODE: &str = include_str!("../../../tests/fixtures/crc32c/main.wat");
+
+/// What a CRC-32C of `input` prints: the number in decimal, and a newline.
+fn crc32c_of(input: &[u8]) -> Vec<u8> {
+    let mut table = [0_u32; 256];
+    for (value, entry) in (0_u32..).zip(table.iter_mut()) {
+        let mut crc = value;
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0x82f6_3b78 & 0_u32.wrapping_sub(crc & 1));
+        }
+        *entry = crc;
     }
-    // No input is no work, and nothing printed.
-    std::fs::write(&file, b"").expect("the input is written");
-    let (none, _) = checked.run_on(&file, None);
-    assert_eq!(none.status.code(), Some(0), "{}", said(&none));
-    assert!(none.stdout.is_empty());
+    let mut crc = u32::MAX;
+    for byte in input {
+        crc = (crc >> 8) ^ table[usize::from(crc.to_le_bytes()[0] ^ *byte)];
+    }
+    format!("{}\n", crc ^ u32::MAX).into_bytes()
 }
 
-/// How long the counts of 64 MiB take by lengua-run, the best of seven runs each: the program
-/// that counts on one core (tests/fixtures/histogram), and the one that splits its work
-/// (examples/histogram-split) with one piece at a time, two at once, and one for each core.
-/// The line it prints is what the documents' numbers are read from; it holds only that every
-/// run gives the same counts.
+/// A program that splits its work runs from what check compiled, by lengua-run alone, and
+/// gives the same bytes with one piece at a time, with three at once and with one for each
+/// core: the byte counts, and the CRC, of 20 MiB and 5 bytes, which is two parts of 8 MiB and
+/// a part of one, each split into eight pieces. No input is no work.
+#[test]
+fn split_work_gives_the_same_on_one_core_and_on_many() {
+    let input = every_value(20 * 1024 * 1024 + 5);
+    let programs = [
+        (SPLIT_IDEA, SPLIT_CODE, histogram_of(&input), Vec::new()),
+        (CRC_SPLIT_IDEA, CRC_SPLIT_CODE, crc32c_of(&input), b"0\n".to_vec()),
+    ];
+    for (idea, code, expected, of_nothing) in programs {
+        let checked = Checked::new(idea, code);
+        checked.compile();
+        let file = checked.root.path().join("input");
+        std::fs::write(&file, &input).expect("the input is written");
+        for at_once in [None, Some(1), Some(3)] {
+            let (ran, _) = checked.run_on(&file, at_once);
+            assert_eq!(ran.status.code(), Some(0), "{at_once:?}: {}", said(&ran));
+            assert!(ran.stdout == expected, "{at_once:?}: another result");
+            assert!(
+                said(&ran).contains("it may split its work into up to 8 pieces"),
+                "{at_once:?}: {}",
+                said(&ran)
+            );
+        }
+        std::fs::write(&file, b"").expect("the input is written");
+        let (none, _) = checked.run_on(&file, None);
+        assert_eq!(none.status.code(), Some(0), "{}", said(&none));
+        assert_eq!(none.stdout, of_nothing);
+    }
+}
+
+/// How long two kinds of work take by lengua-run on 64 MiB and on 256 MiB, the best of seven
+/// runs each on the clock: the byte counts and the CRC-32C, each by the program that works on
+/// one core (tests/fixtures) and by the one that splits its work (examples), with one piece at
+/// a time and with one for each core. The lines it prints are what the documents' numbers are
+/// read from; it holds only that every run gives the same result.
 #[test]
 #[ignore = "a measurement: run alone, by name"]
 fn split_work_is_measured() {
-    let input = every_value(64 * 1024 * 1024);
-    let expected = histogram_of(&input);
-    let whole = Checked::new(WHOLE_IDEA, WHOLE_CODE);
-    whole.compile();
-    let split = Checked::new(SPLIT_IDEA, SPLIT_CODE);
-    split.compile();
-    let file = split.root.path().join("input");
-    std::fs::write(&file, &input).expect("the input is written");
-    let best = |checked: &Checked, at_once: Option<usize>| {
-        let mut least = std::time::Duration::MAX;
-        for _ in 0..7 {
-            let (ran, took) = checked.run_on(&file, at_once);
-            assert_eq!(ran.status.code(), Some(0), "{at_once:?}: {}", said(&ran));
-            assert!(ran.stdout == expected, "{at_once:?}: other counts");
-            least = least.min(took);
-        }
-        least.as_secs_f64() * 1000.0
-    };
     let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
-    let one_core = best(&whole, None);
-    let one = best(&split, Some(1));
-    let two = best(&split, Some(2));
-    let all = best(&split, None);
-    eprintln!(
-        "split_work_is_measured: {} on {}, {cores} cores: one core {one_core:.1} ms; split, one \
-         piece at a time {one:.1} ms; two at once {two:.1} ms; one for each core {all:.1} ms",
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    );
+    let kinds: [(&str, [&str; 4], fn(&[u8]) -> Vec<u8>); 2] = [
+        (
+            "histogram",
+            [WHOLE_IDEA, WHOLE_CODE, SPLIT_IDEA, SPLIT_CODE],
+            histogram_of,
+        ),
+        (
+            "crc32c",
+            [CRC_IDEA, CRC_CODE, CRC_SPLIT_IDEA, CRC_SPLIT_CODE],
+            crc32c_of,
+        ),
+    ];
+    for mebibytes in [64_usize, 256] {
+        let input = every_value(mebibytes * 1024 * 1024);
+        for (kind, [idea, code, split_idea, split_code], result) in kinds {
+            let expected = result(&input);
+            let whole = Checked::new(idea, code);
+            whole.compile();
+            let split = Checked::new(split_idea, split_code);
+            split.compile();
+            let file = split.root.path().join("input");
+            std::fs::write(&file, &input).expect("the input is written");
+            let best = |checked: &Checked, at_once: Option<usize>| {
+                let mut least = std::time::Duration::MAX;
+                for _ in 0..7 {
+                    let (ran, took) = checked.run_on(&file, at_once);
+                    assert_eq!(ran.status.code(), Some(0), "{at_once:?}: {}", said(&ran));
+                    assert!(ran.stdout == expected, "{kind}, {at_once:?}: another result");
+                    least = least.min(took);
+                }
+                least.as_secs_f64() * 1000.0
+            };
+            let one_core = best(&whole, None);
+            let one = best(&split, Some(1));
+            let all = best(&split, None);
+            eprintln!(
+                "split_work_is_measured: {} on {}, {cores} cores, {kind} of {mebibytes} MiB: one \
+                 core {one_core:.1} ms; split, one piece at a time {one:.1} ms; one for each \
+                 core {all:.1} ms",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
+        }
+    }
 }

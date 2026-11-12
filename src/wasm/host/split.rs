@@ -17,9 +17,12 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
+use lengua_os::lent::Lent;
 use wasmtime::{Linker, Module};
 
 use super::limits::Limits;
@@ -40,14 +43,117 @@ pub const STACK: usize = 4 * 1024 * 1024;
 /// past it, the piece is stopped.
 pub const ERRORS: usize = 65_536;
 
+/// What every piece of a run runs with: the run's own module, in its engine.
+struct Running {
+    /// The run's own module, which each piece is a run of.
+    module: Module,
+    /// The host's functions, as the run itself has them.
+    linker: Linker<Host>,
+    /// The engine's configuration the run is in.
+    setup: Setup,
+}
+
+/// The threads that run a run's pieces, kept from its first call that splits to its end, so
+/// that no call starts a thread: each waits for a call's work, takes pieces of it until none
+/// is left, and waits again. They end when the run does.
+struct Pool {
+    /// Where a call's work goes; `None` once the run ends.
+    work: Option<Sender<Arc<Work>>>,
+    /// The threads.
+    threads: Vec<JoinHandle<()>>,
+}
+
+impl Pool {
+    /// A pool of up to `most` threads: as many as the system gives.
+    fn new(most: usize) -> Self {
+        let (work, taken) = std::sync::mpsc::channel::<Arc<Work>>();
+        let taken = Arc::new(Mutex::new(taken));
+        let mut threads = Vec::with_capacity(most);
+        for _ in 0..most {
+            let taken = Arc::clone(&taken);
+            let spawned = std::thread::Builder::new()
+                .name("lengua piece".to_owned())
+                .stack_size(STACK)
+                .spawn(move || {
+                    loop {
+                        // The lock is held for the wait alone: the work runs outside it.
+                        let next = taken.lock().unwrap_or_else(PoisonError::into_inner).recv();
+                        let Ok(work) = next else {
+                            return;
+                        };
+                        let leaving = Leaving(work);
+                        leaving.0.take();
+                    }
+                });
+            match spawned {
+                Ok(thread) => threads.push(thread),
+                Err(_) => break,
+            }
+        }
+        Self {
+            work: Some(work),
+            threads,
+        }
+    }
+
+    /// Hands `work` to up to `threads` of the pool's threads, and gives how many took it.
+    fn hand(&self, work: &Arc<Work>, threads: usize) -> usize {
+        let Some(sender) = &self.work else {
+            return 0;
+        };
+        (0..threads.min(self.threads.len()))
+            .filter(|_| sender.send(Arc::clone(work)).is_ok())
+            .count()
+    }
+}
+
+impl Drop for Pool {
+    fn drop(&mut self) {
+        // With nowhere for work to come from, each thread's wait ends, and the thread with it.
+        self.work = None;
+        for thread in self.threads.drain(..) {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// A thread's hold on a call's work, which says so when it lets go, however it does.
+struct Leaving(Arc<Work>);
+
+impl Drop for Leaving {
+    fn drop(&mut self) {
+        let mut busy = self
+            .0
+            .busy
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *busy = busy.saturating_sub(1);
+        self.0.idle.notify_all();
+    }
+}
+
 /// What a call that splits its work runs its pieces with.
 pub struct Splitting {
-    /// The run's own module, which each piece is a run of.
-    pub module: Module,
-    /// The host's functions, as the run itself has them.
-    pub linker: Linker<Host>,
-    /// The engine's configuration the run is in.
-    pub setup: Setup,
+    /// What each piece runs with.
+    running: Arc<Running>,
+    /// The threads the pieces run on, from the first call that splits.
+    pool: Option<Pool>,
+}
+
+impl Splitting {
+    /// What the pieces of a run of `module` run with, in `setup`'s configuration, with the
+    /// host's functions as `linker` has them.
+    #[must_use]
+    pub fn new(module: Module, linker: Linker<Host>, setup: Setup) -> Self {
+        Self {
+            running: Arc::new(Running {
+                module,
+                linker,
+                setup,
+            }),
+            pool: None,
+        }
+    }
 }
 
 /// What stops a piece that still runs once a piece before it, in the pieces' order, didn't end
@@ -106,13 +212,13 @@ impl Ended {
 }
 
 /// One call's pieces, as the threads that run them share them.
-struct Work<'a> {
+struct Work {
     /// What the pieces run with.
-    splitting: &'a Splitting,
+    running: Arc<Running>,
     /// What a piece may reach.
     policy: Policy,
-    /// The bytes the call splits.
-    bytes: &'a [u8],
+    /// The bytes the call splits, lent for as long as the call lasts.
+    bytes: Lent,
     /// How many pieces.
     pieces: u32,
     /// How many bytes a piece gives back at most.
@@ -129,17 +235,23 @@ struct Work<'a> {
     failed: Arc<AtomicU32>,
     /// How each piece went, by its place.
     ended: Vec<Mutex<Option<Ended>>>,
+    /// How many threads still hold the work.
+    busy: Mutex<usize>,
+    /// Told when a thread lets go of the work.
+    idle: Condvar,
 }
 
-impl Work<'_> {
-    /// Runs piece `index` to its end, in a store of its own.
+impl Work {
+    /// Runs piece `index` to its end, in a store of its own: a new memory, new globals and a
+    /// new stack, as the module declares them, whatever thread runs it and whatever that
+    /// thread ran before.
     fn piece(&self, index: u32) -> Ended {
         let range = crate::split::cut(self.bytes.len(), self.pieces, index);
         let world = World {
             policy: self.policy,
             args: Vec::new(),
             env: BTreeMap::new(),
-            stdin: Input::share(self.bytes[range].to_vec()),
+            stdin: Input::share(self.bytes.clone(), range.start, range.end),
             stdout: Output::kept(self.back),
             stderr: Output::kept(ERRORS),
             folder: None,
@@ -159,12 +271,12 @@ impl Work<'_> {
             failed: Arc::clone(&self.failed),
             index,
         };
-        let splitting = self.splitting;
+        let running = &self.running;
         let executed = crate::wasm::runner::execute_until(
-            splitting.module.engine(),
-            &splitting.linker,
-            &splitting.module,
-            splitting.setup,
+            running.module.engine(),
+            &running.linker,
+            &running.module,
+            running.setup,
             Host::new(world),
             self.deadline,
             Some(halt),
@@ -211,36 +323,20 @@ impl Work<'_> {
         }
     }
 
-    /// Runs every piece, at once on as many threads as the computer has cores, and gives how
-    /// each went, in the pieces' order; `None` for a piece that wasn't run.
-    fn run(self) -> Vec<Option<Ended>> {
-        let pieces = usize::try_from(self.pieces).unwrap_or(usize::MAX);
-        let threads = if self.reversed {
-            1
-        } else {
-            crate::split::at_once().min(pieces)
-        };
-        std::thread::scope(|scope| {
-            let work = &self;
-            let mut running = Vec::with_capacity(threads);
-            for _ in 0..threads {
-                let spawned = std::thread::Builder::new()
-                    .name("lengua piece".to_owned())
-                    .stack_size(STACK)
-                    .spawn_scoped(scope, move || work.take());
-                match spawned {
-                    Ok(thread) => running.push(thread),
-                    Err(_) => break,
-                }
-            }
-            // A thread that failed leaves its piece without an answer, which ends the run.
-            for thread in running {
-                let _ = thread.join();
-            }
-        });
+    /// Waits until no thread holds the work, then gives how each piece went, in the pieces'
+    /// order; `None` for a piece that wasn't run.
+    fn wait(&self) -> Vec<Option<Ended>> {
+        let mut busy = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
+        while *busy > 0 {
+            busy = self
+                .idle
+                .wait(busy)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        drop(busy);
         self.ended
-            .into_iter()
-            .map(|slot| slot.into_inner().unwrap_or_else(PoisonError::into_inner))
+            .iter()
+            .map(|slot| slot.lock().unwrap_or_else(PoisonError::into_inner).take())
             .collect()
     }
 }
@@ -266,7 +362,7 @@ pub fn split(
     let from = memory::range(memory, input.0, input.1)?;
     let to = memory::range(memory, output.0, output.1)?;
     let grant = host.policy.reach.get().split.filter(|_| !host.policy.piece);
-    let (Some(grant), Some(splitting)) = (grant, host.splitting.as_ref()) else {
+    let (Some(grant), true) = (grant, host.splitting.is_some()) else {
         return Err(Fail::Errno(errno::NOTCAPABLE));
     };
     if !grant.covers(from.len(), pieces, to.len()) {
@@ -274,26 +370,59 @@ pub fn split(
     }
     host.limits.check()?;
     let back = usize::try_from(grant.back).unwrap_or(usize::MAX).max(1);
-    let work = Work {
-        splitting,
-        policy: host.policy.for_a_piece(),
-        bytes: &memory[from],
-        pieces,
-        back,
-        deadline: host.limits.deadline,
-        stop: Arc::clone(&host.limits.stop),
-        reversed: host.reversed,
-        next: AtomicU32::new(0),
-        failed: Arc::new(AtomicU32::new(u32::MAX)),
-        ended: (0..pieces).map(|_| Mutex::new(None)).collect(),
+    let policy = host.policy.for_a_piece();
+    let (deadline, reversed) = (host.limits.deadline, host.reversed);
+    let stop = Arc::clone(&host.limits.stop);
+    let Some(splitting) = host.splitting.as_mut() else {
+        return Err(Fail::Errno(errno::NOTCAPABLE));
     };
+    // The threads are started once, at the run's first call that splits: as many as the
+    // idea's line grants pieces, and no more than run at once on this computer.
+    let most = usize::try_from(grant.most).unwrap_or(usize::MAX);
+    let pool = splitting
+        .pool
+        .get_or_insert_with(|| Pool::new(crate::split::at_once().min(most)));
+    let running = Arc::clone(&splitting.running);
+    let threads = if reversed {
+        1
+    } else {
+        usize::try_from(pieces).unwrap_or(usize::MAX)
+    };
+    // The bytes are lent, not copied: each piece reads its share from the program's memory,
+    // which nothing writes while the call lasts, and the call ends only once no thread holds
+    // them.
+    let ended = lengua_os::lent::lend(&memory[from], |bytes| {
+        let work = Arc::new(Work {
+            running,
+            policy,
+            bytes,
+            pieces,
+            back,
+            deadline,
+            stop,
+            reversed,
+            next: AtomicU32::new(0),
+            failed: Arc::new(AtomicU32::new(u32::MAX)),
+            ended: (0..pieces).map(|_| Mutex::new(None)).collect(),
+            busy: Mutex::new(0),
+            idle: Condvar::new(),
+        });
+        // The count goes up before the work goes out, so no thread lets go of it first.
+        *work.busy.lock().unwrap_or_else(PoisonError::into_inner) = threads;
+        let handed = pool.hand(&work, threads);
+        {
+            let mut busy = work.busy.lock().unwrap_or_else(PoisonError::into_inner);
+            *busy = busy.saturating_sub(threads - handed.min(threads));
+        }
+        work.wait()
+    });
     let mut answers = Vec::new();
     let mut failure = None;
     let mut counted: u64 = 0;
     // The pieces' order decides, whichever ended first: the answers go in that order, and the
     // first piece in it that didn't end well ends the run, with what the pieces up to it
     // executed. What a later piece did counts for nothing.
-    for ended in work.run() {
+    for ended in ended {
         let ended = ended.unwrap_or_else(Ended::unstarted);
         counted = counted.saturating_add(ended.counted);
         if ended.well() {

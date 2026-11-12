@@ -385,7 +385,7 @@ with rows the list can't take back is the owner's ([todo.md](todo.md)).
 - `crates/lengua-os/`: the one crate allowed unsafe code, each call in a safe function.
 - `plugin/`: the plugin as it ships: its manifests, the two skills with their references and
   templates, its [README](plugin/README.md) and licence.
-- `examples/`: 27 programs, each a folder of `idea.md` and `main.wat`. Five are the library's
+- `examples/`: 28 programs, each a folder of `idea.md` and `main.wat`. Five are the library's
   parts, `decimal`, `lines`, `crc32`, `bytes` and `sort64`, the same files the compile skill
   ships in its `assets/parts`, and `sum` and `checksums` are built on them.
 - `tests/`: the suite, the 29 programs of `tests/fixtures`, the host's 109 cases in

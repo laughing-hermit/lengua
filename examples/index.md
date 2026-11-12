@@ -13,6 +13,7 @@ okf_version: "0.2"
 * [copy](copy/idea.md) - Copies the file that its first argument names to the file that its second argument names. Code: [main.wat](copy/main.wat)
 * [count](count/idea.md) - Counts the lines and words of standard input and prints the two counts, as wc -lw does. Code: [main.wat](count/main.wat)
 * [crc32](crc32/idea.md) - A part that computes the CRC-32 of bytes, and prints the CRC-32 of standard input. Code: [main.wat](crc32/main.wat)
+* [crc32c-split](crc32c-split/idea.md) - Prints the CRC-32C of standard input of any length, with the work split into pieces that run at once. Code: [main.wat](crc32c-split/main.wat)
 * [decimal](decimal/idea.md) - A part that reads and writes whole numbers in decimal, and prints the negative of the number in its argument. Code: [main.wat](decimal/main.wat)
 * [dice](dice/idea.md) - Rolls a fair six-sided die and prints the roll. Code: [main.wat](dice/main.wat)
 * [echo](echo/idea.md) - A server that sends each line back to the client that sent it. Code: [main.wat](echo/main.wat)
