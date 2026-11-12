@@ -24,7 +24,7 @@ program. The tests give numbers from `-999999` to `999999`, fractions from `0` t
 exponents from `0` to `20`, and strings of `0` to `20` characters.
 
 The program does not change a string or a number. It does not check that the bytes of a string
-are UTF-8, and it does not look for a name that an object has two times.
+are UTF-8. It does not look for a name that an object has two times.
 
 If the text is not JSON, the program exits with code 1. If the program cannot read its input,
 it exits with code 3. If the program cannot write its output, it exits with code 4.

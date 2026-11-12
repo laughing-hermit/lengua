@@ -39,19 +39,18 @@ These are the limits:
 - A folder has at most `256` names in a list.
 - A key has `1` to `64` letters, digits, hyphens, points and underscores.
 - A value in the store has at most `1024` bytes, and the store has at most `65536` bytes.
-- The tests give files of `0` to `2000` bytes, parts of files of `5` bytes, queries of `0` to
-  `20` characters, numbers from `0` to `999999`, and values of `8` characters.
+- The tests give files of `0` to `2000` bytes and parts of files of `5` bytes. They give queries
+  of `0` to `20` characters, numbers from `0` to `999999`, and values of `8` characters.
 - The tests ask for parts of files that start at byte `2001` to `999999`.
 
 The server answers a request for a part of a file with that part, when the request has one
 `Range` field of one range. It answers status 304 when the `If-None-Match` field of the request
 is the `ETag` of the file. The `ETag` is the CRC-32 of the file, in decimal.
 
-For each request, the server prints one line to standard output: the method, the target, the
-status and the length of the body of the answer. It prints two hyphens in place of the method
-and the target when it cannot read the request line, or when the target is too long. The server
-does not stop when it cannot
-print this line.
+For each request, the server prints one line to standard output. The line has the method, the
+target, the status and the length of the body of the answer. It has two hyphens in place of
+the method and the target when the server cannot read the request line. It has them also when
+the target is too long. The server does not stop when it cannot print this line.
 
 # Behaviors
 ## B1: Says that it runs

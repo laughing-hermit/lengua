@@ -29,9 +29,9 @@ empty when the request has no Host field. The program ignores the bytes after th
   characters that print, and at most `1024` bytes.
 - Each header field is a name, a colon and a value, on a line that ends with a carriage return
   and a newline. The program compares names without regard to capital letters.
-- The tests give paths of `0` to `100` characters, hosts of `1` to `40` characters, values of `0`
-  to `40` characters and names of `0` to `10` characters. They also give short texts of up to
-  `4` characters.
+- The tests give paths of `0` to `100` characters and hosts of `1` to `40` characters. They give
+  values of `0` to `40` characters and names of `0` to `10` characters. They also give short
+  texts of up to `4` characters.
 
 If the request is not valid, the program exits with code 1. If the request has another version
 of HTTP, it exits with code 5. If the program cannot read its input, it exits with code 3. If
