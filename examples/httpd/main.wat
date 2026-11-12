@@ -1194,12 +1194,20 @@
   ;; HEAD gets the head alone. A client that has gone gets nothing, and the
   ;; server goes on.
   (func $send (param $fd i32) (param $at i32)
+    (local $head i32)
     (if (i32.load offset=8 (global.get $logged))
-      (then (local.set $at (i32.load offset=12 (global.get $logged)))))
-    (if (i32.gt_u (local.get $at) (global.get $out.size))
-      (then (call $assert_fail (i32.const 43)) unreachable))
-    (block $gone
-      (br_if $gone (call $write_all (local.get $fd) (global.get $out) (local.get $at)))))
+      (then
+        (local.set $head (i32.load offset=12 (global.get $logged)))
+        (if (i32.gt_u (local.get $head) (global.get $out.size))
+          (then (call $assert_fail (i32.const 149)) unreachable))
+        (block $gone
+          (br_if $gone
+            (call $write_all (local.get $fd) (global.get $out) (local.get $head)))))
+      (else
+        (if (i32.gt_u (local.get $at) (global.get $out.size))
+          (then (call $assert_fail (i32.const 43)) unreachable))
+        (block $lost
+          (br_if $lost (call $write_all (local.get $fd) (global.get $out) (local.get $at)))))))
 
   ;; Answers on $fd with $status and a body that is the status's text and a newline, with the
   ;; field $extra, a literal text, when it is one.
