@@ -112,23 +112,6 @@ impl Checked {
         }
     }
 
-    /// The folder of a module made elsewhere, as `lengua-mcp measure` keeps one of another
-    /// toolchain to run under `idea`: the module `code` builds as main.wasm, in main.wat's
-    /// place, and a lock that records the module's hash as its code's and as the module that
-    /// runs.
-    fn of_module(idea: &str, code: &str) -> Self {
-        let checked = Self::new(idea, code);
-        let folder = checked.folder();
-        std::fs::remove_file(folder.join("main.wat")).expect("main.wat goes");
-        std::fs::write(folder.join("main.wasm"), &checked.wasm).expect("main.wasm");
-        let mut lock = lock::read(&folder, Some(&checked.key))
-            .expect("a valid lock")
-            .expect("a lock");
-        lock.code.as_mut().expect("its code").sha256 = checked.module.clone();
-        lock::write(&folder, &lock, &checked.key).expect("lengua.lock");
-        checked
-    }
-
     /// The program's folder.
     fn folder(&self) -> PathBuf {
         self.root.path().join("program")
@@ -164,12 +147,6 @@ impl Checked {
                 .arg("--data-dir")
                 .arg(self.data.path())
                 .arg(self.folder())
-                .args(
-                    self.folder()
-                        .join("main.wasm")
-                        .is_file()
-                        .then_some("--module"),
-                )
                 .args(words)
                 .current_dir(self.root.path().join("work"))
                 .env_remove("LENGUA_LOG")
@@ -515,85 +492,6 @@ fn a_program_reaches_only_what_its_idea_grants() {
         said.starts_with("lengua-run: ") && said.contains("any subdomain of example.org"),
         "{said}"
     );
-}
-
-/// A module made elsewhere runs with every check a program's run makes, on main.wasm in
-/// main.wat's place: it runs from its compiled form, and its trap has no line of a main.wat;
-/// a module changed since its lock was written, a lock that records another module to run, a
-/// lock of another key, an idea changed since, and the folder run as a program's, without
-/// `--module`, are each refused, and nothing runs.
-#[test]
-fn a_module_made_elsewhere_runs_with_every_check() {
-    let checked = Checked::of_module(IDEA, CODE);
-    checked.compile();
-    let folder = checked.folder();
-    let unmatched = "lengua runs a program only when its idea and code match lengua.lock";
-    let sum = checked.run(&["2", "3"]);
-    assert_eq!(sum.stdout, b"5\n", "{sum:?}");
-    assert!(sum.stderr.is_empty(), "{sum:?}");
-    assert_eq!(sum.status.code(), Some(0), "{sum:?}");
-
-    let other = lengua::wasm::text::build(OTHER).expect("it builds").wasm;
-    std::fs::write(folder.join("main.wasm"), &other).expect("another module");
-    refused(&checked.run(&["2", "3"]), unmatched, "another module");
-    std::fs::write(folder.join("main.wasm"), &checked.wasm).expect("the module");
-
-    let edited = IDEA.replace("# Purpose\n", "# Purpose\nIt also multiplies.\n");
-    std::fs::write(folder.join("idea.md"), edited).expect("idea.md");
-    refused(&checked.run(&["2", "3"]), unmatched, "idea.md edited");
-    std::fs::write(folder.join("idea.md"), IDEA).expect("idea.md");
-
-    let signed = std::fs::read_to_string(folder.join("lengua.lock")).expect("the lock");
-    let mut lock = lock::read(&folder, Some(&checked.key))
-        .expect("a valid lock")
-        .expect("a lock");
-    lock::write(&folder, &lock, &Key::from_bytes([9; 32])).expect("another key's lock");
-    refused(&checked.run(&["2", "3"]), unmatched, "another key's lock");
-    lock.code.as_mut().expect("its code").module_sha256 = Sha256Hex::of(&other);
-    lock::write(&folder, &lock, &checked.key).expect("a lock of another module");
-    refused(
-        &checked.run(&["2", "3"]),
-        "lengua.lock records another module than main.wasm to run",
-        "a lock that records another module to run",
-    );
-    std::fs::write(folder.join("lengua.lock"), &signed).expect("the lock");
-
-    let given = checked.run(&["--env", "NAME=you", "2", "3"]);
-    refused(
-        &given,
-        "idea.md doesn't use the environment",
-        "environment variables",
-    );
-
-    // Run as a program's folder, it has no main.wat.
-    let program = Command::new(
-        checked.bin().join(
-            Path::new(env!("CARGO_BIN_EXE_lengua-run"))
-                .file_name()
-                .expect("lengua-run's name"),
-        ),
-    )
-    .arg("--data-dir")
-    .arg(checked.data.path())
-    .arg(&folder)
-    .args(["2", "3"])
-    .output()
-    .expect("lengua-run starts");
-    refused(&program, unmatched, "a module's folder without --module");
-
-    let sum = checked.run(&["2", "3"]);
-    assert_eq!(sum.stdout, b"5\n", "{sum:?}");
-    assert_eq!(sum.status.code(), Some(0), "{sum:?}");
-
-    let deep = Checked::of_module(IDEA, DEEP);
-    deep.compile();
-    let trapped = deep.run(&[]);
-    assert_eq!(trapped.status.code(), Some(134), "{trapped:?}");
-    assert!(
-        said(&trapped).contains("its calls went deeper than the stack holds"),
-        "{trapped:?}"
-    );
-    assert!(!said(&trapped).contains("main.wat"), "{trapped:?}");
 }
 
 /// A file of the example `name`, in examples.

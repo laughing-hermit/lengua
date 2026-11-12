@@ -582,8 +582,18 @@ fn prepare(workload: Workload, place: &Path, idea: &str) -> Result<Prepared, Str
         }
         None => None,
     };
+    // The idea a module of another toolchain runs under: lengua's program's, with the line
+    // that names an outside module as its program, as lengua asks of any idea whose program
+    // is a module made elsewhere. Its grants are lengua's idea's own lines.
     let idea_file = place.join("idea.md");
-    std::fs::write(&idea_file, idea).map_err(|error| failed(idea_file.display(), error))?;
+    let outside = idea
+        .replace("computation: main.wat", "computation: main.wasm")
+        .replace(
+            "# Constraints\n",
+            "# Constraints\n- Module: main.wasm, built from C, C++ or Rust for wasm32-wasip1, \
+             for lengua's benchmark\n",
+        );
+    std::fs::write(&idea_file, outside).map_err(|error| failed(idea_file.display(), error))?;
     Ok(Prepared {
         args: workload.args,
         folder,
@@ -2389,7 +2399,8 @@ fn report(results: &Results) -> String {
     // Since 2026-11-11 the other modules make the checks lengua's run makes.
     let checks = if results.checked_modules {
         ", and with every check lengua's run makes: each has a lengua.lock of its own, signed \
-         with the same key, which records lengua's idea and the module, and its run reads and \
+         with the same key, which records the module and lengua's idea, with the line that names \
+         an outside module added, and its run reads and \
          checks the three as lengua's does, since a module lengua runs for a user always pays \
          them (the last section gives the same modules without)"
     } else {

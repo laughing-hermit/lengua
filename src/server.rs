@@ -36,8 +36,8 @@ use crate::platform::Machine;
 use crate::prove;
 use crate::runner::{self, End, Limits};
 use crate::state::{
-    CODE_FILE, Files, IDEA_FILE, LEGACY_IDEA_FILE, LEGACY_TESTS_FILE, ProgramFolder, Snapshot,
-    State, compiled_module, stamped_copy, tested_module, wrong_record,
+    CODE_FILE, Files, IDEA_FILE, LEGACY_IDEA_FILE, LEGACY_TESTS_FILE, OUTSIDE_FILE, ProgramFolder,
+    Snapshot, State, compiled_module, stamped_copy, tested_module, wrong_record,
 };
 use crate::testdiff;
 use crate::testfile::{self, TestSuite};
@@ -229,6 +229,10 @@ struct Checking {
     /// For an idea with a `- Secret:` line, what the check of the engine's machine code read on
     /// this CPU, in one line.
     machine_code: Option<String>,
+    /// For an outside module, main.wasm, what every reply says of it: that it is trusted, not
+    /// proven, what doesn't hold for it and what lengua's host holds
+    /// ([`crate::wasm::outside::said`]). `None` for main.wat.
+    outside: Option<Vec<String>>,
 }
 
 impl std::fmt::Debug for Checking {
@@ -365,8 +369,17 @@ pub struct CheckParams {
 #[derive(Debug, Default, Serialize, schemars::JsonSchema)]
 pub struct CheckReport {
     /// Where the program stands: write_idea, idea_problems, needs_request, write_code,
-    /// code_problems, testing, tests_failed, proving or done.
+    /// code_problems, testing, tests_failed, proving or done; or trusted_not_proven, in done's
+    /// place, for an outside module (main.wasm, which a compiler made from another language),
+    /// which is never done: lengua tests it and holds it to no rule and no proof.
     pub state: String,
+    /// For an outside module alone, at every stage from its code on: first that it is trusted,
+    /// not proven, with what its idea says it was built from; then each guarantee of a lengua
+    /// program that does not hold for it (`not held`, `not proven`, `not attested`), and what
+    /// lengua's host holds for it all the same (`held`). Tell the user each line. A program
+    /// lengua compiled to main.wat has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outside: Vec<String>,
     /// Every problem to fix before going on, each saying where it is and how to fix it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<String>,
@@ -522,6 +535,11 @@ pub struct RunReport {
     /// words: tell the user before a run that matters to them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub may_reach: Vec<String>,
+    /// For an outside module (main.wasm, which a compiler made from another language) alone:
+    /// that the program that ran is trusted, not proven. lengua held it to its idea's grants,
+    /// and to none of main.wat's rules or proofs. Tell the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outside: Option<String>,
 }
 
 /// One connection lengua made for a program, or couldn't.
@@ -575,6 +593,7 @@ fn ended_report(
             .map(ConnectionReport::of)
             .collect(),
         may_reach: Vec::new(),
+        outside: None,
     }
 }
 
@@ -642,6 +661,7 @@ impl LenguaServer {
             serving: Some(address),
             connections,
             may_reach: Vec::new(),
+            outside: None,
         }
     }
 }
@@ -691,7 +711,11 @@ impl LenguaServer {
             of truth, and the tests in it, and records it with the user's words that asked for \
             it; checks the code, main.wat, against lengua's rules; runs every test with fresh \
             random inputs; and proves the program for \
-            every input it can. It keeps the index.md and log.md of \
+            every input it can. For an idea with a `- Module:` line, the code is main.wasm, an \
+            outside module that a compiler made from another language: check validates and \
+            tests it, holds it to no rule and proves nothing, and replies trusted_not_proven, \
+            never done, with what does not hold for it in `outside`. It keeps the index.md and \
+            log.md of \
             the folder's bundle, the graph of program folders, and says how the graph stands. \
             Call it after every edit to idea.md \
             or the code. It replies within about 40 seconds; the tests and the proof go on in the \
@@ -745,6 +769,9 @@ impl LenguaServer {
             system's: give such an argument as an absolute path, or as a path in folder. \
             An idea with a `- Runs:` line lets it start the programs the line names, which \
             lengua doesn't confine; may_reach says each such grant. \
+            An outside module (main.wasm, for an idea with a `- Module:` line) runs in the same \
+            host under the same grants, and the reply's `outside` says it is trusted, not \
+            proven: tell the user. \
             A server starts in the background on its \
             idea's port and run returns its address; call run with stop: true to stop it and get \
             what it printed (it also stops after ten minutes or when the session ends). path: \
@@ -1484,6 +1511,10 @@ impl LenguaServer {
 
     /// What `check` replies about a checking job.
     fn checking_report(&self, folder: &ProgramFolder, checking: &Checking) -> CheckReport {
+        // An outside module's replies are its own: none of them says done, or names a rule.
+        if let Some(said) = &checking.outside {
+            return self.outside_report(folder, checking, said);
+        }
         let stage = *checking.stage.borrow();
         let code = CODE_FILE;
         let Ok(found) = checking.found.lock() else {
@@ -1688,7 +1719,12 @@ impl LenguaServer {
         code: CodeStamp,
     ) -> Result<(), String> {
         let _writing = self.lock_writes.lock().await;
-        let file = CODE_FILE;
+        // An outside module's stamp is of main.wasm.
+        let file = if code.outside() {
+            OUTSIDE_FILE
+        } else {
+            CODE_FILE
+        };
         let changed = || {
             format!(
                 "{IDEA_FILE} or {file} changed while the code was being checked, so nothing was \
@@ -1702,10 +1738,12 @@ impl LenguaServer {
             .ok()
             .flatten()
             .ok_or_else(changed)?;
-        let current = read_optional(folder, file)?.ok_or_else(changed)?;
+        let current = crate::state::read_file(&folder.file(file))
+            .map_err(|error| format!("couldn't read {folder}/{file}: {error}"))?
+            .ok_or_else(changed)?;
         let unchanged = lock.idea.sha256 == *idea
             && trust::idea_hash(read_idea(folder)?.as_bytes()) == *idea
-            && Sha256Hex::of(current.as_bytes()) == code.sha256;
+            && Sha256Hex::of(&current) == code.sha256;
         if !unchanged {
             return Err(changed());
         }
@@ -2312,10 +2350,9 @@ fn wrong_lines(text: &str) -> Vec<(String, String)> {
 fn state_for_run(
     data_dir: &DataDir,
     folder: &ProgramFolder,
-    code_file: &str,
 ) -> Result<(State, Snapshot, Files, Option<Key>), String> {
     let key = Key::load(data_dir).map_err(|error| error.to_string())?;
-    let (snapshot, files) = Snapshot::read_with_code(folder, key.as_ref(), code_file)
+    let (snapshot, files) = Snapshot::read_with_files(folder, key.as_ref())
         .map_err(|error| format!("can't read {folder}: {error}"))?;
     if let Some(lock) = snapshot.valid_lock() {
         remember_wrong(data_dir, lock);
@@ -2355,10 +2392,6 @@ pub struct ShellRun {
     pub env: BTreeMap<String, String>,
     /// The program's command-line arguments.
     pub args: Vec<String>,
-    /// Whether the folder's code is a module made elsewhere, main.wasm, where a program's is
-    /// main.wat (`--module`): a folder `lengua-mcp measure` made for a module of another
-    /// toolchain, which runs with every check a program's run makes.
-    pub module: bool,
 }
 
 impl ShellRun {
@@ -2376,7 +2409,6 @@ impl ShellRun {
             folder: None,
             env: BTreeMap::new(),
             args: Vec::new(),
-            module: false,
         };
         while let Some(arg) = args.next() {
             // The first word that isn't an option starts the program's arguments.
@@ -2386,7 +2418,6 @@ impl ShellRun {
             }
             match arg.as_str() {
                 "--in" => request.folder = Some(args.next().ok_or("--in needs a folder")?),
-                "--module" => request.module = true,
                 "--env" => {
                     let pair = args.next().ok_or("--env needs NAME=value")?;
                     let (name, value) = pair
@@ -2991,6 +3022,7 @@ mod tests {
             further: false,
             obligations: Vec::new(),
             machine_code: None,
+            outside: None,
         });
         server
             .checks

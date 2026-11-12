@@ -21,7 +21,10 @@ is built for.
   references give the dialect's rules, lengua's host, WebAssembly text, constant time and the
   CPU's caches, and how to build on parts; its assets are templates of whole programs, each
   with its idea, and lengua's library of parts (`assets/parts`), each a program whose idea
-  states what its functions offer.
+  states what its functions offer. When the user asks for code in another language, it also
+  says how a module that a compiler made from Rust or C runs as the program, `main.wasm`:
+  under the idea's grants and tests, held to no rule and no proof, and marked "trusted, not
+  proven".
 - `server/lengua-mcp` (`lengua-mcp.exe` on Windows): the MCP server, with two tools. `check`
   records the idea, builds `main.wat`, holds it to every rule, runs every test and proves the
   tests in the background. `run` runs a program `check` checked.

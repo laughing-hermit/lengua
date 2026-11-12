@@ -1,7 +1,7 @@
 //! `cargo xtask gate`: the one check that says whether the whole run passed, from its jobs'
 //! results as the workflow gives them: `RESULTS`, plan's, format's and test's, which must all
-//! have succeeded; and `GOLDEN_DIFF`, `BENCH_WASM` and `INSTALL`, which run in some modes only,
-//! so may have been skipped.
+//! have succeeded; and `GOLDEN_DIFF`, `BENCH_WASM`, `OUTSIDE_WASM` and `INSTALL`, which run in
+//! some modes only, so may have been skipped.
 
 use crate::ci;
 
@@ -22,12 +22,19 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
     let results = ci::setting("RESULTS");
     let golden = ci::setting("GOLDEN_DIFF");
     let bench = ci::setting("BENCH_WASM");
+    // A workflow that names no outside-wasm job, as an older one, gives nothing: skipped.
+    let outside = Some(ci::setting("OUTSIDE_WASM"))
+        .filter(|result| !result.is_empty())
+        .unwrap_or_else(|| "skipped".to_owned());
     let install = ci::setting("INSTALL");
     println!(
-        "plan, format, test: {results}; golden diff: {golden}; bench-wasm: {bench}; install: \
-         {install}"
+        "plan, format, test: {results}; golden diff: {golden}; bench-wasm: {bench}; \
+         outside-wasm: {outside}; install: {install}"
     );
-    Ok(u8::from(!passed(&results, &[&golden, &bench, &install])))
+    Ok(u8::from(!passed(
+        &results,
+        &[&golden, &bench, &outside, &install],
+    )))
 }
 
 #[cfg(test)]

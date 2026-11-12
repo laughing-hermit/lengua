@@ -57,6 +57,30 @@ Any other folder a run refuses, saying why on standard error, and exits with 125
 folder that came from another computer, where this user's key never signed its lock, use
 [`lengua-mcp check`](check.md), or have the agent call `check` on it.
 
+## An outside module
+
+A folder whose idea has a line `- Module: main.wasm, built from …` holds `main.wasm` in
+`main.wat`'s place: a WebAssembly module that a compiler made from Rust, C or another language.
+`check` tested it against the idea's tests and stamped it; it checked no rule and proved nothing
+([check.md](check.md)). Such a folder runs as any other, by the same commands, in the same host,
+under the same grants, with the same limits and exit codes, and with these differences:
+
+- before the program starts, the run says on standard error what it is, in one line that begins
+  `lengua-run: trusted, not proven: main.wasm is an outside module, which its idea says was built
+  from …` (`lengua-mcp:` from `lengua-mcp run`). The `run` tool's reply says the same in
+  `outside`;
+- the module that runs is `main.wasm` itself, byte for byte the file `check` tested, by the
+  SHA-256 its lock records: there is nothing to build. The `run` tool also reads it again as
+  `check` did, with what the idea grants;
+- a trap is named without a line, since there is no `main.wat` to place it on;
+- nothing says the program ends. The `run` tool stops it at its deadline, as it stops any
+  program. A run from a shell has no time limit, for any program, and `main.wat`'s bounded
+  loops are a rule an outside module isn't held to: stop it as any command, with Ctrl-C or a
+  signal, or run it under a timeout of the shell's.
+
+What holds for it is what the next section says, and it holds by the host alone: no call
+reaches anything the idea doesn't grant, whatever the module imports or passes.
+
 ## What the program reaches
 
 Only what its idea's `- Uses:`, `- Network:`, `- Files:` and `- Runs:` lines name:
@@ -201,16 +225,17 @@ program in the same configuration of the engine, and from its compiled form, kep
 folder under the user's key as a checked program's is: its first run compiles it, before the
 run `measure` measures. There are two ways to run it:
 
-- With `--idea <idea.md>`, the module runs as lengua runs a program for a user. `measure` keeps
-  a folder for it in the data folder (`measured/`), with that idea.md, the module as
-  `main.wasm` and a `lengua.lock` the user's key signs, which the code that writes every lock
-  writes. The measured run is `lengua-run <that folder> --module`: it reads the lock and
-  checks its signature, hashes idea.md and the module and holds them to the lock, and takes
-  its grants from the idea's `- Uses:` and `- Network:` lines. No check is left out. The lock
-  says that nothing was tested or proven, and `--module` runs only a folder whose lock
-  records its module as the one to run, so a lock made this way never runs a `main.wat`, and
-  a checked program's lock never runs a `main.wasm`. An idea that names a secret isn't run
-  this way.
+- With `--idea <idea.md>`, the module runs as lengua runs an outside module for a user
+  ([check.md](check.md)): the idea's `- Module:` line names it. `measure` reads the module as
+  `check` reads an outside module, and refuses what `check` refuses; then it keeps a folder
+  for it in the data folder (`measured/`), with that idea.md, the module as `main.wasm` and a
+  `lengua.lock` the user's key signs, which the code that writes every lock writes, with the
+  stamp of an outside module: trusted, not proven. The measured run is `lengua-run <that
+  folder>`, the run of any outside module's folder: it reads the lock and checks its
+  signature, hashes idea.md and the module and holds them to the lock, takes its grants from
+  the idea's `- Uses:` and `- Network:` lines, and says on standard error that the module is
+  trusted, not proven. No check is left out. `measure` runs none of the idea's tests against
+  the module, as `check` would: it measures a run, and whoever measures checks the output.
 - Without `--idea`, the module runs with no lock, with what `--uses` and `--network` allow,
   written as an idea's lines are; `measure` hashes its file, so the run it measures doesn't.
 

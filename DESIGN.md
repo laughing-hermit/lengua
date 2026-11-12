@@ -51,7 +51,9 @@ done; never edit lengua.lock; run programs only with `run`.
    files. A `check` on changed files cancels the old job.
 
 Its reply's `state` is one of `write_idea`, `idea_problems`, `needs_request`, `write_code`,
-`code_problems`, `testing`, `tests_failed`, `proving` and `done`, with one `next_step`. A reply
+`code_problems`, `testing`, `tests_failed`, `proving` and `done`, with one `next_step`; for an
+outside module (below), `trusted_not_proven` stands where `done` would, and there is no
+`proving`. A reply
 comes within about 40 seconds, since agent harnesses cut off long tool calls; the tests and proofs
 go on in the background, and the next `check` picks them up. Once the tests pass, `check` waits
 at most 20 seconds more for the proofs, then says done and lists the proofs still running. All of
@@ -179,6 +181,82 @@ runs is held to the module hash in the signed lock.
 
 `lengua-mcp wasm <main.wat> [-o <file>]` writes the module, with no rules, tests or lock: a plain
 WASI preview 1 module, which any WASI runtime runs when it reaches only standard streams and files.
+
+## An outside module
+
+The owner decided on 2026-11-12 that the most useful thing lengua has is a safe way to run code an
+agent wrote, and that it should hold for code in any language. So an idea's program may be
+`main.wasm`, a WebAssembly module that a compiler made from Rust, C or another language, in place
+of `main.wat` (`src/wasm/outside.rs`, `src/server/wat/outside.rs`). lengua runs it in the same
+host under the same grants, and marks it "trusted, not proven" wherever it names it.
+
+**The shape.** The folder holds `idea.md` and `main.wasm`, and no `main.wat`. The idea says what
+it is twice, and `check` holds the two to each other: the frontmatter's `computation: main.wasm`,
+and one line of `# Constraints`, `- Module: main.wasm, built from …`, with up to 200 characters
+that say what the module was built from. Those words are the idea's own: lengua records and shows
+them and can't check them. The line is in the idea's body, which lengua hashes and a run reads, so
+which file is the program is part of what the lock records (`Snapshot::outside`, `src/state.rs`).
+An idea with the line has no `- Secret:` line, since the secret rule reads main.wat, no
+`- Splits:` line, since the rules that bound the pieces together read main.wat, and no
+`- Builds on:` line, since a part gives functions of its main.wat.
+
+**What `check` does.** After the idea stage, in place of the build and the rules, it reads
+`main.wasm` and refuses, before anything of it is compiled or run:
+
+- a file past 16 MiB;
+- a module the validator doesn't take with exactly the engine's features (The engine, below): so
+  no threads, tail calls, exceptions, 64-bit or multiple memories, GC, relaxed SIMD, wide
+  arithmetic or components;
+- an import that isn't a function, isn't one of WASI preview 1 or of lengua's own modules, or has
+  another type; and a function of lengua's own modules that the idea doesn't grant. A function of
+  WASI preview 1 that the idea doesn't grant links, since a toolchain's startup imports several
+  whatever the program does, and the host refuses each call of it;
+- a memory that isn't exported as `memory`, one that declares no maximum, and one that may hold
+  more than 16,384 pages, main.wat's own most;
+- a module with no `_start` that takes and gives nothing;
+- `main.wat` beside it.
+
+Then it runs the idea's tests against the module in the workers, as it runs main.wat's, keeps the
+module and its compiled, sealed form, and stamps it. It checks no rule, starts no proof, and
+writes no entry in idea.md's `verified`. Its last state is `trusted_not_proven`; it never says
+`proving` or `done`. Every reply about the module carries `outside`: the trust and the idea's
+words first, then a line for each guarantee that does not hold, then what the host holds. The
+bundle's log records `checked: trusted, not proven`. The attester refuses the folder: it attests
+main.wat alone.
+
+**The lock** keeps its format. An outside module's code stamp has one hash twice, since the code
+file is the module, which no main.wat's stamp has; its `engine` line ends in `; an outside module:
+trusted, not proven`; and its stack and unsafe blocks are 0. A run refuses a folder whose idea, read
+bytes and stamp don't all say the same kind of code.
+
+**A run** makes every check a run makes, then says the trust before the program starts: on
+standard error from a shell, and in the reply's `outside` from the `run` tool. The module that
+runs is `main.wasm` itself, held to the SHA-256 the lock records; the `run` tool reads it again
+as `check` did.
+
+**What holds it is the host alone.** The host was written to answer whatever module comes: every
+function checks the idea before it does anything, and every buffer against the program's memory
+(The host, below). The review of an outside module
+([docs/reviews/outside-2026-11-12.md](docs/reviews/outside-2026-11-12.md)) went through each
+guarantee that leaned on a rule of main.wat's, and says what holds it now:
+
+| The guarantee | For main.wat, also by | For an outside module, by |
+|---|---|---|
+| No call the idea doesn't grant | the checker, which refuses the import | the host, at each call (`answer`); and `check`'s reading, for lengua's own modules |
+| No function of another host | the checker | `check`'s reading; the linker has no such function, so the module wouldn't start |
+| Memory within a stated size, at most 1 GiB | the rule: one memory, minimum equal to maximum, at most 16,384 pages, no `memory.grow` | `check`'s reading (a maximum, at most 16,384 pages), and the store's limit at each `memory.grow` |
+| The memory the host reads and writes is the program's own | the rule: exports are `_start` and `memory` | `check`'s reading (exported as `memory`); a module without it stops at its first call of the host |
+| A buffer a call borrows lies inside the memory | the memory rules, and the sizes call before `args_get` | the host, which checks every buffer of every call |
+| It ends | rule 2, bounded loops, and rule 1, no recursion | the engine's epochs at the deadline of a test and of the `run` tool; the engine's stack limit; nothing in a run from a shell, where the user stops it |
+| Nothing runs before `_start` | the rule: no start function | the limits are set before the module is instantiated, so a start function is stopped as `_start` is |
+| No table, no indirect call | rule 9 | the engine, which checks each call through a table, and the store's limit of 2^20 entries |
+| The same bits everywhere | the dialect's determinism checks | the engine's canonical NaNs, and relaxed SIMD refused. lengua says nothing of an outside module's own use of the clock or random bytes |
+| A secret decides nothing | the secret rule, and the machine code's check | nothing: the idea is refused |
+| Each access inside its own object | the memory rules M1 to M8, and the proofs | nothing: the reply says so |
+
+A run from a shell has no deadline for any program, by design: a server runs as long as its user
+wants. main.wat ends by its rules; an outside module may not, and the reply and docs/run.md say
+so.
 
 ## Parts
 
@@ -923,7 +1001,7 @@ pool, which kills a worker 20 seconds after its job's time.
 
 Memory is held to what the module declares: the dialect makes main.wat's minimum its maximum, of
 at most 16,384 pages, 1 GiB (the largest a shipped program declares is 1,538). A C, C++ or Rust
-toolchain's module, which the benchmark runs, is no main.wat and may declare up to 4 GiB. A
+toolchain's module, an outside module, is held to the same 1 GiB, and the benchmark builds its own so. A
 module's one table holds at most 1,048,576 entries, whatever it declares or grows to.
 
 ### Workers
@@ -1099,7 +1177,8 @@ the CPU's vectors and caches, and the features main.wat may use), `tests`, `proo
 part the program builds on, with the functions taken and what the part's lock records of its
 proofs), `contract` (for a part, each function it offers), `memory`,
 `example` (the idea's first example as the tests ran it), `performance`, `changes` (the requests,
-how idea.md changed, and lengua's list of test changes that test less), `shell` and `graph`. Words
+how idea.md changed, and lengua's list of test changes that test less), `shell`, `graph`, and
+for an outside module `outside` (that it is trusted, not proven, and what does not hold). Words
 given with an idea that still has problems are held for that folder and recorded once it checks;
 a restart loses them.
 
@@ -1107,7 +1186,8 @@ a restart loses them.
 once beneath the folder and read from the file that opened, so no name or link leads out and
 nothing that takes its name afterwards is read), `folder`,
 `timeout_seconds`, `env` and `stop`. Its reply gives standard output and error, the exit code, how
-the program ended, its time on the clock, where a server serves, and the connections lengua made.
+the program ended, its time on the clock, where a server serves, the connections lengua made, and
+for an outside module `outside`, that what ran is trusted, not proven.
 An idea that listens starts a server in the background, at most one per folder, reached at
 127.0.0.1 on its port.
 
@@ -1141,12 +1221,14 @@ Each run is a process of its own, measured by `lengua-mcp measure` (`src/measure
 wall time, peak resident memory and size. lengua's runs go through lengua-run, as a user runs a
 checked program, with every check a run makes. The other modules run by the same lengua-run, in
 the same engine, each from its compiled form kept under the user's key as lengua's is, and with
-the same checks (decided 2026-11-11): `measure --idea` keeps a folder for each, with lengua's
-idea, the module as main.wasm and a lock the user's key signs, and the run reads that lock,
-holds the idea and the module to it and takes its grants from the idea, by the code that runs a
-program. The finish line sets lengua against the other languages under the same runtime, and a
-module lengua runs for a user always pays these checks. Each report's last section gives the
-same modules run with no lock, which the gate doesn't judge.
+the same checks (decided 2026-11-11): each runs as an outside module (W23), as lengua runs one
+for a user. `measure --idea` reads the module as `check` reads an outside module, keeps a folder
+for it with lengua's idea and the `- Module:` line that names it, the module as main.wasm and a
+lock the user's key signs, and the run reads that lock, holds the idea and the module to it
+and takes its grants from the idea, by the code that runs any outside module's folder. The
+finish line sets lengua against the other languages under the same runtime, and a module
+lengua runs for a user always pays these checks. Each report's last section gives the same
+modules run with no lock, which the gate doesn't judge.
 `cargo xtask bench` builds lengua-run by itself first, with no compiler in it, as it ships. On
 Linux a program starts from `lengua-spawn`, a small process that forks it, so its peak memory is
 its own. The runs alternate between the versions, in an order shuffled from
@@ -1322,6 +1404,15 @@ listed below.
   reads the code of the very module it loaded and is about to run. A secret never names a
   computer or a port a program opens, and since no branch or loop depends on one, neither does
   how many connections a program opens, nor when.
+- **A module lengua didn't build, and that passed no rule.** An outside module, `main.wasm`, is a
+  compiler's output or anything written to look like one. `check` reads it before anything of
+  it is compiled, and refuses what the host can't hold by itself (An outside module, above).
+  What it takes, the host holds to the idea's grants at each call, to its own memory, to the
+  size it declares, to the engine's stack and, in a test and in the `run` tool, to the
+  deadline. It can't make a reply say more than "trusted, not proven": the state, the lines
+  and the lock's stamp come from the idea's `- Module:` line, which the lock records, and never
+  from anything the module prints or exports. The threat cases and their tests are in
+  docs/reviews/outside-2026-11-12.md.
 
 ### What lengua trusts
 
