@@ -19,6 +19,9 @@ name: ci
 #   and checked on a clean runner of the same system and CPU).
 # - A bench's C, C++ and Rust are compiled to WebAssembly once, by the bench-wasm job on
 #   linux-x86_64, and every runner's bench measures those same modules.
+# - The suite's outside modules, tests/outside's Rust and C programs, are compiled to WebAssembly
+#   once too, by the outside-wasm job on linux-x86_64, and every runner's suite checks and runs
+#   those same modules (tests/outside.rs).
 # - `filter` matches test *names* only (libtest's filters, after `--`). To run a test *file*, name
 #   it in `test_files` (`lib` is the library's own tests): each becomes `--test <name>`. A run with
 #   a filter or files that matched no test fails, so a gate cannot pass by running nothing.
@@ -127,6 +130,7 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       bench: ${{ steps.matrix.outputs.bench }}
+      outside: ${{ steps.matrix.outputs.outside }}
     steps:
       - uses: actions/checkout@v4
 
@@ -252,12 +256,52 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
+  # The programs of tests/outside, a Rust one and a C one, compiled to WebAssembly once, with
+  # Rust's wasm32-wasip1 target and wasi-sdk, and kept for every runner's suite, which checks
+  # and runs the same modules as outside modules (`cargo xtask outside-wasm`,
+  # tests/outside.rs). It runs only when the suite does.
+  outside-wasm:
+    name: outside-wasm
+    needs: plan
+    if: ${{ needs.plan.outputs.outside == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/wasi-sdk
+          key: wasi-sdk-${{ hashFiles('xtask/tools.tsv') }}
+
+      - name: Rust
+        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
+
+      - name: wasi-sdk and Rust's wasm32-wasip1 target
+        run: cargo xtask fetch linux-x86_64 wasi
+
+      - name: The modules
+        run: cargo xtask outside-wasm target/outside-wasm
+
+      # A run's every attempt keeps one set, the last built.
+      - name: Keep the modules
+        uses: actions/upload-artifact@v4
+        with:
+          name: outside-wasm-${{ github.run_number }}
+          path: target/outside-wasm
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
+
   test:
     name: ${{ matrix.mode }} (${{ matrix.target }})${{ matrix.label && format(' {0}', matrix.label) || '' }}
-    # A bench needs the WebAssembly builds; every other job only waits for bench-wasm to be
-    # skipped, and none runs when it failed.
-    needs: [plan, bench-wasm]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.bench-wasm.result != 'failure' }}
+    # A bench needs the WebAssembly builds, and the suite the outside modules; every other job
+    # only waits for bench-wasm and outside-wasm to be skipped, and none runs when one failed.
+    needs: [plan, bench-wasm, outside-wasm]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.bench-wasm.result != 'failure' && needs.outside-wasm.result != 'failure' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -349,6 +393,13 @@ jobs:
         if: ${{ matrix.mode == 'compile' || matrix.mode == 'test' || matrix.mode == 'ignored' }}
         run: cargo test --release --locked --workspace --no-run
 
+      - name: The modules built from tests/outside's Rust and C
+        if: ${{ matrix.mode == 'test' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: outside-wasm-${{ github.run_number }}
+          path: ${{ runner.temp }}/outside-wasm
+
       - name: Tests
         if: ${{ matrix.mode == 'test' }}
         env:
@@ -359,6 +410,7 @@ jobs:
           LENGUA_RANDOM_SEED: ${{ inputs.seed }}
           STALL_SECONDS: ${{ inputs.stall_seconds }}
           LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
+          LENGUA_OUTSIDE_WASM: ${{ runner.temp }}/outside-wasm
         run: cargo xtask test
 
       - name: The slow ignored tests
@@ -566,11 +618,12 @@ jobs:
           if-no-files-found: ignore
 
   # One check that says whether the whole run passed: plan, format and test must succeed;
-  # golden-diff runs in the golden mode only, bench-wasm when a bench runs, and install in the
-  # release mode only, so each may be skipped (`cargo xtask gate`).
+  # golden-diff runs in the golden mode only, bench-wasm when a bench runs, outside-wasm when
+  # the suite runs, and install in the release mode only, so each may be skipped (`cargo xtask
+  # gate`).
   gate:
     name: gate
-    needs: [plan, format, bench-wasm, test, golden-diff, install]
+    needs: [plan, format, bench-wasm, outside-wasm, test, golden-diff, install]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -587,5 +640,6 @@ jobs:
           RESULTS: ${{ needs.plan.result }} ${{ needs.format.result }} ${{ needs.test.result }}
           GOLDEN_DIFF: ${{ needs.golden-diff.result }}
           BENCH_WASM: ${{ needs.bench-wasm.result }}
+          OUTSIDE_WASM: ${{ needs.outside-wasm.result }}
           INSTALL: ${{ needs.install.result }}
         run: cargo xtask gate

@@ -172,6 +172,20 @@ Share a program by its idea, which anyone's agent compiles and checks, or by its
 `lengua-mcp check` attests on any computer with no lock and no key. A lock is signed with a key
 in your own data folder, so it verifies only there.
 
+### Code in another language
+
+Ask for it, and the program may be a module that a compiler made from Rust, C or another
+language in place of `main.wat`: "Use lengua to run this Rust program so that it can only read
+the folder I give it". The agent writes the idea as for any program, its tests and grants
+included, builds the code for `wasm32-wasip1` into `main.wasm`, and says so in the idea
+(`computation: main.wasm`, and a line `- Module: main.wasm, built from …`). `check` reads the
+module, refuses what lengua's host can't hold by itself, and runs the idea's tests against it.
+`run` and `lengua-run` then run it in the same host, held to the same grants.
+
+Such a module is **trusted, not proven**. `check` ends at `trusted_not_proven`, never `done`,
+and its reply's `outside` lines say each thing that does not hold; every run says the same words
+before the program starts. The next section says which guarantees it keeps.
+
 ## What lengua guarantees, and what it doesn't
 
 Within lengua, for a program at `done`:
@@ -219,6 +233,26 @@ Within lengua, for a program at `done`:
   five ways around the rule; each has a test and is closed, and what it left open is in
   [todo.md](todo.md).
 - **The clock is rounded down to a microsecond**, so it can't carry finer timing.
+
+For an outside module, `main.wasm`, at `trusted_not_proven`, lengua's host alone holds the
+program, and fewer of these hold:
+
+- **It reaches only what its idea grants**, as above: no rule refuses its imports of WASI, so
+  the host refuses each call the idea doesn't allow, and `check` refuses a module that imports a
+  function of lengua's own modules without the grant, or a function of any other host.
+- **Its memory stays its own**, within the maximum its module declares, which `check` holds to
+  1 GiB. Inside that memory nothing is held: no memory rule follows its addresses, so it can
+  corrupt its own data, as a C program can.
+- **A test and the `run` tool stop it at their deadline**, and its calls stay within the
+  engine's stack. Nothing says it ends by itself: a run from a shell has no time limit.
+- **Only the module `check` tested runs**, by the SHA-256 the signed lock records.
+- **Nothing else.** No rule of the Power of 10, no secret rule (`check` refuses an idea with a
+  `- Secret:` line), no proof, no entry in `verified`, no attestation by `lengua-mcp check`,
+  no parts, and no work split into pieces. What the idea says the module was built from is the idea's word: lengua can't
+  check it. The tests show the runs they made and no more.
+
+The threat cases, with the test of each, are in
+[docs/reviews/outside-2026-11-12.md](docs/reviews/outside-2026-11-12.md).
 
 What it doesn't promise:
 
@@ -389,7 +423,8 @@ with rows the list can't take back is the owner's ([todo.md](todo.md)).
   parts, `decimal`, `lines`, `crc32`, `bytes` and `sort64`, the same files the compile skill
   ships in its `assets/parts`, and `sum` and `checksums` are built on them.
 - `tests/`: the suite, the 29 programs of `tests/fixtures`, the host's 109 cases in
-  `tests/host-cases`, and the vendored schemas.
+  `tests/host-cases`, the Rust and C programs of `tests/outside`, which CI compiles to outside
+  modules, and the vendored schemas.
 - `benches/`: the gate, and the C, C++ and Rust versions of its workloads.
 - `xtask/`: lengua's tooling, in Rust (`cargo xtask help` lists the tasks), with the runners in
   `targets.json` and the pinned tools in `tools.tsv`.
@@ -466,7 +501,11 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
   proven for every input in their ranges; `sort64` for two numbers and `crc32` for 2
   characters of text, each tested beyond.
 - **W22, scale; W23, working with other code; W24, tools:** what a programming language has
-  that lengua still lacks ([todo.md](todo.md)).
+  that lengua still lacks ([todo.md](todo.md)). One part of W23 is built, on main:
+  a module that a compiler made from Rust, C or another language, run as the
+  program itself under an idea's grants and tests, and marked "trusted, not proven" (above).
+  The rest of W23, a lengua program as a library and an outside module that a lengua program
+  calls, isn't started.
 
 [ROADMAP.md](ROADMAP.md) has each milestone's design and the runs that verify it.
 
