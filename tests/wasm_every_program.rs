@@ -93,10 +93,14 @@ async fn from_request_to_done(session: &Session, name: &str, folder: &Path) -> R
     if calls {
         let written = program.read("idea.md").unwrap_or_default();
         if !trust::lengua_entries(&written).is_empty() {
-            return Err(format!("{name}: it calls a module and has an entry in `verified`"));
+            return Err(format!(
+                "{name}: it calls a module and has an entry in `verified`"
+            ));
         }
         if done["calls"].as_array().is_none_or(Vec::is_empty) {
-            return Err(format!("{name}: its reply names no module it calls: {done}"));
+            return Err(format!(
+                "{name}: its reply names no module it calls: {done}"
+            ));
         }
         return Ok(());
     }

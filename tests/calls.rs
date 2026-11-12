@@ -701,6 +701,26 @@ async fn a_program_that_calls_an_outside_module_says_what_is_trusted() {
             .any(|line| line.contains("crc32.wasm, an outside module that is trusted, not proven")),
         "{ran}"
     );
+    // The `run` tool's worker loads the called module's compiled form only under the user's
+    // seal: with other bytes in its place, the run compiles the module again, gives the same
+    // CRC and keeps what it compiled.
+    let kept = lengua::state::compiled_for(
+        session.data_dir.path(),
+        lengua::wasm::text::BUILDER,
+        &hash,
+        lengua::wasm::engine::Setup::Run,
+    );
+    let planted = b"not a compiled module".to_vec();
+    std::fs::write(&kept, &planted).expect("plant it");
+    let again = session
+        .call_ok("run", with_stdin(&program, CHECK_INPUT, &json!({})))
+        .await;
+    assert_eq!(again["stdout"], CHECK_CRC, "{again}");
+    let now = std::fs::read(&kept).unwrap_or_default();
+    assert!(
+        now != planted && now.len() > planted.len(),
+        "the run didn't keep the called module it compiled"
+    );
     let folder = program.path().as_os_str();
     let shell = from_shell(
         &launcher(),
@@ -925,10 +945,12 @@ async fn main_wat_calls_only_what_its_idea_names() {
         problems.contains("the idea's `- Calls:` line names no function `text` of it"),
         "{reply}"
     );
-    let retyped = CALLER_CODE.replace(
-        r#"(import "crc32" "buffer" (func $buffer (result i32)))"#,
-        r#"(import "crc32" "buffer" (func $buffer (result i64)))"#,
-    );
+    let retyped = CALLER_CODE
+        .replace(
+            r#"(import "crc32" "buffer" (func $buffer (result i32)))"#,
+            r#"(import "crc32" "buffer" (func $buffer (result i64)))"#,
+        )
+        .replace("(call $buffer)", "(i32.wrap_i64 (call $buffer))");
     program.write("main.wat", &retyped);
     let reply = session.check(&program).await;
     assert_eq!(reply["state"], "code_problems", "{reply}");
@@ -1266,11 +1288,18 @@ async fn main_wat_exports_what_its_idea_offers_and_takes_no_address() {
     );
     let problems = problems_of(unlisted).await;
     assert!(problems.contains("main.wat exports `text`"), "{problems}");
-    // An exported function that reads through a number its caller passes.
-    let lent = LIBRARY_CODE.replace(
-        "(i32.load8_u (i32.add (global.get $text) (local.get $i)))",
-        "(i32.load8_u (i32.add (local.get $length) (local.get $i)))",
-    );
+    // An exported function that reads through a number its caller passes. Its own `_start`
+    // doesn't call it here, so no caller of this module lends it a region: the only callers
+    // are other programs.
+    let lent = LIBRARY_CODE
+        .replace(
+            "(i32.load8_u (i32.add (global.get $text) (local.get $i)))",
+            "(i32.load8_u (i32.add (local.get $length) (local.get $i)))",
+        )
+        .replace(
+            "(local.set $crc (call $crc32 (local.get $got)))",
+            "(local.set $crc (local.get $got))",
+        );
     let problems = problems_of(lent).await;
     assert!(
         problems.contains("$crc32 uses its parameter $length as an address"),
