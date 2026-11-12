@@ -167,7 +167,7 @@ impl Work<'_> {
             splitting.setup,
             Host::new(world),
             self.deadline.filter(|_| std::env::var_os("LENGUA_DEFENCES").is_some()),
-            Some(halt).filter(|_| std::env::var_os("LENGUA_DEFENCES").is_some()),
+            std::env::var_os("LENGUA_DEFENCES").is_some().then_some(halt),
         );
         let mut host = executed.host;
         // A module that can't be started as a piece started as the program: the run ends there.
