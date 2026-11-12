@@ -503,6 +503,12 @@ Linux on x86-64 (2.05 ms and 10.4 MiB before). A run's own cost over its module 
 the hashes of idea.md and main.wat. With the other modules that much faster too, lengua's checks
 now decide more of the short rows against them: the gate found 26 rows behind that
 KNOWN_BEHIND doesn't name, and 137 it names level or ahead, which left it (761 rows stay).
+Since 2026-11-11 the gate runs the other modules with the same checks, as any module lengua runs
+for a user has them, and since W23 as outside modules (run 43191148225): the gate passed on
+Linux on ARM64, no row against a WebAssembly build is behind and unnamed on any runner, and 15
+rows against native builds are, each one a row the list named once (733 rows stay). Reading
+an idea's grants and secrets in one pass, the one risk-free trim found in the checks, measured
+no gain in run 43131768685 and is gone: a run's own cost over its module stays about 0.1 ms.
 
 What a run still pays, on Linux on x86-64, of about 1.2 ms for add where a small Rust program
 takes 0.6 ms: 0.2 ms to load lengua-run itself, whose file is 3.4 MiB of the run's 5.6 MiB; 0.2

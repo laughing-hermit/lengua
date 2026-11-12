@@ -18,8 +18,9 @@
 //! every WebAssembly feature lengua's engine has on, but no other (FEATURES in
 //! src/wasm/engine.rs): LLVM's generic CPU, whose sign extension, saturating float-to-int
 //! conversions, multiple values, reference types, bulk memory and mutable globals are all among
-//! them, and SIMD128. Each memory may grow to 4 GiB, as lengua's host holds a module to the
-//! maximum its memory declares and wasm-ld declares none unless told. The stack is 1 MiB, Rust's
+//! them, and SIMD128. Each memory may grow to 1 GiB, the most lengua takes of an outside
+//! module, as lengua's host holds a module to the maximum its memory declares and wasm-ld
+//! declares none unless told. The stack is 1 MiB, Rust's
 //! own for WebAssembly, and the names are stripped, as a module that ships has none.
 
 use std::path::{Path, PathBuf};
@@ -27,8 +28,9 @@ use std::process::Command;
 
 use crate::{ci, files};
 
-/// The most a module's memory may grow to: 4 GiB.
-const MEMORY: &str = "4294967296";
+/// The most a module's memory may grow to: 1 GiB, the most lengua gives any module, its own
+/// and an outside one (4 GiB before the gate ran the other modules as outside modules).
+const MEMORY: &str = "1073741824";
 
 /// How bench-wasm is called.
 const WASM_USAGE: &str = "usage: cargo xtask bench-wasm <output folder>";

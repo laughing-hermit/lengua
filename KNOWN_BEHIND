@@ -38,9 +38,17 @@
 # (at 45b507b; Windows on ARM64 again in 43099764273, whose first report was lost with its upload),
 # found 135 more level and 2 ahead, and they left: 761 rows stay. It found 26 rows behind by more
 # than the margin that the list doesn't name, 4 of the 6 among them; todo.md lists them.
+# The first run where the other modules make lengua's checks (decided 2026-11-11),
+# https://github.com/laughing-hermit/lengua/actions/runs/43131768685 (at 43813ae; macOS on ARM64
+# in 43145761976, as the first's runner lost its connection), found 25 more level, and they
+# left: 736 rows stay. It found 10 rows behind by more than the margin that the list doesn't
+# name, 4 of the 26 among them; todo.md lists them.
+# The first run where the other modules run as outside modules (W23),
+# https://github.com/laughing-hermit/lengua/actions/runs/43191148225 (at 610aaf5), passed on
+# linux-aarch64 and found 3 more level on the others, and they left: 733 rows stay. It found 15
+# rows behind by more than the margin that the list doesn't name, all against native builds
+# and all rows the list named once; todo.md lists them.
 
-linux-x86_64 empty c-wasm cpu  # behind
-linux-x86_64 empty cpp-wasm cpu  # behind
 linux-x86_64 empty c cpu  # behind
 linux-x86_64 empty c wall  # behind
 linux-x86_64 empty c memory  # behind
@@ -159,7 +167,6 @@ linux-x86_64 tally cpp size  # behind
 linux-x86_64 tally rust memory  # behind
 linux-x86_64 tally rust size  # behind
 linux-x86_64 server c cpu  # behind
-linux-x86_64 server c wall  # behind
 linux-x86_64 server c memory  # behind
 linux-x86_64 server c size  # behind
 linux-x86_64 server cpp cpu  # behind
@@ -218,8 +225,6 @@ linux-aarch64 add rust cpu  # behind
 linux-aarch64 add rust wall  # behind
 linux-aarch64 add rust memory  # behind
 linux-aarch64 add rust size  # behind
-linux-aarch64 hypotenuse c-wasm memory  # behind
-linux-aarch64 hypotenuse cpp-wasm memory  # behind
 linux-aarch64 hypotenuse c cpu  # behind
 linux-aarch64 hypotenuse c wall  # behind
 linux-aarch64 hypotenuse c memory  # behind
@@ -270,8 +275,6 @@ linux-aarch64 shout rust cpu  # behind
 linux-aarch64 shout rust wall  # behind
 linux-aarch64 shout rust memory  # behind
 linux-aarch64 shout rust size  # behind
-linux-aarch64 wc c cpu  # behind
-linux-aarch64 wc c wall  # behind
 linux-aarch64 wc c memory  # behind
 linux-aarch64 wc c size  # behind
 linux-aarch64 wc cpp memory  # behind
@@ -349,7 +352,6 @@ linux-aarch64 readings rust wall  # behind
 linux-aarch64 readings rust memory  # behind
 linux-aarch64 readings rust size  # behind
 
-macos-aarch64 empty cpp-wasm cpu  # behind
 macos-aarch64 empty c cpu  # behind
 macos-aarch64 empty c wall  # behind
 macos-aarch64 empty c memory  # behind
@@ -412,8 +414,6 @@ macos-aarch64 upcase-stdin rust cpu  # behind
 macos-aarch64 upcase-stdin rust wall  # behind
 macos-aarch64 upcase-stdin rust memory  # behind
 macos-aarch64 upcase-stdin rust size  # behind
-macos-aarch64 shout c-wasm cpu  # behind
-macos-aarch64 shout cpp-wasm cpu  # behind
 macos-aarch64 shout c cpu  # behind
 macos-aarch64 shout c wall  # behind
 macos-aarch64 shout c memory  # behind
@@ -469,18 +469,15 @@ macos-aarch64 sort cpp size  # behind
 macos-aarch64 sort rust cpu  # behind
 macos-aarch64 sort rust wall  # behind
 macos-aarch64 sort rust size  # behind
-macos-aarch64 tally c-wasm memory  # behind
 macos-aarch64 tally c memory  # behind
 macos-aarch64 tally c size  # behind
 macos-aarch64 tally cpp memory  # behind
 macos-aarch64 tally cpp size  # behind
 macos-aarch64 tally rust memory  # behind
 macos-aarch64 tally rust size  # behind
-macos-aarch64 server c cpu  # behind
 macos-aarch64 server c wall  # behind
 macos-aarch64 server c memory  # behind
 macos-aarch64 server c size  # behind
-macos-aarch64 server cpp cpu  # behind
 macos-aarch64 server cpp wall  # behind
 macos-aarch64 server cpp memory  # behind
 macos-aarch64 server cpp size  # behind
@@ -530,15 +527,12 @@ windows-x86_64 add cpp size  # behind
 windows-x86_64 add rust wall  # behind
 windows-x86_64 add rust memory  # behind
 windows-x86_64 add rust size  # behind
-windows-x86_64 hypotenuse c cpu  # behind
 windows-x86_64 hypotenuse c wall  # behind
 windows-x86_64 hypotenuse c memory  # behind
 windows-x86_64 hypotenuse c size  # behind
-windows-x86_64 hypotenuse cpp cpu  # behind
 windows-x86_64 hypotenuse cpp wall  # behind
 windows-x86_64 hypotenuse cpp memory  # behind
 windows-x86_64 hypotenuse cpp size  # behind
-windows-x86_64 hypotenuse rust cpu  # behind
 windows-x86_64 hypotenuse rust wall  # behind
 windows-x86_64 hypotenuse rust memory  # behind
 windows-x86_64 hypotenuse rust size  # behind
@@ -553,26 +547,21 @@ windows-x86_64 upcase rust memory  # behind
 windows-x86_64 upcase rust size  # behind
 windows-x86_64 upcase-stdin c-wasm size  # behind
 windows-x86_64 upcase-stdin cpp-wasm size  # behind
-windows-x86_64 upcase-stdin c cpu  # behind
 windows-x86_64 upcase-stdin c wall  # behind
 windows-x86_64 upcase-stdin c memory  # behind
 windows-x86_64 upcase-stdin c size  # behind
 windows-x86_64 upcase-stdin cpp wall  # behind
 windows-x86_64 upcase-stdin cpp memory  # behind
 windows-x86_64 upcase-stdin cpp size  # behind
-windows-x86_64 upcase-stdin rust cpu  # behind
 windows-x86_64 upcase-stdin rust wall  # behind
 windows-x86_64 upcase-stdin rust memory  # behind
 windows-x86_64 upcase-stdin rust size  # behind
-windows-x86_64 shout c cpu  # behind
 windows-x86_64 shout c wall  # behind
 windows-x86_64 shout c memory  # behind
 windows-x86_64 shout c size  # behind
-windows-x86_64 shout cpp cpu  # behind
 windows-x86_64 shout cpp wall  # behind
 windows-x86_64 shout cpp memory  # behind
 windows-x86_64 shout cpp size  # behind
-windows-x86_64 shout rust cpu  # behind
 windows-x86_64 shout rust wall  # behind
 windows-x86_64 shout rust memory  # behind
 windows-x86_64 shout rust size  # behind
@@ -584,15 +573,12 @@ windows-x86_64 wc cpp size  # behind
 windows-x86_64 wc rust wall  # behind
 windows-x86_64 wc rust memory  # behind
 windows-x86_64 wc rust size  # behind
-windows-x86_64 histogram c cpu  # behind
 windows-x86_64 histogram c wall  # behind
 windows-x86_64 histogram c memory  # behind
 windows-x86_64 histogram c size  # behind
-windows-x86_64 histogram cpp cpu  # behind
 windows-x86_64 histogram cpp wall  # behind
 windows-x86_64 histogram cpp memory  # behind
 windows-x86_64 histogram cpp size  # behind
-windows-x86_64 histogram rust cpu  # behind
 windows-x86_64 histogram rust wall  # behind
 windows-x86_64 histogram rust memory  # behind
 windows-x86_64 histogram rust size  # behind
@@ -611,7 +597,6 @@ windows-x86_64 crc32c rust size  # behind
 windows-x86_64 sort c size  # behind
 windows-x86_64 sort cpp size  # behind
 windows-x86_64 sort rust size  # behind
-windows-x86_64 tally rust-wasm memory  # behind
 windows-x86_64 tally c memory  # behind
 windows-x86_64 tally c size  # behind
 windows-x86_64 tally cpp memory  # behind
@@ -725,10 +710,8 @@ windows-aarch64 shout rust cpu  # behind
 windows-aarch64 shout rust wall  # behind
 windows-aarch64 shout rust memory  # behind
 windows-aarch64 shout rust size  # behind
-windows-aarch64 wc c wall  # behind
 windows-aarch64 wc c memory  # behind
 windows-aarch64 wc c size  # behind
-windows-aarch64 wc cpp wall  # behind
 windows-aarch64 wc cpp memory  # behind
 windows-aarch64 wc cpp size  # behind
 windows-aarch64 wc rust memory  # behind
@@ -762,7 +745,6 @@ windows-aarch64 sort cpp size  # behind
 windows-aarch64 sort rust cpu  # behind
 windows-aarch64 sort rust wall  # behind
 windows-aarch64 sort rust size  # behind
-windows-aarch64 tally rust-wasm memory  # behind
 windows-aarch64 tally c memory  # behind
 windows-aarch64 tally c size  # behind
 windows-aarch64 tally cpp memory  # behind

@@ -9,8 +9,10 @@
 //! checked before anything is measured. Each runs as people run it, in a process of its own,
 //! measured by `lengua-mcp measure`: lengua's through lengua-run, the small program beside
 //! lengua-mcp that `check` tells a user to run it with, with every check a run makes; the other
-//! modules in lengua's host, by the same lengua-run in the same engine, each from its compiled
-//! form kept under the user's key, as lengua's is; the native builds as a shell starts them.
+//! modules by the same lengua-run in the same engine, each from its compiled form and with the
+//! same checks, on a lock of its own under lengua's idea (`measure --idea`), since a module lengua
+//! runs for a user always pays them; the native builds as a shell starts them. The other modules
+//! run with no lock too, in rounds apart from the gate's, for the report's last section.
 //! (`cargo xtask bench` builds lengua-run by itself first, with no compiler in it, as it ships;
 //! where it isn't beside lengua-mcp, `lengua-mcp run` runs both, and the report says so.)
 //!
@@ -553,6 +555,10 @@ struct Prepared {
     uses: String,
     /// Its idea's `- Network:` line, after the colon.
     network: String,
+    /// lengua's program's idea, in a file beside the folder: a module of another toolchain
+    /// runs under it as a checked program does, with every check a run makes
+    /// (`lengua-mcp measure --idea`).
+    idea: PathBuf,
     /// Whether it is a server.
     server: bool,
 }
@@ -576,6 +582,18 @@ fn prepare(workload: Workload, place: &Path, idea: &str) -> Result<Prepared, Str
         }
         None => None,
     };
+    // The idea a module of another toolchain runs under: lengua's program's, with the line
+    // that names an outside module as its program, as lengua asks of any idea whose program
+    // is a module made elsewhere. Its grants are lengua's idea's own lines.
+    let idea_file = place.join("idea.md");
+    let outside = idea
+        .replace("computation: main.wat", "computation: main.wasm")
+        .replace(
+            "# Constraints\n",
+            "# Constraints\n- Module: main.wasm, built from C, C++ or Rust for wasm32-wasip1, \
+             for lengua's benchmark\n",
+        );
+    std::fs::write(&idea_file, outside).map_err(|error| failed(idea_file.display(), error))?;
     Ok(Prepared {
         args: workload.args,
         folder,
@@ -586,6 +604,7 @@ fn prepare(workload: Workload, place: &Path, idea: &str) -> Result<Prepared, Str
         expected: (Sha256Hex::of(&output), output.len(), head),
         uses: constraint(idea, "- Uses:"),
         network: constraint(idea, "- Network:"),
+        idea: idea_file,
         server: workload.server,
     })
 }
@@ -599,6 +618,11 @@ struct Version {
     program: PathBuf,
     /// How it was made, for the report.
     made: String,
+    /// For a module: whether it runs with no lock and no idea, by the words of lengua's idea
+    /// alone, as the report's last section measures it. In the gate's rounds a module runs as a
+    /// checked program does, since a module lengua runs for a user always pays lengua's checks
+    /// (todo.md, 2026-11-11).
+    unchecked: bool,
 }
 
 /// A version of a workload as the bench made it: ready to run, or why it isn't.
@@ -650,11 +674,19 @@ impl Runner {
         if let Some(stdin) = &prepared.stdin {
             command.arg("--stdin").arg(stdin);
         }
-        if !prepared.uses.is_empty() {
-            command.arg("--uses").arg(&prepared.uses);
-        }
-        if !prepared.network.is_empty() {
-            command.arg("--network").arg(&prepared.network);
+        let module = version
+            .program
+            .extension()
+            .is_some_and(|kind| kind == "wasm");
+        if module && !version.unchecked {
+            command.arg("--idea").arg(&prepared.idea);
+        } else {
+            if !prepared.uses.is_empty() {
+                command.arg("--uses").arg(&prepared.uses);
+            }
+            if !prepared.network.is_empty() {
+                command.arg("--network").arg(&prepared.network);
+            }
         }
         if prepared.server {
             let load = [
@@ -948,6 +980,7 @@ fn apart_rounds(
     prepared: &Prepared,
     (lengua, size): (&Version, u64),
     module: Result<Version, String>,
+    others: &[Version],
 ) -> Apart {
     let mut apart = Apart {
         lengua: Measured {
@@ -960,6 +993,14 @@ fn apart_rounds(
             name: MODULE_VERSION.to_owned(),
             ..Measured::default()
         },
+        others: others
+            .iter()
+            .map(|other| Measured {
+                name: other.name.clone(),
+                made: other.made.clone(),
+                ..Measured::default()
+            })
+            .collect(),
         seconds: 0.0,
     };
     let module = match module {
@@ -977,7 +1018,20 @@ fn apart_rounds(
             return apart;
         }
     }
-    let versions = [lengua, &module];
+    // The other modules with no lock and no idea: each one's output is checked first too, and
+    // one that can't run so is left out of the rounds, with why.
+    let mut versions = vec![lengua, &module];
+    let mut ran = Vec::new();
+    for (at, other) in others.iter().enumerate() {
+        match check(runner, prepared, other) {
+            Ok(checked) => {
+                apart.others[at].size = checked;
+                versions.push(other);
+                ran.push(at);
+            }
+            Err(problem) => apart.others[at].problem = Some(problem),
+        }
+    }
     let mut started = Instant::now();
     let mut round = 0;
     loop {
@@ -991,11 +1045,15 @@ fn apart_rounds(
             break;
         }
         for at in order(round, versions.len()) {
-            let one = if at == 0 {
-                &mut apart.lengua
-            } else {
-                &mut apart.module
+            let one = match at {
+                0 => &mut apart.lengua,
+                1 => &mut apart.module,
+                other => &mut apart.others[ran[other - 2]],
             };
+            // One of the other modules that stopped running is left, and the rest go on.
+            if at >= 2 && one.problem.is_some() {
+                continue;
+            }
             match runner.run(prepared, versions[at], false, false) {
                 Ok(measures) if counted => one.push(&measures),
                 Ok(_) => {}
@@ -1186,6 +1244,11 @@ struct Apart {
     lengua: Measured,
     /// lengua-module's.
     module: Measured,
+    /// The other modules', C's, C++'s and Rust's, run in these rounds with no lock and no idea,
+    /// as the gate ran them before 2026-11-11: what each costs without lengua's checks, which
+    /// the gate's rounds now have it make. None in a results file from before.
+    #[serde(default)]
+    others: Vec<Measured>,
     /// How long their counted rounds took, in seconds.
     seconds: f64,
 }
@@ -1225,6 +1288,11 @@ struct Results {
     /// where lengua-run wasn't beside it, and in a results file from before lengua-run.
     #[serde(default)]
     runs_with: String,
+    /// Whether the other modules ran, in the gate's rounds, with every check lengua's run
+    /// makes (`lengua-mcp measure --idea`): since 2026-11-11, and not in a results file from
+    /// before.
+    #[serde(default)]
+    checked_modules: bool,
     /// The counts of runs at which the gate looks at a row.
     looks: Vec<usize>,
     /// The level each row's measure is decided at, over all its looks.
@@ -1416,6 +1484,7 @@ fn native(
         name: language.to_owned(),
         program: executable,
         made,
+        unchecked: false,
     })
 }
 
@@ -1430,6 +1499,7 @@ fn modules(folder: &Path, name: &str, toolchains: &BTreeMap<String, String>) -> 
                 name: version.clone(),
                 program: module,
                 made: toolchains.get(&version).cloned().unwrap_or_default(),
+                unchecked: false,
             })
         } else {
             Err(format!(
@@ -1493,6 +1563,7 @@ fn lengua_made(
             name: name.to_owned(),
             program: checked.path().to_path_buf(),
             made: format!("{runs} of lengua {release}, {engine}, {program}{at}"),
+            unchecked: false,
         }),
         Some(Err(problem)) => Err(format!("lengua's program{at} isn't done: {problem}")),
         None => Err(format!("lengua's program{at} wasn't checked")),
@@ -1528,9 +1599,10 @@ fn module_version(place: &Path, bytes: Result<Vec<u8>, String>) -> Result<Versio
         name: MODULE_VERSION.to_owned(),
         program: file,
         made: format!(
-            "the module lengua-mcp {release} builds from lengua's main.wat, run in {engine} as \
-             the other modules are"
+            "the module lengua-mcp {release} builds from lengua's main.wat, run in {engine} with \
+             no lock and no idea, by the words of lengua's idea"
         ),
+        unchecked: true,
     })
 }
 
@@ -1577,12 +1649,29 @@ fn measure_versions(
         .first()
         .filter(|one| one.problem.is_none())
         .map(|one| one.size);
+    // The other modules again, as they ran before the gate had them make lengua's checks:
+    // with no lock and no idea.
+    let others: Vec<Version> = versions
+        .iter()
+        .flatten()
+        .filter(|version| {
+            version
+                .program
+                .extension()
+                .is_some_and(|kind| kind == "wasm")
+        })
+        .map(|version| Version {
+            unchecked: true,
+            ..version.clone()
+        })
+        .collect();
     let apart = match (module, lengua, ran) {
         (Some(module), Some(lengua), Some(size)) => Some(apart_rounds(
             &context.runner,
             prepared,
             (lengua, size),
             module,
+            &others,
         )),
         _ => None,
     };
@@ -2218,8 +2307,12 @@ fn apart_section(out: &mut String, results: &Results) {
         "\nThe runs are lengua's and lengua-module's counted runs, in that order, and how long \
          their counted rounds took."
     );
+    unchecked_section(out, &workloads);
     for (name, apart) in &workloads {
-        for measured in [&apart.lengua, &apart.module] {
+        for measured in [&apart.lengua, &apart.module]
+            .into_iter()
+            .chain(&apart.others)
+        {
             if let Some(problem) = &measured.problem {
                 let version = &measured.name;
                 let _ = writeln!(
@@ -2227,6 +2320,53 @@ fn apart_section(out: &mut String, results: &Results) {
                     "\n- {name}, {version}, wasn't measured to the end: {problem}"
                 );
             }
+        }
+    }
+}
+
+/// The report's section on the other modules run with no lock and no idea, from the same
+/// rounds as lengua's run apart from its module: each module's median CPU time, wall time and
+/// peak memory so, and lengua's median over it, where lengua's run makes every check it makes
+/// for a user. The gate's rows set lengua against the same modules run with those checks.
+fn unchecked_section(out: &mut String, workloads: &[(&str, &Apart)]) {
+    if workloads.iter().all(|(_, apart)| apart.others.is_empty()) {
+        return;
+    }
+    let _ = writeln!(out, "\n## The other modules without lengua's checks\n");
+    let _ = writeln!(
+        out,
+        "In the gate's rows, C's, C++'s and Rust's modules run as lengua's program does, and as \
+         any module lengua runs for a user does: each run reads lengua.lock and holds it to the \
+         user's key, reads and hashes the idea and the module, and takes what the module may \
+         reach from the idea. Here the same modules ran with none of that, by the words of \
+         lengua's idea alone, in the rounds of the section above, beside lengua's program, \
+         which made its checks. Each cell gives the module's median, then lengua's median over \
+         it: above 1, lengua took that many times as much. No verdict is drawn from these, and \
+         the gate doesn't read them.\n"
+    );
+    out.push_str("| workload | against, unchecked | runs | CPU time | wall time | peak memory |\n");
+    out.push_str("|---|---|---|---|---|---|\n");
+    let cell = |lengua: &[u64], other: &[u64], show: fn(f64) -> String| {
+        let medians = (gate::median(&floats(lengua)), gate::median(&floats(other)));
+        match medians {
+            (Some(ours), Some(theirs)) if theirs > 0.0 => {
+                format!("{}, {:.2}×", show(theirs), ours / theirs)
+            }
+            (_, Some(theirs)) => show(theirs),
+            _ => dash(),
+        }
+    };
+    for (name, apart) in workloads {
+        let lengua = &apart.lengua;
+        for other in &apart.others {
+            let (version, runs) = (&other.name, other.cpu_ns.len());
+            let cpu = cell(&lengua.cpu_ns, &other.cpu_ns, duration);
+            let wall = cell(&lengua.wall_ns, &other.wall_ns, duration);
+            let peak = cell(&lengua.peak_bytes, &other.peak_bytes, bytes);
+            let _ = writeln!(
+                out,
+                "| {name} | {version} | {runs} | {cpu} | {wall} | {peak} |"
+            );
         }
     }
 }
@@ -2256,10 +2396,20 @@ fn report(results: &Results) -> String {
     let alone = results.runs_with == lengua::measure::RUNNER;
     let runs = run_command(&results.runs_with);
     let runner = if alone { "lengua-run" } else { "lengua-mcp" };
+    // Since 2026-11-11 the other modules make the checks lengua's run makes.
+    let checks = if results.checked_modules {
+        ", and with every check lengua's run makes: each has a lengua.lock of its own, signed \
+         with the same key, which records the module and lengua's idea, with the line that names \
+         an outside module added, and its run reads and \
+         checks the three as lengua's does, since a module lengua runs for a user always pays \
+         them (the last section gives the same modules without)"
+    } else {
+        ""
+    };
     let modules = if alone {
         format!(
             "run in lengua's host, by the same lengua-run in the same engine ({engine}), each \
-             from its compiled form, kept under the user's key as a checked program's is"
+             from its compiled form, kept under the user's key as a checked program's is{checks}"
         )
     } else {
         format!(
@@ -2496,6 +2646,7 @@ async fn gate_run(root: &Path) -> Result<bool, String> {
         toolchains: wasm_toolchains(&context.wasm),
         runtime: context.runtime,
         runs_with: runs_with.to_owned(),
+        checked_modules: true,
         looks: gate::LOOKS.to_vec(),
         alpha: gate::ALPHA,
         look_alpha: gate::LOOK_ALPHA,
