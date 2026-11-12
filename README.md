@@ -312,10 +312,13 @@ where lengua is behind by more than the margin, and may only shrink: a row behin
 doesn't name, or one it names where lengua is level or ahead, fails the gate. A level row
 doesn't.
 
-The latest run is 43084459708, the first with lengua-run (W19), at commit 45b507b, on all five
-runners; GitHub didn't keep its files for Windows on ARM64, whose report is from run 43099764273
-at the same commit. In it every WebAssembly version, lengua's and the others', runs by lengua-run
-from its compiled form, where the runs before used lengua-mcp and Wasmtime's cache. The reports,
+The latest run is 43191148225, at commit 610aaf5, on all five runners. In it C's, C++'s and
+Rust's modules run as lengua runs a module made elsewhere for a user, an outside module
+(decided 2026-11-11): each has an idea whose `- Module:` line names it and a lengua.lock the
+user's key signs, and its run reads and checks the lock, the idea and the module as lengua's
+run does, by the same code. The finish line sets lengua against them under the same runtime,
+and no module runs there without these checks. Each report's last section gives the same
+modules with no lock, and the gate draws no verdict from it. The reports,
 as the bench wrote them from the runs' results:
 
 | Runner | CPU, as the report names it | Report |
@@ -323,7 +326,7 @@ as the bench wrote them from the runs' results:
 | Linux on x86-64 | AMD EPYC 7763 64-Core Processor, 4 threads | [BENCHMARKS-linux-x86_64.md](docs/benchmarks/BENCHMARKS-linux-x86_64.md) |
 | Linux on ARM64 | CPU implementer 0x41, part 0xd49, 4 threads | [BENCHMARKS-linux-aarch64.md](docs/benchmarks/BENCHMARKS-linux-aarch64.md) |
 | macOS on ARM64 | Apple M1 (Virtual), 3 threads | [BENCHMARKS-macos-aarch64.md](docs/benchmarks/BENCHMARKS-macos-aarch64.md) |
-| Windows on x86-64 | INTEL(R) XEON(R) PLATINUM 8573C, 4 threads | [BENCHMARKS-windows-x86_64.md](docs/benchmarks/BENCHMARKS-windows-x86_64.md) |
+| Windows on x86-64 | AMD EPYC 9V74 80-Core Processor, 4 threads | [BENCHMARKS-windows-x86_64.md](docs/benchmarks/BENCHMARKS-windows-x86_64.md) |
 | Windows on ARM64 | Cobalt 100, 4 threads | [BENCHMARKS-windows-aarch64.md](docs/benchmarks/BENCHMARKS-windows-aarch64.md) |
 
 Against the WebAssembly builds, the rows where lengua was ahead, level and behind, in that
@@ -331,59 +334,52 @@ order, of 42 on each runner (14 workloads against three languages):
 
 | Runner | CPU time | Wall time | Peak memory | Size |
 |---|---|---|---|---|
-| Linux on x86-64 | 33, 7, 2 | 36, 3, 3 | 2, 40, 0 | 40, 0, 2 |
-| Linux on ARM64 | 19, 18, 5 | 22, 16, 4 | 2, 38, 2 | 40, 0, 2 |
-| macOS on ARM64 | 17, 17, 8 | 20, 14, 8 | 8, 31, 3 | 40, 0, 2 |
-| Windows on x86-64 | 14, 27, 1 | 15, 27, 0 | 2, 39, 1 | 40, 0, 2 |
-| Windows on ARM64 | 13, 29, 0 | 20, 22, 0 | 2, 39, 1 | 40, 0, 2 |
-| All five, of 210 | 96, 98, 16 | 113, 82, 15 | 16, 187, 7 | 200, 0, 10 |
+| Linux on x86-64 | 33, 9, 0 | 36, 6, 0 | 3, 39, 0 | 40, 0, 2 |
+| Linux on ARM64 | 29, 13, 0 | 30, 12, 0 | 2, 40, 0 | 40, 0, 2 |
+| macOS on ARM64 | 29, 11, 2 | 31, 9, 2 | 20, 22, 0 | 40, 0, 2 |
+| Windows on x86-64 | 16, 26, 0 | 24, 18, 0 | 2, 40, 0 | 40, 0, 2 |
+| Windows on ARM64 | 12, 30, 0 | 20, 22, 0 | 2, 40, 0 | 40, 0, 2 |
+| All five, of 210 | 119, 89, 2 | 141, 67, 2 | 29, 181, 0 | 200, 0, 10 |
 
 - **Size:** lengua's module is smaller on every row but one workload's, the 64 MiB stream of
   capitals (upcase-stdin), against C and C++.
-- **Memory:** lengua was behind by more than the margin on 7 rows, where it was on 115 in the
-  run before: a run now holds 3 to 7 MiB for a small program where it held 5 to 12, so the
-  0.1 MiB that lengua's own checks add falls within the margin.
-- **Time:** lengua was behind by more than the margin on 16 rows of CPU time and 15 of wall
-  time, nearly all on workloads that are mostly starting up (the empty program, hypotenuse,
-  upcase and shout), against C's and C++'s modules. Those modules now start in about the time
-  lengua's does, less the 0.1 ms that reading and checking lengua.lock, idea.md and main.wat
-  takes, which is past 5% of a run of 1.3 ms. Windows counts a process's CPU time in 15.6 ms
-  ticks, so most CPU rows there are level.
+- **Memory:** lengua is behind by more than the margin on no row.
+- **Time:** lengua is behind by more than the margin on 2 rows of CPU time and 2 of wall time:
+  wc against C's and Rust's modules on macOS on ARM64 (1.15× to 1.20×). Windows counts a
+  process's CPU time in 15.6 ms ticks, so most CPU rows there are level.
 
 Against the native builds, lengua's median over the best of C's, C++'s and Rust's (above 1,
 lengua takes more), from each report's native gaps:
 
 | Runner | CPU time | Wall time | Peak memory | Size, with lengua-run |
 |---|---|---|---|---|
-| Linux on x86-64 | 0.51× to 3.51× | 0.51× to 3.50× | 1.01× to 7.12× | 425.15× to 429.12× |
-| Linux on ARM64 | 0.59× to 3.38× | 0.59× to 3.36× | 1.01× to 10.62× | 75.82× to 75.88× |
-| macOS on ARM64 | 0.45× to 3.69× | 0.45× to 3.64× | 0.95× to 2.89× | 142.51× to 287.84× |
-| Windows on x86-64 | 0.50× to 6.00× | 0.49× to 3.94× | 0.96× to 1.73× | 48.06× to 59.06× |
-| Windows on ARM64 | 0.65× to 3.50× | 0.64× to 2.97× | 0.96× to 1.53× | 40.26× to 49.54× |
+| Linux on x86-64 | 0.51× to 3.44× | 0.51× to 3.43× | 1.01× to 7.07× | 439.38× to 443.49× |
+| Linux on ARM64 | 0.59× to 3.29× | 0.59× to 3.26× | 1.00× to 10.28× | 78.73× to 78.80× |
+| macOS on ARM64 | 0.46× to 3.68× | 0.46× to 3.64× | 0.95× to 3.00× | 148.38× to 299.71× |
+| Windows on x86-64 | 0.50× to 3.00× | 0.53× to 3.55× | 0.96× to 1.75× | 50.39× to 61.92× |
+| Windows on ARM64 | 0.65× to 4.00× | 0.65× to 2.94× | 0.96× to 1.55× | 42.28× to 52.03× |
 
-In the run before, the largest of these were 3.78× to 7.00× for CPU time, 3.20× to 20.51× for
-wall time and 2.49× to 19.33× for peak memory, and the size counted lengua-mcp, 16.9 to
-25.4 MiB, where it now counts lengua-run, 4.6 to 6.0 MiB. On Windows the CPU ratios leave out
-the shortest workloads, whose native CPU time reads as no ticks. Every native C++ version was
-built on all five runners.
+On Windows the CPU ratios leave out the shortest workloads, whose native CPU time reads as no
+ticks. Every native C++ version was built on all five runners.
 
-The run measured KNOWN_BEHIND as it was, 898 rows, so the gate failed on every runner. What it
-found:
+The run measured KNOWN_BEHIND as it was, 736 rows. **The gate passed on Linux on ARM64**, the
+first pass on any runner, and failed on the other four. What it found:
 
-- **137 rows the list named that are level or ahead now** (135 level, 2 ahead): 21 on Linux on
-  x86-64, 15 on Linux on ARM64, 6 on macOS on ARM64, 50 on Windows on x86-64 and 45 on Windows
-  on ARM64. They have left the list, which now names 761 rows; 24 of them are against the
-  WebAssembly builds.
-- **26 rows behind by more than the margin that the list doesn't name:** 3 on Linux on x86-64,
-  9 on Linux on ARM64, 11 on macOS on ARM64 and 3 on Windows on x86-64, 21 of them the time of
-  a workload that is mostly starting up against C's or C++'s module.
-  [docs/benchmarks](docs/benchmarks/README.md) names each. Of the 6 such rows of the run
-  before, 2 are level or ahead now and 4 are among the 26. The list may not grow, so they stay
-  off it.
+- **3 rows the list named that are level now:** 2 on Linux on x86-64 and 1 on Windows on
+  x86-64. They have left the list, which now names 733 rows; 14 of them are against the
+  WebAssembly builds: the size of upcase-stdin against C's and C++'s modules on every runner,
+  and wc's time against C's and Rust's modules on macOS on ARM64.
+- **No row against a WebAssembly build is behind and unnamed**, on any runner.
+- **15 rows behind by more than the margin that the list doesn't name, all against native
+  builds:** 1 on Linux on x86-64, 2 on macOS on ARM64, 4 on Windows on x86-64 and 8 on Windows
+  on ARM64. Every one is a row the list named once, until a run found it level and took it
+  out, and it is behind again now; 7 of them are CPU time on Windows, which comes in 15.6 ms
+  ticks. [docs/benchmarks](docs/benchmarks/README.md) names each. The list may not grow, so
+  they stay off it.
 - **No build failed.**
 
-With the list as it is now, the same results pass the gate on Windows on ARM64 and fail it on
-the other four runners, on those 26 rows alone; no run has measured the new list yet. What to do
+With the list as it is now, the same results pass the gate on Linux on ARM64 and fail it on the
+other four runners, on those 15 rows alone. What to do
 with rows the list can't take back is the owner's ([todo.md](todo.md)).
 
 ## The standards it follows

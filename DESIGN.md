@@ -1011,7 +1011,7 @@ pool, which kills a worker 20 seconds after its job's time.
 
 Memory is held to what the module declares: the dialect makes main.wat's minimum its maximum, of
 at most 16,384 pages, 1 GiB (the largest a shipped program declares is 1,538). A C, C++ or Rust
-toolchain's module, which the benchmark runs, is no main.wat and may declare up to 4 GiB. A
+toolchain's module, an outside module, is held to the same 1 GiB, and the benchmark builds its own so. A
 module's one table holds at most 1,048,576 entries, whatever it declares or grows to.
 
 ### Workers
@@ -1230,8 +1230,15 @@ hand; the others use their standard libraries and plain loops their compilers ve
 Each run is a process of its own, measured by `lengua-mcp measure` (`src/measure.rs`): CPU time,
 wall time, peak resident memory and size. lengua's runs go through lengua-run, as a user runs a
 checked program, with every check a run makes. The other modules run by the same lengua-run, in
-the same engine, each from its compiled form kept under the user's key as lengua's is; `measure`
-hashes a module's file before the run it measures, so that run reads neither the file nor a lock.
+the same engine, each from its compiled form kept under the user's key as lengua's is, and with
+the same checks (decided 2026-11-11): each runs as an outside module (W23), as lengua runs one
+for a user. `measure --idea` reads the module as `check` reads an outside module, keeps a folder
+for it with lengua's idea and the `- Module:` line that names it, the module as main.wasm and a
+lock the user's key signs, and the run reads that lock, holds the idea and the module to it
+and takes its grants from the idea, by the code that runs any outside module's folder. The
+finish line sets lengua against the other languages under the same runtime, and a module
+lengua runs for a user always pays these checks. Each report's last section gives the same
+modules run with no lock, which the gate doesn't judge.
 `cargo xtask bench` builds lengua-run by itself first, with no compiler in it, as it ships. On
 Linux a program starts from `lengua-spawn`, a small process that forks it, so its peak memory is
 its own. The runs alternate between the versions, in an order shuffled from
@@ -1258,30 +1265,30 @@ it names, and where a change in the list's history named a row the list before i
 row needs no line and fails no run.
 
 Each run writes a report, BENCHMARKS-<runner>.md, from its results alone. The latest run's five
-reports are in [docs/benchmarks](docs/benchmarks/README.md): run 43084459708 at 45b507b, the first
-with lengua-run, and for Windows on ARM64 run 43099764273 at the same commit. That run measured
-the list as it was, 898 rows, so the gate passed on no runner. It found 137 rows the list named
-level or ahead (135 level, 2 ahead), which have left it, and 26 rows behind by more than the
-margin that it doesn't name. KNOWN_BEHIND now names 761 rows. Against C, C++ and Rust compiled
-to WebAssembly they are 4 on Linux on x86-64, 4 on Linux on ARM64, 10 on macOS on ARM64, 3 on
-Windows on x86-64 and 3 on Windows on ARM64. Peak memory was behind on 7 of the five runners' 210
-such rows, where it was on 115 in the run before. The 26 are mostly the time of workloads that
-are nearly all start-up, against C's and C++'s modules, which lengua-run starts as fast as
-lengua's own less the 0.1 ms of lengua's checks. Against the native builds the list names 138 to
-152 of each runner's 168 rows: tally is the one workload whose time is below the best native
-build's on every runner, at 0.45 to 0.65 times. Windows counts CPU time in 15.6 ms ticks, so a
+reports are in [docs/benchmarks](docs/benchmarks/README.md): run 43191148225 at 610aaf5, the first
+where the other modules run as outside modules, with lengua's checks. That run measured the
+list as it was, 736 rows, and the gate passed on Linux on ARM64, the first pass on any runner.
+On the other four it found 3 rows the list named level, which have left it, and 15 rows behind
+by more than the margin that it doesn't name, all against native builds. KNOWN_BEHIND now names
+733 rows. Against C, C++ and Rust compiled to WebAssembly they are 14: the size of upcase-stdin
+against C's and C++'s modules on every runner, and wc's CPU and wall time against C's and
+Rust's modules on macOS on ARM64. Of the 840 such rows a measure, lengua is ahead on 489, level
+on 337 and behind on those 14, and none is behind and unnamed. Run 43084459708, where the other
+modules ran with no lock, had 26 unnamed rows, 21 of them start-up time against C's and C++'s
+modules. Against the native builds the list names 127 to
+150 of each runner's 168 rows: tally is the one workload whose time is below the best native
+build's on every runner, at 0.46 to 0.65 times. Windows counts CPU time in 15.6 ms ticks, so a
 short run's CPU time there is a whole number of ticks, and most of its CPU rows against the other
 modules are level. Every native C++ version was
 built in that run, on all five runners: the bench passes `-std=gnu++17`, as the files are C++17
 and Apple's clang and LLVM's clang on Windows take an older standard by default.
 
 The margin has a limit the runs show. It takes the rows at 1.00× out of the gate, which were
-most of what changed sides before. It doesn't settle a row whose gap sits near 5%: the run
-before this one (42964232679) found 6 rows behind that the list doesn't name, four of them at
-1.05× to 1.08×. In this run two of the six are level or ahead, and four are among its 26. The
-list may not take a row back, so with the list as it is these results fail the gate on four
-runners and pass it on Windows on ARM64. No run has measured the new list yet. todo.md names the
-rows ("A row the gate can't decide").
+most of what changed sides before. It doesn't settle a row whose gap sits near 5%, or one
+counted in Windows's ticks: every one of this run's 15 unnamed rows is a row the list named
+once, that a run found level and took out, and that is behind again. The list may not take a
+row back, so with the list as it is these results fail the gate on four runners and pass it on
+Linux on ARM64. todo.md names the rows ("A row the gate can't decide").
 
 ## The release and the install
 

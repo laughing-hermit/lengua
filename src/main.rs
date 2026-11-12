@@ -21,7 +21,8 @@ const USAGE: &str = "usage: lengua-mcp [--data-dir <absolute path>] [--version]
        lengua-mcp [--data-dir <absolute path>] install [--check] [--link] [--prefix <folder>]
        lengua-mcp wasm <main.wat> [-o <main.wasm>]
        lengua-mcp [--data-dir <absolute path>] measure [--in <folder>] [--stdin <file>] \
-[--stdout <file>] [--stderr <file>] [--env NAME=value]... [--uses <words>] [--network <line>] \
+[--stdout <file>] [--stderr <file>] [--env NAME=value]... [--idea <idea.md>] [--uses <words>] \
+[--network <line>] \
 [--serve <port> [--clients <n>] [--requests <n>]] [--counters] <program folder, module.wasm or \
 executable> [[--] <argument>...]";
 
