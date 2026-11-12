@@ -1792,6 +1792,10 @@ pub mod lent {
             while Arc::strong_count(&self.0) > 1 {
                 std::thread::yield_now();
             }
+            // The count is read without an ordering; this fence ties the read to the last
+            // holder's drop (a release), so what that holder read comes before whatever the
+            // lender does to the bytes next. `Arc` does the same before it frees.
+            std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
         }
     }
 
