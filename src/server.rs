@@ -266,6 +266,9 @@ struct Found {
     proofs: Vec<BlockProof>,
     /// Whether the proof found inputs where main.wat is wrong.
     wrong: bool,
+    /// What the contracts say the functions give, each as its proof of the function alone
+    /// settled it, in a line: whether it is about a function taken from a part, and the line.
+    contracts: Vec<(bool, String)>,
 }
 
 /// What passing tests showed.
@@ -1324,8 +1327,34 @@ impl LenguaServer {
         let model = Model {
             program: Arc::clone(&code.program),
             policy: crate::wasm::Policy::of(&idea.uses, &idea.network),
+            claims: Arc::default(),
         };
         let deadline = Instant::now() + proof_time();
+        // What the contracts say the functions give, each proven of its function alone before
+        // any test's proof: the proofs then take a proven one at each call of a function the
+        // program took from a part, in place of the function's body.
+        let settled = if code.claims.is_empty() {
+            Vec::new()
+        } else {
+            let (program, policy) = (Arc::clone(&code.program), model.policy);
+            let claims = code.claims.clone();
+            let until = Instant::now() + prove::contract::UNIT_TIME.min(proof_time() / 2);
+            tokio::task::spawn_blocking(move || {
+                prove::contract::settle(program.built(), policy, &claims, until)
+            })
+            .await
+            .unwrap_or_default()
+        };
+        if let Ok(mut found) = checking.found.lock() {
+            found.contracts = settled
+                .iter()
+                .map(|settled| (settled.claim.part.is_some(), settled.line()))
+                .collect();
+        }
+        let model = Model {
+            claims: Arc::new(prove::contract::usable(&settled)),
+            ..model
+        };
         // The ids proven, those found wrong, those tested, not proven with why, how many the
         // solvers proved, and why any rested on one solver.
         let mut proven_ids = Vec::new();
@@ -1894,6 +1923,9 @@ struct Model {
     program: Arc<crate::wasm::Program>,
     /// What its idea lets it reach.
     policy: crate::wasm::Policy,
+    /// What the contracts of the functions it took from parts say each gives, each proven of
+    /// its function alone: a proof's runs take one at a call, in place of the function's body.
+    claims: Arc<Vec<prove::contract::Claim>>,
 }
 
 impl Model {
@@ -1911,9 +1943,13 @@ impl Model {
         let (model, block) = (self.clone(), block.clone());
         tokio::task::spawn_blocking(move || {
             let (built, policy) = (model.program.built(), model.policy);
-            let found = prove::agrees_wasm(built, policy, &samples, listens, budget.deadline);
+            let claims = model.claims.as_slice();
+            let found =
+                prove::agrees_wasm_with(built, policy, &samples, listens, budget.deadline, claims);
             found.map(|found| {
-                found.unwrap_or_else(|| prove::prove_wasm(built, policy, &block, &budget))
+                found.unwrap_or_else(|| {
+                    prove::prove_wasm_with(built, policy, &block, &budget, claims)
+                })
             })
         })
         .await

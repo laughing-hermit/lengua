@@ -173,6 +173,7 @@ impl LenguaServer {
                     unsafe_blocks: 0,
                     obligations: Vec::new(),
                     parts: Vec::new(),
+                    claims: Vec::new(),
                     machine_code: None,
                     outside: Some(said),
                 };

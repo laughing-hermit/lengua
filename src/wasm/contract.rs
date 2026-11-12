@@ -15,8 +15,24 @@
 //! memory rules find in main.wat ([`crate::checker::wasm::Lends`]), so `check` holds the two to
 //! each other ([`Contract::problems`]): a part states exactly how far each function reaches, and
 //! a program that takes the function lends it regions with that room, or `check` refuses it.
+//!
+//! An item may also state what its function gives, as a formula of its arguments, with more
+//! clauses before the full stop:
+//!
+//! ```markdown
+//! - `$crc32_update`: reads 4096 bytes at `$at`; takes `$crc` from 0 to 0; takes `$length` from
+//!   0 to 256; `$at` holds `$length` bytes; gives `crc32(at)`. Its arguments are …
+//! ```
+//!
+//! `takes` a parameter `from` its least value `to` its most; an address `holds` as many bytes
+//! as a parameter says, and the formula names those bytes by the address's parameter; `gives`
+//! the formula, in the language of the idea's tests, between backticks. `check` proves the
+//! formula of the function, for every argument in the ranges and every byte, and the proofs of
+//! a program that takes the function use it in place of the function's body
+//! ([`crate::prove::contract`]).
 
 use crate::checker::wasm::Lends;
+use crate::expr::{self, Expr};
 use crate::idea::heading;
 
 /// The section's name, after `# `.
@@ -59,6 +75,8 @@ pub struct Offer {
     pub line: usize,
     /// What it does through each address it is lent, in the item's order.
     pub lent: Vec<Lent>,
+    /// What it gives, when the item states it.
+    pub gives: Option<Gives>,
 }
 
 impl Offer {
@@ -72,6 +90,190 @@ impl Offer {
             clauses.join("; ")
         }
     }
+
+    /// The item in one line of a reply: its clauses, and what it gives where it states it.
+    #[must_use]
+    pub fn line(&self) -> String {
+        let clauses = self.clauses();
+        match &self.gives {
+            None => format!("${}: {clauses}", self.name),
+            Some(gives) => format!("${}: {clauses}; {}", self.name, gives.stated()),
+        }
+    }
+}
+
+/// What a function gives, as its item states it: a formula of its arguments, which holds for
+/// every argument in the ranges the item takes them in, and every byte it is lent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Gives {
+    /// The formula, as the item writes it between backticks.
+    pub formula: String,
+    /// The formula, read.
+    pub expr: Expr,
+    /// Each parameter the item takes in a range: its name without the `$`, its least value and
+    /// its most.
+    pub takes: Vec<(String, i128, i128)>,
+    /// Each address whose bytes the formula names: the parameter that holds it, and the
+    /// parameter that says how many bytes, both without the `$`.
+    pub holds: Vec<(String, String)>,
+}
+
+impl Gives {
+    /// The clauses that state it, as the item writes them.
+    #[must_use]
+    pub fn stated(&self) -> String {
+        let mut clauses: Vec<String> = self
+            .takes
+            .iter()
+            .map(|(name, low, high)| format!("takes `${name}` from {low} to {high}"))
+            .collect();
+        clauses.extend(
+            self.holds
+                .iter()
+                .map(|(pointer, length)| format!("`${pointer}` holds `${length}` bytes")),
+        );
+        clauses.push(format!("gives `{}`", self.formula));
+        clauses.join("; ")
+    }
+}
+
+/// One clause of an item.
+enum Clause {
+    /// What the function does through an address.
+    Lent(Lent),
+    /// `uses no memory`.
+    NoMemory,
+    /// `takes` a parameter from its least value to its most.
+    Takes(String, i128, i128),
+    /// An address `holds` as many bytes as a parameter says.
+    Holds(String, String),
+    /// `gives` a formula.
+    Gives(String),
+}
+
+/// The parameter's name that opens `text`, written `` `$name` ``, and what follows it.
+fn named(text: &str) -> Option<(&str, &str)> {
+    let rest = text.trim_start().strip_prefix("`$")?;
+    let (name, rest) = rest.split_once('`')?;
+    (!name.is_empty() && !name.contains(char::is_whitespace)).then_some((name, rest))
+}
+
+/// The clause `clause`, or a problem's words when lengua can't read it.
+fn clause_of(clause: &str) -> Result<Clause, String> {
+    let clause = clause.trim();
+    let unread = || format!("lengua can't read the clause `{clause}`");
+    if let Some(rest) = clause.strip_prefix("gives ") {
+        let formula = rest
+            .trim()
+            .strip_prefix('`')
+            .and_then(|rest| rest.strip_suffix('`'))
+            .filter(|formula| !formula.is_empty() && !formula.contains('`'))
+            .ok_or_else(unread)?;
+        return Ok(Clause::Gives(formula.to_owned()));
+    }
+    if let Some(rest) = clause.strip_prefix("takes ") {
+        let (name, rest) = named(rest).ok_or_else(unread)?;
+        let rest = rest.trim().strip_prefix("from ").ok_or_else(unread)?;
+        let (low, high) = rest.split_once(" to ").ok_or_else(unread)?;
+        let low: i128 = low.trim().parse().map_err(|_| unread())?;
+        let high: i128 = high.trim().parse().map_err(|_| unread())?;
+        return Ok(Clause::Takes(name.to_owned(), low, high));
+    }
+    if let Some((pointer, rest)) = named(clause)
+        && let Some(rest) = rest.trim().strip_prefix("holds ")
+    {
+        let (length, rest) = named(rest).ok_or_else(unread)?;
+        if !matches!(rest.trim(), "bytes" | "byte") {
+            return Err(unread());
+        }
+        return Ok(Clause::Holds(pointer.to_owned(), length.to_owned()));
+    }
+    lent(clause).map(|found| found.map_or(Clause::NoMemory, Clause::Lent))
+}
+
+/// How to write what a function gives, for the problems that name it.
+const GIVES_FORM: &str = "write `` - `$name`: reads 64 bytes at `$at`; takes `$length` from 0 to \
+                          64; `$at` holds `$length` bytes; gives `crc32(at)`. `` or, for a \
+                          function of numbers, `` - `$name`: uses no memory; takes `$n` from 0 to \
+                          255; gives `n * 2`. ``";
+
+/// What an item's clauses say its function gives: the formula `formula` with the ranges `takes`
+/// and the bytes `holds`, held to the item's memory clauses, `lent`; or what is wrong with them.
+fn gives_of(
+    formula: Option<String>,
+    takes: Vec<(String, i128, i128)>,
+    holds: Vec<(String, String)>,
+    lent: &[Lent],
+) -> Result<Option<Gives>, String> {
+    let Some(formula) = formula else {
+        if takes.is_empty() && holds.is_empty() {
+            return Ok(None);
+        }
+        return Err(format!(
+            "a `takes` or a `holds` clause goes with a `gives` clause, which states the formula \
+             they are for: {GIVES_FORM}"
+        ));
+    };
+    let expr = expr::parse(&formula)
+        .map_err(|error| format!("lengua can't read the formula `{formula}`: {error}"))?;
+    if let Some((name, ..)) = takes.iter().find(|(_, low, high)| low > high) {
+        return Err(format!(
+            "`${name}` is taken from a value above the one it is taken to"
+        ));
+    }
+    if let Some(written) = lent.iter().find(|lent| lent.written) {
+        return Err(format!(
+            "a function with a `gives` clause writes nothing, and this one writes at `${}`: the \
+             formula states what a function gives back, not what it leaves in memory",
+            written.param
+        ));
+    }
+    for (pointer, length) in &holds {
+        let Some(read) = lent.iter().find(|lent| lent.param == *pointer) else {
+            return Err(format!(
+                "`${pointer}` holds bytes, so the item says how far the function reads there: \
+                 add `reads N bytes at `${pointer}``"
+            ));
+        };
+        let room = i128::from(read.bytes);
+        let fits = takes
+            .iter()
+            .any(|(name, low, high)| name == length && *low >= 0 && *high <= room);
+        if !fits {
+            return Err(format!(
+                "`${pointer}` holds `${length}` bytes, so the item takes `${length}` from 0 or \
+                 more to at most {room}, the bytes the function reads there: add `takes \
+                 `${length}` from 0 to {room}`, or a smaller range"
+            ));
+        }
+    }
+    if let Some(unheld) = lent
+        .iter()
+        .find(|lent| !holds.iter().any(|(pointer, _)| *pointer == lent.param))
+    {
+        return Err(format!(
+            "the function reads at `${}`, so the item says which of the bytes there the formula \
+             is about: add `` `${}` holds `$length` bytes ``, with the parameter that says how \
+             many",
+            unheld.param, unheld.param
+        ));
+    }
+    for name in expr::variables_of(&expr) {
+        let known = takes.iter().any(|(taken, ..)| *taken == name)
+            || holds.iter().any(|(pointer, _)| *pointer == name);
+        if !known {
+            return Err(format!(
+                "the formula `{formula}` names `{name}`, which the item neither takes in a range \
+                 nor says holds bytes: {GIVES_FORM}"
+            ));
+        }
+    }
+    Ok(Some(Gives {
+        formula,
+        expr,
+        takes,
+        holds,
+    }))
 }
 
 /// A part's contract.
@@ -205,10 +407,38 @@ fn offer(line: usize, item: &str) -> Result<Offer, String> {
         ));
     };
     let mut lends: Vec<Lent> = Vec::new();
+    let mut takes: Vec<(String, i128, i128)> = Vec::new();
+    let mut holds: Vec<(String, String)> = Vec::new();
+    let mut formula: Option<String> = None;
     for clause in rest.get(..end).unwrap_or_default().split(';') {
-        match lent(clause) {
-            Ok(None) => {}
-            Ok(Some(one)) => {
+        match clause_of(clause) {
+            Ok(Clause::NoMemory) => {}
+            Ok(Clause::Takes(param, low, high)) => {
+                if takes.iter().any(|(known, ..)| *known == param) {
+                    return Err(format!(
+                        "line {line}: `${name}` takes `${param}` twice: write one range"
+                    ));
+                }
+                takes.push((param, low, high));
+            }
+            Ok(Clause::Holds(pointer, length)) => {
+                if holds.iter().any(|(known, _)| *known == pointer) {
+                    return Err(format!(
+                        "line {line}: `${name}` has two `holds` clauses for `${pointer}`: \
+                         write one"
+                    ));
+                }
+                holds.push((pointer, length));
+            }
+            Ok(Clause::Gives(stated)) => {
+                if formula.is_some() {
+                    return Err(format!(
+                        "line {line}: `${name}` has two `gives` clauses: write one formula"
+                    ));
+                }
+                formula = Some(stated);
+            }
+            Ok(Clause::Lent(one)) => {
                 if lends.iter().any(|known| known.param == one.param) {
                     return Err(format!(
                         "line {line}: `${name}` has two clauses for `${}`: write one, `writes` \
@@ -221,10 +451,13 @@ fn offer(line: usize, item: &str) -> Result<Offer, String> {
             Err(problem) => return Err(format!("line {line}: `${name}`: {problem}: {FORM}")),
         }
     }
+    let gives = gives_of(formula, takes, holds, &lends)
+        .map_err(|problem| format!("line {line}: `${name}`: {problem}"))?;
     Ok(Offer {
         name: name.to_owned(),
         line,
         lent: lends,
+        gives,
     })
 }
 
@@ -340,7 +573,7 @@ impl Contract {
     pub fn lines(&self) -> Vec<String> {
         self.offers
             .iter()
-            .map(|offer| format!("${}: {}", offer.name, offer.clauses()))
+            .map(Offer::line)
             .collect()
     }
 }
@@ -450,6 +683,87 @@ mod tests {
         assert!(
             problems.contains("offers `$start`, but main.wat has no function"),
             "{problems}"
+        );
+    }
+
+    #[test]
+    fn reads_what_a_function_gives() {
+        let section = "# Contract\n- `$crc`: reads 64 bytes at `$at`; takes `$start` from 0 to 0; \
+                       takes `$length` from 0 to 64;\n  `$at` holds `$length` bytes; gives \
+                       `crc32(at)`. Its arguments.\n- `$twice`: uses no memory; takes `$n` from \
+                       -5 to 5; gives `n * 2`. Twice.\n";
+        let contract = read(section).expect("no problem").expect("a contract");
+        let crc = contract.offer("crc").expect("crc");
+        assert_eq!(crc.clauses(), "reads 64 bytes at `$at`");
+        let gives = crc.gives.as_ref().expect("what it gives");
+        assert_eq!(gives.formula, "crc32(at)");
+        assert_eq!(
+            gives.takes,
+            [("start".to_owned(), 0, 0), ("length".to_owned(), 0, 64)]
+        );
+        assert_eq!(gives.holds, [("at".to_owned(), "length".to_owned())]);
+        assert_eq!(
+            contract.lines(),
+            [
+                "$crc: reads 64 bytes at `$at`; takes `$start` from 0 to 0; takes `$length` from \
+                 0 to 64; `$at` holds `$length` bytes; gives `crc32(at)`",
+                "$twice: uses no memory; takes `$n` from -5 to 5; gives `n * 2`"
+            ]
+        );
+        // The memory clauses are still what the rules are held to.
+        let rules = [
+            lends("crc", &[("at", false, Some(64))]),
+            lends("twice", &[]),
+        ];
+        assert_eq!(contract.problems(&rules), Vec::<String>::new());
+    }
+
+    #[test]
+    fn what_a_function_gives_is_held_to_its_other_clauses() {
+        let problems = |item: &str| {
+            read(&format!("# Contract\n- {item}\n"))
+                .expect_err("a problem")
+                .join("\n")
+        };
+        // A formula lengua can't read, and one that names what the item doesn't state.
+        assert!(
+            problems("`$f`: uses no memory; takes `$n` from 0 to 9; gives `n +`.")
+                .contains("can't read the formula")
+        );
+        assert!(
+            problems("`$f`: uses no memory; takes `$n` from 0 to 9; gives `n + m`.")
+                .contains("names `m`")
+        );
+        // A range upside down, a range or bytes with no formula, and two formulas.
+        assert!(
+            problems("`$f`: uses no memory; takes `$n` from 9 to 0; gives `n`.")
+                .contains("above the one")
+        );
+        assert!(
+            problems("`$f`: uses no memory; takes `$n` from 0 to 9.")
+                .contains("goes with a `gives` clause")
+        );
+        assert!(
+            problems("`$f`: uses no memory; takes `$n` from 0 to 9; gives `n`; gives `n`.")
+                .contains("two `gives` clauses")
+        );
+        // Bytes the item doesn't say the function reads, more bytes than it reads, bytes read
+        // that the formula is not about, and a function that writes.
+        assert!(
+            problems("`$f`: uses no memory; takes `$n` from 0 to 9; `$at` holds `$n` bytes; gives `len(at)`.")
+                .contains("how far the function reads there")
+        );
+        assert!(
+            problems("`$f`: reads 8 bytes at `$at`; takes `$n` from 0 to 9; `$at` holds `$n` bytes; gives `len(at)`.")
+                .contains("to at most 8")
+        );
+        assert!(
+            problems("`$f`: reads 8 bytes at `$at`; takes `$n` from 0 to 8; gives `n`.")
+                .contains("which of the bytes there")
+        );
+        assert!(
+            problems("`$f`: writes 8 bytes at `$at`; takes `$n` from 0 to 8; `$at` holds `$n` bytes; gives `n`.")
+                .contains("writes nothing")
         );
     }
 }

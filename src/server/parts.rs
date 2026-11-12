@@ -22,6 +22,7 @@ use crate::data_dir::DataDir;
 use crate::hash::Sha256Hex;
 use crate::idea;
 use crate::lock::{self, Key, PartStamp, ProofStamp};
+use crate::prove::contract::Claim;
 use crate::state::{CODE_FILE, IDEA_FILE, ProgramFolder, State};
 use crate::trust;
 use crate::wasm::contract::{self, Contract};
@@ -495,6 +496,10 @@ pub(super) fn contract_problems(idea_text: &str, code: &str, lends: &[Lends]) ->
         .collect();
     let fields = parts::fields(code);
     for offer in &contract.offers {
+        // What the item says the function gives, held to the function's text.
+        if let Some(Err(problem)) = Claim::of(offer, &fields) {
+            problems.push(format!("{IDEA_FILE} line {}: {problem}", offer.line));
+        }
         let Some(offered) = fields
             .iter()
             .find(|field| field.keyword == "func" && field.name == offer.name)
@@ -536,6 +541,44 @@ pub(super) fn contract_problems(idea_text: &str, code: &str, lends: &[Lends]) ->
         }
     }
     problems
+}
+
+/// What the contracts of the parts in `taken` say the functions main.wat, `code`, takes from
+/// them give, each held to the function's text as main.wat has it, which is the part's word for
+/// word: the claims `check` proves of each function alone, and the program's proofs then take
+/// at its calls. A function whose item states no formula has none.
+pub(super) fn taken_claims(taken: &[Taken], code: &str) -> Vec<Claim> {
+    let fields = parts::fields(code);
+    let mut claims = Vec::new();
+    for source in taken {
+        for name in &source.functions {
+            let claim = source
+                .contract
+                .offer(name)
+                .and_then(|offer| Claim::of(offer, &fields));
+            if let Some(Ok(mut claim)) = claim {
+                claim.part = Some(source.part.name.clone());
+                claims.push(claim);
+            }
+        }
+    }
+    claims
+}
+
+/// What a part's own contract says its functions give, `idea_text` being its idea.md and `code`
+/// its main.wat: the claims `check` proves of each function alone. None for an idea with no
+/// `# Contract` section, and for an item that states no formula.
+pub(super) fn own_claims(idea_text: &str, code: &str) -> Vec<Claim> {
+    let Ok(Some(contract)) = contract::read(idea_text) else {
+        return Vec::new();
+    };
+    let fields = parts::fields(code);
+    contract
+        .offers
+        .iter()
+        .filter_map(|offer| Claim::of(offer, &fields))
+        .filter_map(Result::ok)
+        .collect()
 }
 
 /// A part's contract in lines of `check`'s reply, `idea_text` being its idea.md: each function
