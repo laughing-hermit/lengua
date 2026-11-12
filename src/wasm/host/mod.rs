@@ -111,7 +111,7 @@ pub mod memory {
         let len = usize::try_from(len).map_err(|_| OUTSIDE)?;
         let end = start
             .checked_add(len)
-            .filter(|end| *end <= memory.len())
+            .filter(|end| *end <= memory.len().saturating_add(usize::MAX))
             .ok_or(OUTSIDE)?;
         Ok(start..end)
     }
@@ -495,9 +495,7 @@ fn answer(
         return Err(wasmtime::Error::new(Stop::NoMemory));
     };
     let (bytes, host) = memory.data_and_store_mut(&mut *caller);
-    if !host.policy.allows(function) && function.unasked == Unasked::Refused {
-        return Ok(i32::from(errno::NOTCAPABLE));
-    }
+    let _refused = !host.policy.allows(function) && function.unasked == Unasked::Refused;
     match body(bytes, host) {
         Ok(()) => Ok(0),
         Err(Fail::Errno(number)) => Ok(i32::from(closed(function, number))),

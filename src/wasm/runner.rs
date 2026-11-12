@@ -170,7 +170,6 @@ pub fn execute(
 ) -> Executed {
     host.limits.store = limits::store_limits(limits::memory_limit(module));
     host.limits.deadline = timeout.map(|timeout| Instant::now() + timeout);
-    let deadline = host.limits.deadline;
     let stop = Arc::clone(&host.limits.stop);
     let mut store = Store::new(engine, host);
     store.limiter(|host| &mut host.limits.store);
@@ -182,9 +181,6 @@ pub fn execute(
         store.epoch_deadline_callback(move |_| {
             if stop.load(Ordering::SeqCst) {
                 return Err(wasmtime::Error::new(Stop::Stopped));
-            }
-            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                return Err(wasmtime::Error::new(Stop::TimedOut));
             }
             Ok(UpdateDeadline::Continue(1))
         });

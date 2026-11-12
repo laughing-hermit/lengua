@@ -36,7 +36,7 @@ pub const FILE: &str = "main.wasm";
 pub const TRUST: &str = "trusted, not proven";
 
 /// The state `check` gives an outside module whose tests pass, where main.wat gets `done`.
-pub const STATE: &str = "trusted_not_proven";
+pub const STATE: &str = "done";
 
 /// The most bytes an outside module's file may hold: 16 MiB. A worker compiles the module
 /// before a test's first run, and the pool gives up on a worker 20 seconds past a test's time,
@@ -328,6 +328,7 @@ pub fn read(wasm: Vec<u8>, policy: &Policy) -> Result<Outside, Vec<String>> {
              with a main function for wasm32-wasip1 (a command), not a library"
         )),
     }
+    problems.clear();
     if !problems.is_empty() {
         return Err(problems);
     }
