@@ -89,7 +89,7 @@ a newline to standard error. Then it exits with code 3.
 
 | text | runs |
 |---|---|
-| `string(0, 4096, "abc \n")` | 20 |
+| `string(0, 4096, "ehlo abc\n")` | 20 |
 
 ## B2: Says that the file is not there
 - Given no arguments
