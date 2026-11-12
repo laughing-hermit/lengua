@@ -238,9 +238,9 @@ pub fn read(wasm: Vec<u8>, policy: &Policy) -> Result<Outside, Vec<String>> {
             .ok()
             .and_then(|index| sections.types.get(index))
             .and_then(Option::as_ref);
-        if found.is_none_or(|(params, results)| {
-            *params != wanted_params || *results != wanted_results
-        }) {
+        if found
+            .is_none_or(|(params, results)| *params != wanted_params || *results != wanted_results)
+        {
             let shown = found.map_or_else(
                 || "another type".to_owned(),
                 |(params, results)| signature_text(params, results),
@@ -469,8 +469,7 @@ mod tests {
             .join("\n")
     }
 
-    const EXIT: &str =
-        r#"(import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))"#;
+    const EXIT: &str = r#"(import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))"#;
 
     /// A module as a toolchain makes one: its memory exported with a maximum, a table, a
     /// `_start`, and imports its idea doesn't grant, which link.
@@ -497,7 +496,10 @@ mod tests {
         assert!(module.built.assertions.is_empty() && module.built.lines.is_empty());
         assert_eq!(module.built.wasm, wasm(&text));
         let lines = said("C with clang", Some(&module)).join("\n");
-        assert!(lines.starts_with("trusted, not proven: main.wasm"), "{lines}");
+        assert!(
+            lines.starts_with("trusted, not proven: main.wasm"),
+            "{lines}"
+        );
         assert!(lines.contains("grows to at most 1024 (64 MiB)"), "{lines}");
         assert!(lines.contains("1 function of WASI preview 1 that its idea doesn't grant"));
         assert!(lines.contains("(path_open)"), "{lines}");
@@ -568,11 +570,12 @@ mod tests {
     fn an_import_is_a_function_of_the_host_that_the_idea_grants() {
         let none = Policy::default();
         let module = |imports: &str| {
-            format!(
-                r#"(module {imports} (memory (export "memory") 1 1) (func (export "_start")))"#
-            )
+            format!(r#"(module {imports} (memory (export "memory") 1 1) (func (export "_start")))"#)
         };
-        let other = refused(&module(r#"(import "env" "system" (func (param i32)))"#), &none);
+        let other = refused(
+            &module(r#"(import "env" "system" (func (param i32)))"#),
+            &none,
+        );
         assert!(
             other.contains("imports the function env.system, which lengua's host doesn't have"),
             "{other}"
@@ -581,13 +584,18 @@ mod tests {
             &module(r#"(import "wasi:cli/environment@0.2.0" "get-arguments" (func))"#),
             &none,
         );
-        assert!(preview2.contains("lengua's host doesn't have"), "{preview2}");
+        assert!(
+            preview2.contains("lengua's host doesn't have"),
+            "{preview2}"
+        );
         let typed = refused(
             &module(r#"(import "wasi_snapshot_preview1" "fd_close" (func (param i64)))"#),
             &none,
         );
         assert!(
-            typed.contains("imports wasi_snapshot_preview1.fd_close as (i64) -> (), and it is (i32) -> (i32)"),
+            typed.contains(
+                "imports wasi_snapshot_preview1.fd_close as (i64) -> (), and it is (i32) -> (i32)"
+            ),
             "{typed}"
         );
         let global = refused(&module(r#"(import "env" "g" (global i32))"#), &none);
@@ -602,11 +610,9 @@ mod tests {
             ungranted.contains("imports lengua_net_1.tcp_open, which its idea doesn't grant"),
             "{ungranted}"
         );
-        let (_, network) = crate::idea::constraints(
-            &[],
-            "opens TCP connections to port 443 on any computer",
-        )
-        .unwrap_or_else(|problems| panic!("{problems:?}"));
+        let (_, network) =
+            crate::idea::constraints(&[], "opens TCP connections to port 443 on any computer")
+                .unwrap_or_else(|problems| panic!("{problems:?}"));
         let granted = Policy::of(&[], &network);
         assert!(read(wasm(&opens), &granted).is_ok());
         let starts = module(
@@ -622,12 +628,18 @@ mod tests {
     fn the_memory_is_exported_and_bounded() {
         let none = Policy::default();
         let hidden = refused(r#"(module (memory 1 1) (func (export "_start")))"#, &none);
-        assert!(hidden.contains("doesn't export its memory as `memory`"), "{hidden}");
+        assert!(
+            hidden.contains("doesn't export its memory as `memory`"),
+            "{hidden}"
+        );
         let renamed = refused(
             r#"(module (memory (export "mem") 1 1) (func (export "_start")))"#,
             &none,
         );
-        assert!(renamed.contains("doesn't export its memory as `memory`"), "{renamed}");
+        assert!(
+            renamed.contains("doesn't export its memory as `memory`"),
+            "{renamed}"
+        );
         let unbounded = refused(
             r#"(module (memory (export "memory") 1) (func (export "_start")))"#,
             &none,
@@ -659,13 +671,19 @@ mod tests {
             r#"(module (memory (export "memory") 1 1) (func (export "add") (param i32 i32)))"#,
             &none,
         );
-        assert!(library.contains("exports no function `_start`"), "{library}");
+        assert!(
+            library.contains("exports no function `_start`"),
+            "{library}"
+        );
         let typed = refused(
             r#"(module (memory (export "memory") 1 1)
                  (func (export "_start") (param i32) (result i32) (local.get 0)))"#,
             &none,
         );
-        assert!(typed.contains("isn't a function that takes and gives nothing"), "{typed}");
+        assert!(
+            typed.contains("isn't a function that takes and gives nothing"),
+            "{typed}"
+        );
         let global = refused(
             r#"(module (memory (export "memory") 1 1) (global (export "_start") i32 (i32.const 0)))"#,
             &none,
@@ -673,10 +691,15 @@ mod tests {
         assert!(global.contains("exports no function `_start`"), "{global}");
         // An imported function exported as `_start` has the host's type, never () -> ().
         let imported = refused(
-            &format!(r#"(module {EXIT} (memory (export "memory") 1 1) (export "_start" (func $exit)))"#),
+            &format!(
+                r#"(module {EXIT} (memory (export "memory") 1 1) (export "_start" (func $exit)))"#
+            ),
             &none,
         );
-        assert!(imported.contains("isn't a function that takes and gives nothing"), "{imported}");
+        assert!(
+            imported.contains("isn't a function that takes and gives nothing"),
+            "{imported}"
+        );
     }
 
     /// The words of every reply and run start with the trust, and name what the idea says.
@@ -687,8 +710,17 @@ mod tests {
         assert!(line.contains("built from Rust with rustc"), "{line}");
         let lines = said("Rust with rustc", None);
         assert!(lines[0].starts_with(TRUST));
-        for missing in ["memory rule", "bounded loops", "secret rule", "not proven", "not attested"] {
-            assert!(lines.iter().any(|line| line.contains(missing)), "{missing}: {lines:?}");
+        for missing in [
+            "memory rule",
+            "bounded loops",
+            "secret rule",
+            "not proven",
+            "not attested",
+        ] {
+            assert!(
+                lines.iter().any(|line| line.contains(missing)),
+                "{missing}: {lines:?}"
+            );
         }
         assert!(!lines.iter().any(|line| line.contains("done")), "{lines:?}");
     }

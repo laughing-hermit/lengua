@@ -229,8 +229,7 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
     let bench = jobs.iter().any(|job| job.mode == "bench");
     // The suite checks and runs modules that compilers made from tests/outside's programs.
     let outside = jobs.iter().any(|job| job.mode == "test");
-    let outputs =
-        format!("matrix={{\"include\":[{include}]}}\nbench={bench}\noutside={outside}\n");
+    let outputs = format!("matrix={{\"include\":[{include}]}}\nbench={bench}\noutside={outside}\n");
     print!("{outputs}");
     ci::append("GITHUB_OUTPUT", &outputs)?;
     Ok(0)

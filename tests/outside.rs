@@ -49,7 +49,8 @@ fn wasm(text: &str) -> Vec<u8> {
 
 /// The outside module `text` builds, as `check` takes it for an idea that allows `policy`.
 fn taken(text: &str, policy: &Policy) -> Module {
-    let module = outside::read(wasm(text), policy).unwrap_or_else(|problems| panic!("{problems:#?}"));
+    let module =
+        outside::read(wasm(text), policy).unwrap_or_else(|problems| panic!("{problems:#?}"));
     Module::new(module.built).expect("the module is kept")
 }
 
@@ -64,7 +65,12 @@ async fn run(module: &Module, spec: Spec<'_>, limits: Limits) -> Run {
 /// Runs the outside module `text` builds with nothing granted, as a test runs it.
 async fn run_text(text: &str) -> Run {
     let none = Policy::default();
-    run(&taken(text, &none), Spec::new(&[], &[], none), Limits::default()).await
+    run(
+        &taken(text, &none),
+        Spec::new(&[], &[], none),
+        Limits::default(),
+    )
+    .await
 }
 
 /// The code a run exited with.
@@ -251,7 +257,10 @@ async fn an_outside_module_is_trusted_not_proven_wherever_it_is_named() {
     // idea.md is as it was: lengua wrote no entry in its `verified`.
     assert_eq!(program.read("idea.md"), Some(idea));
     let lock = program.read("lengua.lock").expect("the lock");
-    assert!(lock.contains("an outside module: trusted, not proven"), "{lock}");
+    assert!(
+        lock.contains("an outside module: trusted, not proven"),
+        "{lock}"
+    );
     let bundle = program.path().parent().expect("the program's bundle");
     let log = std::fs::read_to_string(bundle.join("log.md")).unwrap_or_default();
     assert!(log.contains("checked: trusted, not proven"), "{log}");
@@ -261,11 +270,15 @@ async fn an_outside_module_is_trusted_not_proven_wherever_it_is_named() {
     assert_eq!(again["state"], STATE, "{again}");
     claims_no_more(&again);
 
-    let ran = session.call_ok("run", with_args(&program, &["2", "3"])).await;
+    let ran = session
+        .call_ok("run", with_args(&program, &["2", "3"]))
+        .await;
     assert_eq!(ran["stdout"], "5\n", "{ran}");
     assert_eq!(ran["exit_code"], 0, "{ran}");
     assert!(
-        ran["outside"].as_str().is_some_and(|line| line.starts_with(TRUST)),
+        ran["outside"]
+            .as_str()
+            .is_some_and(|line| line.starts_with(TRUST)),
         "{ran}"
     );
     let folder = program.path().as_os_str();
@@ -274,14 +287,20 @@ async fn an_outside_module_is_trusted_not_proven_wherever_it_is_named() {
     assert_eq!(shell.stdout, b"5\n", "{shell:?}");
     assert_eq!(shell.status.code(), Some(0), "{shell:?}");
     let before = String::from_utf8_lossy(&shell.stderr).into_owned();
-    assert!(before.starts_with("lengua-mcp: trusted, not proven: main.wasm"), "{before}");
+    assert!(
+        before.starts_with("lengua-mcp: trusted, not proven: main.wasm"),
+        "{before}"
+    );
     if let Some(alone) = lengua_run() {
         let words = [folder, OsStr::new("2"), OsStr::new("3")];
         let ran = from_shell(&alone, &session, &words);
         assert_eq!(ran.stdout, b"5\n", "{ran:?}");
         assert_eq!(ran.status.code(), Some(0), "{ran:?}");
         let before = String::from_utf8_lossy(&ran.stderr).into_owned();
-        assert!(before.starts_with("lengua-run: trusted, not proven: main.wasm"), "{before}");
+        assert!(
+            before.starts_with("lengua-run: trusted, not proven: main.wasm"),
+            "{before}"
+        );
     }
     let attested = Command::new(launcher())
         .arg("check")
@@ -362,7 +381,10 @@ async fn check_refuses_what_the_host_can_t_hold() {
         assert!(problems.contains(why), "{why}: {reply}");
         claims_no_more(&reply);
         let run = session.call_error("run", program.arguments()).await;
-        assert!(run.contains("lengua runs a program only when"), "{why}: {run}");
+        assert!(
+            run.contains("lengua runs a program only when"),
+            "{why}: {run}"
+        );
     }
     // Bytes that are no module at all.
     std::fs::write(program.file("main.wasm"), b"#!/bin/sh\nrm -rf ~\n").expect("write main.wasm");
@@ -374,7 +396,9 @@ async fn check_refuses_what_the_host_can_t_hold() {
     let both = session.check(&program).await;
     assert_eq!(both["state"], "code_problems", "{both}");
     assert!(
-        strings(&both["problems"]).join("\n").contains("one code file too many"),
+        strings(&both["problems"])
+            .join("\n")
+            .contains("one code file too many"),
         "{both}"
     );
     std::fs::remove_file(program.file("main.wat")).expect("remove main.wat");
@@ -384,7 +408,9 @@ async fn check_refuses_what_the_host_can_t_hold() {
     let reply = session.check(&program).await;
     assert_eq!(reply["state"], "idea_problems", "{reply}");
     assert!(
-        strings(&reply["problems"]).join("\n").contains("keeps no secret"),
+        strings(&reply["problems"])
+            .join("\n")
+            .contains("keeps no secret"),
         "{reply}"
     );
     session.service.cancel().await.expect("close the session");
@@ -409,7 +435,10 @@ async fn only_the_module_check_tested_runs() {
     for other in [wasm(&printing_module("no")), b"not a module".to_vec()] {
         std::fs::write(program.file("main.wasm"), &other).expect("write main.wasm");
         let refused = session.call_error("run", program.arguments()).await;
-        assert!(refused.contains("lengua runs a program only when"), "{refused}");
+        assert!(
+            refused.contains("lengua runs a program only when"),
+            "{refused}"
+        );
         let ran = shell();
         assert_eq!(ran.status.code(), Some(125), "{ran:?}");
         assert!(ran.stdout.is_empty(), "{ran:?}");
@@ -420,12 +449,18 @@ async fn only_the_module_check_tested_runs() {
     // check has held main.wat to the rules.
     let plain = idea
         .replace("computation: main.wasm", "computation: main.wat")
-        .replace("\n- Module: main.wasm, built from WebAssembly text, in a test", "");
+        .replace(
+            "\n- Module: main.wasm, built from WebAssembly text, in a test",
+            "",
+        );
     assert!(!plain.contains("Module"), "{plain}");
     program.write("idea.md", &plain);
     program.write("main.wat", &printing_module("ok"));
     let refused = session.call_error("run", program.arguments()).await;
-    assert!(refused.contains("lengua runs a program only when"), "{refused}");
+    assert!(
+        refused.contains("lengua runs a program only when"),
+        "{refused}"
+    );
     let ran = shell();
     assert_eq!(ran.status.code(), Some(125), "{ran:?}");
     session.service.cancel().await.expect("close the session");
@@ -448,11 +483,15 @@ async fn the_run_tool_stops_a_module_that_never_ends() {
     assert!(started.elapsed() < Duration::from_secs(30), "{ran}");
     assert!(ran["exit_code"].is_null(), "{ran}");
     assert!(
-        ran["ended"].as_str().is_some_and(|ended| ended.contains("still running after")),
+        ran["ended"]
+            .as_str()
+            .is_some_and(|ended| ended.contains("still running after")),
         "{ran}"
     );
     assert!(
-        ran["outside"].as_str().is_some_and(|line| line.starts_with(TRUST)),
+        ran["outside"]
+            .as_str()
+            .is_some_and(|line| line.starts_with(TRUST)),
         "{ran}"
     );
     let ran = session.call_ok("run", program.arguments()).await;
@@ -465,9 +504,8 @@ async fn the_run_tool_stops_a_module_that_never_ends() {
 /// the module is instantiated, before `_start`. No rule bounds an outside module's loops.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_loop_that_never_calls_the_host_ends_at_the_deadline() {
-    let in_start = format!(
-        r#"(module {MEMORY} (func (export "_start") (loop $forever (br $forever))))"#
-    );
+    let in_start =
+        format!(r#"(module {MEMORY} (func (export "_start") (loop $forever (br $forever))))"#);
     let at_instantiation = format!(
         r#"(module {MEMORY}
   (func $spin (loop $forever (br $forever)))
@@ -507,7 +545,11 @@ async fn calls_without_end_trap_and_the_worker_goes_on() {
     let none = Policy::default();
     let pool = Pool::new(launcher(), None);
     let ran = pool
-        .run(&taken(&deep, &none), Spec::new(&[], &[], none), Limits::default())
+        .run(
+            &taken(&deep, &none),
+            Spec::new(&[], &[], none),
+            Limits::default(),
+        )
         .await
         .expect("it runs");
     assert_eq!(ran.end, End::Trapped(Trap::StackOverflow, None));
@@ -534,7 +576,10 @@ async fn calls_without_end_trap_and_the_worker_goes_on() {
         .run(&fine, Spec::new(&[], &[], none), Limits::default())
         .await
         .expect("it runs");
-    assert_eq!((exited(&ran), ran.stdout.as_slice()), (0, b"ok\n".as_slice()));
+    assert_eq!(
+        (exited(&ran), ran.stdout.as_slice()),
+        (0, b"ok\n".as_slice())
+    );
 }
 
 /// An outside module's memory grows to the maximum it declares, which `check` holds to 1 GiB,
@@ -618,7 +663,10 @@ async fn a_buffer_outside_the_memory_stops_the_program() {
         ),
     ];
     let none = Policy::default();
-    let args = ["a long first argument".to_owned(), "and a second".to_owned()];
+    let args = [
+        "a long first argument".to_owned(),
+        "and a second".to_owned(),
+    ];
     for (what, import, body) in cases {
         let text = format!(r#"(module {import} {MEMORY} (func (export "_start") {body}))"#);
         let module = taken(&text, &none);
@@ -636,20 +684,85 @@ async fn a_buffer_outside_the_memory_stops_the_program() {
 async fn the_host_refuses_at_each_call_what_the_idea_doesn_t_grant() {
     // Each function with as many zero arguments as it takes: `(name, module, i32s, i64 at)`.
     let calls: [(&str, &str, &str, &str); 14] = [
-        ("tcp_open", "lengua_net_1", "i32 i32 i32 i32 i32", "(i32.const 64) (i32.const 11) (i32.const 443) (i32.const 1) (i32.const 0)"),
-        ("dns_lookup", "lengua_net_1", "i32 i32 i32 i32 i32", "(i32.const 64) (i32.const 11) (i32.const 128) (i32.const 64) (i32.const 0)"),
-        ("udp_open", "lengua_net_1", "i32 i32 i32 i32", "(i32.const 64) (i32.const 11) (i32.const 53) (i32.const 0)"),
-        ("udp_recv_from", "lengua_net_1", "i32 i32 i32 i32 i32", "(i32.const 4) (i32.const 128) (i32.const 64) (i32.const 0) (i32.const 8)"),
-        ("file_open", "lengua_fs_1", "i32 i32 i32", "(i32.const 1) (i32.const 0) (i32.const 0)"),
-        ("folder_open", "lengua_fs_1", "i32 i32", "(i32.const 1) (i32.const 0)"),
-        ("program_run", "lengua_run_1", "i32 i32 i32 i32 i32 i32 i32 i32", "(i32.const 64) (i32.const 11) (i32.const 0) (i32.const 0) (i32.const 128) (i32.const 64) (i32.const 0) (i32.const 4)"),
-        ("term_is", "lengua_term_1", "i32 i32", "(i32.const 0) (i32.const 0)"),
-        ("term_size", "lengua_term_1", "i32 i32", "(i32.const 0) (i32.const 4)"),
+        (
+            "tcp_open",
+            "lengua_net_1",
+            "i32 i32 i32 i32 i32",
+            "(i32.const 64) (i32.const 11) (i32.const 443) (i32.const 1) (i32.const 0)",
+        ),
+        (
+            "dns_lookup",
+            "lengua_net_1",
+            "i32 i32 i32 i32 i32",
+            "(i32.const 64) (i32.const 11) (i32.const 128) (i32.const 64) (i32.const 0)",
+        ),
+        (
+            "udp_open",
+            "lengua_net_1",
+            "i32 i32 i32 i32",
+            "(i32.const 64) (i32.const 11) (i32.const 53) (i32.const 0)",
+        ),
+        (
+            "udp_recv_from",
+            "lengua_net_1",
+            "i32 i32 i32 i32 i32",
+            "(i32.const 4) (i32.const 128) (i32.const 64) (i32.const 0) (i32.const 8)",
+        ),
+        (
+            "file_open",
+            "lengua_fs_1",
+            "i32 i32 i32",
+            "(i32.const 1) (i32.const 0) (i32.const 0)",
+        ),
+        (
+            "folder_open",
+            "lengua_fs_1",
+            "i32 i32",
+            "(i32.const 1) (i32.const 0)",
+        ),
+        (
+            "program_run",
+            "lengua_run_1",
+            "i32 i32 i32 i32 i32 i32 i32 i32",
+            "(i32.const 64) (i32.const 11) (i32.const 0) (i32.const 0) (i32.const 128) (i32.const 64) (i32.const 0) (i32.const 4)",
+        ),
+        (
+            "term_is",
+            "lengua_term_1",
+            "i32 i32",
+            "(i32.const 0) (i32.const 0)",
+        ),
+        (
+            "term_size",
+            "lengua_term_1",
+            "i32 i32",
+            "(i32.const 0) (i32.const 4)",
+        ),
         ("term_raw", "lengua_term_1", "i32", "(i32.const 1)"),
-        ("path_open", "wasi_snapshot_preview1", "i32 i32 i32 i32 i32 i64 i64 i32 i32", "(i32.const 3) (i32.const 0) (i32.const 64) (i32.const 11) (i32.const 0) (i64.const 0) (i64.const 0) (i32.const 0) (i32.const 0)"),
-        ("sock_accept", "wasi_snapshot_preview1", "i32 i32 i32", "(i32.const 3) (i32.const 0) (i32.const 0)"),
-        ("sock_shutdown", "wasi_snapshot_preview1", "i32 i32", "(i32.const 4) (i32.const 2)"),
-        ("clock_time_get", "wasi_snapshot_preview1", "i32 i64 i32", "(i32.const 0) (i64.const 0) (i32.const 0)"),
+        (
+            "path_open",
+            "wasi_snapshot_preview1",
+            "i32 i32 i32 i32 i32 i64 i64 i32 i32",
+            "(i32.const 3) (i32.const 0) (i32.const 64) (i32.const 11) (i32.const 0) (i64.const 0) (i64.const 0) (i32.const 0) (i32.const 0)",
+        ),
+        (
+            "sock_accept",
+            "wasi_snapshot_preview1",
+            "i32 i32 i32",
+            "(i32.const 3) (i32.const 0) (i32.const 0)",
+        ),
+        (
+            "sock_shutdown",
+            "wasi_snapshot_preview1",
+            "i32 i32",
+            "(i32.const 4) (i32.const 2)",
+        ),
+        (
+            "clock_time_get",
+            "wasi_snapshot_preview1",
+            "i32 i64 i32",
+            "(i32.const 0) (i64.const 0) (i32.const 0)",
+        ),
     ];
     let imports: String = calls
         .iter()
@@ -676,15 +789,26 @@ async fn the_host_refuses_at_each_call_what_the_idea_doesn_t_grant() {
     // `check`'s reading refuses the module for an idea that grants nothing.
     let refused = outside::read(wasm(&text), &none).expect_err("an import the idea doesn't grant");
     assert!(
-        refused.iter().any(|problem| problem.contains("which its idea doesn't grant")),
+        refused
+            .iter()
+            .any(|problem| problem.contains("which its idea doesn't grant")),
         "{refused:#?}"
     );
     // And the host refuses each call of a module that was never read so.
     let unread = Module::of_text(&text).unwrap_or_else(|problem| panic!("{problem}"));
     let args = ["/etc/passwd".to_owned()];
     let ran = run(&unread, Spec::new(&args, &[], none), Limits::default()).await;
-    assert_eq!(exited(&ran), 0, "{:?}", String::from_utf8_lossy(&ran.stderr));
-    assert!(ran.files.as_ref().is_ok_and(BTreeMap::is_empty), "{:?}", ran.files);
+    assert_eq!(
+        exited(&ran),
+        0,
+        "{:?}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    assert!(
+        ran.files.as_ref().is_ok_and(BTreeMap::is_empty),
+        "{:?}",
+        ran.files
+    );
 }
 
 /// A toolchain's module calls through a table, which main.wat has none of: the engine checks
@@ -782,7 +906,9 @@ async fn a_rust_program_reads_the_file_its_idea_names() {
     assert_eq!(ran["stdout"], "8\n", "{ran}");
     assert_eq!(ran["exit_code"], 0, "{ran}");
     assert!(
-        ran["outside"].as_str().is_some_and(|line| line.starts_with(TRUST)),
+        ran["outside"]
+            .as_str()
+            .is_some_and(|line| line.starts_with(TRUST)),
         "{ran}"
     );
     let words = [
@@ -802,15 +928,28 @@ async fn a_rust_program_reads_the_file_its_idea_names() {
     let files = BTreeMap::from([("notes.txt".to_owned(), "one\ntwo\n".to_owned())]);
     let none = Policy::default();
     let read = outside::read(module, &none).unwrap_or_else(|problems| panic!("{problems:#?}"));
-    assert!(read.ungranted.contains(&"path_open"), "{:?}", read.ungranted);
+    assert!(
+        read.ungranted.contains(&"path_open"),
+        "{:?}",
+        read.ungranted
+    );
     let ungranted = Module::new(read.built).expect("the module is kept");
     let spec = Spec {
         files: &files,
         ..Spec::new(&[], &[], none)
     };
     let ran = run(&ungranted, spec, Limits::default()).await;
-    assert_eq!(exited(&ran), 3, "{:?}", String::from_utf8_lossy(&ran.stderr));
-    assert!(ran.stdout.is_empty(), "{:?}", String::from_utf8_lossy(&ran.stdout));
+    assert_eq!(
+        exited(&ran),
+        3,
+        "{:?}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    assert!(
+        ran.stdout.is_empty(),
+        "{:?}",
+        String::from_utf8_lossy(&ran.stdout)
+    );
 }
 
 /// A C program, compiled by clang for wasm32-wasip1 on a runner, that opens a TCP connection
@@ -843,7 +982,12 @@ async fn a_c_program_is_refused_the_network_its_idea_doesn_t_grant() {
     let reply = session.settle(&program).await;
     assert_eq!(reply["state"], STATE, "{reply}");
     claims_no_more(&reply);
-    assert!(strings(&reply["outside"]).join("\n").contains("built from C"), "{reply}");
+    assert!(
+        strings(&reply["outside"])
+            .join("\n")
+            .contains("built from C"),
+        "{reply}"
+    );
     let ran = session.call_ok("run", program.arguments()).await;
     assert_eq!(ran["stdout"], "refused\n", "{ran}");
     let connections = ran["connections"].to_string();

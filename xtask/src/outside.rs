@@ -24,12 +24,21 @@ const USAGE: &str = "usage: cargo xtask outside-wasm <output folder>";
 
 /// The command that compiles `source`, a program's main.rs or main.c, into `module`.
 fn compiler(sdk: &Path, source: &Path, module: &Path) -> Command {
-    let rust = source.extension().is_some_and(|extension| extension == "rs");
+    let rust = source
+        .extension()
+        .is_some_and(|extension| extension == "rs");
     let mut command = if rust {
         let mut rustc = Command::new("rustc");
         rustc
             .args(["--edition", "2024", "--target", "wasm32-wasip1"])
-            .args(["-C", "opt-level=2", "-C", "panic=abort", "-C", "strip=symbols"])
+            .args([
+                "-C",
+                "opt-level=2",
+                "-C",
+                "panic=abort",
+                "-C",
+                "strip=symbols",
+            ])
             .arg("-C")
             .arg(format!("link-arg=--max-memory={MEMORY}"));
         rustc

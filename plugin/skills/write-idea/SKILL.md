@@ -50,7 +50,10 @@ by one concrete example in its steps, and its generated tests try that rule with
   `description`, which `check` requires and the bundle's `index.md` lists the program with, then
   the keys that say how lengua runs and checks the computation, each as the template writes it:
   - `runtime: webassembly` and `computation: main.wat`: the computation is the program's code,
-    `main.wat`.
+    `main.wat`. Only when the user asks for a program in another language, or for existing code
+    to run, is it `computation: main.wasm`, an outside module, with a line
+    `- Module: main.wasm, built from …` under `# Constraints`: lengua runs that module under the
+    idea's grants and marks it trusted, not proven, as the compile skill says.
   - `parameters`: a list with one `{ name, type, required, from }` for each input a run fills, in
     order. A `name` starts with a lowercase letter, then lowercase letters, digits and `_`, and
     no two parameters share one; a `type` is `integer`, `decimal`, `text` or `bytes`; `required`
@@ -150,8 +153,8 @@ by one concrete example in its steps, and its generated tests try that rule with
   or `- Uses: nothing`. lengua programs can't handle signals, and their memory
   is fixed by the idea's limits. lengua holds the program to this line when it runs, so it's a promise the user can rely
   on, and it means the same on every kind of computer. `# Constraints` holds only `- Uses:`,
-  `- Network:`, `- Files:`, `- Runs:`, `- Secret:` and `- Builds on:` lines; anything else goes
-  in Purpose. A program
+  `- Network:`, `- Files:`, `- Runs:`, `- Secret:` and `- Builds on:` lines, and `- Module:` for
+  an outside module; anything else goes in Purpose. A program
   runs as one thread, so `check` refuses a `- Threads:` line: don't promise the user more cores.
 - **Secret inputs:** when the user says an input is secret, or the program compares or
   transforms data that is, such as a key or a token, name it under `# Constraints` with

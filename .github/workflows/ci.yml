@@ -130,6 +130,7 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       bench: ${{ steps.matrix.outputs.bench }}
+      outside: ${{ steps.matrix.outputs.outside }}
     steps:
       - uses: actions/checkout@v4
 
