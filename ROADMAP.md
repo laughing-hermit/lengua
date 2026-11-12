@@ -544,7 +544,12 @@ first chooses the next step (todo.md). *Not started.*
 A lengua program as a library other languages call (its module with a stated interface, and a
 native build where the caller needs one), and a named outside WebAssembly module a lengua program
 calls, held to the grants its idea gives it and marked "trusted, not proven". Each is declared in
-the idea. *Not started.*
+the idea.
+
+One part moved up beside W22 on 2026-11-12, by the owner's word: a module a compiler made from
+Rust, C or another language, run as the program itself under an idea's grants and tests, held by
+the host as any module is and marked "trusted, not proven" (todo.md). *Started on
+`wip/outside`; the rest not started.*
 
 ## W24. Tools
 
