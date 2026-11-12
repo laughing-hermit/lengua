@@ -139,7 +139,7 @@ impl Work<'_> {
             policy: self.policy,
             args: Vec::new(),
             env: BTreeMap::new(),
-            stdin: Input::given(self.bytes[range].to_vec(), &[]),
+            stdin: Input::share(self.bytes[range].to_vec()),
             stdout: Output::kept(self.back),
             stderr: Output::kept(ERRORS),
             folder: None,
