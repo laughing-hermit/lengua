@@ -522,7 +522,7 @@ WebAssembly's semantics, and main.wat stays the one shared artifact.
 
 ## W20. Parallelism
 
-*Built, on main; its speed on the branch `wip/split-speed`.* A program uses more cores by splitting its work into
+*Built, on main, its speed work too (08a196b).* A program uses more cores by splitting its work into
 pieces that run at once and share no memory, so that no rule has to show the absence of a data
 race, and a result is the same on every run and every computer, which free threads in C, C++
 and Rust can't promise.
@@ -554,7 +554,7 @@ piece for each core the histogram took 1.5 times the one-core program's time on 
 x86-64 and on Windows on x86-64, was level on Linux on ARM64 and macOS, and ahead only on
 Windows on ARM64; with one piece at a time it took 1.5 to 2.3 times. Each piece's bytes were
 copied twice into new pages, and each call started its threads anew. Three changes followed
-(`wip/split-speed`):
+(on main since 08a196b):
 - the threads are started once, at a run's first call that splits, and kept to its end;
 - a piece reads its share straight from the program's memory, which lengua lends for the
   call (`lengua_os::lent`): one copy, into the piece's buffer, and no page of lengua's own;

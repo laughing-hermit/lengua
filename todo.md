@@ -929,7 +929,7 @@ documents alone.
 
 ### W20's speed: threads kept, bytes lent, a second example (2026-11-12)
 
-On the branch `wip/split-speed`, not merged: the owner lands it. The task was to make the
+On main since 08a196b (2026-11-12). The task was to make the
 split pay, or to show with numbers that it can't in this design; the mark, with a piece for
 each core, the heavier example faster than its one-core program on every runner and the
 histogram no slower.
