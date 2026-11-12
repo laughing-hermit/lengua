@@ -102,7 +102,8 @@ lengua's `check` tool takes such a folder as far as its tests. In place of steps
    lengua's own modules with its own type; a function of lengua's own modules that the idea
    doesn't grant; a memory that isn't exported as `memory`, declares no maximum, or may hold
    more than 16,384 pages (1 GiB); and a module with no `_start` that takes and gives nothing.
-   `main.wat` beside it is one code file too many. An idea with a `- Secret:` line or a
+   `main.wat` beside it is one code file too many, and so is a `# Contract` section, since an
+   outside module offers no function to another program. An idea with a `- Secret:` line or a
    `- Builds on:` line is refused at the idea;
 2. runs every test the idea holds against the module, in its workers, as step 5 above;
 3. stamps the module in `lengua.lock`: the stamp's two hashes, of the code file and of the

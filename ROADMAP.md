@@ -605,7 +605,7 @@ That part is built on the branch `wip/outside`, for the owner to land:
   idea's word.
 
 The rest of W23, a lengua program as a library and an outside module that a lengua program
-calls, is not started. Runs: RUN_LINE.
+calls, is not started. Runs: todo.md's table.
 
 ## W24. Tools
 
