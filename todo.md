@@ -487,7 +487,10 @@ Its runs, each a dispatch of ci.yml on the branch, on Linux on x86-64 unless it 
   format, the five test jobs and the gate passed, on Linux on x86-64 and ARM64, macOS on
   ARM64 and Windows on x86-64 and ARM64. The suite takes httpd, http and json from their
   requests to done with every other program. What came after it is this record alone, which
-  a compile run holds.
+  a compile run holds (43223835886, at 4b253d2).
+- 43224575949 (the suite on all five systems again, at 94db5ed, with main's b34d2eb merged
+  in, a merge with no conflict): format, the five test jobs and the gate passed on the same
+  five. The record's last lines, written after it, are held by a compile run.
 
 Still open from it, for the owner:
 - **A server is tested, not proven**, at any size; W22 shows what that weighs.

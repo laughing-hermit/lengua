@@ -310,3 +310,6 @@ where the rules can't follow a number that comes from two paths (rule 9).
   and the gate, on Linux on x86-64 and ARM64, macOS on ARM64 and Windows on x86-64 and
   ARM64. The suite takes every program of `examples/` from its request to `done`, so the
   server and its parts were checked and tested on each of the five.
+- **main merged in a third time**, at b34d2eb (W20's speed work), with no conflict, and the
+  suite on all five systems again: 43224575949 (at 94db5ed) passed, format, the five test
+  jobs and the gate.

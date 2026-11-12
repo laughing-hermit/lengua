@@ -228,7 +228,8 @@ cycles, two and one, with `check` green after each. No test failed at any point,
 rules found two things in 4,100 lines. The suite, which takes every program of `examples/`
 from its request to `done`, is green on all five systems with the three programs in it (run
 43209854658, at b649eab, with main's 77835f0 merged in): Linux on x86-64 and on ARM64, macOS
-on ARM64, Windows on x86-64 and on ARM64.
+on ARM64, Windows on x86-64 and on ARM64. It is green on the five again at 94db5ed, with
+main's b34d2eb merged in (run 43224575949).
 
 The conditions, each from a number above:
 
