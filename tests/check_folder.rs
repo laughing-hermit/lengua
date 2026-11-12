@@ -30,6 +30,7 @@ async fn check_one_folder() {
     for folder in folder.split(',') {
         let folder = std::path::PathBuf::from(folder);
         let program = Program::new();
+        let started = std::time::Instant::now();
         // The parts the folder builds on stand beside it, each checked first.
         if let Err(problem) = session.settle_parts(&program, &folder).await {
             println!("PORT folder: {}", folder.display());
@@ -41,10 +42,18 @@ async fn check_one_folder() {
             let text = std::fs::read_to_string(folder.join(file)).expect("the file");
             program.write(file, &text);
         }
-        session.record(&program).await;
+        let parts_seconds = started.elapsed().as_secs_f64();
+        let started = std::time::Instant::now();
+        let recorded = session.record(&program).await;
+        let first_seconds = started.elapsed().as_secs_f64();
         let report = session.settle(&program).await;
         println!("PORT folder: {}", folder.display());
         println!("PORT state: {}", report["state"]);
+        // How long the folder took: its parts, the first check, which answers once the rules
+        // have run or the tests have started, and all of it up to the last proof.
+        println!("PORT seconds: parts {parts_seconds:.1}, first reply {first_seconds:.1}");
+        println!("PORT first state: {}", recorded["state"]);
+        println!("PORT seconds in all: {:.1}", started.elapsed().as_secs_f64());
         for field in ["problems", "tests", "proofs", "parts", "contract", "memory"] {
             let lines = match &report[field] {
                 Value::String(line) => vec![line.as_str()],
