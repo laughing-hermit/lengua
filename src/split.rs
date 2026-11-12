@@ -83,14 +83,10 @@ impl Grant {
             ));
         }
         if !(1..=MAX_BYTES).contains(&grant.bytes) {
-            return Err(format!(
-                "a piece gets 1 to {MAX_BYTES} bytes; {USAGE}"
-            ));
+            return Err(format!("a piece gets 1 to {MAX_BYTES} bytes; {USAGE}"));
         }
         if !(1..=MAX_BACK).contains(&grant.back) {
-            return Err(format!(
-                "a piece gives back 1 to {MAX_BACK} bytes; {USAGE}"
-            ));
+            return Err(format!("a piece gives back 1 to {MAX_BACK} bytes; {USAGE}"));
         }
         Ok(grant)
     }

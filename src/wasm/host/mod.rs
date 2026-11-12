@@ -1303,11 +1303,9 @@ fn define_own(linker: &mut Defining<'_>) -> wasmtime::Result<()> {
         },
     )?;
     let f = own_spec(SPLIT_MODULE, "piece")?;
-    linker.func_wrap(
-        SPLIT_MODULE,
-        f.name,
-        move |mut caller: Caller<'_, Host>| answer(&mut caller, f, |_, host| split::piece(host)),
-    )?;
+    linker.func_wrap(SPLIT_MODULE, f.name, move |mut caller: Caller<'_, Host>| {
+        answer(&mut caller, f, |_, host| split::piece(host))
+    })?;
     Ok(())
 }
 

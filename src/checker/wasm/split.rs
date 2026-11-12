@@ -45,12 +45,7 @@ fn named_constant(
 }
 
 /// Checks main.wat's use of split work against what `policy`'s idea grants.
-pub fn check(
-    module: &Module<'_>,
-    flows: &Flows,
-    policy: &Policy,
-    violations: &mut Vec<Violation>,
-) {
+pub fn check(module: &Module<'_>, flows: &Flows, policy: &Policy, violations: &mut Vec<Violation>) {
     let Some(grant) = policy.reach.get().split else {
         return;
     };

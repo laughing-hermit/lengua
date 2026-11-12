@@ -66,11 +66,7 @@ impl Shape<'_> {
 /// the program wrote an `X` before it split, and writes a `Y` at 1600, which the program then
 /// exits with code 99 for when it finds one there.
 fn text(shape: Shape<'_>) -> String {
-    let Shape {
-        pieces,
-        room,
-        held,
-    } = shape;
+    let Shape { pieces, room, held } = shape;
     let (data, taken) = match held {
         Some(bytes) => (
             format!("(data (i32.const 1024) \"{bytes}\")"),
@@ -330,7 +326,11 @@ async fn a_call_outside_the_ideas_line_is_refused() {
 async fn a_piece_has_its_own_memory_and_reaches_nothing() {
     const NOTCAPABLE: i32 = 76;
     let own = run("Maaabbbbccccdddd").await;
-    assert_eq!(own.end, End::Exited(0), "a piece's write reached the program");
+    assert_eq!(
+        own.end,
+        End::Exited(0),
+        "a piece's write reached the program"
+    );
     assert_eq!(own.stdout, answers(&["0", "bbbb|", "cccc|", "dddd|"]));
     let nested = run("aaaaNbbbccccdddd").await;
     assert_eq!(nested.end, End::Exited(NOTCAPABLE));
