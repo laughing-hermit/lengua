@@ -2276,3 +2276,53 @@ fn proves_the_vector_templates_behaviors() {
         );
     }
 }
+
+/// A block of the fixture `name` with each of its texts at most `longest` characters long, so a
+/// proof of it by length ends in a test's time.
+fn short_block(name: &str, number: usize, longest: usize) -> (Generated, Policy) {
+    let (blocks, policy) = blocks_of(name);
+    let mut block = blocks[number].clone();
+    for (_, generator) in &mut block.vars {
+        if let Generator::Str { min, max, .. } = generator {
+            *max = longest.max(*min);
+        }
+    }
+    (block, policy)
+}
+
+/// A server that waits on its listener and its connections with poll_oneoff, the shout server,
+/// is proven as any program is, where its proofs used to stop at the wait: a client's line of
+/// up to 4 characters comes back in capitals however it is cut and whenever each piece
+/// arrives, and two lines on one connection; and with two clients at once, in every order
+/// their steps can come. A planted bug is found: a server that drops a line's last letter.
+#[test]
+fn proves_a_server_that_waits_on_its_connections() {
+    if !solvers_installed() {
+        return;
+    }
+    let shout = fixture("shout-server", "main.wat");
+    let built = build(&shout).expect("the shout server builds");
+    for number in 0..3 {
+        let (block, policy) = short_block("shout-server", number, 4);
+        let verdict = prove_wasm(&built, policy, &block, &budget(900, true));
+        println!("shout-server's block {number}: {verdict:?}");
+        assert!(
+            proven(&verdict),
+            "shout-server's block {number}: {verdict:?}"
+        );
+    }
+}
+
+/// The model's run of a server that waits with poll_oneoff, with no client: it serves, as a
+/// test of a server that keeps serving finds it.
+#[test]
+fn a_server_that_waits_with_no_client_serves() {
+    let text = fixture("shout-server", "main.wat");
+    let (_, policy) = blocks_of("shout-server");
+    let given = Given {
+        listens: true,
+        ..Given::default()
+    };
+    let done = ran(&text, policy, &given);
+    assert_eq!(done.end, Ended::Other(format!("{:?}", Some(End::Serving))));
+}

@@ -76,6 +76,12 @@ pub struct World {
     /// Where each of the test's clients stands, once the program waits on its connections with
     /// poll.
     pub(super) peers: Option<Vec<net::Peer>>,
+    /// The states the runs of one exploration have come back from a wait on poll in, after the
+    /// test's clients took steps, shared by them all: a run that comes back in a state another
+    /// already came back in goes no further, as that one goes on for both.
+    pub(super) waits: Rc<std::cell::RefCell<std::collections::HashSet<Vec<u64>>>>,
+    /// The state this run last came back from a wait on poll in.
+    pub(super) last_wait: Option<Rc<Vec<u64>>>,
     /// Every connection the run made or took, in order.
     pub connections: Vec<net::Connection>,
     /// The bytes a test supplies for `getrandom`, in order, when it supplies them: the kernel's

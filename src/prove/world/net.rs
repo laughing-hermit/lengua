@@ -138,6 +138,260 @@ impl World {
         }
     }
 
+    /// Whether the client's next step can come now: connecting, after the client before it has
+    /// connected (at once) or has its answer; each piece of what it sends, its held last piece
+    /// once every client after it has its answer; then closing its side once its answer has
+    /// begun, or at once when it waits for none.
+    fn can_step(&self, client: usize) -> bool {
+        let network = &self.network;
+        let Some(peer) = self
+            .peers
+            .as_ref()
+            .and_then(|peers| peers.get(client))
+            .copied()
+        else {
+            return false;
+        };
+        let Some(them) = network.client.get(client) else {
+            return false;
+        };
+        let pieces = them.pieces.len();
+        if peer.closed {
+            return false;
+        }
+        match peer.steps {
+            0 if client == 0 => true,
+            0 if network.at_once => self
+                .peers
+                .as_ref()
+                .and_then(|peers| peers.get(client - 1))
+                .is_some_and(|before| before.steps >= 1),
+            0 => self.answered(client - 1),
+            steps if steps <= pieces => {
+                !(them.held && steps == pieces)
+                    || (client + 1..network.client.len()).all(|newer| self.answered(newer))
+            }
+            _ => {
+                !them.waits
+                    || self.connections.iter().any(|connection| {
+                        connection.accepted
+                            && connection.exchange == client
+                            && !connection.sent.is_empty()
+                    })
+            }
+        }
+    }
+
+    /// The client's next step.
+    fn step_client(&mut self, client: usize) {
+        let pieces = self
+            .network
+            .client
+            .get(client)
+            .map_or(0, |them| them.pieces.len());
+        if let Some(peer) = self
+            .peers
+            .as_mut()
+            .and_then(|peers| peers.get_mut(client))
+        {
+            if peer.steps <= pieces {
+                peer.steps += 1;
+            } else {
+                peer.closed = true;
+            }
+        }
+    }
+
+    /// Whether a read of the descriptor `fd`, as the world numbers it, has something, for a
+    /// server that polls: the listener a client that has connected and isn't taken, a
+    /// connection bytes that have arrived and aren't read, or its client's side closed.
+    pub(in crate::prove) fn readable(&self, fd: u64) -> bool {
+        let Some(peers) = self.peers.as_ref() else {
+            return false;
+        };
+        if self.network.listening && fd == 3 {
+            return (0..peers.len()).any(|client| peers[client].steps >= 1 && !self.taken(client));
+        }
+        let Some(Some(number)) = self.sockets.get(&fd) else {
+            return false;
+        };
+        let Some(connection) = self.connections.get(*number) else {
+            return false;
+        };
+        if !connection.accepted || connection.ended {
+            return false;
+        }
+        let Some(peer) = peers.get(connection.exchange) else {
+            return false;
+        };
+        let arrived = peer.steps.saturating_sub(1);
+        peer.closed || arrived > connection.piece
+    }
+
+    /// Starts the account of where each of the test's clients stands, at a server's first wait
+    /// on its connections with poll.
+    ///
+    /// # Errors
+    ///
+    /// A connection the program took before it first polled, which the account doesn't follow.
+    pub(in crate::prove) fn start_polling(&mut self) -> Result<(), Stop> {
+        if self.peers.is_some() {
+            return Ok(());
+        }
+        if self.connections.iter().any(|connection| connection.accepted) {
+            return Err(unsupported(
+                "a wait on poll_oneoff over connections taken before the program first waited",
+            ));
+        }
+        self.peers = Some(vec![Peer::default(); self.network.client.len()]);
+        Ok(())
+    }
+
+    /// Every way the test's clients can stand when a wait on poll looks: each client having
+    /// taken any number of the steps open to it since the last wait, each way a world of its
+    /// own; or, for a test's sample, the one way where each has taken every step open to it.
+    pub(in crate::prove) fn stepped(&self) -> Vec<Self> {
+        let eager = self.network.eager;
+        let mut worlds = vec![self.clone()];
+        for client in 0..self.network.client.len() {
+            let mut next = Vec::new();
+            for world in worlds {
+                let mut moved = world.clone();
+                if !eager {
+                    next.push(world);
+                }
+                while moved.can_step(client) {
+                    moved.step_client(client);
+                    if !eager {
+                        next.push(moved.clone());
+                    }
+                }
+                if eager {
+                    next.push(moved);
+                }
+            }
+            worlds = next;
+        }
+        worlds
+    }
+
+    /// A name for what a wait on poll says of the connection at the descriptor `fd`, as the
+    /// world numbers it, at this moment: which client's it is, how far the program has read it,
+    /// and how far the client has got. Two waits with the same name are at the same moment of
+    /// the same connection, where the host would say the same of it.
+    pub(in crate::prove) fn wait_name(&self, fd: u64) -> String {
+        let connection = self
+            .sockets
+            .get(&fd)
+            .copied()
+            .flatten()
+            .and_then(|number| self.connections.get(number));
+        let Some(connection) = connection else {
+            return format!("wait.{fd}");
+        };
+        let peer = self
+            .peers
+            .as_ref()
+            .and_then(|peers| peers.get(connection.exchange))
+            .copied()
+            .unwrap_or_default();
+        format!(
+            "wait.{}.{}.{}.{}.{}",
+            connection.exchange,
+            connection.piece,
+            connection.taken,
+            peer.steps,
+            u8::from(peer.closed)
+        )
+    }
+
+    /// Forgets the states waits on poll came back in: those are one exploration's own.
+    pub(in crate::prove) fn forget_waits(&mut self) {
+        self.waits = Rc::default();
+        self.last_wait = None;
+    }
+
+    /// Adds to `key` everything of the world that what a run does from here on, and what its
+    /// checks find of it, depends on, but what one exploration's runs all share: the test's
+    /// network, input, files, clock and random bytes. `false` for a world a key doesn't cover:
+    /// one with files written, opened, made or removed, or in a proof by induction.
+    pub(in crate::prove) fn wait_key(&self, key: &mut Vec<u64>) -> bool {
+        if !self.written.is_empty()
+            || !self.open.is_empty()
+            || !self.made.is_empty()
+            || !self.removed.is_empty()
+            || self.head.is_some()
+            || self.second.is_some()
+            || self.stdin_length.is_some()
+        {
+            return false;
+        }
+        let none = u64::MAX;
+        let term = |term: &Term| term.index() as u64;
+        key.push(self.stdin_read as u64);
+        for output in [&self.stdout, &self.stderr] {
+            key.push(output.len() as u64);
+            key.extend(output.iter().map(term));
+        }
+        key.push(self.path.len() as u64);
+        key.extend(self.path.iter().map(term));
+        key.push(self.obligations.len() as u64);
+        key.extend(self.obligations.iter().map(|(condition, _)| term(condition)));
+        key.push(self.connections.len() as u64);
+        for connection in &self.connections {
+            key.extend([
+                connection.exchange as u64,
+                u64::from(connection.accepted),
+                u64::from(connection.ended),
+                u64::from(connection.finished),
+                connection.piece as u64,
+                connection.taken as u64,
+                connection.sent.len() as u64,
+            ]);
+            key.extend(connection.sent.iter().map(term));
+        }
+        key.push(self.sockets.len() as u64);
+        for (fd, number) in &self.sockets {
+            key.extend([*fd, number.map_or(none, |number| number as u64)]);
+        }
+        for peer in self.peers.iter().flatten() {
+            key.extend([peer.steps as u64, u64::from(peer.closed)]);
+        }
+        key.extend([
+            u64::from(self.raw_reads),
+            self.fill_cut.map_or(none, |cut| cut as u64),
+            u64::from(self.raw_cuts),
+            u64::from(self.stdout_closed),
+            u64::from(self.every_cut),
+            self.random_used as u64,
+            self.readings_used as u64,
+        ]);
+        true
+    }
+
+    /// Whether a run that came back from a wait on poll in this state, `key`, goes on from it,
+    /// `advanced` saying whether the test's clients took a step in the wait. Where they did, a
+    /// run that comes to a state another run of the exploration already came to goes no
+    /// further: that one goes on for both, and no loop can close through such a state, as the
+    /// clients' steps only add up. Where they didn't and the run is back in the very state its
+    /// last wait left it in, it goes round its loop forever while the wait keeps saying a
+    /// connection is ready: it ends stuck there, and goes on only to be found so.
+    pub(in crate::prove) fn comes_back(&mut self, key: Vec<u64>, advanced: bool) -> bool {
+        if advanced {
+            if !self.waits.borrow_mut().insert(key.clone()) {
+                return false;
+            }
+        } else if self.last_wait.as_deref() == Some(&key) {
+            self.end = Some(End::Stuck(
+                "it goes round its loop forever: its wait on poll_oneoff says a connection is \
+                 ready that it never takes, reads or closes"
+                    .into(),
+            ));
+        }
+        self.last_wait = Some(Rc::new(key));
+        true
+    }
+
     /// Whether the program waited on its connections with poll, so the test's clients took
     /// their steps in every order.
     #[must_use]

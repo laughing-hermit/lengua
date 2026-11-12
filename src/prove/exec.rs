@@ -69,6 +69,20 @@ impl Memory {
         Rc::make_mut(page)[(address % PAGE as u64) as usize] = Some(byte);
     }
 
+    /// Adds to `key` every byte stored, page by page: two memories with the same key hold the
+    /// same bytes.
+    pub fn key(&self, key: &mut Vec<u64>) {
+        key.push(self.pages.len() as u64);
+        for (page, bytes) in &self.pages {
+            key.push(*page);
+            key.extend(
+                bytes
+                    .iter()
+                    .map(|byte| byte.map_or(u64::MAX, |term| term.index() as u64)),
+            );
+        }
+    }
+
     /// The addresses whose bytes differ from `before`'s: written since to other bytes, or written
     /// in one of the two and not the other. Pages the two still share are the same.
     #[must_use]
@@ -292,6 +306,9 @@ pub fn explore<C: Core>(
     oracle: &mut dyn Oracle,
     max_runs: usize,
 ) -> Result<Vec<State<C>>, String> {
+    // The states a server's waits come back in are this exploration's own.
+    let mut start = start;
+    start.world.forget_waits();
     let mut pending = vec![start];
     let mut finished = Vec::new();
     let mut looked = pool.len();
