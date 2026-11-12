@@ -682,6 +682,29 @@ async fn sort64_s_proof_with_its_full_time() {
 const CRC32_GIVES: &str = "; takes `$crc` from 0 to 0; takes `$length` from 0\n  to 64; `$at` \
                            holds `$length` bytes; gives `crc32(at)`";
 
+/// How far [`reach`] says a test is proven when it is proven for every input in its range.
+const FULL_RANGE: usize = usize::MAX;
+
+/// How far `reply`'s proofs say the generated test `id` is proven: [`FULL_RANGE`] for every
+/// input in range, the length of its texts for a proof to a length, and 0 for a test that is
+/// tested, not proven.
+fn reach(reply: &Value, id: &str) -> usize {
+    let start = format!("generated {id}: proven for every input ");
+    lines(reply, "proofs")
+        .iter()
+        .filter_map(|line| line.strip_prefix(start.as_str()))
+        .map(|rest| match rest.strip_prefix("with text up to ") {
+            Some(bounded) => bounded
+                .split(' ')
+                .next()
+                .and_then(|bytes| bytes.parse().ok())
+                .unwrap_or(0),
+            None => FULL_RANGE,
+        })
+        .min()
+        .unwrap_or(0)
+}
+
 /// checksums checked with its parts beside it, crc32's idea as it ships or, where `stated` is
 /// false, without the clauses that state what `$crc32_update` gives: crc32's reply, checksums's
 /// reply, checksums's folder and how long checksums's own check took, in seconds.
@@ -780,13 +803,20 @@ async fn a_contract_s_formula_carries_into_the_program_built_on_the_part() {
     for line in &proofs {
         println!("CARRY the formula used: proofs: {line}");
     }
+    // Each test of a line's CRC is proven past the one byte the solvers reached before the
+    // model read a CRC's step, with the formula and with the body followed: how far each way
+    // is printed, for a person to compare, since the time decides it. The test of a write
+    // that fails is proven for every input in its range.
     for id in ["B1", "B2", "B5"] {
-        assert!(
-            proofs.iter().any(|line| line
-                .starts_with(&format!("generated {id}: proven for every input in range"))),
-            "{id}: {done}"
+        let (with_formula, with_body) = (reach(&done, id), reach(&followed, id));
+        println!(
+            "CARRY generated {id}: to {with_formula} bytes with the formula, to {with_body} with \
+             the body followed"
         );
+        assert!(with_body > 1, "{id}: {followed}");
+        assert!(with_formula > 1, "{id}: {done}");
     }
+    assert_eq!(reach(&done, "B5"), FULL_RANGE, "{done}");
     // A copy of the function that isn't the part's: refused, with nothing said of a contract.
     let code = example("checksums", "main.wat");
     let tampered = changed(

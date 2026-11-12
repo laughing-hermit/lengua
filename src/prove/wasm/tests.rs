@@ -2302,7 +2302,7 @@ fn proves_a_server_that_waits_on_its_connections() {
     }
     let shout = fixture("shout-server", "main.wat");
     let built = build(&shout).expect("the shout server builds");
-    for number in 0..3 {
+    for number in 0..2 {
         let (block, policy) = short_block("shout-server", number, 4);
         let verdict = prove_wasm(&built, policy, &block, &budget(900, true));
         println!("shout-server's block {number}: {verdict:?}");
@@ -2311,6 +2311,31 @@ fn proves_a_server_that_waits_on_its_connections() {
             "shout-server's block {number}: {verdict:?}"
         );
     }
+    // Two clients at once, with the paths a check gives a shape: every order of their steps is
+    // a path or more, so the proof may stop at a length, and says where.
+    let (block, policy) = short_block("shout-server", 2, 2);
+    let whole = Budget::until(Instant::now() + Duration::from_secs(900), true);
+    let verdict = prove_wasm(&built, policy, &block, &whole);
+    println!("shout-server's block 2: {verdict:?}");
+    assert!(
+        matches!(verdict, Verdict::Proven { .. }),
+        "shout-server's block 2: {verdict:?}"
+    );
+    // A planted bug: letters sent back as they came.
+    let quiet = edited(
+        &shout,
+        (
+            "(global $CASE_BIT i32 (i32.const 32))",
+            "(global $CASE_BIT i32 (i32.const 0))",
+        ),
+    );
+    let built = build(&quiet).expect("it builds");
+    let (block, policy) = short_block("shout-server", 0, 4);
+    let verdict = prove_wasm(&built, policy, &block, &budget(900, true));
+    assert!(
+        matches!(verdict, Verdict::Counterexample(_)),
+        "a server that doesn't shout: {verdict:?}"
+    );
 }
 
 /// The model's run of a server that waits with poll_oneoff, with no client: it serves, as a
