@@ -38,8 +38,10 @@ pub const TRUST: &str = "trusted, not proven";
 /// The state `check` gives an outside module whose tests pass, where main.wat gets `done`.
 pub const STATE: &str = "trusted_not_proven";
 
-/// The most bytes an outside module's file may hold: 16 MiB, past what a compiler makes of a
-/// program of tens of thousands of lines, and what the engine compiles within a test's time.
+/// The most bytes an outside module's file may hold: 16 MiB. A worker compiles the module
+/// before a test's first run, and the pool gives up on a worker 20 seconds past a test's time,
+/// so the size bounds what a module can cost before anything holds its time. The number was
+/// chosen, not measured against real modules (todo.md).
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 
 /// The most imports of the idea's ungranted ones that a reply names; it counts the rest.
