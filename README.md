@@ -497,7 +497,15 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
   faster sort, JSON, compression and dates have no part. `decimal`, `lines` and `bytes` are
   proven for every input in their ranges; `sort64` for two numbers and `crc32` for 2
   characters of text, each tested beyond.
-- **W22, scale; W23, working with other code; W24, tools:** what a programming language has
+- **W22, scale:** run on 2026-11-12, passed with conditions
+  ([docs/scale/README.md](docs/scale/README.md)): one agent built a web server of 3,600 lines of
+  `main.wat`, `examples/httpd`, and changed it three times with `check` green. Its tests are
+  not proven, as no server's are. What it asked of `check` is built: one check reports every
+  problem of an idea, the reply counts each function's operators against rule 4's limit, rule
+  9 names a length that comes from two paths, and `check` computes where each named text of
+  the data is and holds the numbers to it. Proofs that reach a server and modules that
+  `check` links are not built.
+- **W23, working with other code; W24, tools:** what a programming language has
   that lengua still lacks ([todo.md](todo.md)). One part of W23 is built, on main:
   a module that a compiler made from Rust, C or another language, run as the
   program itself under an idea's grants and tests, and marked "trusted, not proven" (above).

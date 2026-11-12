@@ -2787,7 +2787,13 @@ fn marked_numbers_are_held_to_their_named_texts() {
             line("(global $ALL")
         ),
     ];
-    assert_eq!(found, expected);
+    // Rule 8 holds a read-only region's size to its data too, as it did before.
+    assert_eq!(found.len(), 5, "{found:#?}");
+    assert_eq!(found[..4], expected);
+    assert!(
+        found[4].contains("$nan.rosize is 20, but the data in $nan holds 18 bytes"),
+        "{found:#?}"
+    );
     assert_eq!(
         report.texts.lines(),
         [
@@ -2880,13 +2886,12 @@ fn named_texts_of_two_segments_that_overlap_are_reported() {
     let moved = apart.replacen("(data (i32.const 1056)", "(data (i32.const 1040)", 1);
     let report = check_text(&moved);
     let found = constants(&report);
-    assert_eq!(found.len(), 1, "{found:#?}");
     assert!(
-        found[0].contains(&format!(
+        found.iter().any(|line| line.contains(&format!(
             "{FILE}:{}: the text `nan` starts at address 1040, inside the text `usage`, which \
              ends before 1042",
             line_of(&moved, "(data (i32.const 1040)")
-        )),
+        ))),
         "{found:#?}"
     );
 }

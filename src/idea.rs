@@ -4071,8 +4071,10 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         assert_eq!(idea.behaviors.len(), 2);
         assert!(parse(&long).is_err(), "an idea with a problem is not valid");
 
-        let no_behaviors = long.replace("# Behaviors", "# Behaviours");
-        let reading = read(&no_behaviors);
+        // A problem of another kind with it, here a code block that is never closed, and
+        // nothing reads.
+        let unclosed = format!("{long}\n```\nnever closed\n");
+        let reading = read(&unclosed);
         assert!(reading.idea.is_none(), "{:#?}", reading.problems);
         assert!(reading.problems.len() > 1, "{:#?}", reading.problems);
 
