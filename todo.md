@@ -974,7 +974,7 @@ What isn't done, each a limit of what was built:
 - **A run from a shell has no deadline**, for any program. main.wat ends by its rules; an
   outside module may not. The replies and docs/run.md say so, and nothing more is done.
 - **The rest of W23**: a lengua program as a library, and an outside module that a lengua
-  program calls. Built since, on `wip/library` ("W23's rest: calls between modules", below).
+  program calls. Built since, on main since d7c84d0 ("W23's rest: calls between modules", below).
 - **An outside module as a part**, one with a secret, and one that splits its work: refused.
 - **Only `wasm32-wasip1` commands.** WASI preview 2 and components, `wasm32-unknown-unknown`,
   Emscripten's output, and a library with no `_start` are refused.
@@ -1006,7 +1006,7 @@ What isn't done, each a limit of what was built:
 
 ### W23's rest: calls between modules (2026-11-12)
 
-On the branch `wip/library`, for the owner to land; the landing run is named where the landing is recorded. DESIGN.md ("Calls between modules") has the
+On main since d7c84d0 (2026-11-13); the landing rests on 43309643200, the suite green on all five runners at d7c84d0. DESIGN.md ("Calls between modules") has the
 design as built, docs/reviews/calls-2026-11-12.md what a called module can and can't reach with
 the test of each, and the decisions are with the others ("Decisions made during the pivot",
 W23's rest).
@@ -1151,7 +1151,7 @@ was merged: every test file green but tests/calls.rs, 20 of 21, the same test of
 43296768126 (compile check at bfc0754, with main merged: green); 43303909259 (at 17d16b1:
 tests/calls.rs 21 of 21, tests/wasm_check.rs, tests/wasm_every_program.rs with the three new
 examples, and tests/wasm_scale.rs, green); 43303937905 (the defences out, above). The landing
-run, the suite on all five runners, is named where the landing is recorded.
+run, the suite on all five runners, is 43309643200, green at d7c84d0.
 
 ### W20: work split into pieces (2026-11-11)
 
@@ -2380,7 +2380,7 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
       with its grants gives that already. The rest of W23 keeps its place.
     - **Built, and on main since 3fd8a3a (2026-11-12):** "W23's first part: an
       outside module", above, says what was built, what is refused and what was never run.
-    - **The rest, built (2026-11-12), on `wip/library` for the owner to land:** "W23's rest:
+    - **The rest, built (2026-11-12), on main since d7c84d0:** "W23's rest:
       calls between modules", above, says what was built, what is refused, what isn't done
       and what was never run.
   - **W24. Tools.** `check`'s reply was the only tool there was. W24 adds what a programmer
