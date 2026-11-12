@@ -713,6 +713,24 @@ the product does not give; the idea was the harder text to keep right; and it wa
 one session. [docs/scale/README.md](docs/scale/README.md) has the measures and the verdict, and
 [docs/scale/log.md](docs/scale/log.md) every check cycle.
 
+After the test, on 2026-11-12, what its conditions asked of `check`'s reply and of the skills
+was built (on main since 7247c16; [todo.md](todo.md) has the runs and the decisions):
+
+- **One check, every problem of an idea**, in the order of its lines: an idea whose problems
+  are of its words alone still reads, so its tests' problems come in the same reply.
+- **A count of operators**, `functions` in the reply whether or not the rules pass: the largest
+  function as rule 4 counts it, the average, each function at 75% of the limit or more by name,
+  and rule 5's assertions a function.
+- **Rule 9 names a length from two paths**, and says the fix.
+- **Named data**: `;; text: NAME` on a string of a `data` segment, and `;; at:`, `;; offset:`
+  or `;; len:` on a constant; `check` computes each text's place and length, holds each marked
+  number to it and says the right number, and the reply's `data` has the table. main.wat stays
+  the one text, plain WebAssembly. `examples/httpd` names its 54 texts this way.
+- **The skills' ten gaps**, each in its page, with two new pages of the compile skill:
+  literal texts, and a large program.
+
+Still open from W22: proofs that reach a server, and modules that `check` links.
+
 ## W23. Working with other code
 
 A lengua program as a library other languages call (its module with a stated interface, and a

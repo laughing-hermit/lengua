@@ -50,6 +50,9 @@ Comments on a line carry the markers the rules read: `;; bound: N` on a loop's l
 function's line, `;; from: <part>` on a line of its own above a function taken from a part
 ([parts](parts.md)), and `;; unsafe: <reason>` … `;; end unsafe` around accesses whose checks are
 provably unneeded. A template uses no unsafe block; neither should a program that can check.
+`;; text: NAME` on a string of a `data` segment, and `;; at: NAME`, `;; offset: NAME` or
+`;; len: NAME` on a constant's line, name a literal text and hold the number to it
+([literal texts](texts.md)).
 
 ## Regions and their sizes
 

@@ -2558,3 +2558,343 @@ fn a_secret_never_names_a_command() {
         "the condition of this `if`",
     );
 }
+
+/// The reply's count of operators: the functions, the largest as rule 4 counts it and the
+/// average, then rule 5's assertions; a function at 75% of rule 4's limit or more is named,
+/// whether or not it is over the limit.
+#[test]
+fn the_report_says_how_full_the_functions_are() {
+    let report = check_text(TEMPLATE);
+    assert!(report.passed(), "{:#?}", report.lines());
+    let largest = line_of(TEMPLATE, "(func $parse_i64");
+    let lines = report.size_lines();
+    assert_eq!(lines.len(), 2, "{lines:#?}");
+    assert_eq!(
+        lines[0],
+        format!(
+            "rule 4: 3 functions, at most 180 operators in each; the largest is $parse_i64 \
+             ({FILE}:{largest}) with 108, and the average is 96.3"
+        )
+    );
+    let assertions = report.facts.assertions;
+    assert_eq!(
+        lines[1],
+        format!(
+            "rule 5: {assertions} assertions in 3 functions, {}.{:02} a function on average; the \
+             rule needs 6: {} to spare",
+            assertions / 3,
+            assertions * 100 / 3 % 100,
+            assertions - 6
+        )
+    );
+
+    // 40 operators more: 148, which is over 135 and under the limit.
+    let first = "(local.set $status (global.get $ERROR_INVALID))";
+    let near = with(first, &format!("{}{first}", "(nop)\n".repeat(40)));
+    let report = check_text(&near);
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|violation| violation.rule == Rule::Functions),
+        "{:#?}",
+        report.lines()
+    );
+    let lines = report.size_lines();
+    assert_eq!(lines.len(), 3, "{lines:#?}");
+    assert!(lines[0].contains("$parse_i64"), "{lines:#?}");
+    assert!(lines[0].contains("with 148,"), "{lines:#?}");
+    assert_eq!(
+        lines[1],
+        format!(
+            "rule 4: with 135 operators or more, 75% of the limit: $parse_i64 148 \
+             ({FILE}:{largest})"
+        )
+    );
+
+    // 80 more: 188, over the limit, which the rule reports and the count still shows.
+    let over = with(first, &format!("{}{first}", "(nop)\n".repeat(80)));
+    let report = check_text(&over);
+    assert_violation(
+        &report,
+        Rule::Functions,
+        largest,
+        "$parse_i64 has 188 operators",
+    );
+    let lines = report.size_lines();
+    assert!(
+        lines[1].ends_with(&format!("$parse_i64 188 ({FILE}:{largest})")),
+        "{lines:#?}"
+    );
+}
+
+/// A function whose length is a parameter on one path and a number loaded from memory on the
+/// other, checked once after the paths meet.
+const TWO_PATHS: &str = "  (func $send (param $fd i32) (param $length i32) (param $whole i32) (result i32)  ;; returns: result
+    (local $n i32)
+    (if (local.get $whole)
+      (then (local.set $n (i32.load (global.get $argv))))
+      (else (local.set $n (local.get $length))))
+    (if (i32.gt_u (local.get $n) (global.get $out.size))
+      (then (call $assert_fail (i32.const 77)) unreachable))
+    (call $write_all (local.get $fd) (global.get $out) (local.get $n)))
+
+";
+
+/// The same with a check on each path, before they meet.
+const EACH_PATH: &str = "  (func $send (param $fd i32) (param $length i32) (param $whole i32) (result i32)  ;; returns: result
+    (local $n i32)
+    (if (local.get $whole)
+      (then
+        (local.set $n (i32.load (global.get $argv)))
+        (if (i32.gt_u (local.get $n) (global.get $out.size))
+          (then (call $assert_fail (i32.const 77)) unreachable)))
+      (else
+        (local.set $n (local.get $length))
+        (if (i32.gt_u (local.get $n) (global.get $out.size))
+          (then (call $assert_fail (i32.const 78)) unreachable))))
+    (call $write_all (local.get $fd) (global.get $out) (local.get $n)))
+
+";
+
+/// Rule 9's message names the cause when a length comes from two paths: one check after the
+/// paths meet bounds neither, and a check on each path does.
+#[test]
+fn rule_9_names_a_length_that_comes_from_two_paths() {
+    let before = "  ;; Parses the decimal whole number that starts at byte $at of $args";
+    let text = with(before, &format!("{TWO_PATHS}{before}"));
+    let report = check_text(&text);
+    let line = line_of(&text, "(call $write_all (local.get $fd)");
+    assert_violation(
+        &report,
+        Rule::Indirection,
+        line,
+        "the buffer $write_all borrows in argument 2 is as long as a number nothing checks, so \
+         it may reach past $out: the length comes from more than one path, as the parameter \
+         $length on one and a value loaded from memory on another, and a check after the paths \
+         meet bounds neither. Check it on each path before they meet, or make the call on each \
+         path. Fix: ",
+    );
+
+    let text = with(before, &format!("{EACH_PATH}{before}"));
+    let report = check_text(&text);
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|violation| violation.rule == Rule::Indirection),
+        "{:#?}",
+        report.lines()
+    );
+}
+
+/// The template with its second message as two named strings of one segment, the segment
+/// named too, and five numbers marked with the names.
+fn named_texts(first: &str) -> String {
+    let text = with(
+        "  (data (i32.const 1056) \"error: not a number\\0a\")\n",
+        &format!(
+            "  (data (i32.const 1056)  ;; text: messages\n    \"{first}\"  ;; text: error\n    \
+             \"not a number\\0a\")  ;; text: what\n"
+        ),
+    );
+    text.replacen(
+        "  (global $NINE i32 (i32.const 9))\n",
+        "  (global $NINE i32 (i32.const 9))\n  (global $WHAT_AT i32 (i32.const 1063))  ;; at: \
+         what\n  (global $WHAT_OFFSET i32 (i32.const 7))  ;; offset: what\n  (global $WHAT_LEN \
+         i32 (i32.const 13))  ;; len: what\n  (global $ERROR_LEN i32 (i32.const 7))  ;; len: \
+         error\n  (global $ALL i32 (i32.const 20))  ;; len: messages\n",
+        1,
+    )
+}
+
+/// The violations of rule 8 that a report has, as its lines.
+fn constants(report: &Report) -> Vec<String> {
+    report
+        .violations
+        .iter()
+        .filter(|violation| violation.rule == Rule::Constants)
+        .map(|violation| violation.in_file(FILE))
+        .collect()
+}
+
+/// Named data: the checker computes where each named text is and how long, from the segment's
+/// address and its strings, and holds every marked number to it.
+#[test]
+fn marked_numbers_are_held_to_their_named_texts() {
+    let right = named_texts("error: ");
+    let report = check_text(&right);
+    assert_eq!(constants(&report), Vec::<String>::new());
+    let table = &report.texts;
+    let places: Vec<(&str, u64, Option<u64>, u64)> = table
+        .texts
+        .iter()
+        .map(|text| {
+            (
+                text.name.as_str(),
+                text.address,
+                text.region.as_ref().map(|(_, offset)| *offset),
+                text.len,
+            )
+        })
+        .collect();
+    assert_eq!(
+        places,
+        [
+            ("messages", 1056, Some(0), 20),
+            ("error", 1056, Some(0), 7),
+            ("what", 1063, Some(7), 13)
+        ]
+    );
+    assert_eq!((table.right, table.wrong, table.unused), (5, 0, 0));
+    assert_eq!(
+        table.lines(),
+        [
+            "3 named texts: every number marked `;; at:`, `;; offset:` or `;; len:` is its text's \
+          (5 marked)"
+        ]
+    );
+
+    // One text gets two bytes shorter: every number after it is wrong, and each is told the
+    // right one.
+    let moved = named_texts("err: ");
+    let report = check_text(&moved);
+    let found = constants(&report);
+    let line = |needle: &str| line_of(&moved, needle);
+    let expected = [
+        format!(
+            "rule 8 (named constants) {FILE}:{}: $WHAT_AT is 1063, and the text `what` is at \
+             address 1061. Fix: write `(i32.const 1061)`: `check`'s reply lists every named \
+             text's address, offset and length under `data`.",
+            line("(global $WHAT_AT")
+        ),
+        format!(
+            "rule 8 (named constants) {FILE}:{}: $WHAT_OFFSET is 7, and the text `what` is 5 \
+             bytes into $nan. Fix: write `(i32.const 5)`: `check`'s reply lists every named \
+             text's address, offset and length under `data`.",
+            line("(global $WHAT_OFFSET")
+        ),
+        format!(
+            "rule 8 (named constants) {FILE}:{}: $ERROR_LEN is 7, and the text `error` has 5 \
+             bytes. Fix: write `(i32.const 5)`: `check`'s reply lists every named text's \
+             address, offset and length under `data`.",
+            line("(global $ERROR_LEN")
+        ),
+        format!(
+            "rule 8 (named constants) {FILE}:{}: $ALL is 20, and the text `messages` has 18 \
+             bytes. Fix: write `(i32.const 18)`: `check`'s reply lists every named text's \
+             address, offset and length under `data`.",
+            line("(global $ALL")
+        ),
+    ];
+    // Rule 8 holds a read-only region's size to its data too, as it did before.
+    assert_eq!(found.len(), 5, "{found:#?}");
+    assert_eq!(found[..4], expected);
+    assert!(
+        found[4].contains("$nan.rosize is 20, but the data in $nan holds 18 bytes"),
+        "{found:#?}"
+    );
+    assert_eq!(
+        report.texts.lines(),
+        [
+            "3 named texts, each with its address, its offset in its region and its length in \
+             bytes: write each number marked `;; at:`, `;; offset:` or `;; len:` from its line",
+            "messages: at 1056, offset 0 in $nan, len 18",
+            "error: at 1056, offset 0 in $nan, len 5",
+            "what: at 1061, offset 5 in $nan, len 13",
+        ]
+    );
+}
+
+/// A marker that names nothing, a name no text has, and a name given twice are each a
+/// violation; a main.wat with no marker has no table.
+#[test]
+fn a_marker_of_named_data_that_names_nothing_is_reported() {
+    let report = check_text(TEMPLATE);
+    assert!(report.texts.texts.is_empty());
+    assert!(report.texts.lines().is_empty());
+
+    let right = named_texts("error: ");
+    let unknown = right.replacen(";; len: error", ";; len: eror", 1);
+    let report = check_text(&unknown);
+    let found = constants(&report);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert!(
+        found[0].contains(
+            "`;; len: eror` names a text that main.wat doesn't have. Fix: name a string of a \
+             `data` segment with `;; text: eror` on its line, or use the name of a text main.wat \
+             has: messages, error, what."
+        ),
+        "{found:#?}"
+    );
+    // The text `error` is now named by no number, so the table is shown.
+    assert_eq!(report.texts.unused, 1);
+    assert_eq!(report.texts.lines().len(), 4);
+
+    let twice = right.replacen(";; text: what", ";; text: error", 1);
+    let report = check_text(&twice);
+    let found = constants(&report);
+    assert!(
+        found
+            .iter()
+            .any(|line| line.contains("the name `error` is given to two texts (also on line ")),
+        "{found:#?}"
+    );
+
+    let nowhere = right.replacen(
+        "(global $STDOUT i32 (i32.const 1))",
+        "(global $STDOUT i32 (i32.const 1))  ;; text: stdout",
+        1,
+    );
+    let report = check_text(&nowhere);
+    let found = constants(&report);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert!(
+        found[0].contains(&format!(
+            "{FILE}:{}: this `;; text:` names nothing",
+            line_of(&nowhere, "(global $STDOUT")
+        )),
+        "{found:#?}"
+    );
+
+    let no_global = right.replacen(
+        "  (func $main (export \"_start\")\n",
+        "  (func $main (export \"_start\")  ;; at: what\n",
+        1,
+    );
+    let report = check_text(&no_global);
+    let found = constants(&report);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert!(
+        found[0].contains("this `;; at:` marks nothing: no global is defined on its line"),
+        "{found:#?}"
+    );
+}
+
+/// Two named texts of two segments that share bytes are reported: a text that grew is written
+/// over by the segment after it, which kept its address.
+#[test]
+fn named_texts_of_two_segments_that_overlap_are_reported() {
+    let usage = "(data (i32.const 1024) \"usage: negate <n>\\0a\")";
+    let nan = "(data (i32.const 1056) \"error: not a number\\0a\")";
+    let apart = with(usage, &format!("{usage}  ;; text: usage")).replacen(
+        nan,
+        &format!("{nan}  ;; text: nan"),
+        1,
+    );
+    let report = check_text(&apart);
+    assert_eq!(constants(&report), Vec::<String>::new());
+    assert_eq!(report.texts.texts.len(), 2);
+
+    let moved = apart.replacen("(data (i32.const 1056)", "(data (i32.const 1040)", 1);
+    let report = check_text(&moved);
+    let found = constants(&report);
+    assert!(
+        found.iter().any(|line| line.contains(&format!(
+            "{FILE}:{}: the text `nan` starts at address 1040, inside the text `usage`, which \
+             ends before 1042",
+            line_of(&moved, "(data (i32.const 1040)")
+        ))),
+        "{found:#?}"
+    );
+}

@@ -190,7 +190,8 @@ Fixed on the branch:
 - `tests/mutation.rs` takes json, http and httpd (the result is below).
 - `examples/index.md` lists the three programs.
 
-Not built, on purpose, since each is more than a small fix; each has its evidence above:
+Not built in the test, on purpose, since each is more than a small fix; each has its evidence
+above. The first, the second and the fourth were built after it (the next section):
 - **A count of operators and an idea-only pass in `check`'s reply,** so that an agent sees how
   full each function is and every problem of an idea at once.
 - **Names for data:** a text's place and length computed by `check` in place of numbers in
@@ -198,6 +199,31 @@ Not built, on purpose, since each is more than a small fix; each has its evidenc
 - **Proofs that reach a server,** or a part's proof carried into the program that takes its
   function.
 - **The skills' missing pages:** the ten rows of the table above.
+
+
+## What was fixed since
+
+After the test, on 2026-11-12, the conditions that live in `check`'s reply and in the skills
+were taken away ([todo.md](../../todo.md) has the runs and the decisions). The numbers above
+are the test's own and stay as they were.
+
+| What the test lacked | What there is now |
+|---|---|
+| `check` reported an idea's problems a kind at a time: three cycles | One `check` reports the sentences' problems and the tests' problems together, in the order of the idea's lines. Only a problem of the idea's own form (frontmatter, a missing section, a step that can't be read) still hides the tests' |
+| No count of operators before `check` broke rule 4 | The reply has `functions`, whether or not the rules pass: the largest function as rule 4 counts it, the average, each function with 135 operators or more by name, and rule 5's assertions a function |
+| Rule 9's message named the line and not the cause | When the length comes from more than one path, the message says so, names the paths' values (the parameter, a value loaded from memory), and says to check on each path |
+| The places of 54 texts computed with `awk`; one changed text moved 90 numbers | A string of a `data` segment marked `;; text: NAME` is a named text. `check` computes its address, its offset in its region and its length, holds each number marked `;; at:`, `;; offset:` or `;; len:` to it, says the right number when one differs, and gives the table of all in `data`. One segment holds all the strings, so a text has no address to write |
+| Ten things the skills didn't say | Each is in its page: test-format.md (an example its test can draw, text between placeholders, runs and boundary values, a server's 2 seconds), power-of-10-webassembly.md (how rule 4 counts, a number from two paths), host.md (the layouts of `path_open`, a filestat and an entry of `fd_readdir`), and two new pages, texts.md and large-programs.md |
+
+`examples/httpd` now names its 54 texts: they are one `data` segment, one string a line, and
+each offset and the region's size carry their text's name. The memory is the same, and the file
+has 3,639 lines. Change (a) made again on it, a text that grows by 9 bytes, is one edit of the
+text and then the numbers `check` lists: 44 offsets and the region's size, each with its new
+value (`tests/wasm_scale.rs`).
+
+Not fixed, and still the conditions that matter most: **the proofs do not reach a server**, and
+**`check` links no modules**. Other agents work on tools and on the run path; neither is part
+of this.
 
 ## The mutation test
 
