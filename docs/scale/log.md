@@ -143,3 +143,20 @@ Two of the three problems are rules of the test format that write-idea's referen
 only in part: that neighbouring placeholders need text between them is not in it, and neither
 is how few runs can leave an output the same (six runs over a choice of six and a string drew
 the string's first boundary value each time).
+
+### Cycle 4 (run 43175796873, at 01d0b0b): httpd's code is read for the first time
+
+| Folder | Lines | What `check` said |
+|---|---|---|
+| httpd | 3,610 (85 functions, 195 assertions) | `code_problems`, **one**: `rule 7 (checked results) main.wat:2245: $fill's error number isn't tested: it's kept in a local, and something else comes before the test` |
+
+The idea was recorded. The rules ran over 3,610 lines in 0.1 s. In `$store_load` the agent
+closed the file between `$fill` and the test of what `$fill` gave, so that a read that failed
+would not leave the file open. Fix: the test comes first and sets a local, the file is closed,
+and the local decides. Seven lines.
+
+So the first full pass of the rules over the server found one slip in 2,570 lines of the
+agent's own and none in the 24 functions taken from parts: no index out of its region, no loop
+without its bound, no region shared without its mark, no bare number, no function over 180
+operators. Nothing here is a slip that a compiler's type check would have caught: the text
+parsed and validated at its first build.
