@@ -107,7 +107,9 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
   other four runners; it was faster only on tally, and on sort on Windows on x86-64. Its peak
   memory was 0.98 to 19.33 times the best native build's, below it on one row (sort on macOS on
   ARM64). That gap is published, not hidden ([docs/benchmarks](docs/benchmarks/README.md)).
-- Programs lengua can't express yet: threads and GUIs. W18 gave connections a program opens on
+- Programs lengua can't express yet: threads that share memory, and GUIs. W20 gave work split
+  into pieces that run at once, which is safe and the same everywhere and, measured, not yet
+  faster ("W20: work split into pieces", below). W18 gave connections a program opens on
   its own, UDP, files anywhere the user names, programs to start and the terminal; a started
   program that works in the user's folder is still out ("W18's second part", below).
 - A few workloads: tally, sort and histogram, where lengua's own programs are slower; W12c is on
@@ -725,6 +727,202 @@ Still open from it, for the owner:
     are refused by their shape, which a test checks.
   - A started lengua program.
 
+### W23's first part: an outside module (2026-11-12)
+
+On main since 3fd8a3a (2026-11-12; run 43172439582 on all five runners). DESIGN.md ("An outside module") has
+the design as built, docs/reviews/outside-2026-11-12.md the threat cases with the test of each,
+and the decisions are with the others ("Decisions made during the pivot", W23's first part).
+
+What was built:
+1. **The shape**: a folder with `idea.md` and `main.wasm`, and no `main.wat`. The idea's
+   frontmatter says `computation: main.wasm`, and its `# Constraints` has one line
+   `- Module: main.wasm, built from …`, up to 200 characters in the idea's own words
+   (`src/idea.rs`). `check` holds the two to each other. The line is in the text lengua's hash
+   covers and a run reads, so the lock records which file is the program (`src/state.rs`).
+2. **`check`'s reading** (`src/wasm/outside.rs`), in place of the build and the rules: at most
+   16 MiB; the validator with exactly the engine's features; every import a function of WASI
+   preview 1 or of lengua's own modules, with its type, and one of lengua's own only when the
+   idea grants it; a memory exported as `memory` with a maximum of at most 16,384 pages; a
+   `_start` that takes and gives nothing. Each refusal says what to build differently.
+3. **The tests**, in the workers, as main.wat's; then the module kept, compiled and sealed for
+   a shell's runs, and stamped. No rule is checked, no proof is started, and no entry goes in
+   `verified`.
+4. **The replies**: the state `trusted_not_proven` in `done`'s place, never `proving` or `done`;
+   a new field `outside` in `check`'s reply, with the trust first, a line for each guarantee
+   that does not hold and what the host holds; each `proofs` line says `not proven`; no
+   `memory` line. `run`'s reply has `outside` too. The bundle's log says `checked: trusted, not
+   proven`, and the index links `main.wasm`.
+5. **The lock**, in its format as it is: an outside module's stamp has one hash twice, and its
+   `engine` line ends in `; an outside module: trusted, not proven`.
+6. **The runs**: `run`, `lengua-mcp run` and lengua-run make every check a run makes, hold the
+   module to the lock's hash, and say the trust before the program starts. A run refuses a
+   folder whose idea, bytes and stamp don't say the same kind of code.
+7. **The attester** stops at an outside module: `not attested`.
+8. **The skills**: the compile skill says when an agent may use one (the user asks for existing
+   code or names a language), how to build one in Rust and in C
+   (`references/outside.md`), and what to tell the user; write-idea names the two lines.
+9. **The tests** (`tests/outside.rs`, and the library's): hostile modules written as WebAssembly
+   text for each threat case, and a Rust and a C program (`tests/outside/`) that CI's new
+   `outside-wasm` job compiles once, on Linux on x86-64, for every runner's suite (`cargo xtask
+   outside-wasm`), as the bench's modules are built.
+
+Where the host leaned on a rule of main.wat's, and what holds an outside module there, is the
+table in DESIGN.md and H1 to H16 in the review. In short: the host's own check at each call, and
+its check of every buffer, were there and need no rule; the memory's size and its export, lengua's
+own modules without their grant, and another host's functions are now refused by `check`'s
+reading; loops and recursion are bounded by the engine's deadline and stack alone; and secrets,
+parts, the memory rules and the proofs don't hold, which the idea's refusal or the reply says.
+
+The tests seen failing: the commit 5260953, kept as the tag
+`archive/wip/outside-off` and never merged, takes defences out; runs 43161754287 and 43161756923
+on Linux on x86-64
+show 9 of the 14 tests of tests/outside.rs and 4 of the library's failing there (the review's last
+section).
+
+What isn't done, each a limit of what was built:
+- **A run from a shell has no deadline**, for any program. main.wat ends by its rules; an
+  outside module may not. The replies and docs/run.md say so, and nothing more is done.
+- **The rest of W23**: a lengua program as a library, and an outside module that a lengua
+  program calls. Not started.
+- **An outside module as a part**, one with a secret, and one that splits its work: refused.
+- **Only `wasm32-wasip1` commands.** WASI preview 2 and components, `wasm32-unknown-unknown`,
+  Emscripten's output, and a library with no `_start` are refused.
+- **A memory needs a stated maximum.** A toolchain's default build declares none and is
+  refused, with the flag to add. The host holds a module to what it declares, and a default of
+  lengua's own would have been a second rule for the same thing.
+- **No line for a trap**: an outside module's trap is named without a place in its source.
+  DWARF isn't read.
+- **Exit code 134** is still reserved in an idea's tests, though an outside module has no
+  assertions of lengua's.
+- **`lengua-mcp measure`** runs other toolchains' modules by its own path, as before, with no
+  idea: it wasn't changed to go through this one.
+- **Never run on a runner**:
+  - Any language but Rust and C, and any compiler but the pinned rustc and wasi-sdk 34's clang.
+    C++, Go (TinyGo), Zig, AssemblyScript and Swift were not tried.
+  - A Rust program built with cargo and dependencies: the test's program is one file built with
+    rustc alone. The skill's cargo commands were not run.
+  - A real program of any size: the two test programs are a few lines each. A module of several
+    MiB, its time to compile in a worker, and the 16 MiB limit with a real module were not
+    tried; the limit's test uses 16 MiB of zeros.
+  - A module made to compile slowly (the review's O12).
+  - An outside module that serves (`listens on`), one that receives datagrams, one that opens a
+    real connection that is granted, one that starts a program, and one at a terminal: the
+    grants are the host's and tested for main.wat, but no outside module used them on a runner.
+    The C program asks for one connection, which is refused.
+  - An outside module from a shell that never ends, stopped with Ctrl-C.
+  - The agent's own use: no agent followed the skill's new pages from a request to
+    `trusted_not_proven` in an interactive session.
+
+### W20: work split into pieces (2026-11-11)
+
+On the branch `wip/threads`, not merged: the owner lands it. DESIGN.md ("The host", Work split
+into pieces) has the design as built, and docs/reviews/threads-2026-11-11.md the threat cases
+with the test that holds each.
+
+What was built:
+1. **The grant**: `- Splits: its work into up to 8 pieces, each of up to 1048576 bytes, each
+   gives back 8192 bytes` (`src/split.rs`, read by `src/idea.rs`): 2 to 64 pieces, 1 byte to
+   1 GiB a piece, 1 to 65,536 bytes back. Such an idea names `standard input` and no secret.
+2. **The calls**, in `lengua_split_1`: `split(input, input_len, pieces, output, output_len)`
+   and `piece()` (`src/wasm/wasi.rs`, `src/wasm/host/split.rs`). A piece is a run of the same
+   module from `_start` in a store of its own, on a thread of lengua's; its share of the bytes
+   is its standard input, what it prints its answer; it reaches nothing else and can't split.
+3. **The rules** (`src/checker/wasm/split.rs`, with rule 3): no import without the line; the
+   number of pieces a named constant the line covers; `piece` imported where `split` is; the
+   memory, times the line's pieces and one more, at most 16,384 pages.
+4. **The same result everywhere**: the cut is arithmetic, the answers are written in the
+   pieces' order, and a run ends as the first piece in that order that didn't end well. A
+   test's second run takes the pieces one at a time, the last first (`src/testrun.rs`).
+5. **A piece as a program**: the step `the program is a piece` runs a test as a piece, and
+   the prover proves such a test on a model in which `piece()` answers 0
+   (`src/prove/wasm/host.rs`). The whole program's tests are tested, not proven: the model
+   stops at `split`.
+6. **Both runners**: the `run` tool, `lengua-mcp run` and lengua-run run the pieces with the
+   same code (`src/wasm/runner.rs`, `execute_until`).
+7. **An example**, `examples/histogram-split`: the byte counts of standard input, 8 MiB at a
+   time, each split into eight pieces, with tests of the whole program and of a piece.
+
+What the runs show:
+- **The example goes from its idea to done** (43136507348, Linux on x86-64): every rule, every
+  test, each test of the whole program twice, with its pieces at once and one at a time. Its
+  proofs: B1, B2 and B4, of the whole program, "tested, not proven: work it splits into
+  pieces"; B5, of a piece, proven for the empty text alone (below).
+- **The tests bite**: on a commit that takes the defences out (3729579, on a branch since
+  deleted, never on main), 7 of the 8 tests of tests/wasm_split.rs fail (43148079519). The
+  eighth, a run from a shell, holds nothing the commit took out. One defence can't be taken
+  out to see its test fail: a piece's own memory, which is how the engine makes a store.
+- **Measured, the split does not pay for the example's work** (43148133679 at 92dec35, and
+  43141059631 at 55443fd, each on all five; ROADMAP.md, W20, has the table). On 64 MiB by
+  lengua-run, a piece for each core against the one-core program: 45.8 ms against 29.4 on
+  Linux on x86-64, 39.6 against 37.7 on Linux on ARM64, 36.5 against 33.8 on macOS on ARM64,
+  102.8 against 66.7 on Windows on x86-64, and 60.8 against 71.4 on Windows on ARM64, the one
+  runner where it is ahead. Against itself with one piece at a time it is 1.4 to 1.9 times as
+  fast. A piece's cost before it works, two copies of its bytes into new pages and a thread
+  and a store started for each call, is more than this count's own time. So the mechanism is
+  built, safe and the same everywhere, and its speed is not shown: the gap W20 was to close
+  is still open.
+
+The decisions, each made without asking, as the brief said:
+- **Separate runs, not shared memory.** WebAssembly's threads would have needed a rule that
+  shows each part writes what no other reads, the engine's threads feature (a setting compiled
+  code depends on), and a prover that follows interleavings. With a memory for each piece the
+  absence of a data race needs no rule, every rule and proof holds for a piece as for a
+  program, and the code is one on all five runners. The cost, copies of the bytes, is
+  measured below.
+- **A piece is a run from `_start`, told apart by `piece()`**, not a second exported function:
+  the rules, the secret rule, the stack rule and the prover all start at `_start`, and stay as
+  they were.
+- **A piece's input is its standard input and its answer its standard output**, so a piece is
+  the program the test format and the prover already know.
+- **The line is `- Splits:`, and its units are pieces**: `- Threads:` stays refused, since a
+  program still has no threads, and "parts" are what `- Builds on:` names.
+- **No secret in a program that splits**, refused at the idea: the simplest thing to state.
+- **The number of pieces is a named constant**, so `check` holds it to the line before a run.
+- **`LENGUA_PIECES_AT_ONCE`** sets how many pieces run at once (1 to 64), for measurements and
+  tests. It changes the time alone.
+
+What it leaves, for the owner:
+- **The proof of the example's piece reaches no text.** `check` proves B5 of
+  examples/histogram-split "for every input with text up to 0 of 1048576 bytes" (run
+  43136507348): the model follows a piece's run, but not the histogram's table, "an access
+  whose place the input chooses among more than 256 places". The mechanism proves a piece as
+  a program; this piece's work is of a kind the prover doesn't follow. A piece that counts in
+  locals, as tests/fixtures/vowels does, is the next example to try.
+- **The join is tested, not proven**: the model stops at `split`. To prove the whole program
+  it would run each piece's model and join them.
+- **Pieces of the program itself only**: no other program as a piece, no arguments, files or
+  clock for a piece, no piece that splits, no pieces that talk while they run.
+- **A run from a shell stops no piece**: its engine has no epochs, as it has no deadline. A
+  piece that started runs to its end after another failed.
+- **Threads are started for each call** and each piece's bytes are copied twice. A pool of
+  threads kept through a run, and input handed over without a copy, would cut the cost of a
+  call.
+- **No workload in the benchmark's gate**, and no C, C++ or Rust native build with threads
+  beside it: the gate's rows and KNOWN_BEHIND are another branch's work in flight
+  (`wip/gate-same-way`), so the measurement is a test of lengua-run's
+  (`split_work_is_measured`), lengua against lengua.
+- **No template in the compile skill**: host.md shows the calls, and names the example.
+- **Never run on a runner**: a program that splits through the `run` tool of the MCP server
+  (the tests run it through the pool the tool uses, in the configuration the tool uses, and
+  through `check`'s own tests); more than 8 pieces at once, and a computer with more than 4
+  cores; a piece stopped by lengua's stop of a background server; the goldens with the new
+  example (`mode=golden` was not dispatched); the bench.
+
+Where the work left the brief: the design (b381dfe) and the review were written with the code,
+by its author, not before it; and the example was to be one where the split pays, which the
+measurements don't show.
+
+The runs: the suite, green on all five runners at 6790d4c, the branch with main's W21 merged in
+(43160037821); before the merge, at 92dec35, green on four and failed on Windows on ARM64 by
+`two_checks_at_once_leave_a_consistent_index` alone, the race in tests/graph.rs noted under
+W19 (43148136973), and green on Linux on x86-64 at 55443fd (43141098911); the example from its
+idea to done (43136507348); the tests of tests/wasm_split.rs and of lengua-run alone
+(43136504390); the defences taken out (43148079519, at 3729579, kept as the tag
+`archive/threads-bite`); the measurements (43141059631, 43148133679; in the first, macOS's job
+failed after its tests, where GitHub didn't take its log); and the first compile, which
+found a test's missing field (43134989066). The commit that writes this paragraph changes
+documents alone.
+
 ### What the permission checks refused
 
 Claude Code's permission checks refused these actions. Each refusal was taken as given, with
@@ -734,6 +932,13 @@ nothing to route around it:
   remains (W16).
 - **`python3 --version`** in a command one of W12b's agents wrote (2026-11-09). It never ran:
   this computer runs no interpreter.
+- **`python3 --version`** again, at the head of a command the agent of W23's first part wrote
+  (2026-11-12), by mistake, against the rule that this computer runs no interpreter. The
+  permission check refused the whole command, so nothing of it ran, and the agent went on with
+  the Read and Edit tools.
+- **`git add -u`** in a command the same agent wrote while merging main (2026-11-12), against
+  the rule to stage named paths. The permission check refused the whole command, so nothing
+  was staged by it, and the files were staged by name.
 - **A broad delete with `rm -rf` on a glob** (2026-11-07). It wasn't needed: a fresh folder was
   used instead.
 
@@ -863,7 +1068,8 @@ Each can be reversed.
   listener, 5 on the connections lengua made. Files live in the working folder, as before.
 - **The clock is rounded to a microsecond**, after OpenAI's 2026 report of agents signalling to
   each other through the CPU cache's timing.
-- **No threads** until WebAssembly's threads are standard: an idea with `- Threads:` is refused.
+- **No threads** in a program: an idea with `- Threads:` is refused. Since W20 a program uses
+  more cores through a `- Splits:` line, whose pieces share no memory.
   Core WebAssembly has no fused multiply-add either. The test format keeps `fma(a, b, c)`, which
   check accepts and the prover follows, and the write-idea skill tells the agent not to use it,
   as a program would have to compute it in software (2026-11-10: this line said `fma` is refused,
@@ -1180,6 +1386,65 @@ Each can be reversed.
     key until a time, the same on every system, with no call of the system's own `poll` or
     console events.
   - **The prover refuses all three**, as it refuses the network's: tested, not proven.
+- **W23's first part: an outside module (2026-11-12)**, each made without asking, on the owner's
+  standing word, and each the owner's to reverse:
+  - **The file is `main.wasm`**, beside `idea.md`, with no `main.wat`. It is the name a
+    compiler's output has, and the name lengua already gives a program as its first argument.
+    `lengua-mcp wasm main.wat` writes a file of that name beside main.wat by default; it stays
+    ignored unless the idea names it, and `check` then asks for main.wat to go.
+  - **The idea says it twice**: `computation: main.wasm`, since that key names the code file of
+    an Attested Computation, and a line `- Module: main.wasm, built from …` in `# Constraints`,
+    since a run reads only that section and must know which file is the program. `check` holds
+    the two to each other. A flag of the tool's call was not used: what a program is belongs to
+    the idea, which the user's words and the lock's hash cover.
+  - **What it was built from is free text**, at most 200 characters. lengua can't check it, so
+    it gave it no form to check, and every place that shows it says it is the idea's word.
+  - **The state is `trusted_not_proven`**, a state of its own, and never `done` with a flag
+    beside it: a reader who looks at the state alone must not take the program for a checked
+    one. The reply's field is `outside`, the log's entry `checked: trusted, not proven`.
+  - **No entry in `verified`, and no attestation.** lengua's entry says lengua checked the
+    idea and its code by its rules; for an outside module it didn't. `lengua-mcp check` says
+    `not attested` and why. Cost: an outside module has no way to show another computer that
+    its tests passed, but to run `check` there.
+  - **The lock's format is unchanged.** An outside module's stamp is told by its two hashes
+    being one, which no main.wat's can be, and by its `engine` line's last words. A new field
+    would have been a new format, which another branch in flight (`wip/parts`) also changes.
+  - **A memory must declare a maximum, of at most 1 GiB**, and be exported as `memory`. The
+    host already held a module to the memory it declares, and gives a module that declares no
+    maximum only its first pages (`tests/wasm_limits.rs`), on which a toolchain's allocator
+    fails at its first growth. So a module with no maximum is refused with the flag to add,
+    in place of a default of lengua's own. 1 GiB is main.wat's own most.
+  - **A WASI function the idea doesn't grant links; one of lengua's own modules doesn't.** A C
+    or Rust standard library imports `fd_prestat_get`, `environ_sizes_get`, `fd_close` and more
+    whatever the program does, so refusing them would refuse every such module. The host
+    refuses each call. lengua's own modules are imported only by a program that means to call
+    them, so `check` refuses those without their grant, as it does for main.wat.
+  - **A start function is allowed.** The limits are set before a module is instantiated, so it
+    is held as `_start` is, and a test shows it stopped at the deadline. Refusing it would have
+    been one more rule with nothing behind it.
+  - **16 MiB of module at most.** The engine compiles a module in a worker, and the pool gives
+    up on a worker 20 seconds past a test's time; a larger module would fail its tests for the
+    compiler's time alone. The number was not measured against real modules.
+  - **Secrets and parts are refused** for an outside module, at the idea: the secret rule and a
+    part's functions both read main.wat. After W21 landed: an outside module is no part either,
+    so `check` refuses a `# Contract` section beside a `- Module:` line, and a main.wat that
+    names an outside module as its part is refused as any part with no main.wat is.
+  - **No `- Splits:` line for an outside module** (after W20 landed). A piece is the same module
+    run again under the same host, with memory of its own, so the host holds each piece as it
+    holds the program. But what bounds the pieces together leans on main.wat's rules: the
+    memory times the pieces within 1 GiB, the number of pieces a named constant, and each
+    piece's end by rule 2, where 64 pieces of an outside module could each hold 1 GiB and
+    never end in a run from a shell. So the idea is refused, which refuses the import of
+    `lengua_split_1` too. It can be given later with limits of the host's own.
+  - **A run from a shell gets no deadline for an outside module.** It has none for any program,
+    and a server must run as long as its user wants. The words before the run, and the
+    documents, say that nothing bounds an outside module's loops.
+  - **The `run` tool reads the module again**, as `check` did; a run from a shell doesn't, and
+    holds it to the lock's hash alone, as lengua-run does for main.wat, to start as fast.
+  - **The real compilers run once, on Linux on x86-64**, in a job of CI's own, and every
+    runner's suite gets the same two modules, as the bench's are built. A run on GitHub's
+    runners without them fails, so no such run passes having skipped them; elsewhere the two
+    tests note that they skipped. No compiled module is committed.
 
 - **W21's parts (2026-11-11)**, each made without asking, on the owner's standing word, and
   each the owner's to reverse:
@@ -1358,9 +1623,10 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
       x86-64 (42975969779), with one of two records in log.md, at a commit where it passed on
       that runner in another run (42975753981), and it has passed on all five since
       (43022864858, 43083574889). It records two ideas and runs nothing of W19's.
-- **W20. Parallelism.** WebAssembly's threads (shared memory and atomics), as structured
-  fork-join alone. The rules show that a program has no data race, so its results stay the same
-  on every run, which free threads in C, C++ and Rust can't promise.
+- **W20. Parallelism.** *Built on `wip/threads`, not merged.* Work split into pieces that run at
+  once, each a run of the same module with a memory of its own, in place of WebAssembly's
+  threads: no rule has to show the absence of a data race, and a result is the same on every
+  run. Measured, it doesn't pay for the example's work yet ("W20: work split into pieces").
 - **W21. A library of proven parts.** A shared, proven standard set (sorting, hash tables, JSON,
   HTTP, compression, dates) that programs build on with `- Builds on:`. The agent assembles
   programs from verified pieces instead of writing everything new, which makes them faster to
@@ -1405,6 +1671,8 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
       exactly as it holds a module of lengua's own. The reason: what is useful to the most
       people today is a safe way to run code an agent wrote, in any language, and the host
       with its grants gives that already. The rest of W23 keeps its place.
+    - **Built, and on main since 3fd8a3a (2026-11-12):** "W23's first part: an
+      outside module", above, says what was built, what is refused and what was never run.
   - **W24. Tools.** `check`'s reply is the only tool there is. W24 adds what a programmer
     expects: a run that stops at a line of main.wat and shows its values (through the `run`
     tool, for the agent), a profile of where a run's time goes by function and line, and a trace
@@ -1442,6 +1710,7 @@ Runs, as they land:
 | Proof depth (2026-11-11) | 42961610246 (the goldens at main 1508847, twice: identical); 42976169988 (the vowel count's proof by its buffer's size, at fd20338: every length in 15 s with 1,024 bytes and in 191 s with 4,096; with 64 KiB bounded at 4,635 bytes); at 7ad6530: 43022877257 (the suite on all five runners, green), 43022883114 (the slow tests on all five, green), 43022887884 (the golden ledger against main: count's and words' steps hold, mean's three blocks proven where they ran out of time, five lines with another reason for no induction, vowels new; no proof lost) and 43022892954 (the runners view: 161 proof lines, the same verdict on all five) |
 | The gate's margin (the owner's decision, 2026-11-11) | On the branch `wip/gate-margin`: 42962012528 (the gate's unit tests on Linux on x86-64 at f87c47c, green, with clippy; the format job's layout applied at b4eb385); 42964220148 (format, the suite on Linux on x86-64 and the gate job at cd54e79, green); 42964232679 (the bench on all five runners at cd54e79, against the list from before the margin: the gate failed on each; 139 rows KNOWN_BEHIND named are level or ahead, 127 and 12, taken out, which leaves 898; 6 rows behind by more than the margin that it doesn't name, 1 on Linux on x86-64, 2 on Linux on ARM64, 2 on macOS on ARM64 and 1 on Windows on x86-64; no build failed, every native C++ version built with `-std=gnu++17`). The reports are in [docs/benchmarks](docs/benchmarks/README.md). No run has measured the new list yet |
 | W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](docs/history/PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
+| W23, its first part: an outside module (on main since 3fd8a3a) | 43158638831 (at e6d96e5 on Linux on x86-64: tests/outside.rs for the first time, 13 of 14 passing, with rustc's and clang's modules built by the outside-wasm job; the one failure was the count idea's own generated range, fixed at 7312377); 43158958049 (the library's tests of the idea's lines, the state and `check`'s reading, green); 43161754287 and 43161756923 (the defences out at 5260953, tag `archive/wip/outside-off`: 9 of tests/outside.rs's 14 tests and 4 of the library's fail); 43161759761 (at 7312377, with main's W21 merged in: format, the suite on all five runners, green but for `two_checks_at_once_leave_a_consistent_index` on Windows on ARM64, the known race in log.md); 43172439582 (at 3fd8a3a, with main's W20 merged in too: format, the outside-wasm job, the suite on all five runners and the gate, all green; the landing on main rests on it) |
 
 ## Superseded by the pivot
 
@@ -1625,8 +1894,9 @@ this file at the tag `native-final`.
   it runs; a TCP listener and a UDP port in one program; a limit on how many connections a
   program opens in all, or a second; and the public suffixes, so that `any subdomain of co.uk`
   is still taken.
-- **Threads**, until WebAssembly's threads are standard and Wasmtime runs them. Planned as W20,
-  as structured fork-join that the rules show free of data races.
+- **Threads that share memory.** W20 gave pieces that share none; what would bring shared
+  memory in is WebAssembly's threads as a standard, a rule that shows each thread writes what
+  no other reads, and a prover that follows them.
 - **An OS sandbox around the engine** as a second wall: Linux's seccomp and Landlock from the
   native lengua, and each other system's own. It would bring back per-OS work.
 - **Native kernels**: assembly a WebAssembly program calls for its busiest loops, for speed. Only

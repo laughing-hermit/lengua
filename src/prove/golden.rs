@@ -402,6 +402,11 @@ fn proofs(
     if block.uses_now() {
         return ("uses now".to_owned(), [Duration::ZERO; 2]);
     }
+    let policy = if block.piece {
+        policy.for_a_piece()
+    } else {
+        policy
+    };
     let (module, smaller) = match (Module::new(built, policy), Module::new(induced, policy)) {
         (Ok(module), Ok(smaller)) => (module, smaller),
         (Err(why), _) | (_, Err(why)) => {

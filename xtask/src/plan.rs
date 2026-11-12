@@ -8,8 +8,9 @@
 //! other. A job's checkout is shallow unless it must read
 //! other commits: a bench holds each change to KNOWN_BEHIND in the history to the list before it
 //! (the list may only shrink) and reads any commit it is measured against, and a golden leg reads
-//! the commit it doesn't run. The step's outputs are `matrix`, and `bench`, whether a bench runs,
-//! which needs the WebAssembly builds of C, C++ and Rust.
+//! the commit it doesn't run. The step's outputs are `matrix`; `bench`, whether a bench runs,
+//! which needs the WebAssembly builds of C, C++ and Rust; and `outside`, whether the suite runs,
+//! which needs the modules built from tests/outside's Rust and C.
 
 use std::process::{Command, Stdio};
 
@@ -226,7 +227,9 @@ pub fn task(arguments: &[String]) -> Result<u8, String> {
     let listed: Vec<String> = jobs.iter().map(Job::json).collect();
     let include = listed.join(",");
     let bench = jobs.iter().any(|job| job.mode == "bench");
-    let outputs = format!("matrix={{\"include\":[{include}]}}\nbench={bench}\n");
+    // The suite checks and runs modules that compilers made from tests/outside's programs.
+    let outside = jobs.iter().any(|job| job.mode == "test");
+    let outputs = format!("matrix={{\"include\":[{include}]}}\nbench={bench}\noutside={outside}\n");
     print!("{outputs}");
     ci::append("GITHUB_OUTPUT", &outputs)?;
     Ok(0)

@@ -26,6 +26,20 @@ pub const CODE_FILE: &str = crate::wasm::CODE_FILE;
 /// `native-final` keeps the native lengua.
 pub const NATIVE_CODE_FILE: &str = "main.s";
 
+/// The code's file name for an idea with a `- Module:` line: an outside module, which a compiler
+/// made from another language and lengua marks "trusted, not proven" ([`crate::wasm::outside`]).
+pub const OUTSIDE_FILE: &str = crate::wasm::outside::FILE;
+
+/// Whether `idea`, idea.md's bytes, names an outside module as its program: its `- Module:`
+/// line reads. An idea whose lines have problems names none, and check says the problems.
+#[must_use]
+pub fn names_outside(idea: &[u8]) -> bool {
+    std::str::from_utf8(idea)
+        .ok()
+        .and_then(|text| crate::idea::outside(text).ok().flatten())
+        .is_some()
+}
+
 /// Where the server keeps a copy of each idea.md it recorded, by hash, so later changes can be
 /// shown against them.
 #[must_use]
@@ -190,11 +204,15 @@ pub struct Snapshot {
     /// lengua's hash of idea.md, which leaves its trust record out
     /// ([`crate::trust::idea_hash`]), when it exists.
     pub idea: Option<Sha256Hex>,
-    /// The SHA-256 of main.wat, when the folder holds it.
+    /// The SHA-256 of the code, when the folder holds it: main.wat, or main.wasm for an idea
+    /// that names an outside module ([`Self::outside`]).
     pub code: Option<Sha256Hex>,
-    /// Whether the folder holds the native lengua's main.s, which no check takes: only that it is
-    /// there is read.
+    /// Whether the folder holds a code file too many, which no check takes: the native lengua's
+    /// main.s, or main.wat beside an outside module's idea. Only that it is there is read.
     pub native: bool,
+    /// Whether the idea names an outside module as its program, with a `- Module:` line: then
+    /// the code is main.wasm.
+    pub outside: bool,
     /// Whether lengua.lock exists and can be trusted.
     pub lock: LockStatus,
 }
@@ -216,7 +234,8 @@ pub enum LockStatus {
 pub struct Files {
     /// idea.md's bytes, when it exists.
     pub idea: Option<Vec<u8>>,
-    /// main.wat's bytes, when the folder holds it.
+    /// The code's bytes, when the folder holds it: main.wat's, or main.wasm's for an idea that
+    /// names an outside module.
     pub code: Option<Vec<u8>>,
 }
 
@@ -241,11 +260,16 @@ impl Snapshot {
         // Each as a regular file of a bounded size: a program folder may come from anyone.
         let read = |name: &str| read_file(&folder.file(name));
         let idea = read(IDEA_FILE)?;
-        let code = read(CODE_FILE)?;
+        // The idea says which file is the program: main.wasm for one with a `- Module:` line,
+        // beside which main.wat is a code file too many, as main.s is beside either.
+        let outside = idea.as_deref().is_some_and(names_outside);
+        let code = read(if outside { OUTSIDE_FILE } else { CODE_FILE })?;
         let snapshot = Self {
             idea: idea.as_deref().map(crate::trust::idea_hash),
             code: code.as_deref().map(Sha256Hex::of),
-            native: folder.file(NATIVE_CODE_FILE).exists(),
+            native: folder.file(NATIVE_CODE_FILE).exists()
+                || (outside && folder.file(CODE_FILE).exists()),
+            outside,
             lock: match lock::read(folder.path(), key) {
                 Ok(None) => LockStatus::Missing,
                 Ok(Some(lock)) => LockStatus::Valid(Box::new(lock)),
@@ -388,6 +412,7 @@ mod tests {
             idea,
             code,
             native: false,
+            outside: false,
             lock,
         })
     }
@@ -400,6 +425,7 @@ mod tests {
                 idea: Some(digest("idea")),
                 code: Some(digest("code")),
                 native,
+                outside: false,
                 lock: LockStatus::Valid(Box::new(with_code())),
             })
         };
@@ -579,6 +605,49 @@ mod tests {
                 .idea,
             None
         );
+    }
+
+    /// An idea with a `- Module:` line names main.wasm as its program: the snapshot hashes that
+    /// file and keeps its bytes, main.wat beside it is a code file too many, and without the
+    /// line main.wasm is no code at all.
+    #[test]
+    fn an_outside_module_s_idea_makes_main_wasm_the_code() {
+        let folder = tempfile::tempdir().expect("temporary folder");
+        let program =
+            ProgramFolder::new(folder.path().to_str().expect("UTF-8 path")).expect("absolute path");
+        let read = || Snapshot::read_with_files(&program, None).expect("read the folder");
+        let plain = "---\ntitle: t\n---\n# Constraints\n- Uses: nothing\n";
+        let outside = format!("{plain}- Module: main.wasm, built from C with clang\n");
+        assert!(!names_outside(plain.as_bytes()));
+        assert!(names_outside(outside.as_bytes()));
+        assert!(!names_outside(&[0xff]));
+        let module = b"\0asm\x01\0\0\0";
+        std::fs::write(program.file(OUTSIDE_FILE), module).expect("write main.wasm");
+        std::fs::write(program.file(IDEA_FILE), plain).expect("write idea.md");
+        let (snapshot, files) = read();
+        assert!(!snapshot.outside && !snapshot.native);
+        assert_eq!((snapshot.code, files.code), (None, None));
+        std::fs::write(program.file(IDEA_FILE), &outside).expect("write idea.md");
+        let (snapshot, files) = read();
+        assert!(snapshot.outside && !snapshot.native);
+        assert_eq!(snapshot.code, Some(Sha256Hex::of(module)));
+        assert_eq!(files.code.as_deref(), Some(module.as_slice()));
+        std::fs::write(program.file(CODE_FILE), "(module)\n").expect("write main.wat");
+        let (snapshot, _) = read();
+        assert!(snapshot.outside && snapshot.native);
+        assert_eq!(snapshot.code, Some(Sha256Hex::of(module)));
+        // With the lock's stamp of main.wasm, the folder still isn't ready beside main.wat.
+        let stamped = |native: bool| {
+            State::of(&Snapshot {
+                idea: Some(digest("idea")),
+                code: Some(digest("code")),
+                native,
+                outside: true,
+                lock: LockStatus::Valid(Box::new(with_code())),
+            })
+        };
+        assert_eq!(stamped(false), State::Ready);
+        assert_eq!(stamped(true), State::CodeUnchecked);
     }
 
     /// A run's read keeps the very bytes of idea.md and main.wat that its snapshot hashed, and

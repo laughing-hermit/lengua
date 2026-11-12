@@ -89,16 +89,21 @@ pub struct IdeaStamp {
     pub sha256: Sha256Hex,
 }
 
-/// The checked code: main.wat's, for every computer ([`WASM_TARGET`]).
+/// The checked code: main.wat's, for every computer ([`WASM_TARGET`]); or main.wasm's, an
+/// outside module, which is tested and never checked against a rule or proven
+/// ([`Self::outside`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeStamp {
-    /// SHA-256 of main.wat as it is.
+    /// SHA-256 of main.wat as it is; of main.wasm, for an outside module.
     pub sha256: Sha256Hex,
-    /// SHA-256 of what passed the checks: the module lengua built from main.wat.
+    /// SHA-256 of what passed the checks: the module lengua built from main.wat. An outside
+    /// module is its own file, so the two hashes are one.
     pub module_sha256: Sha256Hex,
-    /// The engine that runs the module, such as `wasmtime 50.0.1`.
+    /// The engine that runs the module, such as `wasmtime 50.0.1`; for an outside module, with
+    /// [`OUTSIDE_NOTE`] after it, so the lock's own text says what the stamp is of.
     pub engine: String,
-    /// The deepest stack the program can use, as the rules count it.
+    /// The deepest stack the program can use, as the rules count it; 0 for an outside module,
+    /// which no rule counts.
     pub max_stack_bytes: u64,
     /// How many `;; unsafe:` blocks main.wat has.
     pub unsafe_blocks: u32,
@@ -122,6 +127,18 @@ pub struct PartStamp {
     pub code: Sha256Hex,
     /// The functions the code takes from it, without the `$`, in main.wat's order.
     pub functions: Vec<String>,
+}
+
+/// What follows the engine in the stamp of an outside module.
+pub const OUTSIDE_NOTE: &str = "; an outside module: trusted, not proven";
+
+impl CodeStamp {
+    /// Whether it stamps an outside module: the code file is the module itself, so the two
+    /// hashes are one, which no main.wat's are, as its text is never the module it builds.
+    #[must_use]
+    pub fn outside(&self) -> bool {
+        self.sha256 == self.module_sha256
+    }
 }
 
 /// A generated test proven for every input with texts up to a length.

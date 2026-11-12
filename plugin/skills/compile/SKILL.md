@@ -1,6 +1,6 @@
 ---
 name: compile
-description: Compiles a lengua program's idea.md, an Open Knowledge Format Attested Computation, into main.wat, WebAssembly text in lengua's dialect that the lengua check tool builds, holds to the lengua Power of 10 (NASA's rules adapted for WebAssembly, with memory rules like Rust's), tests, proves and runs the same way on every computer. Use after check records the idea, when check says to write main.wat or reports problems in it, when someone shares an idea to build here, or when the user asks for a faster program. Ends when check says done, with a short report to the user.
+description: Compiles a lengua program's idea.md, an Open Knowledge Format Attested Computation, into main.wat, WebAssembly text in lengua's dialect that the lengua check tool builds, holds to the lengua Power of 10 (NASA's rules adapted for WebAssembly, with memory rules like Rust's), tests, proves and runs the same way on every computer. Use after check records the idea, when check says to write main.wat or reports problems in it, when someone shares an idea to build here, or when the user asks for a faster program. Ends when check says done, with a short report to the user. Also says when a module that a compiler made from Rust, C or another language may be the program instead, run under the idea's grants and marked trusted, not proven.
 license: Apache-2.0
 compatibility: Needs the lengua MCP server from the lengua plugin.
 ---
@@ -22,7 +22,8 @@ with masks where a branch would decide on a secret. The `machine` line names the
 [caches.md](references/caches.md) says how to lay work out for them.
 
 The idea is an Attested Computation (`type: Attested Computation`), and its code is `main.wat`
-alone, by the steps below: `check` refuses any other code file and says what to do.
+alone, by the steps below: `check` refuses any other code file and says what to do. The one
+exception is [an outside module](#a-program-in-another-language), which the user must ask for.
 
 ## Steps
 
@@ -37,8 +38,9 @@ alone, by the steps below: `check` refuses any other code file and says what to 
    main.wat may use: WebAssembly 1.0 with sign-extension, saturating-float-to-int, multi-value,
    bulk-memory and simd, and no tables or references. The same main.wat runs on every computer:
    the machine line says how fast vector code will be here, never what the program does. A
-   WebAssembly program is one thread, so `check` refuses an Attested Computation with a
-   `- Threads:` line.
+   program has no threads of its own, so `check` refuses an Attested Computation with a
+   `- Threads:` line; an idea with a `- Splits:` line uses more cores through pieces
+   ([the host](references/host.md), Work split into pieces).
 2. **Pick the template that fits**, and keep its shape. Each is a complete program that passes
    every rule and every test of its idea:
 
@@ -54,7 +56,10 @@ alone, by the steps below: `check` refuses any other code file and says what to 
    | [the two programs](assets/program-template.wat) | [idea](assets/program-template-wat-idea.md) | Programs started with `program_run`: a command, its output, its exit code, and a program the computer does not have |
    | [the key](assets/terminal-template.wat) | [idea](assets/terminal-template-wat-idea.md) | The terminal: keys as they are pressed with `term_raw`, put back, and the same program with no terminal |
 
-   A program that needs threads has no WebAssembly form: tell the user so rather than promise
+   No template splits its work yet: for an idea with a `- Splits:` line, start from the
+   streaming filter and follow [the host](references/host.md), Work split into pieces. A
+   program that needs threads that share memory has no form in lengua: tell the user so rather
+   than promise
    one.
 3. **Plan the functions** before you write them: at most 180 operators each (rule 4), and at
    least two assertions per function on average. `$main`, exported as `_start`, checks the inputs
@@ -270,6 +275,32 @@ with 125, saying why, when it won't run the folder. The `done` reply's `shell` i
 for this computer. `lengua-mcp check <folder>` is the idea's attester: it builds, checks, tests
 and proves a folder with no lock and no key, writes nothing, and ends with `attested` or
 `not attested`.
+
+## A program in another language
+
+`main.wat` is the default, because only it is checked against the rules and proven. When the
+user asks for existing code to run, or for a program in a language they name (Rust, C, another
+that compiles to WebAssembly), the idea's program may be an outside module instead: `main.wasm`,
+which that language's compiler makes for `wasm32-wasip1`. Never choose it by yourself, and never
+to get past a rule or a proof that `main.wat` fails.
+
+- The idea says so twice: `computation: main.wasm` in its frontmatter, and a line
+  `- Module: main.wasm, built from …` in `# Constraints`, with the language, the source and the
+  compiler. Its tests and grants are written as for any idea. It has no `- Secret:`, `- Splits:` or
+  `- Builds on:` line.
+- You build `main.wasm` with the compiler, with a stated maximum for its memory, and put it in
+  the folder, with no `main.wat` there. `check` reads it, refuses what lengua's host can't hold
+  by itself, and runs the idea's tests against it.
+- `check` then says `trusted_not_proven`, never `done`: lengua's host holds the module to the
+  idea's grants and to its own memory, as it holds `main.wat`, but no rule of the dialect is
+  checked, nothing is proven, and lengua writes no entry in `verified`. The reply's `outside`
+  lines say each thing that does not hold. `run` and a shell's run say `trusted, not proven`
+  each time.
+- Tell the user so, before you build it and in your report: what its idea grants, that lengua
+  holds it to that, and that it is tested, not checked and not proven.
+
+[An outside module](references/outside.md) has the build commands for Rust and C, what `check`
+refuses, a whole idea, and the report to give.
 
 ## Shared ideas
 

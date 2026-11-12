@@ -19,6 +19,7 @@ okf_version: "0.2"
 * [fetch](fetch/idea.md) - Gets a page from the web server on port 8080 of this computer and prints its body. Code: [main.wat](fetch/main.wat)
 * [follow](follow/idea.md) - Gets a page from a web server of example.org and follows one redirect to another of its web servers. Code: [main.wat](follow/main.wat)
 * [greet](greet/idea.md) - Greets the person that the NAME environment variable names. Code: [main.wat](greet/main.wat)
+* [histogram-split](histogram-split/idea.md) - Counts how many times each byte value occurs in standard input, with the work split into pieces that run at once. Code: [main.wat](histogram-split/main.wat)
 * [http](http/idea.md) - A part that reads the head of an HTTP request, and prints the method, the path and the host of the request on standard input. Code: [main.wat](http/main.wat)
 * [httpd](httpd/idea.md) - A web server that serves the files of a folder and keeps a store of JSON values, for up to 8 clients at once. Code: [main.wat](httpd/main.wat)
 * [hypotenuse](hypotenuse/idea.md) - Prints the length of the hypotenuse of a right triangle from the lengths of its two sides, with three decimals. Code: [main.wat](hypotenuse/main.wat)

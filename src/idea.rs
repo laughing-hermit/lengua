@@ -97,7 +97,28 @@ pub struct Idea {
     /// What its frontmatter says as an Attested Computation, the form of an idea that lengua
     /// compiles to WebAssembly; `None` for an idea of the native lengua, which `check` refuses.
     pub attested: Option<Attested>,
+    /// What its `- Module:` line says, when it has one: its program is `main.wasm`, an outside
+    /// module that a compiler made from another language, which lengua runs under the idea's
+    /// grants and marks "trusted, not proven" ([`crate::wasm::outside`]).
+    pub outside: Option<Outside>,
 }
+
+/// What an idea's `- Module:` line says of its outside module: ``- Module: main.wasm, built from
+/// Rust with rustc for wasm32-wasip1``.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Outside {
+    /// What the idea says the module was built from, in its own words: the language, the
+    /// compiler, the source. lengua records the words and can't check them.
+    pub built_from: String,
+}
+
+/// The most characters an idea's `- Module:` line gives to what its module was built from.
+pub const MAX_BUILT_FROM: usize = 200;
+
+/// How an idea's `- Module:` line reads, as its problems say it.
+const MODULE_FORM: &str = "an outside module's line reads `- Module: main.wasm, built from …`, \
+                           with the language and the compiler in up to 200 characters, as in \
+                           `- Module: main.wasm, built from Rust with rustc for wasm32-wasip1`";
 
 /// What an Attested Computation's frontmatter says beyond the native lengua's ideas (OKF v0.2
 /// §10): how lengua runs the computation, `main.wat`, and what a run returns for its check.
@@ -1254,6 +1275,19 @@ pub fn secrets(text: &str) -> Result<Vec<Source>, Vec<Problem>> {
         .unwrap_or_default())
 }
 
+/// What an idea's `- Module:` line says, read as [`grants`] reads its lines, by the same code;
+/// `None` for an idea without the line, whose program is main.wat. A run takes it from the idea
+/// whose hash its lock records, to know which file is the program and to say that an outside
+/// module is trusted, not proven, before it starts.
+///
+/// # Errors
+///
+/// As [`grants`].
+pub fn outside(text: &str) -> Result<Option<Outside>, Vec<Problem>> {
+    let mut parser = constraints_read(text)?;
+    Ok(parser.outside.take().map(|(_, outside)| outside))
+}
+
 /// The lines of `# Constraints` of an idea's `text`, read as [`parse`] reads them, and nothing
 /// else of the idea; or the problems [`grants`] reports.
 fn constraints_read(text: &str) -> Result<Parser, Vec<Problem>> {
@@ -1450,6 +1484,12 @@ struct Parser {
     secrets: Option<(usize, Vec<Source>)>,
     /// Whether the idea is of the native lengua's type, which has no secrets to follow.
     native: bool,
+    /// The `- Module:` line's line and what it says, once it's read.
+    outside: Option<(usize, Outside)>,
+    /// Whether an Attested Computation's frontmatter says `computation: main.wasm`, an outside
+    /// module's, with the key's line; `None` for an idea whose frontmatter has no `computation`
+    /// that reads, or no frontmatter read at all, as when only its grants are read.
+    computation: Option<(Option<usize>, bool)>,
 }
 
 impl Default for Parser {
@@ -1476,6 +1516,8 @@ impl Default for Parser {
             names: Vec::new(),
             secrets: None,
             native: false,
+            outside: None,
+            computation: None,
         }
     }
 }
@@ -1691,19 +1733,36 @@ impl Parser {
             front.runtime.as_ref(),
             "lengua runs an Attested Computation as WebAssembly",
         );
-        self.exact(
-            keys,
-            ("computation", crate::state::CODE_FILE),
-            front.computation.as_ref(),
-            "the computation is main.wat, the code file beside idea.md",
-        );
+        // `main.wasm` is an outside module's, which the `- Module:` line must then name too
+        // ([`Self::outside_agrees`]); anything else is held to main.wat.
+        let outside = front.computation.as_ref().and_then(scalar_text).as_deref()
+            == Some(crate::wasm::outside::FILE);
+        if outside {
+            self.computation = Some((keys.line("computation"), true));
+        } else {
+            let before = self.problems.len() + self.hidden_problems;
+            self.exact(
+                keys,
+                ("computation", crate::state::CODE_FILE),
+                front.computation.as_ref(),
+                "the computation is main.wat, the code file beside idea.md",
+            );
+            if self.problems.len() + self.hidden_problems == before {
+                self.computation = Some((keys.line("computation"), false));
+            }
+        }
         let receipt = self.executor(keys, front.executor.as_ref());
         self.attester(keys, front.attester.as_ref());
         let parameters = self.parameters(keys, front.parameters.as_ref());
         self.status(keys, front.status.as_ref());
+        let computation = if outside {
+            crate::wasm::outside::FILE
+        } else {
+            crate::state::CODE_FILE
+        };
         self.attested = Some(Attested {
             runtime: RUNTIME.to_owned(),
-            computation: crate::state::CODE_FILE.to_owned(),
+            computation: computation.to_owned(),
             parameters,
             receipt,
         });
@@ -2715,6 +2774,10 @@ impl Parser {
             self.files_line(number, rest);
             return;
         }
+        if let Some(rest) = strip_prefix_ignore_case(item, "splits:") {
+            self.splits_line(number, rest);
+            return;
+        }
         if let Some(rest) = strip_prefix_ignore_case(item, "runs:") {
             self.runs_line(number, rest);
             return;
@@ -2735,12 +2798,17 @@ impl Parser {
             self.secret_line(number, rest);
             return;
         }
+        if let Some(rest) = strip_prefix_ignore_case(item, "module:") {
+            self.module_line(number, rest);
+            return;
+        }
         let Some(rest) = strip_prefix_ignore_case(item, "uses:") else {
             self.problem(
                 Some(number),
                 "`# Constraints` lists only what the program uses, which means the same on every \
-                 computer: `- Uses: …`, `- Network: …`, `- Files: …`, `- Runs: …`, `- Secret: …` \
-                 and `- Builds on: …`; say \
+                 computer: `- Uses: …`, `- Network: …`, `- Files: …`, `- Runs: …`, `- Splits: …`, \
+                 `- Secret: …` \
+                 and `- Builds on: …`, and `- Module: …` for an outside module; say \
                  anything else in `# Purpose`",
             );
             return;
@@ -2810,6 +2878,47 @@ impl Parser {
             .and_then(|rule| crate::starts::add(&mut self.network.reach.runs, rule));
         if let Err(problem) = added {
             self.problem(Some(number), problem);
+        }
+    }
+
+    /// `- Splits: its work into up to 8 pieces, each of up to 1048576 bytes, each gives back 32
+    /// bytes`: the work the program may split into pieces that run at once, each a run of the
+    /// same program ([`crate::split`]).
+    fn splits_line(&mut self, number: usize, rest: &str) {
+        if self.network.reach.split.is_some() {
+            self.problem(
+                Some(number),
+                "the pieces are given twice; keep one `- Splits:` line",
+            );
+            return;
+        }
+        match crate::split::Grant::read(rest) {
+            Ok(grant) => self.network.reach.split = Some(grant),
+            Err(problem) => self.problem(Some(number), problem),
+        }
+    }
+
+    /// A program that splits its work reads standard input, since a piece gets its bytes
+    /// there, and names no secret: its pieces run at once, beside each other, where one
+    /// piece's work can change how long another's takes.
+    fn check_split(&mut self, uses: &[Use]) {
+        if self.network.reach.split.is_none() {
+            return;
+        }
+        if !uses.contains(&Use::StandardInput) {
+            self.problem(
+                None,
+                "a program that splits its work names `standard input` in its `- Uses:` line: \
+                 a piece gets its bytes as its standard input",
+            );
+        }
+        if self.secrets.is_some() {
+            self.problem(
+                None,
+                "a program that splits its work names no secret: its pieces run at once, and \
+                 lengua doesn't show that a secret in one changes nothing another can time; \
+                 remove the `- Secret:` line or the `- Splits:` line",
+            );
         }
     }
 
@@ -3045,6 +3154,113 @@ impl Parser {
         }
     }
 
+    /// `- Module: main.wasm, built from Rust with rustc for wasm32-wasip1`: the idea's program
+    /// is an outside module, and what the idea says it was built from.
+    fn module_line(&mut self, number: usize, rest: &str) {
+        if let Some(first) = self.outside.as_ref().map(|(line, _)| *line) {
+            self.problem(
+                Some(number),
+                format!(
+                    "the module is named twice (also on line {first}). Keep one `- Module:` line"
+                ),
+            );
+            return;
+        }
+        let file = crate::wasm::outside::FILE;
+        let built_from = rest
+            .trim()
+            .strip_prefix(file)
+            .map(str::trim_start)
+            .and_then(|after| after.strip_prefix(','))
+            .map(str::trim_start)
+            .and_then(|after| strip_prefix_ignore_case(after, "built from "))
+            .map(|words| words.trim().trim_end_matches('.').trim())
+            .filter(|words| {
+                !words.is_empty()
+                    && words.chars().count() <= MAX_BUILT_FROM
+                    && !words.chars().any(char::is_control)
+            });
+        match built_from {
+            Some(words) => {
+                self.outside = Some((
+                    number,
+                    Outside {
+                        built_from: words.to_owned(),
+                    },
+                ));
+            }
+            None => self.problem(Some(number), MODULE_FORM),
+        }
+    }
+
+    /// An outside module's idea says so twice, and the two agree: its frontmatter's
+    /// `computation: main.wasm` and its `- Module:` line. It names no secret, since the secret
+    /// rule reads main.wat, and builds on no part, since a part gives functions of its main.wat.
+    /// `secret` is the `- Secret:` line's line, when the idea has one.
+    fn outside_agrees(&mut self, secret: Option<usize>) {
+        let file = crate::wasm::outside::FILE;
+        let code = crate::state::CODE_FILE;
+        let line = self.outside.as_ref().map(|(line, _)| *line);
+        match (line, self.computation) {
+            (Some(line), Some((_, false))) => self.problem(
+                Some(line),
+                format!(
+                    "the idea has a `- Module:` line, so its program is {file}, an outside \
+                     module, and its frontmatter says so too: write `computation: {file}`; or \
+                     remove the line, for a program that lengua checks and proves as {code}"
+                ),
+            ),
+            (None, Some((key, true))) => self.problem(
+                key,
+                format!(
+                    "the frontmatter says `computation: {file}`, an outside module, so `# \
+                     Constraints` says what it was built from: add `- Module: {file}, built \
+                     from …`, with the language and the compiler; or write `computation: \
+                     {code}`, for a program that lengua checks and proves"
+                ),
+            ),
+            _ => {}
+        }
+        let Some(line) = line else {
+            return;
+        };
+        if self.native {
+            self.problem(
+                Some(line),
+                "`- Module:` is for an idea of `type: Attested Computation`: change the type",
+            );
+        }
+        if let Some(secret) = secret {
+            self.problem(
+                Some(secret),
+                format!(
+                    "an outside module keeps no secret that lengua can check: the secret rule \
+                     reads {code}, and {file} has none. Remove the `- Secret:` line, or compile \
+                     the idea to {code} with the compile skill"
+                ),
+            );
+        }
+        if !self.parts.is_empty() {
+            self.problem(
+                Some(line),
+                format!(
+                    "an outside module builds on no part: a part gives functions of its {code}, \
+                     which {file} can't take. Remove the `- Builds on:` line"
+                ),
+            );
+        }
+        if self.network.reach.split.is_some() {
+            self.problem(
+                Some(line),
+                format!(
+                    "an outside module doesn't split its work: the rules of {code} bound a piece's \
+                     memory, times the pieces, and say that each piece ends, and {file} is held \
+                     to no rule. Remove the `- Splits:` line"
+                ),
+            );
+        }
+    }
+
     /// ``- Secret: standard input, a file `key.txt` and argument `2` ``: the inputs whose values
     /// must not decide how the program runs, several on one line.
     fn secret_line(&mut self, number: usize, rest: &str) {
@@ -3145,8 +3361,11 @@ impl Parser {
         let uses = self.uses.take().unwrap_or_default();
         let syscalls = self.syscalls_for(&uses);
         self.check_network();
+        self.check_split(&uses);
         self.sources_used(&uses);
+        let secret_line = self.secrets.as_ref().map(|(line, _)| *line);
         let secrets = self.secrets_used(&uses);
+        self.outside_agrees(secret_line);
         // STE's problems come last: what the idea says matters before how it says it.
         for (line, message) in std::mem::take(&mut self.prose).finish() {
             self.problem(Some(line), message);
@@ -3165,6 +3384,7 @@ impl Parser {
                 parts: self.parts,
                 links: self.links,
                 attested: self.attested,
+                outside: self.outside.map(|(_, outside)| outside),
             }),
             _ => Err(self.into_problems()),
         }
@@ -4794,6 +5014,80 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
         assert_eq!(idea.behaviors.len(), 2);
         assert!(idea.uses.is_empty());
         assert_eq!(parse(ADD).expect("valid idea").attested, None);
+    }
+
+    /// [`ATTESTED`] as an outside module's idea: its frontmatter names main.wasm, and `line`
+    /// follows its `- Uses:` line.
+    fn outside_idea(line: &str) -> String {
+        attested("computation: main.wat", "computation: main.wasm")
+            .replace("- Uses: nothing", &format!("- Uses: nothing\n{line}"))
+    }
+
+    /// An idea says its program is an outside module twice, in its frontmatter and in a
+    /// `- Module:` line that says what it was built from; a run reads the line alone.
+    #[test]
+    fn an_idea_names_an_outside_module() {
+        let line = "- Module: main.wasm, built from Rust with rustc 1.99 for wasm32-wasip1.";
+        let text = outside_idea(line);
+        let idea = parse(&text).unwrap_or_else(|problems| panic!("{problems:#?}"));
+        let said = Outside {
+            built_from: "Rust with rustc 1.99 for wasm32-wasip1".to_owned(),
+        };
+        assert_eq!(idea.outside, Some(said.clone()));
+        assert_eq!(
+            idea.attested.map(|attested| attested.computation),
+            Some("main.wasm".to_owned())
+        );
+        assert_eq!(outside(&text), Ok(Some(said)));
+        // An idea lengua compiles to main.wat names none.
+        assert_eq!(parse(ATTESTED).expect("valid idea").outside, None);
+        assert_eq!(outside(ATTESTED), Ok(None));
+    }
+
+    /// The two places agree, the line reads one way, and an outside module has no secret and
+    /// builds on no part.
+    #[test]
+    fn an_outside_module_s_idea_is_held_to_its_form() {
+        let line = "- Module: main.wasm, built from C with clang";
+        // The line without the frontmatter's word, and the word without the line.
+        assert_problem(
+            &ATTESTED.replace("- Uses: nothing", &format!("- Uses: nothing\n{line}")),
+            "write `computation: main.wasm`",
+        );
+        assert_problem(
+            &attested("computation: main.wat", "computation: main.wasm"),
+            "add `- Module: main.wasm, built from …`",
+        );
+        for wrong in [
+            "- Module: main.wasm",
+            "- Module: main.wasm, built from",
+            "- Module: other.wasm, built from C with clang",
+            "- Module: built from C with clang",
+            "- Module: main.wat, built from C",
+        ] {
+            assert_problem(&outside_idea(wrong), "an outside module's line reads");
+        }
+        let long = format!("- Module: main.wasm, built from {}", "c".repeat(201));
+        assert_problem(&outside_idea(&long), "an outside module's line reads");
+        assert_problem(
+            &outside_idea(&format!("{line}\n{line}")),
+            "the module is named twice",
+        );
+        assert_problem(
+            &outside_idea(&format!("{line}\n- Secret: argument `1`")),
+            "an outside module keeps no secret that lengua can check",
+        );
+        assert_problem(
+            &outside_idea(&format!(
+                "{line}\n- Splits: its work into up to 8 pieces, each of up to 1024 bytes, each gives \
+                 back 32 bytes"
+            )),
+            "an outside module doesn't split its work",
+        );
+        assert_problem(
+            &outside_idea(&format!("{line}\n- Builds on: [sort](../sort/idea.md)")),
+            "an outside module builds on no part",
+        );
     }
 
     /// `parameters` may be left out: a computation that reads none has none.

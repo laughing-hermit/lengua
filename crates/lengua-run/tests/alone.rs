@@ -637,3 +637,146 @@ fn at_a_terminal_a_program_reads_a_key_and_the_terminal_is_put_back() {
     );
     assert_eq!(mode(), before);
 }
+
+/// The example that splits its work into pieces, and its code.
+const SPLIT_IDEA: &str = include_str!("../../../examples/histogram-split/idea.md");
+
+/// The code of [`SPLIT_IDEA`].
+const SPLIT_CODE: &str = include_str!("../../../examples/histogram-split/main.wat");
+
+/// The program that does the same work on one core, and its code.
+const WHOLE_IDEA: &str = include_str!("../../../tests/fixtures/histogram/idea.md");
+
+/// The code of [`WHOLE_IDEA`].
+const WHOLE_CODE: &str = include_str!("../../../tests/fixtures/histogram/main.wat");
+
+/// `bytes` bytes of every value, the same on every run and every system.
+fn every_value(bytes: usize) -> Vec<u8> {
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    (0..bytes)
+        .map(|_| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            state.to_be_bytes()[0]
+        })
+        .collect()
+}
+
+/// What a histogram of `input` prints: a line for each byte value that occurs, in order.
+fn histogram_of(input: &[u8]) -> Vec<u8> {
+    let mut counts = [0_u64; 256];
+    for byte in input {
+        counts[usize::from(*byte)] += 1;
+    }
+    let mut lines = String::new();
+    for (value, count) in counts.iter().enumerate() {
+        if *count > 0 {
+            lines.push_str(&format!("{value} {count}\n"));
+        }
+    }
+    lines.into_bytes()
+}
+
+impl Checked {
+    /// Runs the program with lengua-run on the file `input` as its standard input, with
+    /// `at_once` pieces of split work at once when given, else one for each core: what it
+    /// gave, and how long the run took on the clock.
+    fn run_on(&self, input: &Path, at_once: Option<usize>) -> (Output, std::time::Duration) {
+        let from = Path::new(env!("CARGO_BIN_EXE_lengua-run"));
+        let program = self
+            .bin()
+            .join(from.file_name().expect("lengua-run's name"));
+        for _ in 0..200 {
+            let mut command = Command::new(&program);
+            command
+                .arg("--data-dir")
+                .arg(self.data.path())
+                .arg(self.folder())
+                .current_dir(self.root.path().join("work"))
+                .env_remove("LENGUA_LOG")
+                .env_remove(lengua::split::AT_ONCE)
+                .stdin(std::fs::File::open(input).expect("the input opens"));
+            if let Some(count) = at_once {
+                command.env(lengua::split::AT_ONCE, count.to_string());
+            }
+            let started = std::time::Instant::now();
+            match command.output() {
+                Ok(output) => return (output, started.elapsed()),
+                Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("lengua-run didn't start: {error}"),
+            }
+        }
+        panic!("lengua-run stayed busy");
+    }
+}
+
+/// A program that splits its work runs from what check compiled, by lengua-run alone, and
+/// gives the same bytes with one piece at a time, with three at once and with one for each
+/// core: the counts of 20 MiB and 5 bytes, which is two buffer-fulls and a part of one, each
+/// split into eight pieces.
+#[test]
+fn split_work_gives_the_same_on_one_core_and_on_many() {
+    let checked = Checked::new(SPLIT_IDEA, SPLIT_CODE);
+    checked.compile();
+    let input = every_value(20 * 1024 * 1024 + 5);
+    let file = checked.root.path().join("input");
+    std::fs::write(&file, &input).expect("the input is written");
+    let expected = histogram_of(&input);
+    for at_once in [None, Some(1), Some(3)] {
+        let (ran, _) = checked.run_on(&file, at_once);
+        assert_eq!(ran.status.code(), Some(0), "{at_once:?}: {}", said(&ran));
+        assert!(ran.stdout == expected, "{at_once:?}: other counts");
+        assert!(
+            said(&ran).contains("it may split its work into up to 8 pieces"),
+            "{at_once:?}: {}",
+            said(&ran)
+        );
+    }
+    // No input is no work, and nothing printed.
+    std::fs::write(&file, b"").expect("the input is written");
+    let (none, _) = checked.run_on(&file, None);
+    assert_eq!(none.status.code(), Some(0), "{}", said(&none));
+    assert!(none.stdout.is_empty());
+}
+
+/// How long the counts of 64 MiB take by lengua-run, the best of seven runs each: the program
+/// that counts on one core (tests/fixtures/histogram), and the one that splits its work
+/// (examples/histogram-split) with one piece at a time, two at once, and one for each core.
+/// The line it prints is what the documents' numbers are read from; it holds only that every
+/// run gives the same counts.
+#[test]
+#[ignore = "a measurement: run alone, by name"]
+fn split_work_is_measured() {
+    let input = every_value(64 * 1024 * 1024);
+    let expected = histogram_of(&input);
+    let whole = Checked::new(WHOLE_IDEA, WHOLE_CODE);
+    whole.compile();
+    let split = Checked::new(SPLIT_IDEA, SPLIT_CODE);
+    split.compile();
+    let file = split.root.path().join("input");
+    std::fs::write(&file, &input).expect("the input is written");
+    let best = |checked: &Checked, at_once: Option<usize>| {
+        let mut least = std::time::Duration::MAX;
+        for _ in 0..7 {
+            let (ran, took) = checked.run_on(&file, at_once);
+            assert_eq!(ran.status.code(), Some(0), "{at_once:?}: {}", said(&ran));
+            assert!(ran.stdout == expected, "{at_once:?}: other counts");
+            least = least.min(took);
+        }
+        least.as_secs_f64() * 1000.0
+    };
+    let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
+    let one_core = best(&whole, None);
+    let one = best(&split, Some(1));
+    let two = best(&split, Some(2));
+    let all = best(&split, None);
+    eprintln!(
+        "split_work_is_measured: {} on {}, {cores} cores: one core {one_core:.1} ms; split, one \
+         piece at a time {one:.1} ms; two at once {two:.1} ms; one for each core {all:.1} ms",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+}

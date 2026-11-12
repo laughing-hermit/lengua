@@ -196,6 +196,7 @@ fn modes(host: &str) -> &'static [usize] {
         "sock_recv" | "sock_send" | "tcp_open" => &[3],
         "file_open" => &[1],
         "term_raw" => &[0],
+        "split" => &[2],
         _ => &[],
     }
 }

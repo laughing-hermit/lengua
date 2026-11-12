@@ -85,7 +85,7 @@ fn about(graph: &Graph, node: &Node, linked: &BTreeSet<PathBuf>, findings: &mut 
     if node.code.is_none() {
         say(
             Severity::Note,
-            format!("{shown} is not built yet: it has no {CODE_FILE}"),
+            format!("{shown} is not built yet: it has no {}", node.code_name),
         );
     }
     if let Some(changed) = node.stale {

@@ -18,7 +18,8 @@ reads the folder's `idea.md` and `main.wat`, then, in order:
    SHA-256 of `idea.md` with its `verified` and `generated` keys left out, and `code`, the
    SHA-256 of `main.wat`;
 2. reads the idea as `check` does: it must parse, be an Attested Computation with no
-   `- Threads:` line, and hold tests that check;
+   `- Threads:` line, and hold tests that check; an idea may split its work with a `- Splits:`
+   line, and a test of a piece runs as a piece;
 3. builds `main.wat` into its WebAssembly module, as [`run`](run.md) does;
 4. checks the module against every rule of lengua's WebAssembly dialect and, for an idea with a
    `- Secret:` line, the secret rule: no value computed from an input the line names decides a
@@ -79,6 +80,56 @@ proofs settle of the rest.
 It writes nothing in the folder or in lengua's data folder: no lock, no `index.md`, no `log.md`
 and no compiled modules. While it runs, it keeps the module and each test's working folder in
 temporary folders, which go when it ends.
+
+## An outside module is never attested
+
+An idea whose frontmatter says `computation: main.wasm`, and whose `# Constraints` has a line
+`- Module: main.wasm, built from …`, names an outside module as its program: a WebAssembly
+module that a compiler made from Rust, C or another language. lengua runs it under the idea's
+grants ([run.md](run.md)) and marks it "trusted, not proven". This page's steps 3, 4 and 6 need
+`main.wat`, so no outside module passes them, and `lengua-mcp check` says so and stops:
+
+```text
+main.wasm: an outside module, which is trusted, not proven: lengua attests an idea and its main.wat, by its rules and its proofs, and holds main.wasm to neither
+not attested
+```
+
+lengua's `check` tool takes such a folder as far as its tests. In place of steps 3 to 6 it:
+
+1. reads `main.wasm`, a regular file of at most 16 MiB, and refuses, with the reason and what to
+   build differently: a module the engine's validator doesn't take with exactly the engine's
+   features (no threads, tail calls, exceptions, 64-bit or multiple memories, GC, relaxed SIMD,
+   wide arithmetic or components); an import that isn't a function of WASI preview 1 or of
+   lengua's own modules with its own type; a function of lengua's own modules that the idea
+   doesn't grant; a memory that isn't exported as `memory`, declares no maximum, or may hold
+   more than 16,384 pages (1 GiB); and a module with no `_start` that takes and gives nothing.
+   `main.wat` beside it is one code file too many, and so is a `# Contract` section, since an
+   outside module offers no function to another program. An idea with a `- Secret:` line, a `- Splits:` line or a
+   `- Builds on:` line is refused at the idea;
+2. runs every test the idea holds against the module, in its workers, as step 5 above;
+3. stamps the module in `lengua.lock`: the stamp's two hashes, of the code file and of the
+   module, are one, and its `engine` line ends with `; an outside module: trusted, not proven`.
+
+It checks no rule of the dialect, proves nothing, and writes no entry in the idea's `verified`
+list. Its reply's `state` is `trusted_not_proven` where `main.wat` gets `done`, and is never
+`proving` or `done`. From the first reply about the module on, the reply's `outside` list says:
+
+- first, `trusted, not proven`, and what the idea says the module was built from, which lengua
+  can't check;
+- a line `not held: …` for main.wat's rules (the memory rules M1 to M8), for bounded loops and
+  no recursion, for the secret rule, and for assertions and the other rules of the Power of 10;
+- `not proven: nothing…`: a generated test shows only the runs it made;
+- `not attested: …`;
+- `held, by lengua's host: …`: it reaches only what its idea grants, its memory stays its own
+  within the pages it declares, its calls stay within the engine's stack, and what it prints
+  and writes has the limits of any program's;
+- the functions of WASI preview 1 it imports that its idea doesn't grant, which the host
+  refuses at each call.
+
+Each line of `proofs` says `not proven`, and the reply has no `memory` line. The bundle's
+`log.md` records `checked: trusted, not proven`. The threat cases an outside module was reviewed
+against, with the test of each, are in
+[docs/reviews/outside-2026-11-12.md](reviews/outside-2026-11-12.md).
 
 ## lengua's entry in `verified`
 

@@ -10,6 +10,7 @@ pub mod contract;
 pub mod engine;
 pub mod host;
 pub mod job;
+pub mod outside;
 pub mod parts;
 pub mod pool;
 pub mod runner;

@@ -13,6 +13,7 @@ mod gate;
 mod golden;
 mod http;
 mod machine;
+mod outside;
 mod plan;
 mod plugin;
 mod release;
@@ -41,6 +42,8 @@ Tasks:
   release [<target>]  this computer's release archive, in dist/
   release-check       the release check, built into dist/check/
   bench-wasm <folder> the bench's C, C++ and Rust compiled to WebAssembly (WASI_SDK)
+  outside-wasm <folder>
+                      the programs of tests/outside compiled to WebAssembly (WASI_SDK)
   bench               the gate against C, C++ and Rust (LENGUA_BENCH_*)
   bench-report <report>
                       the bench's report, in the job's summary
@@ -48,7 +51,8 @@ Tasks:
   golden-diff raw|ledger|runners <base dir> <head dir>
                       the two commits' recordings compared, or the runners' in the head
                       folder with each other, in the job's summary
-  gate                whether the run passed (RESULTS, GOLDEN_DIFF, BENCH_WASM, INSTALL)
+  gate                whether the run passed (RESULTS, GOLDEN_DIFF, BENCH_WASM,
+                      OUTSIDE_WASM, INSTALL)
   help                this list";
 
 fn main() -> ExitCode {
@@ -69,6 +73,7 @@ fn main() -> ExitCode {
         "release" => release::task(rest),
         "release-check" => release::check(rest),
         "bench-wasm" => bench::wasm(rest),
+        "outside-wasm" => outside::wasm(rest),
         "bench" => bench::bench(rest),
         "bench-report" => bench::report(rest),
         "golden-download" => golden::download(rest),

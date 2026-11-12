@@ -22,6 +22,9 @@ pub enum Event {
     Recorded,
     /// It said done: the program passed every test.
     Done,
+    /// It said trusted, not proven: the program is an outside module, which passed every test
+    /// and is held to no rule and no proof.
+    Trusted,
     /// A proof found inputs where the program's code is wrong.
     ProvenWrong,
 }
@@ -33,6 +36,7 @@ impl Event {
         match self {
             Self::Recorded => "recorded",
             Self::Done => "checked: done",
+            Self::Trusted => "checked: trusted, not proven",
             Self::ProvenWrong => "checked: proven wrong",
         }
     }

@@ -114,7 +114,7 @@ The other phrasings were STE already and stay as they are: `the arguments … an
 arguments`, `no standard input`, `empty standard input`, `an empty file`, `no file`, `an empty
 folder`, `the clock at …`, `then …`, `the random bytes … and …`, `a server on port … that
 receives … and replies …`, `at …`, `a client that sends …`, `the clients connect at once`,
-`standard output is closed`, `the program runs`, `it prints …`, `to standard error`, `it prints
+`standard output is closed`, `the program is a piece`, `the program runs`, `it prints …`, `to standard error`, `it prints
 nothing`, `there is no file …`, `there is no folder …`, `there is a folder …` and `it exits with
 code …`. [The test format](test-format.md#the-steps) says what each one gives the program or
 expects of it.

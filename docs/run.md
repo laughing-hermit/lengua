@@ -57,6 +57,30 @@ Any other folder a run refuses, saying why on standard error, and exits with 125
 folder that came from another computer, where this user's key never signed its lock, use
 [`lengua-mcp check`](check.md), or have the agent call `check` on it.
 
+## An outside module
+
+A folder whose idea has a line `- Module: main.wasm, built from …` holds `main.wasm` in
+`main.wat`'s place: a WebAssembly module that a compiler made from Rust, C or another language.
+`check` tested it against the idea's tests and stamped it; it checked no rule and proved nothing
+([check.md](check.md)). Such a folder runs as any other, by the same commands, in the same host,
+under the same grants, with the same limits and exit codes, and with these differences:
+
+- before the program starts, the run says on standard error what it is, in one line that begins
+  `lengua-run: trusted, not proven: main.wasm is an outside module, which its idea says was built
+  from …` (`lengua-mcp:` from `lengua-mcp run`). The `run` tool's reply says the same in
+  `outside`;
+- the module that runs is `main.wasm` itself, byte for byte the file `check` tested, by the
+  SHA-256 its lock records: there is nothing to build. The `run` tool also reads it again as
+  `check` did, with what the idea grants;
+- a trap is named without a line, since there is no `main.wat` to place it on;
+- nothing says the program ends. The `run` tool stops it at its deadline, as it stops any
+  program. A run from a shell has no time limit, for any program, and `main.wat`'s bounded
+  loops are a rule an outside module isn't held to: stop it as any command, with Ctrl-C or a
+  signal, or run it under a timeout of the shell's.
+
+What holds for it is what the next section says, and it holds by the host alone: no call
+reaches anything the idea doesn't grant, whatever the module imports or passes.
+
 ## What the program reaches
 
 Only what its idea's `- Uses:`, `- Network:`, `- Files:` and `- Runs:` lines name:
@@ -127,7 +151,13 @@ Only what its idea's `- Uses:`, `- Network:`, `- Files:` and `- Runs:` lines nam
   system's temporary folder;
 - the terminal's mode and size, with `the terminal`: keys as they're pressed, with no echo.
   lengua puts the terminal back as it was when the program ends, by its exit, a trap, or a
-  signal that ends `lengua-mcp` (Ctrl-C, which still ends the program, among them).
+  signal that ends `lengua-mcp` (Ctrl-C, which still ends the program, among them);
+- more cores, with a `- Splits:` line: the program splits its work into the pieces the line
+  bounds, each a run of the same program with a memory of its own, its share of the bytes as
+  its standard input, and nothing else of what the idea grants. The pieces run at once, one
+  for each core the computer gives the process, and the result is the same on every computer
+  and on every run. `LENGUA_PIECES_AT_ONCE`, 1 to 64, sets how many run at once instead, which
+  changes the time and nothing else. A piece that fails ends the run as it failed.
 
 ## Limits and exit codes
 

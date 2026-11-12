@@ -228,6 +228,9 @@ pub struct Run {
     pub connections: Vec<Made>,
     /// Whether it listed a folder, which a test's second run then lists turned round.
     pub listed: bool,
+    /// Whether it split its work into pieces, which a test's second run then runs one at a time,
+    /// the last first.
+    pub split: bool,
 }
 
 #[cfg(test)]
