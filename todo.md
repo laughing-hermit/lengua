@@ -89,11 +89,11 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
 
 | Point | Now | Left |
 |---|---|---|
-| 1. AI language, Agent Plugin | The WebAssembly plugin: `write-idea`, `compile`, `check`, `run`; `idea.md` an Attested Computation in STE with its tests inside, and `main.wat`; the graph's `index.md` and `log.md`, and `verified` written at `done` (W1, W3, W3b, W6, W9). The native product is retired, kept at the tag (W11, 42713054140). The suite on all five runners at main 33ed7fe, its push run (42947270993) | Loading the plugin into Claude Code itself, the owner's step |
+| 1. AI language, Agent Plugin | The WebAssembly plugin: `write-idea`, `compile`, `check`, `run`; `idea.md` an Attested Computation in STE with its tests inside, and `main.wat`; the graph's `index.md` and `log.md`, and `verified` written at `done` (W1, W3, W3b, W6, W9). The native product is retired, kept at the tag (W11, 42713054140). The suite on all five runners at main 33ed7fe, its push run (42947270993) W22, the scale test, passed with conditions on 2026-11-12: an agent built a web server of 3,638 lines of main.wat on four parts in five check cycles and changed it three times with `check` green ([docs/scale](docs/scale/README.md)) | Loading the plugin into Claude Code itself, the owner's step |
 | 2. One product everywhere | The one suite passes natively on all five runners (42947270993, at 33ed7fe), and so do the slow tests the suite leaves out (42947285372). The goldens hold the WebAssembly checker's and prover's recordings to a baseline, on Linux on x86-64 (42716553289). W17b's run (42919127514) recorded the prover's questions on each of the five runners. On the branch wip/proof-depth, a golden dispatch with `golden_view=runners` records the goldens on each runner and compares them: at 7ad6530 (43022892954) the checker's reports and the model's runs are the same text on all five, and all 161 proof lines have the same verdict on all five, none out of time on one runner alone | The runners view is on wip/proof-depth, not on main yet. The number of questions still differs between runners, which W17b's run showed (Windows on ARM64 asked 10,310 where the others asked about 2,400) and the view doesn't compare: it leaves the counts out |
 | 3. The same bits, each machine's CPU | One set of WebAssembly features on every machine, with NaNs made canonical, so every machine computes the same bits and proofs and tests hold on each; Cranelift compiles each module for the machine's own CPU when a worker first runs it, during `check`'s tests, and Wasmtime's cache keeps it; the `machine` line tells the agent the CPU's vectors and caches (W4, W10, 42386323947) | Nothing: the owner decided on 2026-11-11 that the point is the same bits on every machine, which is what lengua does. The faster sets the engine has, relaxed SIMD and wide arithmetic, stay off: they aren't finished standards, and relaxed SIMD gives different results on different CPUs |
 | 4. Competitive | The gate has run on all five runners five times and passed on none: 42661776298 (W12, at 9a549b3), 42728160641 (W12b, at d6496e3), 42756074550 (W12c, at 076bcc1), 42947294489 (the finish-line run, at 33ed7fe) and 42964232679 (the first with the 5% noise margin the owner decided on 2026-11-11, at cd54e79 on `wip/gate-margin`), whose reports are in [docs/benchmarks](docs/benchmarks/README.md). KNOWN_BEHIND fell from 1,359 rows to 898 (94 off after W12b, 208 after W12c, 20 after the finish-line run, 139 with the margin: 127 level and 12 ahead). It names only rows behind by more than the margin. Of them, against C, C++ and Rust compiled to WebAssembly: 22 on Linux on x86-64, 16 on Linux on ARM64, 16 on macOS on ARM64, 41 on Windows on x86-64 and 41 on Windows on ARM64, peak memory the most common measure among them (114 of the 136). Every native C++ version was built in that run, on all five runners. The run after it, the first with lengua-run (W19; 43084459708 at 45b507b, with 43099764273 for Windows on ARM64), found 137 more rows level or ahead: the list names 761 rows, 24 of them against the WebAssembly builds (4 on Linux on x86-64, 4 on Linux on ARM64, 10 on macOS on ARM64, 3 on each Windows runner). Since 2026-11-11 the other modules make lengua's checks, as any module lengua runs for a user does, and since W23 they run as outside modules: 43131768685 (at 43813ae, with 43145761976 for macOS on ARM64) found 25 more rows level, and 43191148225 (at 610aaf5, all five runners) 3 more, so the list names 733 rows, 14 of them against the WebAssembly builds (the size of upcase-stdin against C's and C++'s modules on every runner, and wc's time against C's and Rust's modules on macOS on ARM64) | **The gate passed on Linux on ARM64 in run 43191148225**, the first pass on any runner, and failed on the other four, on 15 rows behind by more than the margin that the list doesn't name: all against native builds, and every one a row the list named once and can't take back. No row against a WebAssembly build is behind and unnamed on any runner. Against the WebAssembly builds, KNOWN_BEHIND names 14 rows, which point 4 needs gone. A row whose gap sits near 5% can still change sides between runs ("A row the gate can't decide"). Against the native builds, the gaps are published, as the point asks |
-| 5. Safe and proven | The dialect's rules and memory rules over main.wat (W5), proofs on z3 and cvc5 by length and by induction (W8), the secret rule over main.wat (W10), and lengua's host holding a program to what its idea grants, with no OS sandbox around it (W4): the suite on all five runners at 33ed7fe (42947270993). On 2026-11-10 the secret rule was reviewed for soundness and its five findings fixed ([the review](docs/reviews/secret-rule-2026-11-10.md); the suite on all five at 3e08929, 42890372211); the host was reviewed and its eleven holes fixed ([the review](docs/reviews/host-2026-11-10.md); the suite on all five, 42914865765); and W13, the check of the engine's machine code for an idea's secrets, was built, and is on main | Some proofs stay "tested, not proven", so those programs aren't proven or bounded to a length: sorts and tallies over 8 bytes, SHA-256, AES-128, and servers that wait with `poll_oneoff`. What the two reviews and W13 left open is listed under "Still open", each for the owner |
+| 5. Safe and proven | The dialect's rules and memory rules over main.wat (W5), proofs on z3 and cvc5 by length and by induction (W8), the secret rule over main.wat (W10), and lengua's host holding a program to what its idea grants, with no OS sandbox around it (W4): the suite on all five runners at 33ed7fe (42947270993). On 2026-11-10 the secret rule was reviewed for soundness and its five findings fixed ([the review](docs/reviews/secret-rule-2026-11-10.md); the suite on all five at 3e08929, 42890372211); the host was reviewed and its eleven holes fixed ([the review](docs/reviews/host-2026-11-10.md); the suite on all five, 42914865765); and W13, the check of the engine's machine code for an idea's secrets, was built, and is on main | Some proofs stay "tested, not proven", so those programs aren't proven or bounded to a length: sorts and tallies over 8 bytes, SHA-256, AES-128, and servers that wait with `poll_oneoff`. What the two reviews and W13 left open is listed under "Still open", each for the owner. W22 (2026-11-12, passed with conditions) measured what this weighs at size: a server of 3,638 lines whose memory the rules prove and none of whose 25 generated tests is proven ([docs/scale](docs/scale/README.md)) |
 | 6. Truthful documents | README, DESIGN, the white paper, ROADMAP, the plugin's README, docs/run.md and docs/check.md describe the WebAssembly lengua; the native lengua's ledger, sessions and benchmarks are in [docs/history](docs/history); the latest bench run's five reports are in [docs/benchmarks](docs/benchmarks/README.md) (42964232679, the first with the gate's margin), and the documents' numbers are counted from them | The report to the owner (W15) |
 | 7. Shippable | One archive per runner, built by `cargo xtask release` and installed by its own `lengua-mcp install` on a clean runner of each of the five, with doctor and the release check green (at 33ed7fe, 42947303258). The agent's test in the interactive session ran twice: with W14's Linux x86-64 archive (2026-11-07), and with the final one from 42947303258 (2026-11-11). The archives are unsigned | Publishing the archives, which is the owner's |
 
@@ -432,6 +432,78 @@ Still open from it, for the owner:
   ports can't be written yet.
 - **One listener or one UDP port** in a program, and one of each kind at most.
 - **IPv6 for what lengua binds**: the UDP port, as the TCP listener, is IPv4 only.
+
+### W22's scale test: passed with conditions (2026-11-12)
+
+On main since 25d0fdb (2026-11-12). [docs/scale/README.md](docs/scale/README.md) has the summary, the
+measures and the verdict, and [docs/scale/log.md](docs/scale/log.md) every check cycle.
+
+What was built: a web server, `examples/httpd`, of 3,638 lines of main.wat (85 functions, 199
+assertions, an idea of 24 behaviors), on two parts written for it, `examples/json` (561 lines)
+and `examples/http` (930), and on the library's decimal and crc32: 5,129 lines in the three,
+about 4,100 written by hand and 1,040 copied from parts. The largest program before had 544.
+
+What happened:
+- json and http were each `done` at the first check that read their code. httpd broke one
+  rule (rule 7, one place) at its first check and was `done` at its second, all 23 behaviors
+  passing the first time the tests ran. Five cycles in all for the build: three of them
+  stopped at the form of an idea's tests, one at the rule.
+- Three changes, each from the idea down, `check` green after each: HEAD on every route (2
+  cycles, one stopped by rule 9); a bug of the parser, a path in UTF-8 refused (found by
+  reading, not by a test; 1 cycle for the part, 1 for the server); the reading of numbers and
+  of the Range field moved from the server into the part http (1 cycle).
+- No test failed in any cycle, and no text failed to build.
+
+The verdict, **passed with conditions**, and the conditions:
+1. **What is proven does not grow with the program.** None of httpd's 25 generated tests is
+   proven (`a server's wait on poll_oneoff`). Its memory is: the rules follow every address.
+   The parts' own programs are proven (http 12 of 14 for every input in range, json 6 of 10),
+   and a part's proof is not the server's.
+2. **The agent used tools the product doesn't give**: a count of rule 4's operators, and the
+   places of 54 literal texts computed with `awk`. One changed text moved 90 numbers.
+3. **The idea was the harder text to keep right**: three of the build's five cycles.
+4. **One agent, one session, 3,600 lines**: nothing here shows a later session or 30,000.
+
+What it points to, in the order the evidence gives: ideas in parts is what worked, and its
+limits are next (a part that brings data, a contract with a size in it, a part's proof used
+where its function is taken); modules linked by `check` would save the copies and the parts'
+181 s before each check; a higher-level text is not needed for code, only names for data
+whose places `check` computes. The next milestone should buy proof: a server's behavior
+proven, or a part's proof carried.
+
+Its runs, each a dispatch of ci.yml on the branch, on Linux on x86-64 unless it says more:
+- The build's five cycles: 43162164513; 43166298467 and 43166302283; 43170808554 and
+  43170812099; 43175796873; 43180086861 (httpd `done`, 254 test runs, at 4d24d80).
+- The changes: 43186041980 (HEAD, refused by rule 9), 43186160469 (http with the path in
+  UTF-8, `done`), 43191117225 (httpd with HEAD and the path, `done`, 290 test runs),
+  43197275115 and 43197280226 (the refactor: http `done` with 463 test runs, httpd `done`
+  with 290, at 12a8e4b).
+- 43197373671 (the mutants of json, http and httpd, at 734c729): 24 mutants, 16 failed a
+  test, 6 broke a rule, 2 of the parts' were tested and not all proven, none survived.
+- 43202341879 (the suite on all five systems, at 6d36aae, with main's 42507ef merged in):
+  cancelled by the next dispatch, after the format job and the tests on Linux on x86-64 and on
+  ARM64 had passed.
+- 43209854658 (the suite on all five systems, at b649eab, with main's 77835f0 merged in):
+  format, the five test jobs and the gate passed, on Linux on x86-64 and ARM64, macOS on
+  ARM64 and Windows on x86-64 and ARM64. The suite takes httpd, http and json from their
+  requests to done with every other program. What came after it is this record alone, which
+  a compile run holds (43223835886, at 4b253d2).
+- 43224575949 (the suite on all five systems again, at 94db5ed, with main's b34d2eb merged
+  in, a merge with no conflict): format, the five test jobs and the gate passed on the same
+  five. The record's last lines, written after it, are held by a compile run.
+
+Still open from it, for the owner:
+- **A server is tested, not proven**, at any size; W22 shows what that weighs.
+- **`check` has no count of operators and reports an idea's problems a kind at a time.**
+- **A text's place is a number in the code.** A name for a text, with its place and length
+  computed by `check`, would take away the one tool the agent could not work without.
+- **The skills' missing pages**: the ten rows of "Where the skills were silent" in the
+  summary.
+- **The mutation test takes 8 mutants a program**, which is one in 455 lines of httpd.
+- **`$http_number` takes 18 digits where `$decimal_parse` took 19**, so a Content-Length of
+  19 digits gets 400 and not 413 since the refactor; no test sees it.
+- **A request that is refused before its method is known keeps its body when the method was
+  HEAD**, and the server closes without waiting for what a client still sends.
 
 ### W21's parts: functions a program takes, already checked (2026-11-11)
 
@@ -1851,6 +1923,13 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
       ideas in parts, modules linked by `check`, or a higher-level text that compiles to
       WebAssembly under the same host, grants and prover. Rust in place of WebAssembly is not
       among them: it gives up the grants and the proofs.
+    - **Run on 2026-11-12: passed with conditions.** A web server of 3,638 lines of main.wat
+      on four parts, built in five check cycles and changed three times with `check` green;
+      no test failed and two rules were broken in about 4,100 lines written by hand. The
+      conditions: none of the server's tests is proven, the agent needed a count of operators
+      and computed places for its texts, the idea was the harder text to keep right, and it
+      was one agent in one session. The record is in "W22's scale test" under "Still open",
+      and in [docs/scale](docs/scale/README.md).
   - **W23. Working with other code.** A lengua program can't call a C or Rust library, and no
     other program can call it but as a command. W23 gives both ways, each declared in the idea:
     a lengua program as a library other languages call (its module with a stated interface, and
