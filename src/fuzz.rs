@@ -410,6 +410,7 @@ fn written_lock() -> Vec<u8> {
             max_stack_bytes: 64,
             unsafe_blocks: 0,
             features: vec!["bulk-memory".into(), "simd".into()],
+            parts: Vec::new(),
         }),
         proofs: Some(Box::new(ProofStamp {
             module_sha256: Sha256Hex::of(b"module"),

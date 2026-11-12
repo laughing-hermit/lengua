@@ -44,8 +44,9 @@ done; never edit lengua.lock; run programs only with `run`.
 1. The idea: idea.md parses, its tests check, it is an Attested Computation with no `- Threads:`
    line, its parts exist and no `- Builds on:` link closes a cycle. Then it is recorded in the
    lock with the user's words.
-2. The code: main.wat builds, the functions it copies from its parts match them, and it follows
-   every rule.
+2. The code: main.wat builds, each function it takes from a part is the part's own, with the
+   constants it reads ([Parts](#parts)), it follows every rule, and, for a part, its contract
+   is what the rules find.
 3. The tests, then the proofs, in a background job for the folder, keyed by the hashes of its
    files. A `check` on changed files cancels the old job.
 
@@ -108,9 +109,13 @@ key, OKF's `tags`, `sources`, `generated` and `verified` among them, is kept and
     last, and `, within N seconds` for its time. Never a shell. At most 16.
   - `- Secret:` the inputs whose values must not decide how it runs: standard input, a named file,
     an environment variable or an argument.
-  - `- Builds on:` links to the idea.md of each part it is made from.
+  - `- Builds on:` links to the idea.md of each part it takes functions from.
   - `- Threads:` still parses, so that `check` can refuse it: a WebAssembly program runs as one
     thread.
+
+- `# Contract`, for a part: each function the idea offers to the programs that build on it,
+  with what it reads and writes through the addresses it is lent ([Parts](#parts)). The idea
+  parser leaves the section to `check`'s code stage, which holds it to main.wat.
 
 ### Wording
 
@@ -162,7 +167,7 @@ so a module the validator takes is one the engine runs.
 A build keeps, for each operator of main.wat's own functions, its offset in the module and its
 line in main.wat, so a trap, the validator's complaint or a failed assertion names the line. The
 module that runs carries no name section. A function written under a `;; from: <part>` line
-must match the part's function word for word, comments and spacing aside (`src/wasm/parts.rs`).
+must be the part's function word for word, comments and spacing aside ([Parts](#parts)).
 
 `BUILDER` names a build: a hash of lengua's version, the build's source, the library and
 Cargo.lock, which pins `wast` and the encoder exactly. `check` keeps each module whose tests passed
@@ -171,6 +176,98 @@ runs is held to the module hash in the signed lock.
 
 `lengua-mcp wasm <main.wat> [-o <file>]` writes the module, with no rules, tests or lock: a plain
 WASI preview 1 module, which any WASI runtime runs when it reaches only standard streams and files.
+
+## Parts
+
+A part is a program whose idea offers some of its functions to other programs (W21;
+`src/wasm/contract.rs`, `src/wasm/parts.rs`, `src/server/parts.rs`). It is a program folder like
+any other, with its own behaviors, tests and proofs, and one more section in its idea.md:
+
+```markdown
+# Contract
+- `$decimal_parse`: reads 20 bytes at `$at`; writes 8 bytes at `$into`. It gives 0, or 28 when
+  the text is not a number.
+```
+
+An item is a function's name, then its clauses up to the first full stop: `reads N bytes at` a
+parameter, `writes N bytes at` a parameter, or `uses no memory`. The words after the full stop
+are the idea's own. The clauses are what the memory rules compute for every function anyway: how
+far it reaches through each address a parameter lends it, and whether it writes there. `check`
+holds the two to each other, and refuses a part whose contract says another parameter, another
+number of bytes, or `reads` where main.wat writes; so does the attester. A contract offers only
+a function a program can take: one the part defines itself, that names no region and no global
+that changes, names functions and globals by `$name`, and calls no function of the part that the
+contract doesn't offer too. Such a function's result depends only on its arguments, the bytes it
+is lent and the host.
+
+A program builds on a part by copying. Its idea names the part (`- Builds on:`), the part's
+folder stands in the same bundle, and main.wat holds each function it takes under a
+`;; from: <part>` line. At every check, before anything runs, `check` holds main.wat to its
+parts, and refuses it with `code_problems` unless:
+- each part is checked on this computer (its lock records its idea.md and its main.wat as they
+  are), has a contract, and has no proof that found it wrong;
+- each function under a `;; from:` line is the part's function of that name, word for word,
+  comments and spacing aside, and the part's contract offers it;
+- each constant the function reads is in main.wat exactly as the part defines it, each function
+  of the part that it calls is taken from the part too, and each host function it calls is
+  imported exactly as the part imports it;
+- each `;; from:` line names a part the idea builds on, and main.wat takes something from every
+  part the idea builds on.
+
+The check is on main.wat's text, field by field, and runs again on every `check`, since a job on
+the same two files may be older than a change to a part. A part that changed is no longer
+checked, so the program is refused until the part is checked again and its functions copied
+again.
+
+**The mechanism, and why.** main.wat stays the one text lengua builds, checks, tests, proves and
+runs: nothing is linked, and the module that runs is built from main.wat alone. So each
+guarantee is stated once, of main.wat, as before: every rule, the memory rules and the secret
+rule among them, goes through a taken function as through any other, and the tests and the
+proofs run it as the program calls it. What a part adds is one statement: a function under a
+`;; from:` line is the function the part's own tests and proofs ran, with the same constants
+and the same callees. Linking modules would have needed a second artifact, a linker lengua
+trusts, and rules that cross a module's edge (todo.md's decisions).
+
+**The memory rules at the boundary.** A taken function is checked where it is called: the
+caller's region must hold every byte the function may reach through the address it is lent
+(M2), a read-only region can't be lent to a function that writes (M6), and no two arguments
+name bytes one of which the function writes (M4). A contract's numbers are those same reaches,
+so a program that lends less room than the contract states is refused, with the call's line.
+What a function's other arguments must be, such as a length of at most 4096, the function
+checks itself, with an assertion.
+
+**The proofs.** A part's proofs are of the part's own program, for the inputs its idea gives.
+The prover doesn't use them in a program built on the part: it follows each taken function
+again, in the program's own module, for the program's generated tests. Using a part's contract
+in place of its body would need the contract to state what the function computes, as a formula
+the prover holds the body to once, for every argument and every memory it may be lent; the
+contract states only what it reaches, and the part's proofs cover only the calls the part's
+program makes. So a program's `proofs` say what holds of it, the taken functions included, and
+its `parts` lines say what each part's own lock records, as evidence about the function, not as
+a proof of the program.
+
+lengua.lock records the parts with the code: each part's folder, lengua's hash of its idea.md,
+the SHA-256 of its main.wat, and the functions taken. The record is of the parts as they were
+when the program's tests passed, and a run holds the parts to it: `run`, `lengua-mcp run` and
+lengua-run read each recorded part's idea.md and main.wat and refuse the program when one
+changed or is gone. `check` then says what to do, and once the part is checked again it
+stamps the program again with the part as it is.
+
+**The library.** lengua ships five parts, in the compile skill's `assets/parts`, and holds
+the same files in `examples/`, where the suite and the golden ledger take them with every other
+program: `decimal` (`$decimal_parse`, `$decimal_format`), `lines` (`$lines_read`, `$lines_end`),
+`crc32` (`$crc32_update`), `bytes` (`$bytes_equal`) and `sort64` (`$sort64`). lengua-mcp carries
+their text, so `check` says of a part whether it is the library's, unchanged. A library part is
+checked on the user's computer like any other part; lengua trusts no part for being its own.
+`examples/sum` and `examples/checksums` are built on them. Their limits are fixed: a function
+reaches a fixed number of bytes whatever length it is given, so each part states the most it
+takes: 20 bytes for a number, 4096 for a text and 256 numbers for a sort. The library's
+assertions are numbered from 800, each part its own.
+
+How far each is proven, by its own program on lengua's runners (todo.md has the runs): `decimal`,
+`lines` and `bytes` for every input in their ideas' ranges; `sort64` for two numbers, with three
+tested; `crc32` for a text of 2 characters in five minutes, and tested beyond. `examples/sum` is
+proven for every input in its range, and `examples/checksums` as far as crc32.
 
 ## The rules
 
@@ -788,7 +885,9 @@ fingerprint over the idea's and the code's hashes, once code is stamped; `[reque
 words (at most 6 a build, the first and the latest, each at most 2,000 characters) and the idea's
 hash when the build began; `[idea]`, idea.md's hash; `[code]`, main.wat's SHA-256, the module's,
 the engine (`wasmtime 50.0.1`), the deepest stack the rules count, the unsafe blocks, the target
-`webassembly` and the features used beyond WebAssembly 1.0; `[proofs]`, about that module: the
+`webassembly`, the features used beyond WebAssembly 1.0 and, for a program built on parts, each
+part with the hashes of its idea.md and its main.wat and the functions taken ([Parts](#parts);
+the line is written only then, so a lock without parts is as it was); `[proofs]`, about that module: the
 proven, the bounded with their lengths, the solvers, the wrong and the unproven with why; and the
 signature, an HMAC-SHA256 of every byte before it, keyed with the user's key.
 
@@ -846,6 +945,8 @@ isn't read. lengua.lock is read the same way, within its own 64 KiB.
   tests_failed, with what the proof found and that the lock doesn't record it, where `run`
   refuses;
 - the working folder, for a program that uses files, is none of lengua's own or the system's;
+- each part the lock records with the code is still the part it records, by the hashes of its
+  idea.md and its main.wat ([Parts](#parts));
 - environment variables are given only to an idea that uses the environment;
 - what runs is the module `check` tested. The `run` tool builds main.wat again and compares the
   build's SHA-256 with the lock's. A shell's run loads that module's compiled form, which is kept
@@ -867,7 +968,9 @@ checks every rule; runs every test in workers of its own, from a fresh seed; and
 else passed and the entry names both files, proves each generated test within 300 seconds, the
 model held to 24 sample runs. A proof that doesn't finish leaves the folder attested; a confirmed
 wrong one doesn't. It prints its lines, then `attested` (exit 0) or `not attested` (exit 1). It
-doesn't check the parts an idea builds on, which `check` does, and it can't prove further.
+holds a part's contract to its main.wat, as `check` does. It doesn't hold main.wat to the parts
+an idea builds on, which only `check` does, on the computer where they are checked, and it
+can't prove further.
 
 ## The knowledge graph
 
@@ -903,7 +1006,9 @@ tools capability only: no resources and no prompts (`src/server.rs`). Logs go to
 `check` takes `path`, the absolute path of the program folder; `request`, the user's own words,
 at most 2,000 characters; and `prove_further`. Its reply holds the `state` and `next_step`, and
 only when they say something: `problems`, `machine` (while the code isn't written: the engine,
-the CPU's vectors and caches, and the features main.wat may use), `tests`, `proofs`, `memory`,
+the CPU's vectors and caches, and the features main.wat may use), `tests`, `proofs`, `parts` (each
+part the program builds on, with the functions taken and what the part's lock records of its
+proofs), `contract` (for a part, each function it offers), `memory`,
 `example` (the idea's first example as the tests ran it), `performance`, `changes` (the requests,
 how idea.md changed, and lengua's list of test changes that test less), `shell` and `graph`. Words
 given with an idea that still has problems are held for that folder and recorded once it checks;
@@ -1096,6 +1201,11 @@ listed below.
 - **A lock that isn't lengua's.** A lock lengua didn't write, or one changed outside lengua, fails
   its HMAC with the user's key, and `run` refuses the folder. So does a lock of another layout, a
   format lengua doesn't read, or proofs about another module.
+- **A function that isn't the part's.** A function main.wat says it takes from a part is held to
+  that part at every check: its text, the constants it reads and the functions it calls. A part
+  that changed, has no contract, or that a proof found wrong is refused, and so is the program
+  built on it. lengua trusts no part for being in its library: each is checked on the computer
+  that builds on it.
 - **A build that isn't what was checked.** `run` runs only the module whose SHA-256 the signed lock
   records: the `run` tool builds main.wat again and compares, and a shell's run loads the compiled
   form the user's key sealed as that module. An idea or code changed since the record, a module

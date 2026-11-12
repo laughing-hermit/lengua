@@ -17,13 +17,14 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
+use super::parts;
 use super::{
     BlockProof, CheckParams, CheckReport, Checking, ConnectionReport, FURTHER, Found, IdeaStage,
     LenguaServer, Model, Passed, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun, Stage,
     VERIFIED_NOTE, Witness, already_serving, background_limits, check_wait, cost_line, counted,
     ended_report, idea_problems, keep_tested, may_reach, own_folder_problem, own_folders,
     proof_time, proven_detail, random_seed, reaches, read_optional, settled, state_for_run,
-    state_of, wait_for, working_folder,
+    wait_for, working_folder,
 };
 use crate::checker::{
     self,
@@ -50,7 +51,7 @@ use crate::wasm::engine::{self, Setup};
 use crate::wasm::job::{Connection, Made};
 use crate::wasm::runner::{Here, On, Order, Source, run_once_checked};
 use crate::wasm::text::{self, Built};
-use crate::wasm::{Policy, Pool, Program, Spec, parts};
+use crate::wasm::{Policy, Pool, Program, Spec};
 
 /// The exit code `lengua-mcp run` gives a program that trapped: an abort's, 128 and SIGABRT's 6,
 /// as WebAssembly runtimes give on a Unix, here on every system.
@@ -476,102 +477,11 @@ pub(super) struct WasmCode {
     unsafe_blocks: usize,
     /// What the rules leave to the proofs.
     obligations: Vec<Obligation>,
+    /// The parts main.wat takes functions from, as lengua.lock records them.
+    parts: Vec<lock::PartStamp>,
     /// For an idea with a `- Secret:` line, what the check of the engine's machine code read on
     /// this CPU, in one line.
     machine_code: Option<String>,
-}
-
-/// What keeps main.wat from building on its idea's parts: a part that isn't checked on this
-/// computer or has no main.wat, a function taken from one that isn't its current code word for
-/// word, a function that names a part the idea doesn't build on, and a part the idea builds on
-/// that main.wat takes nothing from.
-fn parts_problems(
-    data_dir: &DataDir,
-    folder: &ProgramFolder,
-    idea: &Idea,
-    code: &str,
-) -> Vec<String> {
-    let mut problems = Vec::new();
-    let mut used: Vec<&idea::Part> = Vec::new();
-    let mut checked: Vec<String> = Vec::new();
-    for function in parts::functions(code) {
-        let Some(from) = &function.from else {
-            continue;
-        };
-        let wanted = idea::folder_of_link(from);
-        let Some(part) = idea.parts.iter().find(|part| part.folder() == wanted) else {
-            problems.push(format!(
-                "{CODE_FILE}'s ${} says `;; from: {from}`, a part {IDEA_FILE} doesn't build \
-                 on: add `[{wanted}]({wanted}/idea.md)` to its `- Builds on:` line, or drop the \
-                 line",
-                function.name
-            ));
-            continue;
-        };
-        if !used.contains(&part) {
-            used.push(part);
-        }
-        // The part's own path, `..` resolved, as a program folder takes it.
-        let joined = folder.path().join(part.folder());
-        let part_folder = std::fs::canonicalize(&joined).unwrap_or(joined);
-        let shown = part_folder.display().to_string();
-        if !checked.contains(&part.idea) {
-            checked.push(part.idea.clone());
-            let ready = part_folder
-                .to_str()
-                .and_then(|path| super::folder_of(path).ok())
-                .and_then(|part_folder| state_of(data_dir, &part_folder).ok())
-                .is_some_and(|state| state == State::Ready);
-            if !ready {
-                problems.push(format!(
-                    "the part [{}]({}) isn't checked on this computer: call check with path \
-                     {shown} until it's done, then check this program",
-                    part.name, part.idea
-                ));
-                continue;
-            }
-        }
-        let Ok(Some(theirs)) = crate::state::read_text(&part_folder.join(CODE_FILE)) else {
-            problems.push(format!(
-                "the part [{}]({}) has no {CODE_FILE}: {CODE_FILE} takes functions only \
-                 from parts in WebAssembly; make the part an Attested Computation compiled to \
-                 {CODE_FILE} and call check with path {shown} until it's done, or write ${} \
-                 in {CODE_FILE} yourself, without its `;; from:` line, and drop the part \
-                 from `- Builds on:`",
-                part.name, part.idea, function.name
-            ));
-            continue;
-        };
-        match parts::functions(&theirs)
-            .into_iter()
-            .find(|their| their.name == function.name)
-        {
-            None => problems.push(format!(
-                "{CODE_FILE}'s ${} says `;; from: {from}`, but {shown}/{CODE_FILE} has \
-                 no ${}: take it from the part under the name it has there",
-                function.name, function.name
-            )),
-            Some(their) if their.body != function.body => problems.push(format!(
-                "{CODE_FILE}'s ${} differs from {shown}/{CODE_FILE}'s, where it comes \
-                 from: copy it again word for word, keeping its `;; from: {from}` line",
-                function.name
-            )),
-            Some(_) => {}
-        }
-    }
-    for part in &idea.parts {
-        if !used.contains(&part) {
-            problems.push(format!(
-                "{IDEA_FILE} builds on [{}]({}), but {CODE_FILE} takes nothing from it: copy \
-                 each function it uses with a `;; from: {}` line above it, or drop the part from \
-                 `- Builds on:`",
-                part.name,
-                part.idea,
-                part.folder()
-            ));
-        }
-    }
-    problems
 }
 
 /// A file's text from the bytes a read kept, `bytes`: `None` when the file wasn't there.
@@ -726,6 +636,11 @@ fn runnable(
         .code
         .as_ref()
         .ok_or_else(|| format!("{CODE_FILE} isn't checked; call check with path {folder}."))?;
+    // The parts main.wat takes from, as the lock records them: a part that changed since is no
+    // longer the part check held main.wat to.
+    if let Some(problem) = parts::changed_since(folder, &stamp.parts) {
+        return Err(problem);
+    }
     // What a proof found wrong outlasts lengua's restarts: lengua.lock records it.
     if let Some(proofs) = &lock.proofs
         && proofs.module_sha256 == stamp.module_sha256
@@ -1156,9 +1071,16 @@ impl LenguaServer {
         let idea_hash = trust::idea_hash(idea_text.as_bytes());
         let files = [idea_hash, Sha256Hex::of(code.as_bytes())];
         let prove_further = params.prove_further;
-        let checking = match self.current_checking(folder, &files, prove_further).await {
+        let builds_on = idea.parts.clone();
+        // A job on these very files stands only while the lock records the parts as they are
+        // now: after a part was checked again, the code is stamped again with it.
+        let current = match self.current_checking(folder, &files, prove_further).await {
+            Some(checking) if self.parts_as_stamped(folder, &builds_on, &code) => Some(checking),
+            _ => None,
+        };
+        let checking = match current {
             Some(checking) => checking,
-            None => match self.wasm_code(folder, &code, idea, suite) {
+            None => match self.wasm_code(folder, idea_text, &code, idea, suite) {
                 Ok(code) => {
                     self.start_wasm_checking(folder, files, code, prove_further)
                         .await
@@ -1172,6 +1094,18 @@ impl LenguaServer {
                 }
             },
         };
+        // The parts as they are now: a job on these very files may be older than a change to a
+        // part, and main.wat's copy must be the part's own at every check.
+        let taken = match parts::taken(&self.data_dir, folder, &builds_on, &code) {
+            Ok(taken) => taken,
+            Err(problems) => {
+                return Ok(CheckReport::problems(
+                    "code_problems",
+                    problems,
+                    fix_code(folder),
+                ));
+            }
+        };
         wait_for(&checking, began + check_wait()).await;
         if *checking.stage.borrow() == Stage::Ended {
             self.verify_once_passed(folder, &checking).await;
@@ -1184,6 +1118,8 @@ impl LenguaServer {
             report = self.checking_report(folder, &checking);
             report.next_step = report.next_step.replace(VERIFIED_NOTE, "");
         }
+        report.parts = parts::lines(&taken);
+        report.contract = parts::contract_lines(idea_text);
         let proven_wrong = checking.found.lock().is_ok_and(|found| found.wrong);
         if report.state == "done" {
             events.push(graph::Event::Done);
@@ -1193,20 +1129,41 @@ impl LenguaServer {
         Ok(report)
     }
 
+    /// Whether lengua.lock records the parts main.wat, `code`, takes from as they are now, or
+    /// doesn't record this main.wat yet, or main.wat doesn't hold to its parts, which the check that
+    /// follows says.
+    fn parts_as_stamped(
+        &self,
+        folder: &ProgramFolder,
+        builds_on: &[idea::Part],
+        code: &str,
+    ) -> bool {
+        let Ok(taken) = parts::taken(&self.data_dir, folder, builds_on, code) else {
+            return true;
+        };
+        let stamped = Key::load(&self.data_dir)
+            .ok()
+            .flatten()
+            .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
+            .and_then(|lock| lock.code);
+        let current = Sha256Hex::of(code.as_bytes());
+        stamped
+            .filter(|stamp| stamp.sha256 == current)
+            .is_none_or(|stamp| stamp.parts == parts::stamps(&taken))
+    }
+
     /// main.wat's `code` built, held to its parts and checked against every rule of the
     /// WebAssembly dialect, ready for its tests; or what's wrong, each on its line.
     fn wasm_code(
         &self,
         folder: &ProgramFolder,
+        idea_text: &str,
         code: &str,
         idea: Idea,
         suite: TestSuite,
     ) -> Result<WasmCode, Vec<String>> {
         let built = text::build(code).map_err(|problem| vec![problem.to_string()])?;
-        let from_parts = parts_problems(&self.data_dir, folder, &idea, code);
-        if !from_parts.is_empty() {
-            return Err(from_parts);
-        }
+        let taken = parts::taken(&self.data_dir, folder, &idea.parts, code)?;
         let context = checker::wasm::Context {
             uses: &idea.uses,
             network: &idea.network,
@@ -1215,6 +1172,11 @@ impl LenguaServer {
         let report = checker::wasm::check(code, &built, &context);
         if !report.passed() {
             return Err(report.lines());
+        }
+        // A part's contract, held to what the rules found of the functions it offers.
+        let stated = parts::contract_problems(idea_text, code, &report.lends);
+        if !stated.is_empty() {
+            return Err(stated);
         }
         // An idea with a `- Secret:` line: the code the engine compiles the module to on this
         // CPU, as `run` and a run from a shell compile it, keeps the secret rule too. An idea
@@ -1245,6 +1207,7 @@ impl LenguaServer {
             max_stack_bytes: report.facts.max_stack_bytes,
             unsafe_blocks: report.unsafe_blocks.len(),
             obligations: report.facts.obligations.clone(),
+            parts: parts::stamps(&taken),
             machine_code,
         })
     }
@@ -1364,6 +1327,7 @@ impl LenguaServer {
             max_stack_bytes: code.max_stack_bytes,
             unsafe_blocks: u32::try_from(code.unsafe_blocks).unwrap_or(u32::MAX),
             features: code.features.clone(),
+            parts: code.parts.clone(),
         };
         if let Err(error) = self.stamp_code(folder, &idea_hash, stamp).await {
             return fail(vec![error]);
@@ -1813,6 +1777,15 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     lines.push(format!(
         "{CODE_FILE}: follows every rule of lengua's WebAssembly dialect"
     ));
+    // A part's contract, held to what the rules found of the functions it offers.
+    let stated = parts::contract_problems(&idea_text, &code, &report.lends);
+    if !stated.is_empty() {
+        lines.extend(stated);
+        return false;
+    }
+    for offered in parts::contract_lines(&idea_text) {
+        lines.push(format!("{IDEA_FILE}: its contract holds: {offered}"));
+    }
     // An idea that names a secret: the code the engine compiles the module to on this computer
     // keeps the secret rule too, compiled here with nothing kept.
     if !idea.secrets.is_empty() {

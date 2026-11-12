@@ -14,7 +14,7 @@ use std::process::{Command, Output};
 
 use lengua::data_dir::DataDir;
 use lengua::hash::Sha256Hex;
-use lengua::lock::{self, CodeStamp, IdeaStamp, Key, Lock, RequestStamp};
+use lengua::lock::{self, CodeStamp, IdeaStamp, Key, Lock, PartStamp, RequestStamp};
 use lengua::wasm::engine::{self, Setup};
 
 /// The add program's idea.
@@ -92,6 +92,7 @@ impl Checked {
                 max_stack_bytes: 0,
                 unsafe_blocks: 0,
                 features: engine::features_used(&wasm),
+                parts: Vec::new(),
             }),
             proofs: None,
         };
@@ -326,6 +327,57 @@ fn every_check_of_a_run_holds() {
     let sum = checked.run(&["2", "3"]);
     assert_eq!(sum.stdout, b"5\n", "{sum:?}");
     assert_eq!(sum.status.code(), Some(0), "{sum:?}");
+}
+
+/// A program built on a part runs only while the part is what lengua.lock records: with the
+/// part's main.wat or its idea.md changed since check held main.wat to it, or the part gone,
+/// lengua-run refuses the run, as `lengua-mcp run` does, and with the part as it was it runs.
+#[test]
+fn a_program_runs_only_while_its_parts_are_as_recorded() {
+    const PART_IDEA: &str = "---\ntitle: decimal\n---\n# Purpose\nA part.\n";
+    const PART_CODE: &str = "(module)\n";
+    let checked = Checked::new(IDEA, CODE);
+    checked.compile();
+    let folder = checked.folder();
+    let part = checked.root.path().join("decimal");
+    std::fs::create_dir_all(&part).expect("the part's folder");
+    std::fs::write(part.join("idea.md"), PART_IDEA).expect("the part's idea.md");
+    std::fs::write(part.join("main.wat"), PART_CODE).expect("the part's main.wat");
+    let mut recorded = lock::read(&folder, Some(&checked.key))
+        .expect("a valid lock")
+        .expect("a lock");
+    recorded.code.as_mut().expect("the code's stamp").parts = vec![PartStamp {
+        part: "../decimal".to_owned(),
+        idea: lengua::trust::idea_hash(PART_IDEA.as_bytes()),
+        code: Sha256Hex::of(PART_CODE.as_bytes()),
+        functions: vec!["decimal_format".to_owned()],
+    }];
+    lock::write(&folder, &recorded, &checked.key).expect("lengua.lock");
+    let runs = || {
+        let sum = checked.run(&["2", "3"]);
+        assert_eq!(sum.stdout, b"5\n", "{sum:?}");
+        assert_eq!(sum.status.code(), Some(0), "{sum:?}");
+    };
+    let changed = "that part isn't what it was when check held main.wat to it";
+    runs();
+    std::fs::write(part.join("main.wat"), "(module (memory 1))\n").expect("main.wat");
+    refused(
+        &checked.run(&["2", "3"]),
+        changed,
+        "the part's main.wat changed",
+    );
+    std::fs::write(part.join("main.wat"), PART_CODE).expect("main.wat");
+    runs();
+    std::fs::write(part.join("idea.md"), format!("{PART_IDEA}More.\n")).expect("idea.md");
+    refused(
+        &checked.run(&["2", "3"]),
+        changed,
+        "the part's idea.md changed",
+    );
+    std::fs::write(part.join("idea.md"), PART_IDEA).expect("idea.md");
+    runs();
+    std::fs::remove_dir_all(&part).expect("take the part away");
+    refused(&checked.run(&["2", "3"]), changed, "the part gone");
 }
 
 /// A program whose calls go deeper than the stack the engine gives it traps, on the thread

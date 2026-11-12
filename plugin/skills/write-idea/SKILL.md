@@ -250,15 +250,15 @@ by one concrete example in its steps, and its generated tests try that rule with
   all of it at once, such as a sort, states a generous limit, such as `1073741824` bytes: its
   memory costs nothing until it's used, and the tests and proofs still try smaller inputs, given
   in backticks of their own.
-- **Programs built from programs:** a program can build on others, each a folder with its own
-  idea.md and code, linked as a graph is: `- Builds on: [sort lines](../sort/idea.md)` under
-  `# Constraints`, each part by a path relative to this idea. Build on a part when the program
-  needs what another program already does, such as sorting, parsing numbers or a hash table,
-  rather than doing it again. A part is a whole program, with its own behaviors and tests: a
-  library, such as a hash table, is specified through a small program that uses it, so the same
-  steps test it. Keep the parts in sibling folders, in one bundle. Each part is written,
-  compiled and checked on its own, before the programs that build on it. A cycle of
-  `- Builds on:` links, such as a part that builds on the program, blocks every program in it.
+- **Programs built from parts:** look for a part before you specify what a program does for
+  itself. lengua's library is in the compile skill's `assets/parts` (`decimal`, `lines`, `crc32`,
+  `bytes`, `sort64`), each a folder with its own idea.md and code; a program of the user's can be a
+  part too. Put the part's folder beside the program's, in one bundle, and name it under
+  `# Constraints`, by a path relative to this idea: `- Builds on: [decimal](../decimal/idea.md)`.
+  A part's `# Contract` section says what each function it offers reads, writes and gives, with
+  its limits: take those limits into Purpose. [Parts](references/parts.md) says how to build on
+  a part and how to write one. Each part is checked on its own, before the programs that build
+  on it. A cycle of `- Builds on:` links blocks every program in it.
 - **The graph:** program folders are the nodes of a knowledge graph in the Open Knowledge
   Format, and `check` keeps it. A program's bundle is the nearest folder above it whose
   `index.md` has `okf_version` in its frontmatter, or else the folder that holds the program.
