@@ -2995,6 +2995,33 @@ const SIZES_FIX: &str = "call `$args_sizes_get` (for the environment, `$environ_
                          the first region, and `(br_if $usage (i32.gt_u (i32.load offset=4 \
                          (global.get $sizes)) (global.get $args.size)))` for the text's bytes";
 
+/// What a length that is one of several values is told, besides that nothing checks it: on the
+/// paths that meet before the access it is values of different owners (`items`: a parameter on
+/// one path, a value loaded from memory on another, a region's address), and a check after the
+/// paths meet bounds a value of one owner, not one of several. Nothing for any other length.
+fn two_paths(function: &Function<'_>, module: &Module<'_>, room: &Room) -> String {
+    let Room::Length(Value::Several(items)) = room else {
+        return String::new();
+    };
+    let kinds: Vec<String> = items
+        .iter()
+        .map(|item| match item {
+            Value::Param { param, .. } => format!("the parameter {}", function.local_shown(*param)),
+            Value::Address { region, .. } => module.regions.get(*region).map_or_else(
+                || "a region's address".to_owned(),
+                |region| format!("an address in ${}", region.name),
+            ),
+            _ => "a value loaded from memory".to_owned(),
+        })
+        .collect();
+    format!(
+        ": the length comes from more than one path, as {} on another, and a check after the \
+         paths meet bounds neither. Check it on each path before they meet, or make the call \
+         on each path",
+        kinds.join(" on one and ")
+    )
+}
+
 /// How `access`, an access of `function`, stands against its region.
 #[must_use]
 #[allow(clippy::too_many_lines)]
@@ -3133,7 +3160,8 @@ pub fn judge(module: &Module<'_>, function: &Function<'_>, access: &Access) -> V
                 )));
             } else if offset.checked {
                 verdicts.push(Verdict::Unchecked(format!(
-                    "{what} is as long as a number nothing checks, so it may reach past {name}"
+                    "{what} is as long as a number nothing checks, so it may reach past {name}{}",
+                    two_paths(function, module, &access.room)
                 )));
             } else {
                 verdicts.push(Verdict::Unchecked(format!(

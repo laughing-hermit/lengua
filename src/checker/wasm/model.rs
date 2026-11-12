@@ -12,7 +12,9 @@ use wasmparser::{
     Parser, Payload, RefType, SubType, TypeRef, ValType,
 };
 use wast::Wat;
-use wast::core::{FuncKind, GlobalKind, ItemKind, MemoryKind, ModuleField, ModuleKind, TableKind};
+use wast::core::{
+    DataVal, FuncKind, GlobalKind, ItemKind, MemoryKind, ModuleField, ModuleKind, TableKind,
+};
 use wast::parser::{self, ParseBuffer};
 use wast::token::Span;
 
@@ -231,6 +233,15 @@ pub struct Export {
     pub line: Option<usize>,
 }
 
+/// One value of a data segment as main.wat writes it: a string, or numbers such as `(i8 1 2)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Piece {
+    /// For a string, the line it starts on; `None` for numbers.
+    pub line: Option<usize>,
+    /// How many bytes it gives the segment.
+    pub len: u64,
+}
+
 /// A data segment of the module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Data {
@@ -245,6 +256,9 @@ pub struct Data {
     pub len: u64,
     /// Its line in main.wat.
     pub line: Option<usize>,
+    /// Its values in order, as main.wat writes them, which together are its bytes; none for
+    /// lengua's library's, and none when main.wat's strings can't be told apart.
+    pub pieces: Vec<Piece>,
 }
 
 /// A region of the program's memory: an immutable i32 global `$x` holding its address, with
@@ -357,6 +371,8 @@ struct Places {
     tables: Vec<usize>,
     /// Data segments.
     data: Vec<usize>,
+    /// Each data segment's values, as [`Data::pieces`] keeps them.
+    pieces: Vec<Vec<Piece>>,
     /// Element segments.
     elems: Vec<usize>,
     /// Exports, by name.
@@ -508,6 +524,93 @@ fn exported(names: &[&str], line: usize) -> Vec<(String, usize)> {
         .collect()
 }
 
+/// The line of each string between the data field at `from` and the parenthesis that closes
+/// it, in order, skipping comments: `from` is where the field's keyword starts, or its opening
+/// parenthesis.
+fn string_lines(text: &str, starts: &[usize], from: usize) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    let mut at = from;
+    // How deep inside parentheses: the field's own is open already at its keyword.
+    let mut depth = usize::from(bytes.get(from) != Some(&b'('));
+    // How deep inside block comments, `(; … ;)`, which nest.
+    let mut comment = 0_usize;
+    while at < bytes.len() {
+        let rest = &bytes[at..];
+        if comment > 0 {
+            if rest.starts_with(b";)") {
+                comment -= 1;
+                at += 2;
+            } else if rest.starts_with(b"(;") {
+                comment += 1;
+                at += 2;
+            } else {
+                at += 1;
+            }
+        } else if rest.starts_with(b";;") {
+            at = text[at..].find('\n').map_or(text.len(), |found| at + found);
+        } else if rest.starts_with(b"(;") {
+            comment += 1;
+            at += 2;
+        } else if bytes[at] == b'"' {
+            found.push(line_of(starts, at));
+            at += 1;
+            while at < bytes.len() && bytes[at] != b'"' {
+                if bytes[at] == b'\\' {
+                    at += 1;
+                }
+                at += 1;
+            }
+            at += 1;
+        } else if bytes[at] == b'(' {
+            depth += 1;
+            at += 1;
+        } else if bytes[at] == b')' {
+            depth = depth.saturating_sub(1);
+            at += 1;
+            if depth == 0 {
+                break;
+            }
+        } else {
+            at += 1;
+        }
+    }
+    found
+}
+
+/// The values of the data field `data` of `text`, each with its bytes, and each string with its
+/// line. Nothing when the strings in the text aren't one for one the strings `wast` read, as
+/// for a segment with a name annotation, which holds a string of its own: then no string of
+/// the segment can be named.
+fn pieces(text: &str, starts: &[usize], data: &wast::core::Data<'_>) -> Vec<Piece> {
+    if data.name.is_some() {
+        return Vec::new();
+    }
+    let lines = string_lines(text, starts, data.span.offset());
+    let strings = data
+        .data
+        .iter()
+        .filter(|value| matches!(value, DataVal::String(_)))
+        .count();
+    if lines.len() != strings {
+        return Vec::new();
+    }
+    let mut lines = lines.into_iter();
+    data.data
+        .iter()
+        .map(|value| {
+            let (line, len) = match value {
+                DataVal::String(bytes) => (lines.next(), bytes.len()),
+                DataVal::Integral(bytes) => (None, bytes.len()),
+            };
+            Piece {
+                line,
+                len: u64::try_from(len).unwrap_or(u64::MAX),
+            }
+        })
+        .collect()
+}
+
 /// Where each of main.wat's fields is, read from its text; nothing when the text doesn't parse,
 /// which a text the build took always does.
 fn places(text: &str, starts: &[usize]) -> Places {
@@ -560,6 +663,7 @@ fn places(text: &str, starts: &[usize]) -> Places {
                 // Inline data becomes a segment of its own, written at 0.
                 if matches!(memory.kind, MemoryKind::Inline { .. }) {
                     places.data.push(at);
+                    places.pieces.push(Vec::new());
                 }
                 places.exports.extend(exported(&memory.exports.names, at));
             }
@@ -571,7 +675,10 @@ fn places(text: &str, starts: &[usize]) -> Places {
                 }
                 places.exports.extend(exported(&table.exports.names, at));
             }
-            ModuleField::Data(data) => places.data.push(line(data.span)),
+            ModuleField::Data(data) => {
+                places.data.push(line(data.span));
+                places.pieces.push(pieces(text, starts, data));
+            }
             ModuleField::Elem(elem) => places.elems.push(line(elem.span)),
             ModuleField::Export(export) => {
                 places
@@ -1025,6 +1132,13 @@ impl<'a> Module<'a> {
                 at,
                 len,
                 line: places.data.get(position).copied(),
+                // The values main.wat writes, when they add up to the segment's bytes.
+                pieces: places
+                    .pieces
+                    .get(position)
+                    .filter(|pieces| pieces.iter().map(|piece| piece.len).sum::<u64>() == len)
+                    .cloned()
+                    .unwrap_or_default(),
             })
             .collect();
         let regions = regions(&globals, &notes);
