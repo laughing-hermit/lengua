@@ -480,7 +480,9 @@ async fn the_run_tool_stops_a_module_that_never_ends() {
     arguments["timeout_seconds"] = json!(1);
     let started = std::time::Instant::now();
     let ran = session.call_ok("run", arguments).await;
-    assert!(started.elapsed() < Duration::from_secs(30), "{ran}");
+    // Well within the 20 seconds more after which the pool gives up on a worker: the engine
+    // stopped the program, not the pool.
+    assert!(started.elapsed() < Duration::from_secs(15), "{ran}");
     assert!(ran["exit_code"].is_null(), "{ran}");
     assert!(
         ran["ended"]

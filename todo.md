@@ -581,6 +581,90 @@ Still open from it, for the owner:
     are refused by their shape, which a test checks.
   - A started lengua program.
 
+### W23's first part: an outside module (2026-11-12)
+
+On the branch `wip/outside`, not merged: the owner lands it. DESIGN.md ("An outside module") has
+the design as built, docs/reviews/outside-2026-11-12.md the threat cases with the test of each,
+and the decisions are with the others ("Decisions made during the pivot", W23's first part).
+
+What was built:
+1. **The shape**: a folder with `idea.md` and `main.wasm`, and no `main.wat`. The idea's
+   frontmatter says `computation: main.wasm`, and its `# Constraints` has one line
+   `- Module: main.wasm, built from …`, up to 200 characters in the idea's own words
+   (`src/idea.rs`). `check` holds the two to each other. The line is in the text lengua's hash
+   covers and a run reads, so the lock records which file is the program (`src/state.rs`).
+2. **`check`'s reading** (`src/wasm/outside.rs`), in place of the build and the rules: at most
+   16 MiB; the validator with exactly the engine's features; every import a function of WASI
+   preview 1 or of lengua's own modules, with its type, and one of lengua's own only when the
+   idea grants it; a memory exported as `memory` with a maximum of at most 16,384 pages; a
+   `_start` that takes and gives nothing. Each refusal says what to build differently.
+3. **The tests**, in the workers, as main.wat's; then the module kept, compiled and sealed for
+   a shell's runs, and stamped. No rule is checked, no proof is started, and no entry goes in
+   `verified`.
+4. **The replies**: the state `trusted_not_proven` in `done`'s place, never `proving` or `done`;
+   a new field `outside` in `check`'s reply, with the trust first, a line for each guarantee
+   that does not hold and what the host holds; each `proofs` line says `not proven`; no
+   `memory` line. `run`'s reply has `outside` too. The bundle's log says `checked: trusted, not
+   proven`, and the index links `main.wasm`.
+5. **The lock**, in its format as it is: an outside module's stamp has one hash twice, and its
+   `engine` line ends in `; an outside module: trusted, not proven`.
+6. **The runs**: `run`, `lengua-mcp run` and lengua-run make every check a run makes, hold the
+   module to the lock's hash, and say the trust before the program starts. A run refuses a
+   folder whose idea, bytes and stamp don't say the same kind of code.
+7. **The attester** stops at an outside module: `not attested`.
+8. **The skills**: the compile skill says when an agent may use one (the user asks for existing
+   code or names a language), how to build one in Rust and in C
+   (`references/outside.md`), and what to tell the user; write-idea names the two lines.
+9. **The tests** (`tests/outside.rs`, and the library's): hostile modules written as WebAssembly
+   text for each threat case, and a Rust and a C program (`tests/outside/`) that CI's new
+   `outside-wasm` job compiles once, on Linux on x86-64, for every runner's suite (`cargo xtask
+   outside-wasm`), as the bench's modules are built.
+
+Where the host leaned on a rule of main.wat's, and what holds an outside module there, is the
+table in DESIGN.md and H1 to H15 in the review. In short: the host's own check at each call, and
+its check of every buffer, were there and need no rule; the memory's size and its export, lengua's
+own modules without their grant, and another host's functions are now refused by `check`'s
+reading; loops and recursion are bounded by the engine's deadline and stack alone; and secrets,
+parts, the memory rules and the proofs don't hold, which the idea's refusal or the reply says.
+
+The tests seen failing: the commit RUN_BITE_COMMIT, kept as the tag
+`archive/wip/outside-off` and never merged, takes defences out; run RUN_BITE on Linux on x86-64
+shows which tests fail there (the review's last section).
+
+What isn't done, each a limit of what was built:
+- **A run from a shell has no deadline**, for any program. main.wat ends by its rules; an
+  outside module may not. The replies and docs/run.md say so, and nothing more is done.
+- **The rest of W23**: a lengua program as a library, and an outside module that a lengua
+  program calls. Not started.
+- **An outside module as a part**, and one with a secret: refused.
+- **Only `wasm32-wasip1` commands.** WASI preview 2 and components, `wasm32-unknown-unknown`,
+  Emscripten's output, and a library with no `_start` are refused.
+- **A memory needs a stated maximum.** A toolchain's default build declares none and is
+  refused, with the flag to add. The host holds a module to what it declares, and a default of
+  lengua's own would have been a second rule for the same thing.
+- **No line for a trap**: an outside module's trap is named without a place in its source.
+  DWARF isn't read.
+- **Exit code 134** is still reserved in an idea's tests, though an outside module has no
+  assertions of lengua's.
+- **`lengua-mcp measure`** runs other toolchains' modules by its own path, as before, with no
+  idea: it wasn't changed to go through this one.
+- **Never run on a runner**:
+  - Any language but Rust and C, and any compiler but the pinned rustc and wasi-sdk 34's clang.
+    C++, Go (TinyGo), Zig, AssemblyScript and Swift were not tried.
+  - A Rust program built with cargo and dependencies: the test's program is one file built with
+    rustc alone. The skill's cargo commands were not run.
+  - A real program of any size: the two test programs are a few lines each. A module of several
+    MiB, its time to compile in a worker, and the 16 MiB limit with a real module were not
+    tried; the limit's test uses 16 MiB of zeros.
+  - A module made to compile slowly (the review's O12).
+  - An outside module that serves (`listens on`), one that receives datagrams, one that opens a
+    real connection that is granted, one that starts a program, and one at a terminal: the
+    grants are the host's and tested for main.wat, but no outside module used them on a runner.
+    The C program asks for one connection, which is refused.
+  - An outside module from a shell that never ends, stopped with Ctrl-C.
+  - The agent's own use: no agent followed the skill's new pages from a request to
+    `trusted_not_proven` in an interactive session.
+
 ### What the permission checks refused
 
 Claude Code's permission checks refused these actions. Each refusal was taken as given, with
@@ -590,6 +674,10 @@ nothing to route around it:
   remains (W16).
 - **`python3 --version`** in a command one of W12b's agents wrote (2026-11-09). It never ran:
   this computer runs no interpreter.
+- **`python3 --version`** again, at the head of a command the agent of W23's first part wrote
+  (2026-11-12), by mistake, against the rule that this computer runs no interpreter. The
+  permission check refused the whole command, so nothing of it ran, and the agent went on with
+  the Read and Edit tools.
 - **A broad delete with `rm -rf` on a glob** (2026-11-07). It wasn't needed: a fresh folder was
   used instead.
 
@@ -1036,6 +1124,56 @@ Each can be reversed.
     key until a time, the same on every system, with no call of the system's own `poll` or
     console events.
   - **The prover refuses all three**, as it refuses the network's: tested, not proven.
+- **W23's first part: an outside module (2026-11-12)**, each made without asking, on the owner's
+  standing word, and each the owner's to reverse:
+  - **The file is `main.wasm`**, beside `idea.md`, with no `main.wat`. It is the name a
+    compiler's output has, and the name lengua already gives a program as its first argument.
+    `lengua-mcp wasm main.wat` writes a file of that name beside main.wat by default; it stays
+    ignored unless the idea names it, and `check` then asks for main.wat to go.
+  - **The idea says it twice**: `computation: main.wasm`, since that key names the code file of
+    an Attested Computation, and a line `- Module: main.wasm, built from …` in `# Constraints`,
+    since a run reads only that section and must know which file is the program. `check` holds
+    the two to each other. A flag of the tool's call was not used: what a program is belongs to
+    the idea, which the user's words and the lock's hash cover.
+  - **What it was built from is free text**, at most 200 characters. lengua can't check it, so
+    it gave it no form to check, and every place that shows it says it is the idea's word.
+  - **The state is `trusted_not_proven`**, a state of its own, and never `done` with a flag
+    beside it: a reader who looks at the state alone must not take the program for a checked
+    one. The reply's field is `outside`, the log's entry `checked: trusted, not proven`.
+  - **No entry in `verified`, and no attestation.** lengua's entry says lengua checked the
+    idea and its code by its rules; for an outside module it didn't. `lengua-mcp check` says
+    `not attested` and why. Cost: an outside module has no way to show another computer that
+    its tests passed, but to run `check` there.
+  - **The lock's format is unchanged.** An outside module's stamp is told by its two hashes
+    being one, which no main.wat's can be, and by its `engine` line's last words. A new field
+    would have been a new format, which another branch in flight (`wip/parts`) also changes.
+  - **A memory must declare a maximum, of at most 1 GiB**, and be exported as `memory`. The
+    host already held a module to the memory it declares, and gives a module that declares no
+    maximum only its first pages (`tests/wasm_limits.rs`), on which a toolchain's allocator
+    fails at its first growth. So a module with no maximum is refused with the flag to add,
+    in place of a default of lengua's own. 1 GiB is main.wat's own most.
+  - **A WASI function the idea doesn't grant links; one of lengua's own modules doesn't.** A C
+    or Rust standard library imports `fd_prestat_get`, `environ_sizes_get`, `fd_close` and more
+    whatever the program does, so refusing them would refuse every such module. The host
+    refuses each call. lengua's own modules are imported only by a program that means to call
+    them, so `check` refuses those without their grant, as it does for main.wat.
+  - **A start function is allowed.** The limits are set before a module is instantiated, so it
+    is held as `_start` is, and a test shows it stopped at the deadline. Refusing it would have
+    been one more rule with nothing behind it.
+  - **16 MiB of module at most.** The engine compiles a module in a worker, and the pool gives
+    up on a worker 20 seconds past a test's time; a larger module would fail its tests for the
+    compiler's time alone. The number was not measured against real modules.
+  - **Secrets and parts are refused** for an outside module, at the idea: the secret rule and a
+    part's functions both read main.wat.
+  - **A run from a shell gets no deadline for an outside module.** It has none for any program,
+    and a server must run as long as its user wants. The words before the run, and the
+    documents, say that nothing bounds an outside module's loops.
+  - **The `run` tool reads the module again**, as `check` did; a run from a shell doesn't, and
+    holds it to the lock's hash alone, as lengua-run does for main.wat, to start as fast.
+  - **The real compilers run once, on Linux on x86-64**, in a job of CI's own, and every
+    runner's suite gets the same two modules, as the bench's are built. A run on GitHub's
+    runners without them fails, so no such run passes having skipped them; elsewhere the two
+    tests note that they skipped. No compiled module is committed.
 
 ## Roadmap: the pivot's milestones (2026-11-06)
 
@@ -1188,6 +1326,8 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
       exactly as it holds a module of lengua's own. The reason: what is useful to the most
       people today is a safe way to run code an agent wrote, in any language, and the host
       with its grants gives that already. The rest of W23 keeps its place.
+    - **Built on `wip/outside` (2026-11-12)**, for the owner to land: "W23's first part: an
+      outside module", above, says what was built, what is refused and what was never run.
   - **W24. Tools.** `check`'s reply is the only tool there is. W24 adds what a programmer
     expects: a run that stops at a line of main.wat and shows its values (through the `run`
     tool, for the agent), a profile of where a run's time goes by function and line, and a trace

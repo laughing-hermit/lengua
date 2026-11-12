@@ -610,7 +610,7 @@ mod tests {
     /// file and keeps its bytes, main.wat beside it is a code file too many, and without the
     /// line main.wasm is no code at all.
     #[test]
-    fn an_idea_s_module_line_makes_main_wasm_the_code() {
+    fn an_outside_module_s_idea_makes_main_wasm_the_code() {
         let folder = tempfile::tempdir().expect("temporary folder");
         let program =
             ProgramFolder::new(folder.path().to_str().expect("UTF-8 path")).expect("absolute path");

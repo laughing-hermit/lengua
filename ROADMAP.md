@@ -548,8 +548,35 @@ the idea.
 
 One part moved up beside W22 on 2026-11-12, by the owner's word: a module a compiler made from
 Rust, C or another language, run as the program itself under an idea's grants and tests, held by
-the host as any module is and marked "trusted, not proven" (todo.md). *Started on
-`wip/outside`; the rest not started.*
+the host as any module is and marked "trusted, not proven" (todo.md).
+
+That part is built on the branch `wip/outside`, for the owner to land:
+
+- **The shape.** A folder holds `idea.md` and `main.wasm`. The idea says `computation:
+  main.wasm` and has a line `- Module: main.wasm, built from …` in its own words. Its tests and
+  grants are written as for any idea. It has no secret and builds on no part.
+- **`check`** reads the module and refuses what lengua's host can't hold by itself: a feature
+  the engine has off, an import that isn't a function of the host's with its type, a function
+  of lengua's own modules without its grant, a memory not exported as `memory`, with no maximum
+  or of more than 1 GiB, no `_start`, more than 16 MiB. Then it runs the idea's tests, stamps
+  the module, and says `trusted_not_proven`, with every guarantee that does not hold in the
+  reply's `outside`. It checks no rule, proves nothing, writes no entry in `verified`, and the
+  attester doesn't attest the folder.
+- **`run`, `lengua-mcp run` and lengua-run** run it in the same host, under the same grants,
+  and say "trusted, not proven" before it starts.
+- **The host stands alone.** Each guarantee that leaned on a rule of main.wat's is listed with
+  what holds it now, in DESIGN.md ("An outside module") and in
+  [docs/reviews/outside-2026-11-12.md](docs/reviews/outside-2026-11-12.md), with a test of a
+  hostile module for each threat case and a run on a commit with the defences out.
+- **Real compilers' output** is in the suite: a Rust program that reads a file its idea names,
+  and a C program that is refused the network its idea doesn't grant, each built for
+  `wasm32-wasip1` by CI, once, for all five runners.
+- **Not held:** an outside module's loops have no bound but a run's deadline, and a run from a
+  shell has none. Inside its own memory it is held to nothing. What it was built from is the
+  idea's word.
+
+The rest of W23, a lengua program as a library and an outside module that a lengua program
+calls, is not started. Runs: RUN_LINE.
 
 ## W24. Tools
 
