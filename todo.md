@@ -530,8 +530,8 @@ Its runs, each a dispatch of ci.yml on the branch:
   request to done, the nine templates, and the runs of `tests/wasm_named.rs`, with each
   system's own `hostname` and `whoami` started; on the two Linux runners and macOS, the run at
   a pseudo-terminal too; and the library's tests, but the one on Windows on ARM64.
-- The suite on all five systems with the two faults fixed ran at the commit that has this line,
-  so this list can't name it: the commit that lands the branch on main names that run.
+- 43121534983 (the suite on all five systems at c1a6625, the branch merged with the lean runner,
+  with the two faults fixed): green. The landing on main rests on it.
 - 43109219212 (the same suite at 9b7cd87, with the two faults fixed): Linux on x86-64 and on
   ARM64 passed, and the run was replaced before the other three ended, because main moved:
   W19's lean runner landed, and the branch took main in. `lengua-run`, which a shell's run
