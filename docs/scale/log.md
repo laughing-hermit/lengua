@@ -19,13 +19,20 @@ carries over, and the minutes are the runner's.
 
 ## What the agent read first
 
-The two skills as shipped, and nothing of lengua's source for how to write code:
-`plugin/skills/write-idea` (SKILL.md, references/test-format.md, parts.md) and
-`plugin/skills/compile` (SKILL.md, references/wasm.md, power-of-10-webassembly.md, host.md,
-parts.md, the server template and its idea, the parts decimal, bytes and crc32). Where the
-skills did not answer a question that a program of this size raises, the agent read lengua's
-source for the answer, and each such question is listed under "Where the skills were silent"
-in the README: each is a place where an agent with the plugin alone would have guessed.
+The two skills as shipped: `plugin/skills/write-idea` (SKILL.md, references/test-format.md,
+ste.md, parts.md) and `plugin/skills/compile` (SKILL.md, references/wasm.md,
+power-of-10-webassembly.md, host.md, parts.md, the server template and its idea, the parts
+decimal, bytes and crc32).
+
+Then, which an agent with the plugin alone could not do, lengua's source. Before it wrote the
+server's idea, the agent sent a read-only sub-agent of its session through the source with 15
+questions that the skills left open for a server of this size: how a test of a server runs
+and what it compares, the layouts the host writes, how the rules count operators and bound an
+index, what `check` replies. The sub-agent wrote no line of the program. Its answers shaped
+the design (the log on standard output in every behavior, no close that waits, the sort of a
+list), and the README lists, under "Where the skills were silent", what the skills should
+have said. So the count of cycles below is of an agent that had those answers: one with the
+skills alone would have met some of them as refused checks.
 
 ## The program, and why this one
 
@@ -286,3 +293,17 @@ No cycle was lost to a slip that a compiler catches (a name that isn't defined, 
 doesn't fit, text that doesn't parse), and none to a wrong answer of the program. Three were
 lost to the form of an idea's tests, and two to rules: one real slip (rule 7), and one place
 where the rules can't follow a number that comes from two paths (rule 9).
+
+## After the changes
+
+- **The mutation test** (run 43197373671, at 734c729, 314 s): json, http and httpd were added
+  to `tests/mutation.rs`, 8 mutants each. 16 failed a test, 6 broke a rule, 2 of the parts'
+  were tested and not all proven, and none survived. All 8 of httpd's were caught: 4 by a
+  rule (three of them in functions taken from parts, which the copy check holds) and 4 by a
+  test.
+- **main merged in twice**, at 42507ef (W20's splits and W23's outside modules) and at 77835f0
+  (the gate that measures the same way). Each time `examples/index.md` was the one conflict:
+  main had added a program between the lines the branch had added.
+- **The suite on all five systems**: 43202341879 (at 6d36aae) was cancelled by the dispatch
+  that followed the second merge, after the tests on Linux on x86-64 and on ARM64 had passed.
+  FINAL_SUITE_LOG

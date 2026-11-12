@@ -481,7 +481,8 @@ Its runs, each a dispatch of ci.yml on the branch, on Linux on x86-64 unless it 
 - 43197373671 (the mutants of json, http and httpd, at 734c729): 24 mutants, 16 failed a
   test, 6 broke a rule, 2 of the parts' were tested and not all proven, none survived.
 - 43202341879 (the suite on all five systems, at 6d36aae, with main's 42507ef merged in):
-  SUITE_ONE.
+  cancelled by the next dispatch, after the format job and the tests on Linux on x86-64 and on
+  ARM64 had passed.
 - FINAL_SUITE
 
 Still open from it, for the owner:
