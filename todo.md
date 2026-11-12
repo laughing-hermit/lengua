@@ -532,6 +532,15 @@ Its runs, each a dispatch of ci.yml on the branch, on Linux on x86-64 unless it 
   proven, which the run failed on. Both change nothing a program does (`$argv.size` one
   larger in decimal, `$out` one byte along in lines), and tests/mutation.rs now names each
   with why.
+- At 6f29d62, which adds those two mutants' names and this list to d1fe52a: 43143045047 (the
+  five parts' mutants, Linux on x86-64): green, no mutant came out proven but the two named.
+  43143036339 (the suite on all five systems): green on its second attempt. On the first,
+  Windows on ARM64 failed one test that W21 doesn't touch,
+  `two_checks_at_once_leave_a_consistent_index` of tests/graph.rs: of two ideas recorded at
+  once in one bundle, log.md held one entry, not two. The same job passed at d1fe52a and
+  when it was run again, so it is a race, and it is open (below).
+- After them, main's two commits of todo.md and ROADMAP.md alone (to aa429a9) are merged
+  in; the head they give is held by a compile run, as documents are.
 
 Still open from it, for the owner:
 - **A part's proof isn't used in the programs built on it.** The prover follows each taken
@@ -564,6 +573,8 @@ Still open from it, for the owner:
 - **The library reaches a user by a copy the agent makes** from the skill's assets. Nothing
   fetches a part, and nothing tells a user that a newer lengua ships a newer part.
 - **The attester doesn't hold a program to its parts**: `lengua-mcp check` reads one folder.
+- **log.md can lose an entry when two programs of one bundle are recorded at once.** Seen
+  once, on Windows on ARM64 (run 43143036339, first attempt); not from W21, and not fixed.
 ### W18's second part: files the user names, programs, the terminal (2026-11-11)
 
 On the branch `wip/reach-2`, not merged: the owner lands it. DESIGN.md ("The host") has the
