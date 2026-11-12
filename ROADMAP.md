@@ -78,7 +78,8 @@ format, the suite on all five runners and the gate, green at 2fb46f1 (4231758363
 `src/wasm/`: the text parsed by `wast` with each instruction's line, lengua's library merged in,
 validated by `wasmparser` with the engine's features; Wasmtime with Cranelift, pinned, with three
 configurations (tests with fuel and epochs, runs with epochs, shells and benchmarks with neither)
-and its compilation cache in the `cache` folder of the plugin's data folder when the agent's
+and, until W19 took it out, its compilation cache in the `cache` folder of the plugin's data
+folder when the agent's
 harness gives one (`PLUGIN_DATA`, or `CLAUDE_PLUGIN_DATA`), else of lengua's own; lengua's own WASI
 preview 1 host (the function table with each function's allowance, borrowed buffers and errors;
 standard streams; files through `cap-std` and `src/names.rs`; the listener and connections;
@@ -217,7 +218,8 @@ again) and lengua's library merged in whole. W12b cuts it and keeps every guaran
   verifies lengua.lock once;
 - the module that runs has no name section, and lengua's library calls main.wat's own imports of
   WASI's functions;
-- the cache of compiled modules never compresses a module again;
+- the cache of compiled modules never compresses a module again (the cache itself went with
+  W19);
 - `lengua-mcp` is built with one codegen unit, fat link-time optimization and no symbol table.
 
 *Verified by:* at d6496e3, format, the suite on all five runners and the gate, green
@@ -515,6 +517,32 @@ takes 0.6 ms: 0.2 ms to load lengua-run itself, whose file is 3.4 MiB of the run
 ms for the checks; 0.12 ms for the engine and the compiled module, 0.3 ms on ARM64, where the
 module is 135 KiB; and 0.2 ms to link, start, run and end the program. lengua-run still holds
 TLS, for a program with connections, and the parser of main.wat, for a trap's line.
+
+**Step 1's leftovers, built (2026-11-12): the `run` tool loads the sealed module, and no engine
+has a cache.** Step 1 left the MCP `run` tool and the tests on Wasmtime's own cache, which loads
+a file's machine code as it finds it. Now:
+- `check` compiles the module a second time, for the `run` tool, whose engine can stop a
+  program at its deadline, and seals it as that module for that kind of run
+  (`<sha256>.run.cwasm`). The tool's worker reads the user's key and loads the file once its
+  seal holds. Where it has none it takes, it compiles the module, seals and keeps it, and says
+  why on standard error, as lengua-run does. An outside module goes the same way, and a
+  program that splits its work starts every piece from the one loaded module;
+- Wasmtime's cache is not built in: the `cache` feature is gone from Cargo.toml, with 16
+  crates of Cargo.lock, zstd's C code among them. A test's worker compiles its module in its
+  own process, as it did in every test of `check` in the suite, where each starts with a
+  new data folder and so an empty cache. `PLUGIN_DATA` held only the cache, so lengua no
+  longer reads it, and doctor has no line for it.
+
+*Verified by:* on Linux on x86-64, the suite, green (43230322720, at 6a30b13). Its new tests:
+a program that prints 6, sealed with the user's own key as add's module for the `run` tool,
+runs in add's place, so the tool loads the file and compiles nothing; another module sealed as
+itself, the shell's form, a changed byte, another key's seal, bytes no engine made, an empty
+file and no file each leave `run` to give add's sum and put add's sealed form back; the same
+for an outside module's file; a split run leaves the sealed file as it was; and no `cache`
+folder appears in the data folder. That suite's tests took 27 min 10 s, and main's, with the
+cache, 35 min 5 s (43209689066): no slower, on runners that differ by as much. No bench ran:
+it measures a run from a shell, which this leaves as it was. todo.md has the decisions and
+what no runner exercised.
 
 **Step 2, open:** an optional native build of the proven main.wat, through wasm2c and clang, as
 Firefox sandboxes C libraries at close to native speed. The proof still holds, since it covers

@@ -437,8 +437,8 @@ The rule is over main.wat, and WebAssembly with no branch on a secret can still 
 code with one, since the engine chooses the CPU's instructions. So for a module the rule passes,
 `check` also reads the machine code (W13, `src/checker/wasm/machine.rs`). The secret rule gives
 every operator that takes a secret operand, by its offset in the module. `check` compiles the
-module with the engine as `run` and a run from a shell configure it, with the compiled modules'
-cache they use, and takes the code, each function's place in it, and Wasmtime's address map, which
+module with the engine as `run` and a run from a shell configure it,
+and takes the code, each function's place in it, and Wasmtime's address map, which
 says for each stretch of code the offset of the operator it was made for. Those offsets are the
 checker's own: Cranelift's translator names each operator by where its reader stands in the module
 before it reads the operator, which is the offset `wasmparser` gives the checker for the same
@@ -644,23 +644,40 @@ Each setup has two engines, with the same settings wherever compiled code depend
 (`shared`, `src/wasm/engine.rs`): Wasmtime holds a compiled module to those settings when it loads
 one, and a test loads each setup's module into the other engine.
 
-- **The engine that compiles.** Cranelift compiles a module for this machine's CPU. The tests'
-  workers and the `run` tool compile a module the first time they run it, and Wasmtime's cache
-  keeps it, in the `cache` folder of the plugin's data folder when the agent's harness gives one
-  (`PLUGIN_DATA`, or `CLAUDE_PLUGIN_DATA`), else of lengua's own.
+- **The engine that compiles.** Cranelift compiles a module for this machine's CPU. A test's
+  worker compiles its module the first time it runs it, in its own process, and keeps it in
+  memory. The `run` tool's worker has this engine too, and loads into it the compiled form
+  `check` kept, once its seal holds; it compiles only where there is none to load.
 - **The engine that only runs.** It has no compiler in it, and loads a module compiled ahead of
-  the run. A run from a shell uses it, and reads no cache.
+  the run. A run from a shell uses it.
 
-When a program's tests pass, `check` compiles its module for a run from a shell
-(`Engine::precompile_module`) and keeps the result beside the tested module, in
-`tested/<builder>/<module's SHA-256>.shell.cwasm` of the data folder, with a seal after it: an
-HMAC-SHA256, keyed with the user's key, over a domain of its own, the module's SHA-256 and the
-compiled bytes (`compile_sealed`, `crates/lengua-os`). A run loads that file only when its seal
+No engine has a cache of compiled modules. Wasmtime's own cache is not built in (the `cache`
+feature is off in Cargo.toml, and a test holds it off): it loads a file's machine code as it
+finds it, checking only that it suits the engine. The only compiled code lengua loads from a
+file is code under the seal below. Everything else an engine runs, it compiled in the same
+process. `PLUGIN_DATA` held only that cache, so lengua no longer reads it.
+
+When a program's tests pass, `check` compiles its module twice: for a run from a shell, and for
+the `run` tool, whose engine can stop a program at its deadline, so its code differs
+(`Engine::precompile_module`). It keeps each result beside the tested module, in
+`tested/<builder>/<module's SHA-256>.shell.cwasm` and `.run.cwasm` of the data folder, with a
+seal after it: an HMAC-SHA256, keyed with the user's key, over a domain of its own, the
+configuration's name, the module's SHA-256 and the
+compiled bytes (`compile_sealed`, `crates/lengua-os`). A run loads its file only when its seal
 holds (`load_sealed`), compared in constant time, and copies its code into memory of the
 engine's own. Wasmtime then holds the module to its own version, its settings and this CPU's
 features, and refuses one that doesn't suit. The Shell setup maps no copy-on-write image of a
 module's first memory, which pays where a module starts many times: a run starts its module
 once.
+
+The `run` tool's worker is given the data folder on its command line, reads the user's key
+there, and loads `.run.cwasm` itself (`src/wasm/worker.rs`). A file with no seal, another
+module's, the shell's form, or one the engine refuses is left unloaded: the worker compiles
+the module the server built and held to the lock's hash, seals what it made, keeps it for the
+next run, and says on standard error, the server's log, why it compiled. A program that
+splits its work starts every piece from that one loaded module. A test's job does not ask
+for a sealed form, and neither does the attester (`lengua-mcp check`), which has no data
+folder.
 
 ### The host
 
@@ -734,8 +751,8 @@ hold are held to 1,048,576 entries in all (`LISTED`, `src/wasm/host/files.rs`). 
 that would pass it answers `IO`, as does any call on a path in a folder with more entries.
 
 The working folder is never one of lengua's own. For a program that uses files, and for a
-`stdin_file`, `run` refuses a folder that is, holds or lies inside the data folder or the folder of
-compiled modules, the plugin's own (`PLUGIN_DATA`) too, and on Linux `/proc`, `/sys`, `/dev` and
+`stdin_file`, `run` refuses a folder that is, holds or lies inside the data folder, which
+holds the compiled modules too, and on Linux `/proc`, `/sys`, `/dev` and
 anything beneath them, with links followed before paths are compared (`own_folder_problem`,
 `src/server.rs`). The program's own folder is a working folder like any other: what a program
 changes there only stops its next run.
@@ -1085,8 +1102,8 @@ The code stamp is written when every test passes, before the proofs end, so `run
 `src/data_dir.rs`). The data folder is `$XDG_DATA_HOME/lengua` or `~/.local/share/lengua` on
 Linux, `~/Library/Application Support/lengua` on macOS, `%LOCALAPPDATA%\lengua` on Windows, or
 `--data-dir`. On Linux and macOS the folder is made readable only by the user (0700) when the key
-is made or loaded for a record, and, where it is there with another mode, as when the engine's
-cache made it first, when the server starts and at each run from a shell, before the key is read
+is made or loaded for a record, and, where it is there with another mode, as when something
+else made it first, when the server starts and at each run from a shell, before the key is read
 (`DataDir::keep_private`); the key's file is the user's alone (0600) from the start; on Windows lengua
 sets no permissions of its own, so the key is as private as the user's
 `%LOCALAPPDATA%`. One key serves every agent harness, so a lock recorded in one verifies in
@@ -1208,7 +1225,7 @@ The command line (`src/main.rs`):
 | `lengua-mcp` | The MCP server |
 | `lengua-mcp run <folder> [--in <folder>] [--env NAME=value]… [[--] args]` | Runs a checked program attached to the shell. Exits with the program's code, 134 when it trapped, 127 when it never started, and 125 when lengua won't run it or can't start it |
 | `lengua-mcp check <folder>` | The attester: 0 attested, 1 not |
-| `lengua-mcp doctor` | Checks this computer: the server, the engine (a module it compiles and runs), the CPU, z3 and cvc5 and their pinned versions, whether the data folder and `PLUGIN_DATA` can be written, and the clocks' resolution. Exits 0 only when nothing is wrong |
+| `lengua-mcp doctor` | Checks this computer: the server, the engine (a module it compiles and runs), the CPU, z3 and cvc5 and their pinned versions, whether the data folder can be written, and the clocks' resolution. Exits 0 only when nothing is wrong |
 | `lengua-mcp install [--check] [--link] [--prefix <folder>]` | Installs lengua from its unpacked release archive |
 | `lengua-mcp wasm <main.wat> [-o <file>]` | Writes the module |
 | `lengua-mcp measure …` | Runs one program in a process of its own and prints what it cost, for the benchmark |
@@ -1385,16 +1402,18 @@ listed below.
   built on it. lengua trusts no part for being in its library: each is checked on the computer
   that builds on it.
 - **A build that isn't what was checked.** `run` runs only the module whose SHA-256 the signed lock
-  records: the `run` tool builds main.wat again and compares, and a shell's run loads the compiled
+  records: the `run` tool builds main.wat again and compares, and its worker and a shell's run
+  load the compiled
   form the user's key sealed as that module. An idea or code changed since the record, a module
   a proof found wrong, and a build that differs after lengua changed are refused. A module found wrong stays refused when an
   earlier lock, which the user's key signed too, is put back: the data folder keeps the verdict.
-- **Machine code that lengua didn't compile, in a run from a shell.** A run from a shell loads
+- **Machine code that lengua didn't compile.** A run, from a shell or from the `run` tool, loads
   compiled code from one file, and only when that file carries the seal of the user's key for
   the module its lock records. `compile_sealed` alone makes a seal, over what the engine's
   compiler returned in that call. So a file put in the data folder by someone without the key
   is never handed to the engine: not other bytes, not another program's compiled module, and
-  not the right one with a byte changed. Such a run reads no cache of compiled modules.
+  not the right one with a byte changed, and not the form compiled for the other kind of run.
+  No run and no test reads a cache of compiled modules: lengua has none.
 - **Work split into pieces that goes past its grant, or gives another result on another
   computer.** A piece is a run of its own with memory of its own, so no piece reads or writes
   what another or the program holds; it reaches standard input and its output alone; it can't
@@ -1440,19 +1459,15 @@ listed below.
   checks the addresses the resolver gives, whatever it asked to find them (DNS, the hosts file,
   a local network's own names).
 - **The user's own folders**: the data folder, which holds the key, the recorded ideas, the
-  modules `check` kept and what proofs found wrong, and the cache of compiled modules, which
-  `PLUGIN_DATA` may place elsewhere: whoever sets that variable names a folder lengua runs machine
-  code from. Whoever can read the key, or write the
+  modules `check` kept, their compiled forms and what proofs found wrong. Whoever can read the key, or write the
   data folder, can sign locks lengua trusts: the lock's HMAC is a record of what this user's lengua
-  checked, not a wall against the user's own account. Wasmtime 50.0.1 loads a cached module's
-  machine code as it finds it, checking only that it suits this engine, so the cache folder is
-  trusted as the key is by what reads it: the tests' workers and the `run` tool. A run from a
-  shell reads no cache. It trusts the key alone for the code it loads, and whoever holds the key
+  checked, not a wall against the user's own account. A run trusts the key alone for the
+  compiled code it loads, from a shell and from the `run` tool alike, and whoever holds the key
   can seal code of their own.
 - **lengua's own code**: lengua's crate forbids unsafe code; the calls that need it sit in
   `crates/lengua-os`, each in a safe function with a test: the few into the operating system,
   tested on their system's runner, and the load of a sealed compiled module, which hands the
-  engine nothing without the seal. TLS is rustls with ring; the solvers, ring, zstd and a file of
+  engine nothing without the seal. TLS is rustls with ring; the solvers, ring and a file of
   Wasmtime's carry C (todo.md's decisions).
 
 ### Out of scope
