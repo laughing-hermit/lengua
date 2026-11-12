@@ -158,6 +158,14 @@ program. A dry run evaluates every run of every block, from a fixed seed hashed 
 sections. It covers its own draws, not the fresh ones a later check makes, so a formula's error
 there shows as a failed test.
 
+One `check` reports every problem that it finds without running code, in the order of the
+idea's lines (`idea_findings`, `src/server.rs`). An idea whose problems are of its words alone,
+a rule of STE or a word that names one kind of computer, still reads (`idea::read`), so its
+tests are checked in the same pass, and with them its type, a `- Threads:` line, the parts it
+links to and a cycle of those links. Only a problem of the idea's own form hides the tests'
+problems, since the tests can't be read before it is fixed. The cap stays: 20 problems of the
+idea and 20 of its tests, then one count of the rest.
+
 ## main.wat, lengua's library and the build
 
 `main.wat` is parsed by `wast` 261.0.0, keeping each instruction's line (`src/wasm/text.rs`). A
@@ -467,6 +475,32 @@ at most 20 at once.
 | 8, named constants | Exit codes, descriptors, lengths and modes are named constants; `_start` never falls off its end; a read-only region's size is its data's |
 | 9, no indirection | No start function, no tables, no element segments; every computed index checked against its region, or left to the proof inside a `;; unsafe:` block |
 | 10, checked by tools | The module validates with the engine's features; no function, import, global or local left unused; no code no path reaches |
+
+Three things in the rules serve a large program (W22's scale test asked for them):
+
+- **A count of operators.** `check`'s reply has `functions` once main.wat builds, whether or
+  not the rules pass: how many functions it has, the largest as rule 4 counts it and the
+  average; each function with 135 operators or more, 75% of the limit, by name, at most 12, the
+  largest first; and rule 5's assertions a function, with how many the rule needs
+  (`Report::size_lines`, `src/checker/wasm/mod.rs`). Rule 4 counts every operator of a body as
+  the module holds it, its last `end` aside.
+- **Rule 9 names a length from two paths.** A length that is a parameter on one path and a
+  number loaded from memory on another is one of several values after the paths meet, and a
+  check there bounds a value of one owner, not one of several. The rule's message says so and
+  says the fix, a check on each path. The checker was not made to accept the single check: a
+  value of several owners that passed a check would have to become a plain number, and a
+  program that then used it as an address would break M1 where it passes today.
+- **Named data.** `;; text: NAME` on the line of one string of a `data` segment names its
+  bytes; on a segment's first line, with no string there, it names all of the segment.
+  `;; at: NAME`, `;; offset: NAME` and `;; len: NAME` on a constant global's line say that its
+  number is the text's address, its offset in its region, or its length. The checker computes
+  each from the module and from the segment's strings as `wast` read them
+  (`src/checker/wasm/texts.rs`), and a number that differs is a violation of rule 8 that says
+  the right number. The reply's `data` has the table of every text while a number is wrong or a
+  text has no number, and one line when all are right. Two named texts of two segments that
+  share bytes are a violation too. The markers are comments: main.wat stays plain WebAssembly
+  text and the one text that is checked and run, the module does not change, and a number with
+  no marker is checked by nothing here, as before.
 
 The memory rules work over regions: an immutable global `$x` holding an address, with `$x.size`
 (writable) or `$x.rosize` (read-only). Regions start at address 1024 or above, inside the memory,
@@ -1353,7 +1387,8 @@ tools capability only: no resources and no prompts (`src/server.rs`). Logs go to
 
 `check` takes `path`, the absolute path of the program folder; `request`, the user's own words,
 at most 2,000 characters; and `prove_further`. Its reply holds the `state` and `next_step`, and
-only when they say something: `problems`, `machine` (while the code isn't written: the engine,
+only when they say something: `problems`, `functions` and `data` (once main.wat builds: how
+full its functions are by rule 4's count, and its named texts), `machine` (while the code isn't written: the engine,
 the CPU's vectors and caches, and the features main.wat may use), `tests`, `proofs`, `parts` (each
 part the program builds on, with the functions taken and what the part's lock records of its
 proofs), `contract` (for a part, each function it offers), `memory`,

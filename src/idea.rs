@@ -1138,17 +1138,43 @@ impl fmt::Display for Problem {
     }
 }
 
+/// An idea as far as it reads, with every problem found in it.
+#[derive(Debug)]
+pub struct Reading {
+    /// The idea, when it reads: when it has no problem, or when each of its problems is of its
+    /// words alone (a rule of STE, or a word that names one kind of computer), which changes
+    /// nothing of what the idea's behaviors, tests and constraints are. So its tests can be
+    /// checked in the same pass, and one check reports both.
+    pub idea: Option<Idea>,
+    /// Every problem found (up to 20, then how many more).
+    pub problems: Vec<Problem>,
+}
+
 /// Parses and validates idea.md, reporting every problem found (up to 20).
 ///
 /// # Errors
 ///
 /// Returns the problems when the idea isn't valid.
 pub fn parse(text: &str) -> Result<Idea, Vec<Problem>> {
+    let reading = read(text);
+    match reading.idea {
+        Some(idea) if reading.problems.is_empty() => Ok(idea),
+        _ => Err(reading.problems),
+    }
+}
+
+/// Reads idea.md as [`parse`] does, and gives the idea with its problems when the problems
+/// are of its words alone ([`Reading::idea`]).
+#[must_use]
+pub fn read(text: &str) -> Reading {
     let lines: Vec<&str> = text.lines().collect();
     let mut parser = Parser::default();
     let Some(end) = frontmatter_end(&lines) else {
         parser.problem(Some(1), no_frontmatter());
-        return Err(parser.into_problems());
+        return Reading {
+            idea: None,
+            problems: parser.into_problems(),
+        };
     };
     let blocks = crate::trust::blocks(&lines, 1, end);
     let keys = Keys {
@@ -1455,6 +1481,8 @@ enum Table {
 struct Parser {
     problems: Vec<Problem>,
     hidden_problems: usize,
+    /// How many of the problems, shown or not, are of the idea's words alone.
+    wording: usize,
     section: Section,
     sections: Vec<(Section, usize)>,
     current: Option<Draft>,
@@ -1501,6 +1529,7 @@ impl Default for Parser {
         Self {
             problems: Vec::new(),
             hidden_problems: 0,
+            wording: 0,
             section: Section::Preamble,
             sections: Vec::new(),
             current: None,
@@ -1529,6 +1558,13 @@ impl Default for Parser {
 }
 
 impl Parser {
+    /// A problem of the idea's words alone: with no other kind, the idea still reads
+    /// ([`Reading::idea`]).
+    fn wording(&mut self, line: Option<usize>, message: impl Into<String>) {
+        self.wording += 1;
+        self.problem(line, message);
+    }
+
     fn problem(&mut self, line: Option<usize>, message: impl Into<String>) {
         if self.problems.len() < MAX_PROBLEMS {
             self.problems.push(Problem {
@@ -1547,7 +1583,7 @@ impl Parser {
             if subject.contains(&word.to_lowercase()) {
                 continue;
             }
-            self.problem(
+            self.wording(
                 Some(number),
                 format!(
                     "`{word}` names one kind of computer, not what the program does: an idea is \
@@ -3467,7 +3503,7 @@ impl Parser {
         secrets
     }
 
-    fn finish(mut self, header: Option<(String, Option<String>)>) -> Result<Idea, Vec<Problem>> {
+    fn finish(mut self, header: Option<(String, Option<String>)>) -> Reading {
         if !self.purpose_written {
             self.problem(
                 None,
@@ -3502,25 +3538,31 @@ impl Parser {
         self.check_calls(secret_line);
         // STE's problems come last: what the idea says matters before how it says it.
         for (line, message) in std::mem::take(&mut self.prose).finish() {
-            self.problem(Some(line), message);
+            self.wording(Some(line), message);
         }
-        match header {
-            Some((title, Some(description))) if self.problems.is_empty() => Ok(Idea {
+        // The idea reads when its problems, if it has any, are of its words alone.
+        let reads = self.problems.len() + self.hidden_problems == self.wording;
+        let idea = match header {
+            Some((title, Some(description))) if reads => Some(Idea {
                 title,
                 description,
-                behaviors: self.behaviors,
+                behaviors: std::mem::take(&mut self.behaviors),
                 uses,
                 syscalls,
                 threads: self.threads,
-                purpose_values: self.purpose_values,
-                network: self.network,
+                purpose_values: std::mem::take(&mut self.purpose_values),
+                network: std::mem::take(&mut self.network),
                 secrets,
-                parts: self.parts,
-                links: self.links,
-                attested: self.attested,
-                outside: self.outside.map(|(_, outside)| outside),
+                parts: std::mem::take(&mut self.parts),
+                links: std::mem::take(&mut self.links),
+                attested: self.attested.take(),
+                outside: self.outside.take().map(|(_, outside)| outside),
             }),
-            _ => Err(self.into_problems()),
+            _ => None,
+        };
+        Reading {
+            idea,
+            problems: self.into_problems(),
         }
     }
 
@@ -4138,6 +4180,41 @@ The program adds two whole numbers between `-1000000000` and `1000000000`.
             problems.iter().any(|problem| problem.contains(needle)),
             "no problem containing {needle:?} in {problems:#?}"
         );
+    }
+
+    /// An idea whose only problems are of its words still reads, so that one check finds the
+    /// problems of its tests with them; any other problem, and nothing reads.
+    #[test]
+    fn an_idea_with_problems_of_its_words_alone_still_reads() {
+        let long = ADD.replace(
+            "The program adds two whole numbers between `-1000000000` and `1000000000`.",
+            "The program adds two whole numbers between `-1000000000` and `1000000000`. The \
+             program is small and it is quick and it is plain and it is exact and it is safe and \
+             it is good and it is here and it is done.",
+        );
+        let reading = read(&long);
+        assert!(
+            reading
+                .problems
+                .iter()
+                .any(|problem| problem.message.contains("STE: this sentence has 32 words")),
+            "{:#?}",
+            reading.problems
+        );
+        let idea = reading.idea.expect("the idea reads");
+        assert_eq!(idea.behaviors.len(), 2);
+        assert!(parse(&long).is_err(), "an idea with a problem is not valid");
+
+        // A problem of another kind with it, here a code block that is never closed, and
+        // nothing reads.
+        let unclosed = format!("{long}\n```\nnever closed\n");
+        let reading = read(&unclosed);
+        assert!(reading.idea.is_none(), "{:#?}", reading.problems);
+        assert!(reading.problems.len() > 1, "{:#?}", reading.problems);
+
+        let reading = read(ADD);
+        assert!(reading.problems.is_empty(), "{:#?}", reading.problems);
+        assert!(reading.idea.is_some());
     }
 
     /// An idea links to the parts it builds on, each by a path relative to it, so the graph of

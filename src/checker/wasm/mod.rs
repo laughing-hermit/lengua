@@ -21,6 +21,7 @@ pub mod rules;
 pub mod secret;
 pub mod split;
 pub mod structure;
+pub mod texts;
 
 #[cfg(test)]
 mod tests;
@@ -155,6 +156,33 @@ fn offered(
     }
 }
 
+/// One of main.wat's own functions as rule 4 counts it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Size {
+    /// The function, as a report names it: `$name`.
+    pub function: String,
+    /// Its line in main.wat.
+    pub line: Option<usize>,
+    /// Its operators, as rule 4 counts them ([`rules::operators`]).
+    pub operators: usize,
+}
+
+/// From this share of rule 4's limit, in percent, `check`'s reply lists a function by name.
+pub const NEAR_PERCENT: usize = 75;
+
+/// The most functions `check`'s reply lists by name.
+pub const MAX_NAMED: usize = 12;
+
+/// `total` over `count` with `digits` decimals, cut and not rounded: an average for a reply.
+fn average(total: usize, count: usize, digits: usize) -> String {
+    let scale = (0..digits).fold(1_usize, |scale, _| scale * 10);
+    let scaled = total.saturating_mul(scale) / count.max(1);
+    if digits == 0 {
+        return scaled.to_string();
+    }
+    format!("{}.{:0digits$}", scaled / scale, scaled % scale)
+}
+
 /// What the rules learned about the program.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Facts {
@@ -189,6 +217,10 @@ pub struct Report {
     /// What each of main.wat's own functions does through the addresses it is lent: what a
     /// part's contract states.
     pub lends: Vec<Lends>,
+    /// Each of main.wat's own functions as rule 4 counts it, in main.wat's order.
+    pub sizes: Vec<Size>,
+    /// main.wat's named texts, and how its marked numbers stand to them.
+    pub texts: texts::Table,
 }
 
 impl Report {
@@ -211,6 +243,8 @@ impl Report {
             unsafe_blocks,
             secret_operators: Vec::new(),
             lends: Vec::new(),
+            sizes: Vec::new(),
+            texts: texts::Table::default(),
         }
     }
 
@@ -231,6 +265,71 @@ impl Report {
         if self.hidden > 0 {
             lines.push(format!("…and {} more", self.hidden));
         }
+        lines
+    }
+
+    /// How full main.wat's functions are, for `check`'s reply, whether or not the rules pass:
+    /// how many functions it has, the largest as rule 4 counts it and the average; each function
+    /// at [`NEAR_PERCENT`] percent of rule 4's limit or more, by name, the largest first, at most
+    /// [`MAX_NAMED`]; and rule 5's assertions a function, with how many the rule needs. Nothing
+    /// for a module the checker couldn't read.
+    #[must_use]
+    pub fn size_lines(&self) -> Vec<String> {
+        let limit = rules::MAX_OPERATORS;
+        let Some(largest) = self.sizes.iter().max_by_key(|size| size.operators) else {
+            return Vec::new();
+        };
+        let count = self.sizes.len();
+        let at = |size: &Size| {
+            size.line
+                .map_or_else(String::new, |line| format!(" ({FILE}:{line})"))
+        };
+        let total: usize = self.sizes.iter().map(|size| size.operators).sum();
+        let mut lines = vec![format!(
+            "rule 4: {count} function{}, at most {limit} operators in each; the largest is {}{} \
+             with {}, and the average is {}",
+            if count == 1 { "" } else { "s" },
+            largest.function,
+            at(largest),
+            largest.operators,
+            average(total, count, 1),
+        )];
+        let near = limit * NEAR_PERCENT / 100;
+        let mut full: Vec<&Size> = self
+            .sizes
+            .iter()
+            .filter(|size| size.operators >= near)
+            .collect();
+        full.sort_by_key(|size| (std::cmp::Reverse(size.operators), size.line));
+        if !full.is_empty() {
+            let mut named: Vec<String> = full
+                .iter()
+                .copied()
+                .take(MAX_NAMED)
+                .map(|size| format!("{} {}{}", size.function, size.operators, at(size)))
+                .collect();
+            if full.len() > MAX_NAMED {
+                named.push(format!("and {} more", full.len() - MAX_NAMED));
+            }
+            lines.push(format!(
+                "rule 4: with {near} operators or more, {NEAR_PERCENT}% of the limit: {}",
+                named.join(", ")
+            ));
+        }
+        let assertions = self.facts.assertions;
+        let needed = rules::MIN_ASSERTIONS_PER_FUNCTION * count;
+        let margin = if assertions >= needed {
+            format!("{} to spare", assertions - needed)
+        } else {
+            format!("{} more to write", needed - assertions)
+        };
+        lines.push(format!(
+            "rule 5: {assertions} assertion{} in {count} function{}, {} a function on average; \
+             the rule needs {needed}: {margin}",
+            if assertions == 1 { "" } else { "s" },
+            if count == 1 { "" } else { "s" },
+            average(assertions, count, 2),
+        ));
         lines
     }
 }
@@ -270,6 +369,15 @@ pub fn check(text: &str, built: &Built, context: &Context<'_>) -> Report {
         ..Facts::default()
     };
     structure::check(&module, built, &policy, &mut violations);
+    let texts = texts::check(&module, &mut violations);
+    let sizes = module
+        .own()
+        .map(|function| Size {
+            function: function.shown(),
+            line: function.line,
+            operators: rules::operators(function),
+        })
+        .collect();
     let flows = flow::analyze(&module, &policy, &mut violations);
     split::check(&module, &flows, &policy, &mut violations);
     let analysis = memory::analyze(&module, &flows);
@@ -283,6 +391,8 @@ pub fn check(text: &str, built: &Built, context: &Context<'_>) -> Report {
     Report {
         secret_operators,
         lends,
+        sizes,
+        texts,
         ..Report::new(violations, facts, module.unsafe_blocks.clone())
     }
 }

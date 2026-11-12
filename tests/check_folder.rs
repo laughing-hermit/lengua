@@ -57,7 +57,16 @@ async fn check_one_folder() {
             "PORT seconds in all: {:.1}",
             started.elapsed().as_secs_f64()
         );
-        for field in ["problems", "tests", "proofs", "parts", "contract", "memory"] {
+        for field in [
+            "problems",
+            "functions",
+            "data",
+            "tests",
+            "proofs",
+            "parts",
+            "contract",
+            "memory",
+        ] {
             let lines = match &report[field] {
                 Value::String(line) => vec![line.as_str()],
                 lines => lines.as_array().into_iter().flatten().map(text).collect(),

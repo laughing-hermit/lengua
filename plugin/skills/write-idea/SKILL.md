@@ -29,7 +29,7 @@ which says what it promises.
    them in the user's mouth. Don't wait for an approval: go straight on. Only if the user asked to
    see the idea before you build, tell them in a line where it is, wait for their go-ahead, and
    call `check` then.
-4. `check` lists every problem at once, in the idea and in its tests, with the fix for each; fix
+4. `check` lists every problem at once, in the idea and in its tests, in the order of the idea's lines, each with its fix; fix
    them all and call it again. If its `next_step` starts with "Blocked", tell the user and stop.
    Then follow its `next_step`: next comes the code, with the compile skill. Its `graph` lines
    say how the program's bundle stands, each starting with how much it matters: fix what

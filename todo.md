@@ -494,16 +494,132 @@ Its runs, each a dispatch of ci.yml on the branch, on Linux on x86-64 unless it 
 
 Still open from it, for the owner:
 - **A server is tested, not proven**, at any size; W22 shows what that weighs.
-- **`check` has no count of operators and reports an idea's problems a kind at a time.**
-- **A text's place is a number in the code.** A name for a text, with its place and length
-  computed by `check`, would take away the one tool the agent could not work without.
-- **The skills' missing pages**: the ten rows of "Where the skills were silent" in the
-  summary.
+- A count of operators, every problem of an idea at once, names for data and the skills'
+  missing pages were open here and are built: the next section.
 - **The mutation test takes 8 mutants a program**, which is one in 455 lines of httpd.
 - **`$http_number` takes 18 digits where `$decimal_parse` took 19**, so a Content-Length of
   19 digits gets 400 and not 413 since the refactor; no test sees it.
 - **A request that is refused before its method is known keeps its body when the method was
   HEAD**, and the server closes without waiting for what a client still sends.
+
+### After the scale test: `check`'s reply and the skills (2026-11-12)
+
+W22's conditions named what the agent lacked. The ones that live in `check`'s reply and in the
+skills are built, on main since 7247c16 (2026-11-13).
+
+What was built:
+- **One check, every problem of an idea.** `idea::read` gives the idea with its problems when
+  the problems are of its words alone (a rule of STE, a word that names one kind of computer).
+  `check`'s idea stage then reads the tests in the same pass, and adds the idea's type, a
+  `- Threads:` line, the parts it links to that are missing and a cycle of those links. The
+  problems come in the order of the idea's lines, each worded as before.
+- **A count of operators.** The reply has `functions` once main.wat builds, whether or not the
+  rules pass: the functions, the largest as rule 4 counts it and the average; each function
+  with 135 operators or more by name, the largest first; rule 5's assertions a function and how
+  many the rule needs.
+- **Rule 9's message names a length from two paths**, with the values the paths bring and the
+  fix, a check on each path.
+- **Named data.** `;; text: NAME` on a string of a `data` segment (or on a segment's first
+  line, for all of it), and `;; at: NAME`, `;; offset: NAME` or `;; len: NAME` on a constant
+  global's line. `check` computes each text's address, its offset in its region and its length,
+  holds each marked number to it (rule 8, with the right number in the message), and replies
+  the table in `data`. Two named texts of two segments that share bytes are a violation.
+  `examples/httpd` uses it for its 54 texts.
+- **The skills' ten gaps**, each from the source: in test-format.md, power-of-10-webassembly.md
+  and host.md, and in two new pages of the compile skill, texts.md and large-programs.md.
+
+What changed in a reply and in a file's format:
+- `check`'s reply has two new fields, `functions` and `data`, each left out when it has
+  nothing to say. No field changed its meaning.
+- A reply with `idea_problems` may now list more problems than before, and lists them in the
+  order of the idea's lines, not the idea's first and STE's last.
+- lengua.lock's format did not change, and nothing new is recorded in it.
+- `examples/httpd/main.wat` has one line more (3,639): its texts are one `data` segment. The
+  memory that the data makes is the same.
+
+Decisions made without asking, each with its reason, for the owner to reverse:
+- **The cap stays**: at most 20 problems of the idea and 20 of its tests, then one count of the
+  rest. A reply with every problem of a long idea could be very large, and the tests keep
+  their numbers. To list them all, raise `MAX_PROBLEMS` in `src/idea.rs` and `src/testfile.rs`.
+- **Only a problem of words lets the tests be read.** A problem of the idea's form (its
+  frontmatter, a missing section, a step that can't be read, a `# Constraints` line) still
+  stops before the tests: a test can't be read from an idea that doesn't parse, and a guess
+  would report problems that aren't there.
+- **`code_problems` still has its stages**: text that doesn't build, then the parts' copies,
+  then the rules, then a part's contract. They were not merged: the rules need text that
+  builds, a contract needs what the rules found, and the scale test lost no cycle there.
+- **`functions` names a function from 75% of rule 4's limit** (135 of 180), at most 12 names,
+  the largest first. Lower would list a third of a large program's functions; higher would
+  warn one edit before the rule breaks. It is in every reply once main.wat builds, the `done`
+  reply too: two or three lines.
+- **Rule 9 got a message, not a wider rule.** The checker could take a check after the paths
+  meet, by making a value of several owners a plain number. A program that then used the
+  value as an address would break rule M1 where it passes today, so the change could refuse a
+  program that is `done` now. The message is sound as it is: it is given only when the rules
+  themselves hold the length as one of several values.
+- **Only a length gets the hint**, as the scale test hit it. An index from two paths gets the
+  old message: by the time it is an offset, the rules no longer hold where it came from.
+- **Named data is comments on plain WebAssembly text**, as the owner preferred, in this shape:
+  one `data` segment with one string a line, so that a text has no address of its own to
+  write, and three markers for a number (`at`, `offset`, `len`). `offset` is the one a large
+  program needs: rule 9 wants an index checked against its region's size, so a function takes
+  a text's offset, not its address. A length counts every byte of the string, a NUL too.
+- **The table is in the reply only while it is needed**: when a marked number is wrong or a
+  text has no number yet. When all are right, `data` is one line. A table of 54 texts in
+  every reply would be 55 lines for nothing.
+- **A text's region is the one that starts nearest at or below its address**, whether or not
+  the region's size holds the text, so that a size still to write (0) doesn't hide the offsets.
+  Rule M6 still refuses data that a read-only region doesn't hold.
+- **A wrong marked number is rule 8's**, named constants: the number is a named constant that
+  says something of the data, and the rule already holds a region's size to its data.
+- **The checker's facts were left as they are** (`Facts`), and the new counts are fields of
+  its report: the checker's golden recordings print the facts, and they did not change.
+- **`lengua-mcp check <folder>`, the attester, was not changed**: it says attested or not, and
+  still stops at the first kind of problem of an idea. An agent fixes an idea with `check`.
+
+What was not built, and why:
+- **Proofs that reach a server, modules that `check` links, the run path**: not this work's.
+- **A rule 9 that takes one check after two paths meet**: the reason is above.
+- **The hint for an index from two paths**: the reason is above.
+- **A text that a part brings**: a part still brings no data. Named data is the program's own.
+- **A count by size in the mutation test** (8 mutants a program): not touched.
+
+Found on the way, in lengua as it was: rule 8 already holds a read-only region's size to the
+bytes of its data, and says the right size. So a region of texts needs no marker on its size;
+`examples/httpd` has one all the same, and both checks agree.
+
+Never exercised on a runner:
+- **The mutation test with httpd as it is now.** Its texts are one segment and the file has
+  one line more, so the test's 8 mutants of httpd may fall on other lines than in run
+  43197373671. The test is one of the slow ignored ones, and it was not run again.
+- **The slow ignored tests**, and `check_one_folder` on `examples/httpd` through the server
+  with its parts and proofs: the suite takes httpd from its request to done with no proof time.
+- **An agent that uses named data from the skills alone**, in a live session: the pages
+  texts.md and large-programs.md were written from the source and from `examples/httpd`, and
+  no agent has built a program from them.
+- **A `data` segment with a name annotation, or with numbers such as `(i8 1 2)` between its
+  strings**: the code handles both (the first names nothing, the second counts the numbers'
+  bytes), and no test has either.
+- **The golden recordings**: the checker's facts did not change, and no golden run compared
+  them.
+
+Its runs, each a dispatch of ci.yml on the branch:
+- 43247312892 (Linux on x86-64, at da17e2e, the library's tests and six test files): clippy
+  and the build passed; 597 of the library's tests passed and 2 failed, both new tests whose
+  own expectations were wrong (rule 8's line for a region's size, which the test had not
+  expected; and an idea that the test took to have a second kind of problem, which had one);
+  the two tests of `tests/wasm_scale.rs` passed; the format job failed and gave a patch.
+- 43254949991 (Linux on x86-64, at f438352, the library's tests and `wasm_scale`, `skills`,
+  `wasm_every_program`, `wasm_red_team` and `wasm_templates`): every test passed, httpd with
+  its named texts among the programs that go from their request to done; the format job
+  failed on two of the tests' lines and gave a patch, which is applied.
+- 43262384846 (the suite on all five systems, at 5f7c803, with main's 7d1a450 merged in, a
+  merge with no conflict): format, the five test jobs and the gate passed, on Linux on x86-64
+  and on ARM64, macOS on ARM64, and Windows on x86-64 and on ARM64. This record's last lines
+  were written after it.
+- 43279029552 (a compile check at a80cb76): green.
+- 43279811923 (the suite on all five systems, at 7247c16, with main's b070fd6 merged in): format,
+  the five test jobs and the gate passed. The landing on main rests on it.
 
 ### W21's parts: functions a program takes, already checked (2026-11-11)
 

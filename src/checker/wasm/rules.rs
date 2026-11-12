@@ -19,6 +19,15 @@ use crate::wasm::wasi::Bytes;
 /// measures.
 pub const MAX_OPERATORS: usize = 180;
 
+/// How many operators rule 4 counts in `function`: every operator of its body as the module
+/// holds it, its final `end` aside. So each `block`, `loop`, `if`, `else` and `end` is one, and
+/// so is each `local.get`, `global.get` and constant: a folded `(if (cond) (then …))` is its
+/// condition's operators, `if`, the body's and `end`.
+#[must_use]
+pub fn operators(function: &Function<'_>) -> usize {
+    function.body.len().saturating_sub(1)
+}
+
 /// The fewest assertions per function, on average.
 pub const MIN_ASSERTIONS_PER_FUNCTION: usize = 2;
 
@@ -259,7 +268,7 @@ impl Checker<'_, '_, '_> {
 
     /// Rule 4: at most [`MAX_OPERATORS`] operators.
     fn size(&mut self, function: &Function<'_>) {
-        let count = function.body.len().saturating_sub(1);
+        let count = operators(function);
         if count > MAX_OPERATORS {
             self.violation(
                 Rule::Functions,

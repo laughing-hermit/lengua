@@ -231,6 +231,11 @@ struct Checking {
     /// For an idea with a `- Secret:` line, what the check of the engine's machine code read on
     /// this CPU, in one line.
     machine_code: Option<String>,
+    /// How full main.wat's functions are, which every reply about it says
+    /// ([`CheckReport::functions`]).
+    functions: Vec<String>,
+    /// main.wat's named texts, which every reply about it says ([`CheckReport::data`]).
+    data: Vec<String>,
     /// For an outside module, main.wasm, what every reply says of it: that it is trusted, not
     /// proven, what doesn't hold for it and what lengua's host holds
     /// ([`crate::wasm::outside::said`]). `None` for main.wat.
@@ -415,6 +420,19 @@ pub struct CheckReport {
     /// addresses it is lent, which is what the section states.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub contract: Vec<String>,
+    /// How full main.wat's functions are, once it builds, whether or not it follows the rules:
+    /// how many functions it has, the largest as rule 4 counts its operators (at most 180 a
+    /// function) and the average; each function with 135 operators or more, by name, the
+    /// largest first; and rule 5's assertions a function, with how many the rule needs. Read
+    /// it before a function grows: one near the limit is split before it breaks the rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub functions: Vec<String>,
+    /// main.wat's named texts, when it names any: each string of a `data` segment marked
+    /// `;; text: NAME`. One line when every number marked `;; at: NAME`, `;; offset: NAME` or
+    /// `;; len: NAME` is its text's; else every text's address, its offset in its region and
+    /// its length in bytes, to write the numbers from.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data: Vec<String>,
     /// What's known of memory safety, once the tests pass: what the rules settle, and the runs
     /// the proofs hold to the rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -975,29 +993,7 @@ impl LenguaServer {
                  and runs, as the write-idea skill shows, then delete {LEGACY_TESTS_FILE}."
             )])
         } else {
-            match idea::parse(idea_text) {
-                Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
-                Ok(idea) => match testfile::check(&idea) {
-                    Err(problems) => Err(problems.iter().map(ToString::to_string).collect()),
-                    Ok(suite) => {
-                        // An idea of the native lengua's type, then one with threads.
-                        let problem = wat::type_problem(idea_text, &idea)
-                            .or_else(|| wat::threads_problem(idea_text, &idea));
-                        let missing = missing_parts(folder, &idea);
-                        // A cycle of `- Builds on:` links blocks the programs in it, and only
-                        // them.
-                        if let Some(problem) = problem {
-                            Err(vec![problem])
-                        } else if !missing.is_empty() {
-                            Err(missing)
-                        } else if let Some(cycle) = graph::builds_on_cycle(folder.path()) {
-                            Err(vec![cycle])
-                        } else {
-                            Ok((idea, suite))
-                        }
-                    }
-                },
-            }
+            idea_findings(folder, idea_text)
         };
         let (idea, suite) = match problems {
             Ok(parsed) => parsed,
@@ -2728,6 +2724,76 @@ fn keep_tested(data_dir: &DataDir, module: &Sha256Hex, wasm: &[u8]) -> Result<()
     Ok(())
 }
 
+/// The line a problem of an idea names, when it starts with `line N: `.
+fn problem_line(problem: &str) -> Option<usize> {
+    let (number, _) = problem.strip_prefix("line ")?.split_once(": ")?;
+    number.parse().ok()
+}
+
+/// How many problems a line such as `…and 3 more problems` stands for, when `problem` is one.
+fn more_problems(problem: &str) -> Option<usize> {
+    problem
+        .strip_prefix("…and ")?
+        .strip_suffix(" more problems")?
+        .parse()
+        .ok()
+}
+
+/// `found`, an idea's problems from every reading of it, in the order of the idea's lines:
+/// those that name a line first, by line, each reading's order kept within a line; then those
+/// that name none; then one count of the problems that the readings left out.
+fn in_line_order(found: Vec<String>) -> Vec<String> {
+    let mut hidden = 0;
+    let mut kept: Vec<(usize, String)> = Vec::new();
+    for problem in found {
+        match more_problems(&problem) {
+            Some(count) => hidden += count,
+            None => kept.push((problem_line(&problem).unwrap_or(usize::MAX), problem)),
+        }
+    }
+    // A stable sort: two problems of one line stay in the order they were found.
+    kept.sort_by_key(|(line, _)| *line);
+    let mut ordered: Vec<String> = kept.into_iter().map(|(_, problem)| problem).collect();
+    if hidden > 0 {
+        ordered.push(format!("…and {hidden} more problems"));
+    }
+    ordered
+}
+
+/// The idea of `folder`, `idea_text`, with its tests; or every problem that a check finds in it
+/// without running code, at once and in the order of its lines: its own problems; and, when
+/// those are of its words alone (so the idea still reads), also the problems of its tests,
+/// that it is of the native lengua's type or has threads, the parts it links to that are
+/// missing, and a cycle of its `- Builds on:` links. Each problem is worded as its own reading
+/// words it.
+fn idea_findings(
+    folder: &ProgramFolder,
+    idea_text: &str,
+) -> Result<(Idea, TestSuite), Vec<String>> {
+    let reading = idea::read(idea_text);
+    let mut found: Vec<String> = reading.problems.iter().map(ToString::to_string).collect();
+    let Some(idea) = reading.idea else {
+        return Err(in_line_order(found));
+    };
+    let suite = match testfile::check(&idea) {
+        Ok(suite) => Some(suite),
+        Err(problems) => {
+            found.extend(problems.iter().map(ToString::to_string));
+            None
+        }
+    };
+    // An idea of the native lengua's type, then one with threads.
+    found.extend(wat::type_problem(idea_text, &idea));
+    found.extend(wat::threads_problem(idea_text, &idea));
+    found.extend(missing_parts(folder, &idea));
+    // A cycle of `- Builds on:` links blocks the programs in it, and only them.
+    found.extend(graph::builds_on_cycle(folder.path()));
+    match suite {
+        Some(suite) if found.is_empty() => Ok((idea, suite)),
+        _ => Err(in_line_order(found)),
+    }
+}
+
 fn idea_problems(folder: &ProgramFolder, problems: &[idea::Problem]) -> String {
     let mut text = format!("{folder}/{IDEA_FILE} has problems; call check:\n");
     for problem in problems {
@@ -2746,6 +2812,32 @@ mod tests {
     fn a_server_for_any_computer_is_said_to_serve_on_every_address() {
         assert_eq!(serving_address(8080, false), "127.0.0.1:8080");
         assert_eq!(serving_address(8080, true), "0.0.0.0:8080");
+    }
+
+    /// An idea's problems from its several readings come in the order of its lines, those of
+    /// one line in the order they were found, those with no line after them, and what the
+    /// readings left out as one count.
+    #[test]
+    fn an_idea_s_problems_come_in_the_order_of_its_lines() {
+        let found = [
+            "line 30: the second",
+            "a part is missing",
+            "line 4: the first",
+            "…and 2 more problems",
+            "line 30: the third",
+            "…and 3 more problems",
+        ];
+        let ordered = in_line_order(found.iter().map(|problem| (*problem).to_owned()).collect());
+        assert_eq!(
+            ordered,
+            [
+                "line 4: the first",
+                "line 30: the second",
+                "line 30: the third",
+                "a part is missing",
+                "…and 5 more problems",
+            ]
+        );
     }
 
     /// A working folder is none of lengua's own: not the data folder, not a folder inside it,
@@ -3083,6 +3175,8 @@ mod tests {
             machine_code: None,
             outside: None,
             calls: false,
+            functions: Vec::new(),
+            data: Vec::new(),
         });
         server
             .checks
