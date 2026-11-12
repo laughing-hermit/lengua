@@ -607,3 +607,57 @@ async fn a_profile_of_a_short_run_has_its_form() {
     }
     session.service.cancel().await.expect("close the session");
 }
+
+/// `lengua-mcp lsp` serves an editor over standard input and output: it answers `initialize`,
+/// publishes the findings of a folder's main.wat when the editor saves it, here the builder's
+/// for a line that doesn't build, and exits with 0 after `shutdown` and `exit`.
+#[test]
+fn the_language_server_publishes_the_findings_of_a_saved_file() {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let program = Program::new();
+    program.write("idea.md", ADD_IDEA);
+    let broken = ADD_CODE.replacen("(local.set $err", "(local.sett $err", 1);
+    assert_ne!(broken, ADD_CODE);
+    program.write("main.wat", &broken);
+    let path = program.path().to_string_lossy().replace('\\', "/");
+    let root = if path.starts_with('/') { "" } else { "/" };
+    let uri = format!("file://{root}{path}/main.wat");
+    let frame = |message: &Value| {
+        let body = message.to_string();
+        format!("Content-Length: {}\r\n\r\n{body}", body.len())
+    };
+    let mut server = Command::new(launcher())
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env_remove("LENGUA_LOG")
+        .spawn()
+        .expect("it starts");
+    let mut input = server.stdin.take().expect("its input");
+    for message in [
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
+        json!({ "jsonrpc": "2.0", "method": "textDocument/didSave",
+                "params": { "textDocument": { "uri": uri } } }),
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "shutdown" }),
+        json!({ "jsonrpc": "2.0", "method": "exit" }),
+    ] {
+        input
+            .write_all(frame(&message).as_bytes())
+            .expect("the message is written");
+    }
+    drop(input);
+    let output = server.wait_with_output().expect("it ends");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let said = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(said.starts_with("Content-Length: "), "{said}");
+    assert!(said.contains("\"textDocumentSync\""), "{said}");
+    assert!(
+        said.contains("\"method\":\"textDocument/publishDiagnostics\""),
+        "{said}"
+    );
+    assert!(said.contains("\"source\":\"lengua\""), "{said}");
+    assert!(said.contains(&format!("\"uri\":\"{uri}\"")), "{said}");
+}
