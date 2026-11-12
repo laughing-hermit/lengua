@@ -1416,7 +1416,7 @@ What it gives, each on Linux on x86-64 with a minute for a build's proofs:
 | checksums, B1 and B2 | a line of 1 byte of 24 | two lines of up to 20 of 24 bytes with the formula at each call (466 input combinations); up to 18 with the body followed (385) | 43299067452 |
 | checksums, B5 | tested (crc32's limit) | every input in range | 43299067452 |
 | shout-server (the event-loop server), 3 tests | 0 proven: the wait on poll_oneoff | B2 for every input in range; B1 to 1,021 of 1,023 bytes; B3, two clients at once, to 11 of 1,023 | 43299050025 |
-| httpd, 25 tests | 0 proven: the wait on poll_oneoff | 7 for every input in range (B4, B9, B11, both of B12, B13, B14), 8 to a length (B1, B2, B7, B8, B15, B19, B20, B21), 1 found wrong (B5, below), 9 tested, not proven | 43299050025, before B5's fix |
+| httpd, 25 tests | 0 proven: the wait on poll_oneoff | 8 for every input in range (B4, B5 once its test was right, B9, B11, both of B12, B13, B14), 8 to a length (B1, B2, B7, B8, B15, B19, B20, B21), 9 tested, not proven | 43312340945, at 607721c; 43299050025 before B5 changed, where B5 was found wrong |
 
 The same check of checksums took 33.5 s with the formula and 34.4 s with the body followed
 (43299067452): the time goes to the paths of the decimal printing, 85 a combination, not to
