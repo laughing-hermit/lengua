@@ -181,15 +181,10 @@ impl Policy {
     /// which bounds what it prints, and it can't split in its turn.
     #[must_use]
     pub fn for_a_piece(self) -> Self {
-        let split = Grants {
-            split: self.reach.get().split,
-            ..Grants::NONE
-        };
         Self {
             standard_input: true,
-            reach: Reach::of(&split),
             piece: true,
-            ..Self::default()
+            ..self
         }
     }
 

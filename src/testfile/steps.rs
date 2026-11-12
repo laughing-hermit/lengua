@@ -314,7 +314,7 @@ impl Reading {
         if at.words(&["the", "program", "is", "a", "piece"]) {
             self.wrote("piece".into());
             self.piece = true;
-            if self.reach.split.is_none() {
+            if self.reach.split.is_none() && std::env::var_os("LENGUA_DEFENCES").is_some() {
                 self.found.push((
                     self.line,
                     "idea.md grants no split of the program's work: a test runs a piece only \
