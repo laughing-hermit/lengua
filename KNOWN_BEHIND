@@ -43,9 +43,12 @@
 # in 43145761976, as the first's runner lost its connection), found 25 more level, and they
 # left: 736 rows stay. It found 10 rows behind by more than the margin that the list doesn't
 # name, 4 of the 26 among them; todo.md lists them.
+# The first run where the other modules run as outside modules (W23),
+# https://github.com/laughing-hermit/lengua/actions/runs/43191148225 (at 610aaf5), passed on
+# linux-aarch64 and found 3 more level on the others, and they left: 733 rows stay. It found 15
+# rows behind by more than the margin that the list doesn't name, all against native builds
+# and all rows the list named once; todo.md lists them.
 
-linux-x86_64 empty c-wasm cpu  # behind
-linux-x86_64 empty cpp-wasm cpu  # behind
 linux-x86_64 empty c cpu  # behind
 linux-x86_64 empty c wall  # behind
 linux-x86_64 empty c memory  # behind
@@ -576,7 +579,6 @@ windows-x86_64 histogram c size  # behind
 windows-x86_64 histogram cpp wall  # behind
 windows-x86_64 histogram cpp memory  # behind
 windows-x86_64 histogram cpp size  # behind
-windows-x86_64 histogram rust cpu  # behind
 windows-x86_64 histogram rust wall  # behind
 windows-x86_64 histogram rust memory  # behind
 windows-x86_64 histogram rust size  # behind

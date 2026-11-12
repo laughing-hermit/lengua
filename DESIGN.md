@@ -1255,33 +1255,30 @@ it names, and where a change in the list's history named a row the list before i
 row needs no line and fails no run.
 
 Each run writes a report, BENCHMARKS-<runner>.md, from its results alone. The latest run's five
-reports are in [docs/benchmarks](docs/benchmarks/README.md): run 43131768685 at 43813ae, the first
-where the other modules make lengua's checks, and for macOS on ARM64 run 43145761976 at the same
-commit, as the first's macOS runner lost its connection. That run measured the list as it was,
-761 rows, so the gate passed on no runner. It found 25 rows the list named level, which have
-left it, and 10 rows behind by more than the margin that it doesn't name, where the run before
-(43084459708, the other modules with no lock) had 26. KNOWN_BEHIND now names 736 rows. Against
-C, C++ and Rust compiled to WebAssembly they are 4 on Linux on x86-64, 2 on Linux on ARM64, 6
-on macOS on ARM64, 2 on Windows on x86-64 and 2 on Windows on ARM64, and 10 of the 16 are the
-size of upcase-stdin against C's and C++'s modules. Of the 840 such rows a measure, lengua is
-ahead on 470, level on 351 and behind on 19. Three of the 10 unnamed rows are against the
-other modules: the empty program's wall time against C's and C++'s on Linux on x86-64, at
-1.12×, where lengua's module starts 0.13 ms behind C's with no lock on either, for a reason not
-found yet; and tally's memory against Rust's on macOS on ARM64, at 1.05×. Seven are against
-native builds, four of them CPU time on Windows. Against the native builds the list names 128 to
+reports are in [docs/benchmarks](docs/benchmarks/README.md): run 43191148225 at 610aaf5, the first
+where the other modules run as outside modules, with lengua's checks. That run measured the
+list as it was, 736 rows, and the gate passed on Linux on ARM64, the first pass on any runner.
+On the other four it found 3 rows the list named level, which have left it, and 15 rows behind
+by more than the margin that it doesn't name, all against native builds. KNOWN_BEHIND now names
+733 rows. Against C, C++ and Rust compiled to WebAssembly they are 14: the size of upcase-stdin
+against C's and C++'s modules on every runner, and wc's CPU and wall time against C's and
+Rust's modules on macOS on ARM64. Of the 840 such rows a measure, lengua is ahead on 489, level
+on 337 and behind on those 14, and none is behind and unnamed. Run 43084459708, where the other
+modules ran with no lock, had 26 unnamed rows, 21 of them start-up time against C's and C++'s
+modules. Against the native builds the list names 127 to
 150 of each runner's 168 rows: tally is the one workload whose time is below the best native
-build's on every runner, at 0.43 to 0.65 times. Windows counts CPU time in 15.6 ms ticks, so a
+build's on every runner, at 0.46 to 0.65 times. Windows counts CPU time in 15.6 ms ticks, so a
 short run's CPU time there is a whole number of ticks, and most of its CPU rows against the other
 modules are level. Every native C++ version was
 built in that run, on all five runners: the bench passes `-std=gnu++17`, as the files are C++17
 and Apple's clang and LLVM's clang on Windows take an older standard by default.
 
 The margin has a limit the runs show. It takes the rows at 1.00× out of the gate, which were
-most of what changed sides before. It doesn't settle a row whose gap sits near 5%: of this
-run's 10 unnamed rows, four are at 1.05× to 1.08×, and four more are Windows's CPU time in
-ticks. The list may not take a row back, so with the list as it is these results fail the gate
-on four runners and pass it on Linux on ARM64. No run has measured the new list yet. todo.md
-names the rows ("A row the gate can't decide").
+most of what changed sides before. It doesn't settle a row whose gap sits near 5%, or one
+counted in Windows's ticks: every one of this run's 15 unnamed rows is a row the list named
+once, that a run found level and took out, and that is behind again. The list may not take a
+row back, so with the list as it is these results fail the gate on four runners and pass it on
+Linux on ARM64. todo.md names the rows ("A row the gate can't decide").
 
 ## The release and the install
 
