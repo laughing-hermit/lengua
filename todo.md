@@ -1156,7 +1156,7 @@ tests in it). The suite on all five runners at 08597b1, which the landing on mai
 
 ### W24: the tools of a run (2026-11-12)
 
-On the branch `wip/tools`, for the owner to land. DESIGN.md ("The tools of a run") has the design
+On main since 09b3603 (2026-11-13); the landing rests on 43262336978, the suite green on all five runners at 09b3603, with the sealed run merged in. DESIGN.md ("The tools of a run") has the design
 as built, docs/run.md the reports, and the compile skill's page ("Finding what a run does") what
 an agent is told. The tests are `tests/tools.rs` and the unit tests of `src/wasm/tools.rs`.
 
@@ -1251,7 +1251,7 @@ bench was run for this: see below.
     report says about how far apart samples are meant to be, not how far they were.
   - The agent's own use: no agent followed the skill's new page in an interactive session.
 
-Runs, all on `wip/tools`: 43228046587 (at b411f2a on Linux on x86-64: clippy passes for the three
+Runs, before the landing run 43262336978: 43228046587 (at b411f2a on Linux on x86-64: clippy passes for the three
 tools; the run was then replaced by the next compile run); 43230047911 (at bacf6a5 on Linux on
 x86-64: `tests/tools.rs`, 6 of 6, and the unit tests of the tools, green, the first time they
 ran); 43230111360 (at a0e4961 on Linux on x86-64: the language server compiles under clippy; its
@@ -2054,7 +2054,7 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
     tool, for the agent), a profile of where a run's time goes by function and line, and a trace
     of what a run asked the host for. Each is a tool call or a flag, with no new program to
     install.
-    - **Built (2026-11-12), on `wip/tools`:** "W24: the tools of a run", above, says what
+    - **Built (2026-11-12), on main since 09b3603:** "W24: the tools of a run", above, says what
       was built, what is refused, each decision and what was never run.
 
 Runs, as they land:
@@ -2090,7 +2090,7 @@ Runs, as they land:
 | The gate's margin (the owner's decision, 2026-11-11) | On the branch `wip/gate-margin`: 42962012528 (the gate's unit tests on Linux on x86-64 at f87c47c, green, with clippy; the format job's layout applied at b4eb385); 42964220148 (format, the suite on Linux on x86-64 and the gate job at cd54e79, green); 42964232679 (the bench on all five runners at cd54e79, against the list from before the margin: the gate failed on each; 139 rows KNOWN_BEHIND named are level or ahead, 127 and 12, taken out, which leaves 898; 6 rows behind by more than the margin that it doesn't name, 1 on Linux on x86-64, 2 on Linux on ARM64, 2 on macOS on ARM64 and 1 on Windows on x86-64; no build failed, every native C++ version built with `-std=gnu++17`). The reports are in [docs/benchmarks](docs/benchmarks/README.md). No run has measured the new list yet |
 | W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](docs/history/PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
 | W23, its first part: an outside module (on main since 3fd8a3a) | 43158638831 (at e6d96e5 on Linux on x86-64: tests/outside.rs for the first time, 13 of 14 passing, with rustc's and clang's modules built by the outside-wasm job; the one failure was the count idea's own generated range, fixed at 7312377); 43158958049 (the library's tests of the idea's lines, the state and `check`'s reading, green); 43161754287 and 43161756923 (the defences out at 5260953, tag `archive/wip/outside-off`: 9 of tests/outside.rs's 14 tests and 4 of the library's fail); 43161759761 (at 7312377, with main's W21 merged in: format, the suite on all five runners, green but for `two_checks_at_once_leave_a_consistent_index` on Windows on ARM64, the known race in log.md); 43172439582 (at 3fd8a3a, with main's W20 merged in too: format, the outside-wasm job, the suite on all five runners and the gate, all green; the landing on main rests on it) |
-| W24, the tools of a run (on `wip/tools`) | 43228046587 (clippy for the three tools, at b411f2a on Linux on x86-64); 43230047911 (at bacf6a5 on Linux on x86-64: `tests/tools.rs`, 6 of 6, and the tools' unit tests, green); 43230111360 (the language server compiles, at a0e4961); 43233706608 (at 6860c47 on Linux on x86-64: `tests/tools.rs`, 8 of 8, with the language server's test and the server's refusal, and 22 unit tests, green, the format job too); 43244554648 (at 6eb8d78, with main ac3a6fd in it: the suite on all five runners and the gate, green, before the sealed-run work landed on main) |
+| W24, the tools of a run (on main since 09b3603) | 43262336978 (the landing run: the suite on all five runners and the gate at 09b3603, green) and 43262312598 (its compile check); before them: 43228046587 (clippy for the three tools, at b411f2a on Linux on x86-64); 43230047911 (at bacf6a5 on Linux on x86-64: `tests/tools.rs`, 6 of 6, and the tools' unit tests, green); 43230111360 (the language server compiles, at a0e4961); 43233706608 (at 6860c47 on Linux on x86-64: `tests/tools.rs`, 8 of 8, with the language server's test and the server's refusal, and 22 unit tests, green, the format job too); 43244554648 (at 6eb8d78, with main ac3a6fd in it: the suite on all five runners and the gate, green, before the sealed-run work landed on main) |
 
 ## Superseded by the pivot
 
