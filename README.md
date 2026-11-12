@@ -403,7 +403,8 @@ with rows the list can't take back is the owner's ([todo.md](todo.md)).
   templates, its [README](plugin/README.md) and licence.
 - `examples/`: 19 programs, each a folder of `idea.md` and `main.wat`.
 - `tests/`: the suite, the 29 programs of `tests/fixtures`, the host's 109 cases in
-  `tests/host-cases`, and the vendored schemas.
+  `tests/host-cases`, the Rust and C programs of `tests/outside`, which CI compiles to outside
+  modules, and the vendored schemas.
 - `benches/`: the gate, and the C, C++ and Rust versions of its workloads.
 - `xtask/`: lengua's tooling, in Rust (`cargo xtask help` lists the tasks), with the runners in
   `targets.json` and the pinned tools in `tools.tsv`.
