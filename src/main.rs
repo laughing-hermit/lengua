@@ -15,7 +15,8 @@ use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage: lengua-mcp [--data-dir <absolute path>] [--version]
        lengua-mcp [--data-dir <absolute path>] run <program folder> [--in <folder>] \
-[--env NAME=value]... [[--] <argument>...]
+[--env NAME=value]... [--trace] [--profile] [--stop-at <line or $function>] \
+[--show-memory <address>:<length>] [[--] <argument>...]
        lengua-mcp check <program folder>
        lengua-mcp [--data-dir <absolute path>] doctor
        lengua-mcp [--data-dir <absolute path>] install [--check] [--link] [--prefix <folder>]

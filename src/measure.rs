@@ -1012,7 +1012,9 @@ mod counters {
 pub fn run_module(spec: &str) -> i32 {
     match run_module_alone(spec) {
         Ok(code) => code,
-        Err(NotRun::Refused(message) | NotRun::NotCompiled(message)) => {
+        Err(
+            NotRun::Refused(message) | NotRun::NotCompiled(message) | NotRun::Tool(message),
+        ) => {
             eprintln!("lengua-mcp: {message}");
             REFUSED
         }

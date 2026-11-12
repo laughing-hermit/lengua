@@ -507,6 +507,24 @@ pub struct RunParams {
     /// these reach it.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// true to record every call the program makes to the host, in order: the reply's
+    /// `host_calls`. For an idea with a `- Secret:` line it holds the calls' names and the
+    /// host's answers only.
+    #[serde(default)]
+    pub trace: bool,
+    /// true to sample where the run's time goes, by function and line of main.wat: the
+    /// reply's `profile`.
+    #[serde(default)]
+    pub profile: bool,
+    /// Stops the run when it reaches a line of main.wat, as `"42"`, or the start of one of
+    /// its functions, as `"$parse"`, and reports the values there: the reply's `stopped`.
+    /// What runs is a copy of main.wat with the stop written in, which check never stamps.
+    #[serde(default)]
+    pub stop_at: Option<String>,
+    /// With `stop_at`: bytes of the program's memory to show at the stop, as
+    /// `"<address>:<length>"`, such as `"1024:64"`, at most 1024 bytes.
+    #[serde(default)]
+    pub show_memory: Option<String>,
 }
 
 /// What `run` reports.
@@ -540,6 +558,15 @@ pub struct RunReport {
     /// and to none of main.wat's rules or proofs. Tell the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outside: Option<String>,
+    /// With `trace`: every call the program made to the host, in order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_calls: Option<crate::wasm::tools::TraceReport>,
+    /// With `profile`: where the run's time went.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::wasm::tools::ProfileReport>,
+    /// With `stop_at`: whether the run reached the place, and the values there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped: Option<crate::wasm::tools::StopReport>,
 }
 
 /// One connection lengua made for a program, or couldn't.
@@ -594,6 +621,9 @@ fn ended_report(
             .collect(),
         may_reach: Vec::new(),
         outside: None,
+        host_calls: None,
+        profile: None,
+        stopped: None,
     }
 }
 
@@ -662,6 +692,9 @@ impl LenguaServer {
             connections,
             may_reach: Vec::new(),
             outside: None,
+            host_calls: None,
+            profile: None,
+            stopped: None,
         }
     }
 }
@@ -780,7 +813,16 @@ impl LenguaServer {
             naming the files in args relative to it (\"notes.txt\", not \"/home/me/notes.txt\"); \
             stdin_file: a file in folder to read as standard input instead of stdin, up to 16 \
             MiB; timeout_seconds: up to 40 (10 by default); env: environment variables, for an \
-            idea that uses the environment; stop: true to stop the server run started.",
+            idea that uses the environment; stop: true to stop the server run started. \
+            Three tools, each off unless asked for, for a run that ends: trace: true lists \
+            every call the program made to the host, in order, in host_calls (names and \
+            answers only for an idea with a `- Secret:` line); profile: true samples where \
+            the time went, by function and line of main.wat, in profile; stop_at: a line of \
+            main.wat (\"42\") or a function of it (\"$parse\") stops the run there and gives \
+            the locals, the globals the program changes and, with show_memory \
+            (\"<address>:<length>\"), bytes of its memory, in stopped. A stop runs a copy of \
+            main.wat with the stop written in, which check never stamps; lengua refuses it \
+            for an idea with a `- Secret:` or a `- Splits:` line and for an outside module.",
         annotations(title = "Run program", read_only_hint = false, open_world_hint = true)
     )]
     async fn run(
@@ -2390,6 +2432,8 @@ pub struct ShellRun {
     /// Environment variables for a program whose idea uses the environment: only these reach
     /// it.
     pub env: BTreeMap<String, String>,
+    /// The tools the run is asked for: `--trace`, `--profile`, `--stop-at` and `--show-memory`.
+    pub tools: crate::wasm::tools::Asked,
     /// The program's command-line arguments.
     pub args: Vec<String>,
 }
@@ -2409,6 +2453,7 @@ impl ShellRun {
             folder: None,
             env: BTreeMap::new(),
             args: Vec::new(),
+            tools: crate::wasm::tools::Asked::default(),
         };
         while let Some(arg) = args.next() {
             // The first word that isn't an option starts the program's arguments.
@@ -2424,6 +2469,20 @@ impl ShellRun {
                         .split_once('=')
                         .ok_or_else(|| format!("--env {pair:?} isn't NAME=value"))?;
                     request.env.insert(name.to_owned(), value.to_owned());
+                }
+                "--trace" => request.tools.trace = true,
+                "--profile" => request.tools.profile = true,
+                "--stop-at" => {
+                    let place = args
+                        .next()
+                        .ok_or("--stop-at needs a line of main.wat or a function of it")?;
+                    request.tools.stop_at = Some(place);
+                }
+                "--show-memory" => {
+                    let range = args
+                        .next()
+                        .ok_or("--show-memory needs <address>:<length>")?;
+                    request.tools.show_memory = Some(range);
                 }
                 "--" => {
                     request.args = args.collect();
@@ -2478,6 +2537,7 @@ pub fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> Result<i32, Str
             // A process that compiles is never told to leave a run to another.
             NotRun::NotCompiled(why) => format!("the module isn't compiled: {why}"),
             NotRun::Secret => "the idea names a secret, which this lengua can't check".to_owned(),
+            NotRun::Tool(why) => format!("{why}, which this lengua can't do"),
         }
     })
 }

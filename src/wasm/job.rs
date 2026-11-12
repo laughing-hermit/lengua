@@ -153,6 +153,9 @@ pub struct Job {
     pub instant_sleeps: bool,
     /// How far it may go.
     pub limits: Limits,
+    /// The tools the run is asked for: none, unless the server asks.
+    #[serde(default)]
+    pub tools: crate::wasm::tools::Tools,
 }
 
 /// How a job's program ended.
@@ -209,6 +212,9 @@ pub struct Done {
     pub connections: Vec<Reached>,
     /// Why lengua couldn't run it as asked, if it couldn't.
     pub problem: Option<String>,
+    /// What the run's tools found, for a run that was asked for any.
+    #[serde(default)]
+    pub found: Option<Box<crate::wasm::tools::Found>>,
 }
 
 /// `bytes` in lowercase hex.
@@ -378,6 +384,7 @@ mod tests {
                     max_file: Some(64),
                     max_written: None,
                 },
+                tools: crate::wasm::tools::Tools::default(),
             })),
         ];
         let mut wire = Vec::new();

@@ -17,7 +17,8 @@ use lengua::data_dir::DataDir;
 use lengua::server::{NotRun, ShellRun};
 
 const USAGE: &str = "usage: lengua-run [--data-dir <absolute path>] <program folder> \
-[--in <folder>] [--env NAME=value]... [[--] <argument>...]
+[--in <folder>] [--env NAME=value]... [--trace] [--profile] [--stop-at <line or $function>] \
+[--show-memory <address>:<length>] [[--] <argument>...]
        lengua-run --version";
 
 /// The exit code when lengua won't run a program or can't start it, as `lengua-mcp run` gives
@@ -129,7 +130,7 @@ fn main() -> ExitCode {
                 eprintln!("lengua-run: {message}");
                 ExitCode::from(REFUSED)
             }
-            Err(NotRun::NotCompiled(_) | NotRun::Secret) => hand_over(
+            Err(NotRun::NotCompiled(_) | NotRun::Secret | NotRun::Tool(_)) => hand_over(
                 words.into_iter(),
                 "the module isn't compiled for this computer yet",
             ),
@@ -190,6 +191,9 @@ fn main() -> ExitCode {
             );
             hand_over(for_lengua_mcp(), "the program's module has to be compiled")
         }
+        // A profile takes an engine whose clock moves, and a stop a copy of main.wat built for
+        // the run: both are lengua-mcp's to compile.
+        Err(NotRun::Tool(why)) => hand_over(for_lengua_mcp(), &why),
         Err(NotRun::Secret) => hand_over(
             for_lengua_mcp(),
             "the idea names a secret, so the machine code is read before each run",

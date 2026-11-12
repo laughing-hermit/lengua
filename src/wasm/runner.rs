@@ -28,6 +28,7 @@ use crate::wasm::host::stdio::{Input, Output, Stream};
 use crate::wasm::host::term::{Own, Terminal};
 use crate::wasm::host::{Beyond, Host, Stop, World};
 use crate::wasm::job::{self, Connection, Done, Ending, Event, Job, Reached};
+use crate::wasm::tools::{self, Equipment, Tools};
 
 /// The exit code a run that never started is given, as a shell gives a command it can't find:
 /// the run's `supplied` says why.
@@ -193,6 +194,11 @@ pub(crate) fn execute_until(
         host.splitting = Some(Splitting::new(module.clone(), linker.clone(), setup));
     }
     let stop = Arc::clone(&host.limits.stop);
+    // A profiled run: the engine's clock moves on faster while it lasts, and each look at
+    // the clock takes a sample.
+    let samples = host.probe.samples.clone().filter(|_| setup.interrupts());
+    let _ticker = samples.as_ref().map(|_| tools::Ticker::start(engine));
+    let show = host.probe.stop;
     let mut store = Store::new(engine, host);
     store.limiter(|host| &mut host.limits.store);
     if setup.counts() {
@@ -200,18 +206,24 @@ pub(crate) fn execute_until(
     }
     if setup.interrupts() {
         store.set_epoch_deadline(1);
-        store.epoch_deadline_callback(move |_| {
+        store.epoch_deadline_callback(move |context| {
             if stop.load(Ordering::SeqCst) || halt.as_ref().is_some_and(Halt::halted) {
                 return Err(wasmtime::Error::new(Stop::Stopped));
             }
             if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return Err(wasmtime::Error::new(Stop::TimedOut));
             }
+            if let Some(samples) = &samples
+                && let Ok(mut samples) = samples.lock()
+            {
+                samples.take(WasmBacktrace::force_capture(&context).frames());
+            }
             Ok(UpdateDeadline::Continue(1))
         });
     }
     let started = Instant::now();
     let instantiated = linker.instantiate(&mut store, module);
+    let kept = instantiated.as_ref().ok().copied();
     let (mut ending, mut problem) = match instantiated {
         Err(error)
             if error.downcast_ref::<Stop>().is_none()
@@ -237,6 +249,11 @@ pub(crate) fn execute_until(
         },
     };
     let wall_time_ns = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    // A copy with a stop: what it kept is read before its store goes.
+    if let (Some(show), Some(instance)) = (show, kept) {
+        let stopped = tools::stopped(&mut store, &instance, show);
+        store.data_mut().probe.stopped = Some(stopped);
+    }
     let instructions = if setup.counts() {
         store.get_fuel().ok().map(|left| u64::MAX - left)
     } else {
@@ -460,6 +477,7 @@ pub fn unstarted(id: u64, problem: String, connections: Vec<Reached>) -> Done {
         split: false,
         connections,
         problem: Some(problem),
+        found: None,
     }
 }
 
@@ -482,6 +500,7 @@ pub fn done(id: u64, executed: Executed, connections: Vec<Reached>) -> Done {
     // After the connections lengua made, what the program asked to open itself.
     let mut connections = connections;
     connections.append(&mut host.notes.opened);
+    let found = host.probe.found();
     drop(host);
     Done {
         id,
@@ -495,6 +514,7 @@ pub fn done(id: u64, executed: Executed, connections: Vec<Reached>) -> Done {
         split,
         connections,
         problem,
+        found,
     }
 }
 
@@ -607,6 +627,30 @@ fn read_left(folder: &Path) -> Result<Found, String> {
     Ok((files, folders))
 }
 
+/// Gives `host` what the tools `tools` fill while `module` runs, and, for a run that asks for a
+/// trace, the linker whose functions write it, in place of the run's own.
+///
+/// # Errors
+///
+/// When the traced linker can't be made, which lengua's tests rule out.
+pub fn equip(
+    tools: Tools,
+    host: &mut Host,
+    module: &Module,
+) -> Result<Option<Linker<Host>>, String> {
+    if tools.profile {
+        host.probe.samples = Some(Arc::default());
+    }
+    host.probe.stop = tools.stop;
+    let Some(detail) = tools.trace else {
+        return Ok(None);
+    };
+    let trace = Arc::new(std::sync::Mutex::new(tools::Trace::new(detail)));
+    let linker = crate::wasm::host::linker_traced(module, &trace)?;
+    host.probe.trace = Some(trace);
+    Ok(Some(linker))
+}
+
 /// What a run from a shell gives its program: this process's own standard input, output and
 /// error, the shell's folder or the one it names, no time limit and nothing counted.
 #[derive(Debug, Clone, Copy)]
@@ -655,6 +699,11 @@ pub trait Order: Send + Sync {
 
     /// What the module is given.
     fn here(&self) -> Here<'_>;
+
+    /// The tools the run is asked for, with what their reports need; none, by default.
+    fn equipment(&self) -> Option<&Equipment> {
+        None
+    }
 }
 
 /// A module and what it is given, handed over as they are: [`run_here`]'s order, which no checks
@@ -751,7 +800,11 @@ pub fn run_once_checked<O: Order, E>(
 ) -> Result<io::Result<End>, E> {
     let checked = checks()?;
     if on == On::Main {
-        return Ok(run_on_this_thread(checked.module(), &checked.here()));
+        return Ok(run_on_this_thread(
+            checked.module(),
+            &checked.here(),
+            checked.equipment(),
+        ));
     }
     let ended = std::thread::scope(|scope| {
         let order = &checked;
@@ -759,7 +812,7 @@ pub fn run_once_checked<O: Order, E>(
             .name("lengua program".to_owned())
             .stack_size(STACK)
             .spawn_scoped(scope, move || {
-                run_on_this_thread(order.module(), &order.here())
+                run_on_this_thread(order.module(), &order.here(), order.equipment())
             })
             .and_then(|running| {
                 running
@@ -810,7 +863,11 @@ fn say_places(here: &Here<'_>, ground: &Ground, lengua: &str) {
 /// [`run_once_checked`]'s work, on the program's thread, once the checks pass: `module` run with
 /// what `here` gives, in its own engine, through a linker with the functions it imports, with
 /// room made for the files a program may hold.
-fn run_on_this_thread(module: &Module, here: &Here<'_>) -> io::Result<End> {
+fn run_on_this_thread(
+    module: &Module,
+    here: &Here<'_>,
+    equipment: Option<&Equipment>,
+) -> io::Result<End> {
     make_room().map_err(io::Error::other)?;
     let engine = module.engine();
     let linker = crate::wasm::host::linker_for(module).map_err(io::Error::other)?;
@@ -909,14 +966,19 @@ fn run_on_this_thread(module: &Module, here: &Here<'_>) -> io::Result<End> {
         instant_sleeps: false,
         events: None,
     };
-    let executed = execute(
-        engine,
-        &linker,
-        module,
-        Setup::Shell,
-        Host::new(world),
-        None,
-    );
+    // A run that asks for a tool: its host holds what the tool fills, a trace takes a linker
+    // of its own, and a profile an engine whose clock moves.
+    let mut host = Host::new(world);
+    let (setup, traced) = match equipment {
+        Some(equipment) => (
+            equipment.setup,
+            equip(equipment.tools, &mut host, module).map_err(io::Error::other)?,
+        ),
+        None => (Setup::Shell, None),
+    };
+    let linker = traced.unwrap_or(linker);
+    let mut executed = execute(engine, &linker, module, setup, host, None);
+    let found = executed.host.probe.found();
     if let Some(problem) = &executed.problem {
         eprintln!("{lengua}: {problem}");
     }
@@ -939,6 +1001,16 @@ fn run_on_this_thread(module: &Module, here: &Here<'_>) -> io::Result<End> {
         (Ok(BTreeMap::new()), BTreeSet::new()),
         line,
     );
+    if let Some(equipment) = equipment {
+        let reports = tools::reports(found.map(|found| *found), equipment.tools, &equipment.names);
+        for line in reports.lines(lengua) {
+            eprintln!("{line}");
+        }
+        // A run that reached its stop ended as it was asked to.
+        if reports.stopped.is_some_and(|stop| stop.reached) {
+            return Ok(End::Exited(0));
+        }
+    }
     Ok(run.end)
 }
 

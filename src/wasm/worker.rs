@@ -101,14 +101,13 @@ impl Worker {
             Err(problem) => return runner::unstarted(job.id, problem, reached),
         };
         let timeout = job.limits.timeout_ms.map(Duration::from_millis);
-        let executed = runner::execute(
-            &engine,
-            &linker,
-            &module,
-            job.setup,
-            Host::new(world),
-            timeout,
-        );
+        // A run that asks for a trace gets a linker of its own, whose functions write it.
+        let mut host = Host::new(world);
+        let linker = match runner::equip(job.tools, &mut host, &module) {
+            Ok(traced) => traced.unwrap_or(linker),
+            Err(problem) => return runner::unstarted(job.id, problem, reached),
+        };
+        let executed = runner::execute(&engine, &linker, &module, job.setup, host, timeout);
         runner::done(job.id, executed, reached)
     }
 }
