@@ -856,6 +856,9 @@ pub struct Names {
     /// Whether the program splits its work into pieces, whose calls and time the tools don't
     /// see.
     pub splits: bool,
+    /// Whether the program calls a module ([`crate::call`]), whose own functions the tools
+    /// don't name.
+    pub calls: bool,
 }
 
 impl Names {
@@ -877,6 +880,7 @@ impl Names {
             lines: Some((built.lines.clone(), built.bodies.clone())),
             stop: None,
             splits: false,
+            calls: false,
         }
     }
 
@@ -996,6 +1000,13 @@ fn trace_report(traced: Traced, detail: Detail, names: &Names) -> TraceReport {
     if names.splits {
         note.push_str(" The calls the pieces of its split work made are not in the trace.");
     }
+    if names.calls {
+        note.push_str(
+            " A call of a function of a module the program calls is no call of the host, and \
+             is not in the trace: the trace has the copies it made to and from the module, \
+             `lengua_call_1.give` and `lengua_call_1.take`, with the module's number first.",
+        );
+    }
     TraceReport {
         calls: traced.calls,
         left_out: traced.left_out,
@@ -1057,6 +1068,12 @@ fn profile_report(sampled: &Sampled, names: &Names) -> ProfileReport {
     };
     if names.splits {
         note.push_str(" The pieces of its split work are not sampled.");
+    }
+    if names.calls {
+        note.push_str(
+            " A sample inside a module the program calls counts for the function and the \
+             line of main.wat that made the call.",
+        );
     }
     ProfileReport {
         samples: sampled.taken,

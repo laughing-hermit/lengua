@@ -9,6 +9,7 @@
 //! before it does anything, and every buffer it borrows is checked against the program's memory:
 //! one outside it stops the program as a load outside it would.
 
+pub mod call;
 pub mod clock;
 pub mod fds;
 pub mod files;
@@ -54,6 +55,9 @@ pub enum Stop {
     /// A piece of its split work didn't end well: the run ends as that piece ended, which the
     /// host's notes hold ([`Notes::piece`]).
     Piece,
+    /// A module the program calls called a function of the host, which a called module
+    /// doesn't have ([`call`]).
+    Reaches,
     /// It calls the host but exports no memory named `memory`.
     NoMemory,
 }
@@ -67,6 +71,10 @@ impl fmt::Display for Stop {
             Self::Stopped => f.write_str("lengua stopped the program"),
             Self::OutsideMemory => f.write_str("a host call's buffer is outside the memory"),
             Self::Piece => f.write_str("a piece of the program's split work didn't end well"),
+            Self::Reaches => f.write_str(
+                "a module the program calls called a function of lengua's host, and a called \
+                 module reaches nothing",
+            ),
             Self::NoMemory => f.write_str(
                 "the module calls the host but exports no memory named \"memory\", which every \
                  host call reads and writes through",
@@ -385,6 +393,12 @@ pub struct Host {
     /// What a call that splits its work runs its pieces with: this run's own module, in its
     /// engine. `None` in a piece, which doesn't split, and in a run whose idea grants none.
     pub splitting: Option<split::Splitting>,
+    /// The modules its idea calls, compiled, as the run was given them: taken when they are
+    /// started ([`call::start`]).
+    pub calls: Vec<call::Loaded>,
+    /// The modules its idea calls, each an instance of its own in the run's store, in the
+    /// order of the idea's `- Calls:` lines.
+    pub called: Vec<call::Instance>,
     /// Its clocks.
     pub clock: clock::Clock,
     /// Its random bytes.
@@ -475,6 +489,8 @@ impl Host {
             reversed,
             terminal: beyond.terminal.unwrap_or_else(|| Box::new(term::Absent)),
             splitting: None,
+            calls: Vec::new(),
+            called: Vec::new(),
             clock: clock::Clock::new(clock),
             random: random::Random::new(random),
             limits,
@@ -541,6 +557,7 @@ pub fn linker(engine: &Engine) -> Result<Linker<Host>, String> {
         linker: &mut linker,
         wanted: None,
         trace: None,
+        refusing: false,
     };
     define(&mut defining).map_err(|error| format!("lengua's host couldn't be set up: {error}"))?;
     Ok(linker)
@@ -567,6 +584,7 @@ pub fn linker_for(module: &wasmtime::Module) -> Result<Linker<Host>, String> {
         linker: &mut linker,
         wanted: Some(wanted.as_slice()),
         trace: None,
+        refusing: false,
     };
     define(&mut defining).map_err(|error| format!("lengua's host couldn't be set up: {error}"))?;
     Ok(linker)
@@ -592,6 +610,32 @@ pub fn linker_traced(
         linker: &mut linker,
         wanted: Some(wanted.as_slice()),
         trace: Some(trace),
+        refusing: false,
+    };
+    define(&mut defining).map_err(|error| format!("lengua's host couldn't be set up: {error}"))?;
+    Ok(linker)
+}
+
+/// The linker for a module the program calls ([`call`]): each function of WASI preview 1 and of
+/// lengua's own modules that the module imports, defined with its type as one that stops the
+/// run, and nothing else. A called module reaches nothing of the host: a function the
+/// program's idea grants the program is not the called module's. An import that is no function
+/// of the host's is undefined here, and the module doesn't start.
+///
+/// # Errors
+///
+/// When a function can't be defined, which lengua's tests rule out.
+pub fn linker_refusing(module: &wasmtime::Module) -> Result<Linker<Host>, String> {
+    let wanted: Vec<(&str, &str)> = module
+        .imports()
+        .map(|import| (import.module(), import.name()))
+        .collect();
+    let mut linker = Linker::new(module.engine());
+    let mut defining = Defining {
+        linker: &mut linker,
+        wanted: Some(wanted.as_slice()),
+        trace: None,
+        refusing: true,
     };
     define(&mut defining).map_err(|error| format!("lengua's host couldn't be set up: {error}"))?;
     Ok(linker)
@@ -605,6 +649,9 @@ struct Defining<'l> {
     wanted: Option<&'l [(&'l str, &'l str)]>,
     /// The trace each call goes into, for a run that asked for one.
     trace: Option<&'l trace::Shared>,
+    /// Whether each function is defined as one that stops the run, for a module the program
+    /// calls, which reaches nothing of the host.
+    refusing: bool,
 }
 
 impl Defining<'_> {
@@ -621,6 +668,9 @@ impl Defining<'_> {
             .wanted
             .is_none_or(|wanted| wanted.contains(&(module, name)))
         {
+            if self.refusing {
+                return function.refuse(self.linker, module, name);
+            }
             match self.trace {
                 Some(trace) => function.define(self.linker, module, name, trace)?,
                 None => {
@@ -1236,7 +1286,7 @@ fn own_spec(module: &str, name: &str) -> wasmtime::Result<&'static Function> {
 /// Defines lengua's own functions for the files a program's arguments name, the programs it
 /// starts and the terminal, each in its own module.
 fn define_own(linker: &mut Defining<'_>) -> wasmtime::Result<()> {
-    use wasi::{FS_MODULE, RUN_MODULE, SPLIT_MODULE, TERM_MODULE};
+    use wasi::{CALL_MODULE, FS_MODULE, RUN_MODULE, SPLIT_MODULE, TERM_MODULE};
     let unsigned = i32::cast_unsigned;
 
     let f = own_spec(FS_MODULE, "file_open")?;
@@ -1345,6 +1395,38 @@ fn define_own(linker: &mut Defining<'_>) -> wasmtime::Result<()> {
     linker.func_wrap(SPLIT_MODULE, f.name, move |mut caller: Caller<'_, Host>| {
         answer(&mut caller, f, |_, host| split::piece(host))
     })?;
+    let f = own_spec(CALL_MODULE, "give")?;
+    linker.func_wrap(
+        CALL_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>, module: i32, at: i32, from: i32, len: i32| {
+            call::copy(
+                &mut caller,
+                f,
+                call::Way::Give,
+                unsigned(module),
+                unsigned(at),
+                unsigned(from),
+                unsigned(len),
+            )
+        },
+    )?;
+    let f = own_spec(CALL_MODULE, "take")?;
+    linker.func_wrap(
+        CALL_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>, module: i32, at: i32, into: i32, len: i32| {
+            call::copy(
+                &mut caller,
+                f,
+                call::Way::Take,
+                unsigned(module),
+                unsigned(at),
+                unsigned(into),
+                unsigned(len),
+            )
+        },
+    )?;
     Ok(())
 }
 

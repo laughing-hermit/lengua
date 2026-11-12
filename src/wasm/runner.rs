@@ -103,35 +103,45 @@ pub struct Executed {
     pub problem: Option<String>,
 }
 
-/// Where `error` stopped the program: each frame's offset in its module, the innermost first, as
-/// far as the engine kept them (its 20 innermost).
-fn offsets_of(error: &wasmtime::Error) -> Vec<u64> {
-    error
-        .downcast_ref::<WasmBacktrace>()
-        .map(|trace| {
-            trace
-                .frames()
-                .iter()
-                .filter_map(wasmtime::FrameInfo::module_offset)
-                .filter_map(|offset| u64::try_from(offset).ok())
-                .collect()
-        })
-        .unwrap_or_default()
+/// Where `error` stopped the program: each frame's offset in `module`, the program's own, the
+/// innermost first, as far as the engine kept them (its 20 innermost); and whether the innermost
+/// frame of all is in another module, one the program calls ([`crate::wasm::host::call`]). A
+/// frame there has no line of main.wat: the trap's place is the call main.wat made.
+fn offsets_of(error: &wasmtime::Error, module: &Module) -> (Vec<u64>, bool) {
+    let Some(trace) = error.downcast_ref::<WasmBacktrace>() else {
+        return (Vec::new(), false);
+    };
+    let frames = trace.frames();
+    let elsewhere = frames
+        .first()
+        .is_some_and(|frame| !Module::same(frame.module(), module));
+    let offsets = frames
+        .iter()
+        .filter(|frame| Module::same(frame.module(), module))
+        .filter_map(wasmtime::FrameInfo::module_offset)
+        .filter_map(|offset| u64::try_from(offset).ok())
+        .collect();
+    (offsets, elsewhere)
 }
 
-/// How a run that stopped with `error` ended, and what lengua has to say of it.
-fn ending_of(error: &wasmtime::Error) -> (Ending, Option<String>) {
+/// What lengua says of a trap inside a module the program calls.
+const TRAPPED_IN_CALLED: &str = "it trapped inside a module it calls: the place is the call \
+                                 main.wat made";
+
+/// How a run of `module` that stopped with `error` ended, and what lengua has to say of it.
+fn ending_of(error: &wasmtime::Error, module: &Module) -> (Ending, Option<String>) {
+    let (offsets, elsewhere) = offsets_of(error, module);
+    let called = elsewhere.then(|| TRAPPED_IN_CALLED.to_owned());
     if let Some(stop) = error.downcast_ref::<Stop>() {
         return match stop {
             Stop::Exit(code) => (Ending::Exited(*code), None),
             Stop::OutputTooLarge => (Ending::OutputTooLarge, None),
             Stop::TimedOut => (Ending::TimedOut, None),
             Stop::Stopped | Stop::Piece => (Ending::Stopped, None),
-            Stop::OutsideMemory => (Ending::Trapped(Trap::OutOfBounds, offsets_of(error)), None),
-            Stop::NoMemory => (
-                Ending::Trapped(Trap::Other, offsets_of(error)),
-                Some(stop.to_string()),
-            ),
+            Stop::OutsideMemory => (Ending::Trapped(Trap::OutOfBounds, offsets), None),
+            Stop::NoMemory | Stop::Reaches => {
+                (Ending::Trapped(Trap::Other, offsets), Some(stop.to_string()))
+            }
         };
     }
     if let Some(trap) = error.downcast_ref::<wasmtime::Trap>() {
@@ -150,10 +160,10 @@ fn ending_of(error: &wasmtime::Error) -> (Ending, Option<String>) {
             | wasmtime::Trap::BadSignature => Trap::IndirectCall,
             _ => Trap::Other,
         };
-        return (Ending::Trapped(kind, offsets_of(error)), None);
+        return (Ending::Trapped(kind, offsets), called);
     }
     (
-        Ending::Trapped(Trap::Other, offsets_of(error)),
+        Ending::Trapped(Trap::Other, offsets),
         Some(format!("{error:#}")),
     )
 }
@@ -188,7 +198,18 @@ pub(crate) fn execute_until(
     deadline: Option<Instant>,
     halt: Option<Halt>,
 ) -> Executed {
-    host.limits.store = limits::store_limits(limits::memory_limit(module));
+    // The modules the idea calls are instances of the same store, each with a memory of its
+    // own, which the engine holds to the maximum its module declares.
+    let called = if host.policy.piece {
+        &[][..]
+    } else {
+        host.calls.as_slice()
+    };
+    let memory = called
+        .iter()
+        .map(|called| limits::memory_limit(&called.module))
+        .fold(limits::memory_limit(module), usize::max);
+    host.limits.store = limits::store_limits_with(memory, called.len());
     host.limits.deadline = deadline;
     if host.policy.reach.get().split.is_some() && !host.policy.piece {
         host.splitting = Some(Splitting::new(module.clone(), linker.clone(), setup));
@@ -199,6 +220,8 @@ pub(crate) fn execute_until(
     let samples = host.probe.samples.clone().filter(|_| setup.interrupts());
     let _ticker = samples.as_ref().map(|_| tools::Ticker::start(engine));
     let show = host.probe.stop;
+    // A sample inside a module the program calls counts for the call main.wat made.
+    let sampled = module.clone();
     let mut store = Store::new(engine, host);
     store.limiter(|host| &mut host.limits.store);
     if setup.counts() {
@@ -216,13 +239,33 @@ pub(crate) fn execute_until(
             if let Some(samples) = &samples
                 && let Ok(mut samples) = samples.lock()
             {
-                samples.take(WasmBacktrace::force_capture(&context).frames());
+                let trace = WasmBacktrace::force_capture(&context);
+                let frames = trace.frames();
+                let own = frames
+                    .iter()
+                    .position(|frame| Module::same(frame.module(), &sampled))
+                    .unwrap_or(frames.len());
+                samples.take(&frames[own..]);
             }
             Ok(UpdateDeadline::Continue(1))
         });
     }
     let started = Instant::now();
-    let instantiated = linker.instantiate(&mut store, module);
+    // The modules the idea calls start first, each an instance of its own with no function of
+    // the host, and the program's linker gets their functions: only then is the program itself
+    // started. A run whose idea calls none takes its linker as it is.
+    let calls = store.data().policy.reach.get().calls.len();
+    let mut linked = None;
+    let begun = if calls > 0 && !store.data().policy.piece {
+        let mut own = linker.clone();
+        let begun = crate::wasm::host::call::start(&mut store, &mut own);
+        linked = Some(own);
+        begun
+    } else {
+        Ok(())
+    };
+    let linker = linked.as_ref().unwrap_or(linker);
+    let instantiated = begun.and_then(|()| linker.instantiate(&mut store, module));
     let kept = instantiated.as_ref().ok().copied();
     let (mut ending, mut problem) = match instantiated {
         Err(error)
@@ -234,7 +277,7 @@ pub(crate) fn execute_until(
                 Some(format!("lengua couldn't start the module: {error:#}")),
             )
         }
-        Err(error) => ending_of(&error),
+        Err(error) => ending_of(&error, module),
         Ok(instance) => match instance.get_typed_func::<(), ()>(&mut store, "_start") {
             Err(error) => (
                 Ending::Unstarted,
@@ -244,7 +287,7 @@ pub(crate) fn execute_until(
             ),
             Ok(start) => match start.call(&mut store, ()) {
                 Ok(()) => (Ending::Exited(0), None),
-                Err(error) => ending_of(&error),
+                Err(error) => ending_of(&error, module),
             },
         },
     };
@@ -700,6 +743,12 @@ pub trait Order: Send + Sync {
     /// What the module is given.
     fn here(&self) -> Here<'_>;
 
+    /// The modules the program's idea calls, each compiled in the engine that runs the program;
+    /// none, by default.
+    fn calls(&self) -> &[crate::wasm::host::call::Loaded] {
+        &[]
+    }
+
     /// The tools the run is asked for, with what their reports need; none, by default.
     fn equipment(&self) -> Option<&Equipment> {
         None
@@ -804,6 +853,7 @@ pub fn run_once_checked<O: Order, E>(
             checked.module(),
             &checked.here(),
             checked.equipment(),
+            checked.calls(),
         ));
     }
     let ended = std::thread::scope(|scope| {
@@ -812,7 +862,12 @@ pub fn run_once_checked<O: Order, E>(
             .name("lengua program".to_owned())
             .stack_size(STACK)
             .spawn_scoped(scope, move || {
-                run_on_this_thread(order.module(), &order.here(), order.equipment())
+                run_on_this_thread(
+                    order.module(),
+                    &order.here(),
+                    order.equipment(),
+                    order.calls(),
+                )
             })
             .and_then(|running| {
                 running
@@ -867,6 +922,7 @@ fn run_on_this_thread(
     module: &Module,
     here: &Here<'_>,
     equipment: Option<&Equipment>,
+    calls: &[crate::wasm::host::call::Loaded],
 ) -> io::Result<End> {
     make_room().map_err(io::Error::other)?;
     let engine = module.engine();
@@ -969,6 +1025,7 @@ fn run_on_this_thread(
     // A run that asks for a tool: its host holds what the tool fills, a trace takes a linker
     // of its own, and a profile an engine whose clock moves.
     let mut host = Host::new(world);
+    host.calls = calls.to_vec();
     let (setup, traced) = match equipment {
         Some(equipment) => (
             equipment.setup,

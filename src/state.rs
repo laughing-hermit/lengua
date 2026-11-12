@@ -412,6 +412,7 @@ mod tests {
                 unsafe_blocks: 0,
                 features: Vec::new(),
                 parts: Vec::new(),
+                calls: Vec::new(),
             }),
             ..recorded()
         }

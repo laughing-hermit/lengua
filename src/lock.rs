@@ -113,6 +113,9 @@ pub struct CodeStamp {
     /// The parts the code takes functions from, in the idea's order: none for a program that
     /// builds on no part.
     pub parts: Vec<PartStamp>,
+    /// The modules the code calls, in the idea's order: none for a program that calls none
+    /// ([`crate::call`]).
+    pub calls: Vec<CallStamp>,
 }
 
 /// A part the checked code builds on, as it was when the code's tests passed: `check` held each
@@ -128,6 +131,21 @@ pub struct PartStamp {
     pub code: Sha256Hex,
     /// The functions the code takes from it, without the `$`, in main.wat's order.
     pub functions: Vec<String>,
+}
+
+/// A module the checked code calls, as it was when the code's tests passed with it: a run
+/// starts the program only beside this very module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallStamp {
+    /// Where the module is, as the idea's `- Calls:` line names it, relative to the program's
+    /// folder: `shapes.wasm` for an outside module, `../shapes` for a lengua program.
+    pub call: String,
+    /// SHA-256 of the module that ran beside the program: the outside module's file, or the
+    /// module the called program's own lock records.
+    pub module: Sha256Hex,
+    /// Whether it is a lengua program checked on this computer; otherwise it is an outside
+    /// module, trusted and not proven.
+    pub checked: bool,
 }
 
 /// What follows the engine in the stamp of an outside module.
@@ -300,6 +318,21 @@ impl Lock {
                     .collect();
                 let _ = writeln!(text, "parts = [{}]", parts.join(", "));
             }
+            if !code.calls.is_empty() {
+                let calls: Vec<String> = code
+                    .calls
+                    .iter()
+                    .map(|call| {
+                        format!(
+                            "{{ call = {}, module = \"{}\", checked = {} }}",
+                            toml_string(&call.call),
+                            call.module,
+                            call.checked
+                        )
+                    })
+                    .collect();
+                let _ = writeln!(text, "calls = [{}]", calls.join(", "));
+            }
         }
         if let Some(proofs) = &self.proofs {
             let proven: Vec<String> = proofs.proven.iter().map(|id| toml_string(id)).collect();
@@ -471,7 +504,18 @@ struct CodeTable {
     #[serde(default)]
     parts: Vec<PartTable>,
     #[serde(default)]
+    calls: Vec<CallTable>,
+    #[serde(default)]
     emulator: Option<String>,
+}
+
+/// One of `[code]`'s `calls`: a module the code calls.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CallTable {
+    call: String,
+    module: String,
+    checked: bool,
 }
 
 /// One of `[code]`'s `parts`: a part the code builds on.
@@ -579,6 +623,17 @@ pub(crate) fn parse_toml(body: &str) -> Result<Lock, LockError> {
                                 idea: digest(&part.idea)?,
                                 code: digest(&part.code)?,
                                 functions: part.functions,
+                            })
+                        })
+                        .collect::<Result<_, _>>()?,
+                    calls: code
+                        .calls
+                        .into_iter()
+                        .map(|call| {
+                            Ok::<_, LockError>(CallStamp {
+                                call: call.call,
+                                module: digest(&call.module)?,
+                                checked: call.checked,
                             })
                         })
                         .collect::<Result<_, _>>()?,
@@ -692,6 +747,14 @@ pub(crate) fn as_written(body: &str) -> Option<Lock> {
         } else {
             Vec::new()
         };
+        // The modules the code calls, when it calls any.
+        let calls = if text.eat("calls = ").is_some() {
+            let calls = text.list(Written::call)?;
+            text.eat("\n")?;
+            calls
+        } else {
+            Vec::new()
+        };
         Some(CodeStamp {
             sha256,
             module_sha256,
@@ -700,6 +763,7 @@ pub(crate) fn as_written(body: &str) -> Option<Lock> {
             unsafe_blocks,
             features,
             parts,
+            calls,
         })
     } else {
         None
@@ -883,6 +947,23 @@ impl Written<'_> {
             idea,
             code,
             functions,
+        })
+    }
+
+    /// One of `[code]`'s `calls` tables: `{ call = "shapes.wasm", module = "…", checked =
+    /// false }`.
+    fn call(&mut self) -> Option<CallStamp> {
+        self.eat("{ call = ")?;
+        let call = self.string()?;
+        self.eat(", module = ")?;
+        let module = self.sha256()?;
+        self.eat(", checked = ")?;
+        let checked = self.boolean()?;
+        self.eat(" }")?;
+        Some(CallStamp {
+            call,
+            module,
+            checked,
         })
     }
 
@@ -1329,6 +1410,7 @@ mod tests {
                 unsafe_blocks: 1,
                 features: vec!["bulk-memory".into(), "simd".into()],
                 parts: Vec::new(),
+                calls: Vec::new(),
             }),
             proofs: None,
         }
@@ -1754,7 +1836,27 @@ mod tests {
                     functions: Vec::new(),
                 },
             ];
+            code.calls = vec![
+                CallStamp {
+                    call: "shapes.wasm".into(),
+                    module: Sha256Hex::of(b"an outside module"),
+                    checked: false,
+                },
+                CallStamp {
+                    call: "../a \"quoted\" program".into(),
+                    module: Sha256Hex::of(b"a program's module"),
+                    checked: true,
+                },
+            ];
         }
+        assert!(
+            built
+                .body()
+                .contains("]\ncalls = [{ call = \"shapes.wasm\", module = \""),
+            "{}",
+            built.body()
+        );
+        assert!(built.body().contains(", checked = false }, { call = "));
         assert!(
             built.body().contains(concat!(
                 "\nfeatures = [\"bulk-memory\", \"simd\"]\nparts = [{ part = \"../decimal\", ",
@@ -1896,6 +1998,13 @@ mod tests {
                     idea: random_hash(rng),
                     code: random_hash(rng),
                     functions: random_texts(rng, 3),
+                })
+                .collect(),
+            calls: (0..rng.random_range(0..=2))
+                .map(|_| CallStamp {
+                    call: random_text(rng),
+                    module: random_hash(rng),
+                    checked: rng.random_bool(0.5),
                 })
                 .collect(),
         });

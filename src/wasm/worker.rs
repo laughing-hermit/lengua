@@ -35,6 +35,18 @@ const KEPT_MODULES: usize = 16;
 /// How many jobs' stops a worker remembers: a stop may come just after its job has ended.
 const KEPT_STOPS: usize = 16;
 
+/// A module a job runs or calls, as the worker finds it.
+struct Wanted<'j> {
+    /// The engine's configuration it runs in.
+    setup: Setup,
+    /// Whether its compiled form is loaded from lengua's data folder, under the user's seal.
+    sealed: bool,
+    /// Its SHA-256, in hex.
+    hash: &'j str,
+    /// Its file.
+    file: &'j Path,
+}
+
 /// A worker's engines, linkers and compiled modules.
 struct Worker {
     /// lengua's data folder, when the server gave it: where the compiled modules a run loads
@@ -62,51 +74,51 @@ impl Worker {
         Ok((engine, linker))
     }
 
-    /// The compiled form of `job`'s module that the data folder keeps for the job's
+    /// The compiled form of `wanted`'s module that the data folder keeps for its
     /// configuration, loaded into `engine` once it carries the seal of `key` as that module's;
     /// or why there is none to load.
     fn kept(
         engine: &Engine,
-        job: &Job,
+        wanted: &Wanted<'_>,
         key: &Key,
         path: &Path,
         hash: &Sha256Hex,
     ) -> Result<Module, String> {
         let sealed = std::fs::read(path)
             .map_err(|_| "it isn't compiled for this computer yet".to_owned())?;
-        key.load_sealed_for(job.setup, engine, hash, &sealed)
+        key.load_sealed_for(wanted.setup, engine, hash, &sealed)
             .map_err(|unsealed| unsealed.to_string())
     }
 
-    /// `job`'s module from its file, checked against its hash.
-    fn read(job: &Job) -> Result<Vec<u8>, String> {
-        let bytes = std::fs::read(&job.module).map_err(|error| {
-            format!("the module {} can't be read: {error}", job.module.display())
+    /// `wanted`'s module from its file, checked against its hash.
+    fn read(wanted: &Wanted<'_>) -> Result<Vec<u8>, String> {
+        let bytes = std::fs::read(wanted.file).map_err(|error| {
+            format!("the module {} can't be read: {error}", wanted.file.display())
         })?;
-        if Sha256Hex::of(&bytes).as_str() != job.hash {
+        if Sha256Hex::of(&bytes).as_str() != wanted.hash {
             return Err(format!(
                 "the module {} changed since it was built",
-                job.module.display()
+                wanted.file.display()
             ));
         }
         Ok(bytes)
     }
 
-    /// `job`'s module for a job that loads its compiled form ([`Job::sealed`]), with the data
-    /// folder and the user's key there: the form kept, once its seal holds ([`Self::kept`]);
-    /// else the module compiled here, sealed, kept for the next run, and loaded from those
-    /// very bytes, as the next run loads them, which this worker says once on standard error,
-    /// the server's log. `None` when the job doesn't ask, or there is no data folder or no
-    /// key: then the module is compiled as a test's is.
-    fn sealed(&self, engine: &Engine, job: &Job) -> Option<Result<Module, String>> {
-        if !job.sealed {
+    /// `wanted`'s module for a job that loads its compiled form ([`Job::sealed`]), with the
+    /// data folder and the user's key there: the form kept, once its seal holds
+    /// ([`Self::kept`]); else the module compiled here, sealed, kept for the next run, and
+    /// loaded from those very bytes, as the next run loads them, which this worker says once on
+    /// standard error, the server's log. `None` when the job doesn't ask, or there is no data
+    /// folder or no key: then the module is compiled as a test's is.
+    fn sealed(&self, engine: &Engine, wanted: &Wanted<'_>) -> Option<Result<Module, String>> {
+        if !wanted.sealed {
             return None;
         }
         let data = self.data.as_ref()?;
         let key = Key::load(data).ok().flatten()?;
-        let hash = Sha256Hex::parse(&job.hash)?;
-        let path = compiled_for(data.path(), text::BUILDER, &hash, job.setup);
-        let why = match Self::kept(engine, job, &key, &path, &hash) {
+        let hash = Sha256Hex::parse(wanted.hash)?;
+        let path = compiled_for(data.path(), text::BUILDER, &hash, wanted.setup);
+        let why = match Self::kept(engine, wanted, &key, &path, &hash) {
             Ok(module) => return Some(Ok(module)),
             Err(why) => why,
         };
@@ -115,27 +127,27 @@ impl Worker {
              compiles it and keeps it for the next",
             engine::name()
         );
-        Some(Self::read(job).and_then(|wasm| {
+        Some(Self::read(wanted).and_then(|wasm| {
             let sealed = key
-                .compile_sealed_for(job.setup, engine, &hash, &wasm)
+                .compile_sealed_for(wanted.setup, engine, &hash, &wasm)
                 .map_err(|error| format!("the engine couldn't compile the module: {error}"))?;
             keep(&path, &sealed);
-            key.load_sealed_for(job.setup, engine, &hash, &sealed)
+            key.load_sealed_for(wanted.setup, engine, &hash, &sealed)
                 .map_err(|unsealed| format!("lengua couldn't load what it compiled: {unsealed}"))
         }))
     }
 
-    /// `job`'s module for `engine`: kept from an earlier job; or its compiled form from the data
-    /// folder, under the user's seal ([`Self::sealed`]); or read from its file, checked against
-    /// its hash, and compiled here.
-    fn module(&mut self, engine: &Engine, job: &Job) -> Result<Module, String> {
-        let key = (job.setup, job.hash.clone());
+    /// `wanted`'s module for `engine`: kept from an earlier job; or its compiled form from the
+    /// data folder, under the user's seal ([`Self::sealed`]); or read from its file, checked
+    /// against its hash, and compiled here.
+    fn module(&mut self, engine: &Engine, wanted: &Wanted<'_>) -> Result<Module, String> {
+        let key = (wanted.setup, wanted.hash.to_owned());
         if let Some(module) = self.modules.get(&key) {
             return Ok(module.clone());
         }
-        let module = match self.sealed(engine, job) {
+        let module = match self.sealed(engine, wanted) {
             Some(loaded) => loaded?,
-            None => engine::compile(engine, &Self::read(job)?)
+            None => engine::compile(engine, &Self::read(wanted)?)
                 .map_err(|error| format!("the engine couldn't compile the module: {error:#}"))?,
         };
         if self.order.len() == KEPT_MODULES
@@ -162,13 +174,42 @@ impl Worker {
             Ok(engine) => engine,
             Err(problem) => return runner::unstarted(job.id, problem, reached),
         };
-        let module = match self.module(&engine, job) {
+        let wanted = Wanted {
+            setup: job.setup,
+            sealed: job.sealed,
+            hash: &job.hash,
+            file: &job.module,
+        };
+        let module = match self.module(&engine, &wanted) {
             Ok(module) => module,
             Err(problem) => return runner::unstarted(job.id, problem, reached),
         };
+        // The modules the program calls, each compiled or loaded as the program's own is: a
+        // run that loads compiled forms loads theirs too, also where the program's own module
+        // is a copy made for this one run.
+        let mut calls = Vec::with_capacity(job.calls.len());
+        for called in &job.calls {
+            let wanted = Wanted {
+                setup: job.setup,
+                sealed: job.sealed || job.tools.stop.is_some(),
+                hash: &called.hash,
+                file: &called.module,
+            };
+            match self.module(&engine, &wanted) {
+                Ok(module) => calls.push(crate::wasm::host::call::Loaded {
+                    name: called.name.clone(),
+                    module,
+                }),
+                Err(problem) => {
+                    let problem = format!("`{}`, a module the program calls: {problem}", called.name);
+                    return runner::unstarted(job.id, problem, reached);
+                }
+            }
+        }
         let timeout = job.limits.timeout_ms.map(Duration::from_millis);
         // A run that asks for a trace gets a linker of its own, whose functions write it.
         let mut host = Host::new(world);
+        host.calls = calls;
         let linker = match runner::equip(job.tools, &mut host, &module) {
             Ok(traced) => traced.unwrap_or(linker),
             Err(problem) => return runner::unstarted(job.id, problem, reached),

@@ -163,6 +163,7 @@ impl Policy {
             Allowance::NamedFolder => reach.files.iter().any(|grant| grant.folder),
             Allowance::Runs => !reach.runs.is_empty(),
             Allowance::Splits => reach.split.is_some(),
+            Allowance::Calls => !reach.calls.is_empty(),
         }
     }
 

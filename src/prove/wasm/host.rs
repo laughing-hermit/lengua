@@ -332,6 +332,13 @@ pub(super) fn call(
              the program is tested, not proven, where it splits",
         ));
     }
+    // The bytes of a module it calls: the model follows no other module.
+    if function.name == "give" || function.name == "take" {
+        return Err(unsupported(
+            "bytes it copies to or from a module it calls, which the model doesn't follow: the \
+             program is tested, not proven, where it depends on the call",
+        ));
+    }
     let State { core, world } = state;
     let mut host = Call {
         module,

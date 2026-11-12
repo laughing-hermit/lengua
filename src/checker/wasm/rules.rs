@@ -147,7 +147,10 @@ fn bare(ops: &[Op<'_>], shape: &Shape, at: usize, operand: usize) -> Option<i64>
 /// `$write_all`, or main.wat's own function marked `;; returns: result`.
 fn gives_error(module: &Module<'_>, callee: &Function<'_>) -> bool {
     match callee.kind {
-        Kind::Import | Kind::LibraryImport => callee.results == [ValType::I32],
+        // A function of a module the idea calls gives a number of its own, not an error number.
+        Kind::Import | Kind::LibraryImport => {
+            callee.host().is_some() && callee.results == [ValType::I32]
+        }
         Kind::Library => callee.is_library("fill") || callee.is_library("write_all"),
         Kind::Own => returns_result(module, callee),
     }
@@ -498,7 +501,8 @@ impl Checker<'_, '_, '_> {
                 if callee.is_host("proc_exit") {
                     self.exit_status(op, literal(at, 0), produced(ops, shape, at, 0));
                 }
-                let descriptor = callee.import.as_ref().is_some_and(|(_, field)| {
+                let descriptor = callee.host().is_some()
+                    && callee.import.as_ref().is_some_and(|(_, field)| {
                     field.starts_with("fd_")
                         || field.starts_with("sock_")
                         || field.starts_with("path_")

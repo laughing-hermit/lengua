@@ -437,6 +437,9 @@ pub(super) struct Function {
     pub(super) own: bool,
     /// For an import, the WASI function of lengua's host it calls.
     pub(super) import: Option<&'static wasi::Function>,
+    /// Whether it is a function of a module the program calls ([`crate::call`]): the model follows
+    /// no other module, so a run stops at a call of it, tested and not proven.
+    pub(super) called: bool,
     /// The kinds of the locals it declares after its parameters.
     pub(super) locals: Vec<Kind>,
     /// Its operators, the final `end` included; none for an import.
@@ -1346,6 +1349,25 @@ impl Module {
         let mut functions = Vec::new();
         for (module, name, index) in &imports {
             let (params, results) = signature(&types, *index)?;
+            // A function of a module the idea calls: the model follows no other module, and a
+            // run that reaches a call of it stops there (step.rs). The rules hold main.wat to
+            // the idea's `- Calls:` lines, so an import from no module of the host's is one.
+            if module.as_str() != wasi::MODULE && !wasi::own_module(module) {
+                functions.push(Function {
+                    name: Some(format!("{module}.{name}")),
+                    params: params.len(),
+                    results: results.len(),
+                    own: false,
+                    import: None,
+                    called: true,
+                    locals: Vec::new(),
+                    ops: Vec::new(),
+                    offsets: Vec::new(),
+                    ends: Vec::new(),
+                    elses: Vec::new(),
+                });
+                continue;
+            }
             // What a program opens by itself at run time, the model doesn't follow: which
             // computer it reaches is the program's own choice while it runs, and the model's
             // network is the connections lengua makes before the start.
@@ -1361,7 +1383,10 @@ impl Module {
             // and its standard input is the test's bytes.
             // Work split into pieces is its own: the model follows a run that is a piece, and
             // stops at a call that splits (host.rs).
-            let splits = module.as_str() == wasi::SPLIT_MODULE;
+            // The bytes of a module it calls are its own too: the model stops at a copy to or
+            // from one (host.rs).
+            let splits =
+                module.as_str() == wasi::SPLIT_MODULE || module.as_str() == wasi::CALL_MODULE;
             if wasi::own_module(module) && !splits {
                 return Err(format!(
                     "it imports {module}.{name}, which reaches what its idea grants while it \
@@ -1389,6 +1414,7 @@ impl Module {
                 results: results.len(),
                 own: false,
                 import: Some(host),
+                called: false,
                 locals: Vec::new(),
                 ops: Vec::new(),
                 offsets: Vec::new(),
@@ -1433,6 +1459,7 @@ impl Module {
                 results: results.len(),
                 own,
                 import: None,
+                called: false,
                 locals,
                 ops,
                 offsets,

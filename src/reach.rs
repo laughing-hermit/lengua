@@ -235,6 +235,16 @@ pub struct Grants {
     /// ([`crate::split`]).
     #[serde(default)]
     pub split: Option<crate::split::Grant>,
+    /// The modules it may call, each an instance of its own beside it, which its `- Calls:`
+    /// lines name ([`crate::call`]): an outside module, trusted and not proven, or a lengua
+    /// program checked on this computer.
+    #[serde(default)]
+    pub calls: Vec<crate::call::Called>,
+    /// The functions its main.wat exports for another program to call, which its `- Exports:`
+    /// line lists ([`crate::call`]). They travel with the grants, since the rules hold main.wat
+    /// to them as to every other line of `# Constraints`.
+    #[serde(default)]
+    pub exports: Vec<crate::call::Signature>,
 }
 
 /// How an idea writes its run-time grants, for a line that doesn't read as one.
@@ -290,6 +300,8 @@ impl Grants {
         files: Vec::new(),
         runs: Vec::new(),
         split: None,
+        calls: Vec::new(),
+        exports: Vec::new(),
     };
 
     /// Whether the idea grants nothing on the network at run time.
@@ -305,7 +317,12 @@ impl Grants {
     /// arguments name, and no program to start.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.no_network() && self.files.is_empty() && self.runs.is_empty() && self.split.is_none()
+        self.no_network()
+            && self.files.is_empty()
+            && self.runs.is_empty()
+            && self.split.is_none()
+            && self.calls.is_empty()
+            && self.exports.is_empty()
     }
 
     /// Reads a `- Network:` line's words, in lower case, as a run-time grant, and adds it:
@@ -423,6 +440,7 @@ impl Grants {
         lines.extend(self.files.iter().map(crate::named::Grant::describe));
         lines.extend(self.runs.iter().map(crate::starts::Rule::describe));
         lines.extend(self.split.iter().map(crate::split::Grant::describe));
+        lines.extend(self.calls.iter().map(crate::call::Called::describe));
         lines
     }
 

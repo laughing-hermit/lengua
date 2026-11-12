@@ -173,7 +173,9 @@ impl LenguaServer {
                     unsafe_blocks: 0,
                     obligations: Vec::new(),
                     parts: Vec::new(),
+                    calls: Vec::new(),
                     machine_code: None,
+                    calls: Vec::new(),
                     outside: Some(said),
                 };
                 self.start_wasm_checking(folder, files, code, false).await

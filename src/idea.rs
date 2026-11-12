@@ -1484,6 +1484,10 @@ struct Parser {
     secrets: Option<(usize, Vec<Source>)>,
     /// Whether the idea is of the native lengua's type, which has no secrets to follow.
     native: bool,
+    /// The first `- Calls:` line that reads, by its line.
+    calls_at: Option<usize>,
+    /// The `- Exports:` line, by its line.
+    exports_at: Option<usize>,
     /// The `- Module:` line's line and what it says, once it's read.
     outside: Option<(usize, Outside)>,
     /// Whether an Attested Computation's frontmatter says `computation: main.wasm`, an outside
@@ -1517,6 +1521,8 @@ impl Default for Parser {
             secrets: None,
             native: false,
             outside: None,
+            calls_at: None,
+            exports_at: None,
             computation: None,
         }
     }
@@ -2798,6 +2804,14 @@ impl Parser {
             self.secret_line(number, rest);
             return;
         }
+        if let Some(rest) = strip_prefix_ignore_case(item, "calls:") {
+            self.calls_line(number, rest);
+            return;
+        }
+        if let Some(rest) = strip_prefix_ignore_case(item, "exports:") {
+            self.exports_line(number, rest);
+            return;
+        }
         if let Some(rest) = strip_prefix_ignore_case(item, "module:") {
             self.module_line(number, rest);
             return;
@@ -2807,7 +2821,7 @@ impl Parser {
                 Some(number),
                 "`# Constraints` lists only what the program uses, which means the same on every \
                  computer: `- Uses: …`, `- Network: …`, `- Files: …`, `- Runs: …`, `- Splits: …`, \
-                 `- Secret: …` \
+                 `- Secret: …`, `- Calls: …`, `- Exports: …` \
                  and `- Builds on: …`, and `- Module: …` for an outside module; say \
                  anything else in `# Purpose`",
             );
@@ -2895,6 +2909,114 @@ impl Parser {
         match crate::split::Grant::read(rest) {
             Ok(grant) => self.network.reach.split = Some(grant),
             Err(problem) => self.problem(Some(number), problem),
+        }
+    }
+
+    /// `- Calls: shapes.wasm, built from Rust with rustc; its functions: area(f64, f64) -> f64`
+    /// or `- Calls: [shapes](../shapes/idea.md); its functions: …`: a module the program may
+    /// call, which runs beside it with a memory of its own ([`crate::call`]).
+    fn calls_line(&mut self, number: usize, rest: &str) {
+        match crate::call::Called::read(rest) {
+            Ok(called) => {
+                let calls = &mut self.network.reach.calls;
+                if calls.iter().any(|other| other.name == called.name) {
+                    self.problem(
+                        Some(number),
+                        format!(
+                            "the module `{}` is called on two lines; keep one `- Calls:` line \
+                             for it, with all its functions",
+                            called.name
+                        ),
+                    );
+                } else if calls.len() == crate::call::MAX_MODULES {
+                    self.problem(
+                        Some(number),
+                        format!(
+                            "an idea calls at most {} modules, each an instance with a memory \
+                             of its own",
+                            crate::call::MAX_MODULES
+                        ),
+                    );
+                } else {
+                    calls.push(called);
+                    if self.calls_at.is_none() {
+                        self.calls_at = Some(number);
+                    }
+                }
+            }
+            Err(problem) => self.problem(Some(number), problem),
+        }
+    }
+
+    /// `- Exports: area(f64, f64) -> f64`: the functions main.wat exports for another program
+    /// to call ([`crate::call`]).
+    fn exports_line(&mut self, number: usize, rest: &str) {
+        if let Some(first) = self.exports_at {
+            self.problem(
+                Some(number),
+                format!(
+                    "the exports are on two lines (also on line {first}). Keep one `- Exports:` \
+                     line"
+                ),
+            );
+            return;
+        }
+        self.exports_at = Some(number);
+        match crate::call::exports(rest) {
+            Ok(exports) => self.network.reach.exports = exports,
+            Err(problem) => self.problem(Some(number), problem),
+        }
+    }
+
+    /// What a program that calls a module, or offers functions to others, can't also be. It
+    /// names no secret: a secret the program passes to a module, or that a caller's numbers
+    /// lead a function to, leaves what the secret rule follows, which is one main.wat. It
+    /// doesn't split its work: a piece is a run of the program's own module alone. And one
+    /// idea doesn't do both, since a called module reaches nothing, a module of its own
+    /// included. `secret` is the `- Secret:` line's line, when the idea has one.
+    fn check_calls(&mut self, secret: Option<usize>) {
+        let calls = self.calls_at;
+        let exports = self.exports_at;
+        if let (Some(line), Some(_)) = (calls, secret) {
+            self.problem(
+                Some(line),
+                "a program that calls a module names no secret: lengua's secret rule follows a \
+                 secret through main.wat, and a number that a call passes to another module \
+                 leaves it; remove the `- Secret:` line or the `- Calls:` line",
+            );
+        }
+        if let (Some(line), true) = (calls, self.network.reach.split.is_some()) {
+            self.problem(
+                Some(line),
+                "a program that calls a module doesn't split its work: a piece is a run of the \
+                 program's own module, with nothing else of the program's; remove the \
+                 `- Splits:` line or the `- Calls:` line",
+            );
+        }
+        if let (Some(line), Some(_)) = (exports, secret) {
+            self.problem(
+                Some(line),
+                "a program that offers functions to other programs names no secret: a caller's \
+                 numbers decide what an exported function does, outside what lengua's secret \
+                 rule follows; remove the `- Secret:` line or the `- Exports:` line",
+            );
+        }
+        if let (Some(line), Some(_)) = (exports, calls) {
+            self.problem(
+                Some(line),
+                "a program that offers functions to other programs calls no module itself: a \
+                 called module reaches nothing, a module of its own included; remove the \
+                 `- Calls:` line or the `- Exports:` line",
+            );
+        }
+        if self.native
+            && let Some(line) = calls.or(exports)
+        {
+            self.problem(
+                Some(line),
+                "`- Calls:` and `- Exports:` are for an idea of `type: Attested Computation`: \
+                 change the type",
+            );
         }
     }
 
@@ -3259,6 +3381,17 @@ impl Parser {
                 ),
             );
         }
+        if let Some(calls) = self.calls_at.or(self.exports_at) {
+            self.problem(
+                Some(calls),
+                format!(
+                    "an outside module calls no other module and offers no function: lengua \
+                     holds the imports and exports of {code} to the idea's lines, and {file} is \
+                     held to no rule. Remove the `- Calls:` and `- Exports:` lines, or compile \
+                     the idea to {code} with the compile skill"
+                ),
+            );
+        }
     }
 
     /// ``- Secret: standard input, a file `key.txt` and argument `2` ``: the inputs whose values
@@ -3366,6 +3499,7 @@ impl Parser {
         let secret_line = self.secrets.as_ref().map(|(line, _)| *line);
         let secrets = self.secrets_used(&uses);
         self.outside_agrees(secret_line);
+        self.check_calls(secret_line);
         // STE's problems come last: what the idea says matters before how it says it.
         for (line, message) in std::mem::take(&mut self.prose).finish() {
             self.problem(Some(line), message);

@@ -39,8 +39,15 @@ impl Passed for i64 {
 
 /// What a function of the host gives back.
 pub trait Answered {
+    /// What a function with this answer gives where it is defined for a module the program
+    /// calls: a stop of the run, in a type the engine links as it links this one.
+    type Refused: WasmRet;
+
     /// What it came to, as a trace says it.
     fn answered(&self) -> Gave;
+
+    /// The stop of the run that a called module gets for a call of the host.
+    fn refused() -> Self::Refused;
 }
 
 /// What a call that stopped the program with `error` came to.
@@ -53,12 +60,24 @@ fn stopped(error: &wasmtime::Error) -> Gave {
 }
 
 impl Answered for i32 {
+    type Refused = wasmtime::Result<i32>;
+
+    fn refused() -> Self::Refused {
+        Err(wasmtime::Error::new(Stop::Reaches))
+    }
+
     fn answered(&self) -> Gave {
         Gave::Code(*self)
     }
 }
 
 impl Answered for wasmtime::Result<i32> {
+    type Refused = wasmtime::Result<i32>;
+
+    fn refused() -> Self::Refused {
+        Err(wasmtime::Error::new(Stop::Reaches))
+    }
+
     fn answered(&self) -> Gave {
         match self {
             Ok(code) => Gave::Code(*code),
@@ -68,6 +87,12 @@ impl Answered for wasmtime::Result<i32> {
 }
 
 impl Answered for wasmtime::Result<()> {
+    type Refused = wasmtime::Result<()>;
+
+    fn refused() -> Self::Refused {
+        Err(wasmtime::Error::new(Stop::Reaches))
+    }
+
     fn answered(&self) -> Gave {
         match self {
             Ok(()) => Gave::Nothing,
@@ -124,6 +149,15 @@ pub trait Traced<Marker>: Sized {
         name: &str,
         trace: &Shared,
     ) -> wasmtime::Result<()>;
+
+    /// Defines the function as `name` of `module` on `linker` for a module the program calls:
+    /// with its type, and so that a call of it stops the run. The function itself is never
+    /// called.
+    ///
+    /// # Errors
+    ///
+    /// When the linker doesn't take it.
+    fn refuse(self, linker: &mut Linker<Host>, module: &str, name: &str) -> wasmtime::Result<()>;
 }
 
 /// Implements [`Traced`] for the host functions of one count of parameters, with their caller
@@ -163,6 +197,24 @@ macro_rules! traced {
                 )?;
                 Ok(())
             }
+
+            #[allow(non_snake_case)]
+            fn refuse(
+                self,
+                linker: &mut Linker<Host>,
+                module: &str,
+                name: &str,
+            ) -> wasmtime::Result<()> {
+                linker.func_wrap(
+                    module,
+                    name,
+                    move |_caller: Caller<'_, Host>, $($argument: $argument),*| -> R::Refused {
+                        $(let _ = $argument;)*
+                        R::refused()
+                    },
+                )?;
+                Ok(())
+            }
         }
 
         impl<F, R, $($argument),*> Traced<(Alone, R, $($argument,)*)> for F
@@ -194,6 +246,24 @@ macro_rules! traced {
                         let gave = function($($argument),*);
                         end(&trace, at, gave.answered());
                         gave
+                    },
+                )?;
+                Ok(())
+            }
+
+            #[allow(non_snake_case)]
+            fn refuse(
+                self,
+                linker: &mut Linker<Host>,
+                module: &str,
+                name: &str,
+            ) -> wasmtime::Result<()> {
+                linker.func_wrap(
+                    module,
+                    name,
+                    move |_caller: Caller<'_, Host>, $($argument: $argument),*| -> R::Refused {
+                        $(let _ = $argument;)*
+                        R::refused()
                     },
                 )?;
                 Ok(())

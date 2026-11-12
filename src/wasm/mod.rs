@@ -50,6 +50,8 @@ pub struct Program {
     file: PathBuf,
     /// The folder that holds it.
     _folder: tempfile::TempDir,
+    /// The modules it calls, in the order of its idea's `- Calls:` lines.
+    calls: Vec<CalledModule>,
 }
 
 impl Program {
@@ -68,6 +70,7 @@ impl Program {
             built,
             file,
             _folder: folder,
+            calls: Vec::new(),
         })
     }
 
@@ -79,6 +82,20 @@ impl Program {
     pub fn of_text(text: &str) -> Result<Self, String> {
         let built = text::build(text).map_err(|problem| problem.to_string())?;
         Self::new(built).map_err(|error| format!("lengua couldn't keep the module: {error}"))
+    }
+
+    /// The program with `calls`, the modules its idea calls, in the order of the idea's
+    /// `- Calls:` lines: every run of it starts them beside it.
+    #[must_use]
+    pub fn with_calls(mut self, calls: Vec<CalledModule>) -> Self {
+        self.calls = calls;
+        self
+    }
+
+    /// The modules it calls.
+    #[must_use]
+    pub fn calls(&self) -> &[CalledModule] {
+        &self.calls
     }
 
     /// What the build made.
@@ -103,5 +120,38 @@ impl Program {
     #[must_use]
     pub fn lines(&self) -> pool::Lines {
         Arc::clone(&self.lines)
+    }
+}
+
+/// A module a program calls ([`crate::call`]), kept in a file of its own for the pool's
+/// workers, as the program's own module is.
+#[derive(Debug)]
+pub struct CalledModule {
+    /// Its name, as the idea's `- Calls:` line names it.
+    pub name: String,
+    /// The module's SHA-256.
+    pub hash: crate::hash::Sha256Hex,
+    /// The module's file.
+    pub file: PathBuf,
+    /// The folder that holds it.
+    _folder: tempfile::TempDir,
+}
+
+impl CalledModule {
+    /// The called module `name`, whose bytes are `wasm`, kept for the workers.
+    ///
+    /// # Errors
+    ///
+    /// When its file can't be written.
+    pub fn new(name: &str, wasm: &[u8]) -> io::Result<Self> {
+        let folder = tempfile::tempdir()?;
+        let file = folder.path().join("called.wasm");
+        std::fs::write(&file, wasm)?;
+        Ok(Self {
+            name: name.to_owned(),
+            hash: crate::hash::Sha256Hex::of(wasm),
+            file,
+            _folder: folder,
+        })
     }
 }

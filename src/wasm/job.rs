@@ -106,6 +106,18 @@ pub struct Limits {
     pub max_written: Option<u64>,
 }
 
+/// A module the job's program calls ([`crate::call`]), as the worker takes it: by its file,
+/// checked against its hash. What it is called for is in the job's policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Called {
+    /// Its name, as the idea's `- Calls:` line names it.
+    pub name: String,
+    /// The module's file.
+    pub module: PathBuf,
+    /// The module's SHA-256, in hex.
+    pub hash: String,
+}
+
 /// One run of a module.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Job {
@@ -158,6 +170,10 @@ pub struct Job {
     pub instant_sleeps: bool,
     /// How far it may go.
     pub limits: Limits,
+    /// The modules the program calls, in the order of its idea's `- Calls:` lines: the worker
+    /// compiles each, or loads its compiled form as it loads the program's.
+    #[serde(default)]
+    pub calls: Vec<Called>,
     /// The tools the run is asked for: none, unless the server asks.
     #[serde(default)]
     pub tools: crate::wasm::tools::Tools,
@@ -391,6 +407,11 @@ mod tests {
                     max_written: None,
                 },
                 tools: crate::wasm::tools::Tools::default(),
+                calls: vec![Called {
+                    name: "shapes".to_owned(),
+                    module: PathBuf::from("shapes.wasm"),
+                    hash: "cd".repeat(32),
+                }],
             })),
         ];
         let mut wire = Vec::new();

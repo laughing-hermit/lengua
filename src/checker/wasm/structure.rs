@@ -44,6 +44,7 @@ pub fn needs(host: &wasi::Function) -> String {
                 Some("`- Files: reads the folder its first argument names`".to_owned())
             }
             Allowance::Runs => Some("``- Runs: `program` with no arguments``".to_owned()),
+            Allowance::Calls => Some("a `- Calls:` line for the module".to_owned()),
             Allowance::Splits => Some(
                 "`- Splits: its work into up to 8 pieces, each of up to 1048576 bytes, each \
                  gives back 32 bytes`"
@@ -59,6 +60,16 @@ fn value_type(value: wasi::Value) -> ValType {
     match value {
         wasi::Value::I32 => ValType::I32,
         wasi::Value::I64 => ValType::I64,
+    }
+}
+
+/// The type of a number that crosses between modules, as WebAssembly's.
+pub(super) const fn call_type(ty: crate::call::Type) -> ValType {
+    match ty {
+        crate::call::Type::I32 => ValType::I32,
+        crate::call::Type::I64 => ValType::I64,
+        crate::call::Type::F32 => ValType::F32,
+        crate::call::Type::F64 => ValType::F64,
     }
 }
 
@@ -162,6 +173,18 @@ impl Checker<'_, '_, '_> {
                 continue;
             };
             let line = function.line;
+            // A function of a module the idea calls: its `- Calls:` line names the module and
+            // the function, with its type.
+            if let Some(called) = policy
+                .reach
+                .get()
+                .calls
+                .iter()
+                .find(|called| called.name == *from)
+            {
+                self.called(function, called, field);
+                continue;
+            }
             if from != wasi::MODULE && !wasi::own_module(from) {
                 let own: Vec<String> = wasi::OWN
                     .iter()
@@ -241,6 +264,49 @@ impl Checker<'_, '_, '_> {
         }
     }
 
+    /// Rule 3: a function main.wat imports from `called`, a module its idea calls, is one the
+    /// idea's `- Calls:` line names, with the type the line gives it.
+    fn called(&mut self, function: &Function<'_>, called: &crate::call::Called, field: &str) {
+        let line = function.line;
+        let Some(signature) = called.function(field) else {
+            self.violation(
+                Rule::Resources,
+                line,
+                format!(
+                    "{} is imported from `{}`, a module the idea calls, and the idea's `- Calls:` \
+                     line names no function `{field}` of it: it names {}",
+                    function.shown(),
+                    called.name,
+                    called.listed()
+                ),
+                "call only the functions the idea's `- Calls:` line names, or add the function \
+                 to the line in idea.md and tell the user",
+            );
+            return;
+        };
+        let params: Vec<ValType> = signature.params.iter().copied().map(call_type).collect();
+        let results: Vec<ValType> = signature.result.into_iter().map(call_type).collect();
+        if function.params != params || function.results != results {
+            self.violation(
+                Rule::Resources,
+                line,
+                format!(
+                    "the idea's `- Calls:` line says `{}`, but main.wat imports it as taking {} \
+                     and giving {}",
+                    signature.shown(),
+                    types(&function.params),
+                    types(&function.results)
+                ),
+                format!(
+                    "import it with the type the idea gives: `(import \"{}\" \"{field}\" (func \
+                     ${field}{}))`",
+                    called.name,
+                    signature.wat_type()
+                ),
+            );
+        }
+    }
+
     /// Rule 3: what lengua's library calls for a program, the idea allows: a call to `$fill`
     /// reads, as `fd_read` does.
     fn library(&mut self, policy: &Policy) {
@@ -317,7 +383,7 @@ impl Checker<'_, '_, '_> {
 
     /// Rule 6: main.wat exports exactly the function `_start`, which takes and gives nothing, and
     /// the memory `memory`.
-    fn exports(&mut self) {
+    fn exports(&mut self, policy: &Policy) {
         let module = self.module;
         let mut start = false;
         let mut memory = false;
@@ -345,6 +411,13 @@ impl Checker<'_, '_, '_> {
                     }
                 }
                 ("memory", ExternalKind::Memory) => memory = true,
+                (name, ExternalKind::Func)
+                    if policy
+                        .reach
+                        .get()
+                        .exports
+                        .iter()
+                        .any(|offered| offered.name == name) => {}
                 (name, _) => self.violation(
                     Rule::Scope,
                     export.line,
@@ -371,6 +444,71 @@ impl Checker<'_, '_, '_> {
                 "main.wat exports no memory `memory`, which the host reads and writes",
                 "declare and export it: `(memory (export \"memory\") 1 1)`",
             );
+        }
+        self.offered(policy);
+    }
+
+    /// Rule 6: each function the idea's `- Exports:` line lists is one main.wat exports under
+    /// that name, its own, with the type the line gives it.
+    fn offered(&mut self, policy: &Policy) {
+        let module = self.module;
+        for offered in &policy.reach.get().exports {
+            let export = module
+                .exports
+                .iter()
+                .find(|export| export.kind == ExternalKind::Func && export.name == offered.name);
+            let Some(export) = export else {
+                self.violation(
+                    Rule::Scope,
+                    None,
+                    format!(
+                        "the idea's `- Exports:` line lists `{}`, and main.wat exports no \
+                         function `{}`",
+                        offered.shown(),
+                        offered.name
+                    ),
+                    format!(
+                        "export it: `(func ${0} (export \"{0}\"){1} …)`; or remove it from the \
+                         line in idea.md and tell the user",
+                        offered.name,
+                        offered.wat_type()
+                    ),
+                );
+                continue;
+            };
+            let Some(function) = module.function(export.index) else {
+                continue;
+            };
+            if function.kind != Kind::Own {
+                self.violation(
+                    Rule::Scope,
+                    export.line,
+                    format!(
+                        "main.wat exports `{}`, which isn't one of its own functions",
+                        offered.name
+                    ),
+                    "export a function main.wat defines",
+                );
+                continue;
+            }
+            let params: Vec<ValType> = offered.params.iter().copied().map(call_type).collect();
+            let results: Vec<ValType> = offered.result.into_iter().map(call_type).collect();
+            if function.params != params || function.results != results {
+                self.violation(
+                    Rule::Scope,
+                    function.line,
+                    format!(
+                        "the idea's `- Exports:` line says `{}`, but main.wat's {} takes {} and \
+                         gives {}",
+                        offered.shown(),
+                        function.shown(),
+                        types(&function.params),
+                        types(&function.results)
+                    ),
+                    "give the function the type the idea states, or change the line in idea.md \
+                     and tell the user",
+                );
+            }
         }
     }
 
@@ -810,7 +948,7 @@ pub fn check(module: &Module<'_>, built: &Built, policy: &Policy, violations: &m
     checker.annotations();
     checker.imports(policy);
     checker.library(policy);
-    checker.exports();
+    checker.exports(policy);
     checker.indirection();
     checker.memory();
     checker.regions();
