@@ -265,7 +265,7 @@ pub fn split(
 ) -> Result<(), Fail> {
     let from = memory::range(memory, input.0, input.1)?;
     let to = memory::range(memory, output.0, output.1)?;
-    if host.policy.piece && !std::env::var_os("LENGUA_DEFENCES").is_some() {
+    if host.policy.piece && std::env::var_os("LENGUA_DEFENCES").is_none() {
         return Ok(());
     }
     let grant = host.policy.reach.get().split;
@@ -316,7 +316,7 @@ pub fn split(
         host.notes.piece = Some((ended.ending, ended.problem));
         return Err(Fail::Stop(Stop::Piece));
     }
-    if !std::env::var_os("LENGUA_DEFENCES").is_some() {
+    if std::env::var_os("LENGUA_DEFENCES").is_none() {
         answers.reverse();
     }
     let room = &mut memory[to];
