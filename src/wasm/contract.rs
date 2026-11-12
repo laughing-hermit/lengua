@@ -571,10 +571,7 @@ impl Contract {
     /// Each function it offers, in a line: what a reply shows of a part.
     #[must_use]
     pub fn lines(&self) -> Vec<String> {
-        self.offers
-            .iter()
-            .map(Offer::line)
-            .collect()
+        self.offers.iter().map(Offer::line).collect()
     }
 }
 

@@ -92,9 +92,12 @@ fn width_of(kind: &str) -> Option<u32> {
     }
 }
 
+/// A function's parameters, each a name without its `$` and a type, and its results' types.
+type Signature = (Vec<(String, String)>, Vec<String>);
+
 /// The parameters, each a name without its `$` and a type, and the results' types of the
 /// function whose text is `body`, as [`Field::body`] holds it.
-fn signature(body: &str) -> Result<(Vec<(String, String)>, Vec<String>), String> {
+fn signature(body: &str) -> Result<Signature, String> {
     let unread = || "lengua can't read the function's parameters".to_owned();
     let mut params = Vec::new();
     let mut results = Vec::new();
@@ -105,10 +108,7 @@ fn signature(body: &str) -> Result<(Vec<(String, String)>, Vec<String>), String>
     while let Some(open) = rest.find('(') {
         // Only white space and the function's name stand before a field of the signature.
         let before = rest.get(..open).unwrap_or_default();
-        if before
-            .split_whitespace()
-            .any(|word| !word.starts_with('$'))
-        {
+        if before.split_whitespace().any(|word| !word.starts_with('$')) {
             break;
         }
         let field = rest.get(open..).unwrap_or_default();
@@ -176,12 +176,12 @@ impl Claim {
                 .iter()
                 .position(|(param, _)| !param.is_empty() && param == wanted)
         };
-        for stated in gives
-            .takes
-            .iter()
-            .map(|(taken, ..)| taken)
-            .chain(gives.holds.iter().flat_map(|(pointer, length)| [pointer, length]))
-        {
+        for stated in gives.takes.iter().map(|(taken, ..)| taken).chain(
+            gives
+                .holds
+                .iter()
+                .flat_map(|(pointer, length)| [pointer, length]),
+        ) {
             if place(stated).is_none() {
                 return Some(Err(format!(
                     "`${name}` has no parameter `${stated}`: a `takes` and a `holds` clause name \
@@ -487,8 +487,7 @@ fn prove_unit(
                     } else {
                         let (low, high) = (low.unsigned_abs(), high.unsigned_abs());
                         let arg = pool.var_in(param.width, &name, low, high);
-                        let (least, most) =
-                            (pool.bv(param.width, low), pool.bv(param.width, high));
+                        let (least, most) = (pool.bv(param.width, low), pool.bv(param.width, high));
                         conditions.extend([pool.ule(least, arg), pool.ule(arg, most)]);
                         arg
                     }
@@ -543,9 +542,10 @@ fn prove_unit(
                     Answer::Unsat => Ok(false),
                     Answer::Sat => Ok(true),
                     Answer::Unknown if solver.out_of_time() => Err(super::OUT_OF_TIME.to_owned()),
-                    Answer::Unknown => {
-                        Err(format!("a path couldn't be settled: {}", solver.why_unknown))
-                    }
+                    Answer::Unknown => Err(format!(
+                        "a path couldn't be settled: {}",
+                        solver.why_unknown
+                    )),
                 }
             };
             let given = match wasm::unit_end(module, &mut pool, run) {
@@ -621,7 +621,9 @@ pub fn settle(
     let module = wasm::Module::new(built, policy);
     let mut settled = Vec::new();
     for (turn, claim) in claims.iter().enumerate() {
-        let left = u32::try_from(claims.len() - turn).unwrap_or(u32::MAX).max(1);
+        let left = u32::try_from(claims.len() - turn)
+            .unwrap_or(u32::MAX)
+            .max(1);
         let now = Instant::now();
         let share = deadline.saturating_duration_since(now) / left;
         let proven = match &module {
@@ -826,14 +828,21 @@ mod tests {
         assert!(past.contains("another value than `n * 2`"), "{past}");
         // An assertion an argument in range reaches.
         let stops = why("- `$checked`: uses no memory; takes `$n` from 0 to 1001; gives `n * 2`.");
-        assert!(stops.contains("an assertion of the function stops"), "{stops}");
+        assert!(
+            stops.contains("an assertion of the function stops"),
+            "{stops}"
+        );
         // A text the formula says less of than the function reads.
-        let same = why("- `$same`: reads 4 bytes at `$a`; reads 4 bytes at `$b`; takes `$length` \
+        let same = why(
+            "- `$same`: reads 4 bytes at `$a`; reads 4 bytes at `$b`; takes `$length` \
                         from 0 to 4; `$a` holds `$length` bytes; `$b` holds `$length` bytes; gives \
-                        `1`.");
+                        `1`.",
+        );
         assert!(same.contains("another value than `1`"), "{same}");
-        let outside = why("- `$second`: reads 2 bytes at `$at`; takes `$length` from 0 to 1; `$at` \
-                           holds `$length` bytes; gives `len(at)`.");
+        let outside = why(
+            "- `$second`: reads 2 bytes at `$at`; takes `$length` from 0 to 1; `$at` \
+                           holds `$length` bytes; gives `len(at)`.",
+        );
         assert!(outside.contains("reads outside the bytes"), "{outside}");
     }
 
@@ -843,8 +852,10 @@ mod tests {
         let counts = why("- `$counts`: uses no memory; takes `$n` from 0 to 9; gives `n`.");
         assert!(counts.contains("$counts"), "{counts}");
         assert!(counts.contains("global"), "{counts}");
-        let aligned = why("- `$aligned`: reads 1 byte at `$at`; takes `$length` from 0 to 1; `$at` \
-                           holds `$length` bytes; gives `0`.");
+        let aligned = why(
+            "- `$aligned`: reads 1 byte at `$at`; takes `$length` from 0 to 1; `$at` \
+                           holds `$length` bytes; gives `0`.",
+        );
         assert!(aligned.contains("computes with an address"), "{aligned}");
     }
 
