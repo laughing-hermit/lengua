@@ -19,6 +19,7 @@ pub mod open;
 pub mod policy;
 pub mod poll;
 pub mod random;
+pub mod split;
 pub mod start;
 pub mod stdio;
 pub mod term;
@@ -49,6 +50,9 @@ pub enum Stop {
     Stopped,
     /// A host call's buffer outside its memory.
     OutsideMemory,
+    /// A piece of its split work didn't end well: the run ends as that piece ended, which the
+    /// host's notes hold ([`Notes::piece`]).
+    Piece,
     /// It calls the host but exports no memory named `memory`.
     NoMemory,
 }
@@ -61,6 +65,7 @@ impl fmt::Display for Stop {
             Self::TimedOut => f.write_str("the program ran past its time"),
             Self::Stopped => f.write_str("lengua stopped the program"),
             Self::OutsideMemory => f.write_str("a host call's buffer is outside the memory"),
+            Self::Piece => f.write_str("a piece of the program's split work didn't end well"),
             Self::NoMemory => f.write_str(
                 "the module calls the host but exports no memory named \"memory\", which every \
                  host call reads and writes through",
@@ -266,6 +271,14 @@ pub struct Notes {
     /// What became of what it asked to open itself, in order, for the run's report: the first
     /// of them.
     pub opened: Vec<crate::wasm::job::Reached>,
+    /// Whether it split its work into pieces, which a test's second run then runs one at a
+    /// time, the last first.
+    pub split: bool,
+    /// How a piece of its split work ended that didn't exit with code 0, the first in the
+    /// pieces' order, and what lengua has to say of it: the whole run ends so.
+    pub piece: Option<(crate::wasm::job::Ending, Option<String>)>,
+    /// The operations its pieces executed, where the engine counts them.
+    pub counted: u64,
     /// How many of lengua's refusals a run from a shell has said on standard error.
     pub refused: usize,
 }
@@ -368,6 +381,9 @@ pub struct Host {
     /// The terminal it runs in. It is put back as it was when the host is dropped, which
     /// every end of a run comes to.
     pub terminal: Box<dyn term::Terminal>,
+    /// What a call that splits its work runs its pieces with: this run's own module, in its
+    /// engine. `None` in a piece, which doesn't split, and in a run whose idea grants none.
+    pub splitting: Option<split::Splitting>,
     /// Its clocks.
     pub clock: clock::Clock,
     /// Its random bytes.
@@ -455,6 +471,7 @@ impl Host {
             working: beyond.working,
             reversed,
             terminal: beyond.terminal.unwrap_or_else(|| Box::new(term::Absent)),
+            splitting: None,
             clock: clock::Clock::new(clock),
             random: random::Random::new(random),
             limits,
@@ -1180,7 +1197,7 @@ fn own_spec(module: &str, name: &str) -> wasmtime::Result<&'static Function> {
 /// Defines lengua's own functions for the files a program's arguments name, the programs it
 /// starts and the terminal, each in its own module.
 fn define_own(linker: &mut Defining<'_>) -> wasmtime::Result<()> {
-    use wasi::{FS_MODULE, RUN_MODULE, TERM_MODULE};
+    use wasi::{FS_MODULE, RUN_MODULE, SPLIT_MODULE, TERM_MODULE};
     let unsigned = i32::cast_unsigned;
 
     let f = own_spec(FS_MODULE, "file_open")?;
@@ -1263,6 +1280,33 @@ fn define_own(linker: &mut Defining<'_>) -> wasmtime::Result<()> {
                 term::term_raw(host, unsigned(mode))
             })
         },
+    )?;
+    let f = own_spec(SPLIT_MODULE, "split")?;
+    linker.func_wrap(
+        SPLIT_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>,
+              input: i32,
+              input_len: i32,
+              pieces: i32,
+              output: i32,
+              output_len: i32| {
+            answer(&mut caller, f, |memory, host| {
+                split::split(
+                    host,
+                    memory,
+                    (unsigned(input), unsigned(input_len)),
+                    unsigned(pieces),
+                    (unsigned(output), unsigned(output_len)),
+                )
+            })
+        },
+    )?;
+    let f = own_spec(SPLIT_MODULE, "piece")?;
+    linker.func_wrap(
+        SPLIT_MODULE,
+        f.name,
+        move |mut caller: Caller<'_, Host>| answer(&mut caller, f, |_, host| split::piece(host)),
     )?;
     Ok(())
 }

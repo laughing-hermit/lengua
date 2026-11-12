@@ -44,6 +44,11 @@ pub fn needs(host: &wasi::Function) -> String {
                 Some("`- Files: reads the folder its first argument names`".to_owned())
             }
             Allowance::Runs => Some("``- Runs: `program` with no arguments``".to_owned()),
+            Allowance::Splits => Some(
+                "`- Splits: its work into up to 8 pieces, each of up to 1048576 bytes, each \
+                 gives back 32 bytes`"
+                    .to_owned(),
+            ),
         })
         .collect::<Vec<_>>()
         .join(" or ")

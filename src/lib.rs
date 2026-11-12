@@ -37,6 +37,7 @@ pub mod server;
 pub mod skiplog;
 pub mod starts;
 pub mod state;
+pub mod split;
 pub mod ste;
 pub mod supply;
 pub mod testdiff;

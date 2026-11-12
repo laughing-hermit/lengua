@@ -2674,6 +2674,12 @@ fn attempt_wasm(
     if block.uses_now() {
         return Err(USES_NOW.into());
     }
+    // A block about a piece of split work is proven on a piece's own world.
+    let policy = if block.piece {
+        policy.as_piece()
+    } else {
+        policy
+    };
     let module = wasm::Module::new(built, policy)?;
     either_way(&module, block, budget)
 }
@@ -4491,8 +4497,19 @@ pub fn agrees_wasm(
     listens: bool,
     deadline: Instant,
 ) -> Result<Option<Verdict>, String> {
-    let module = wasm::Module::new(built, policy)?;
-    agrees_with(&module, cases, listens, deadline)
+    // A case about a piece of split work runs in a piece's own world, the others in the
+    // program's: each kind on a model of its own.
+    let (pieces, whole): (Vec<&crate::testfile::Case>, Vec<&crate::testfile::Case>) =
+        cases.iter().partition(|case| case.piece);
+    if !whole.is_empty() || pieces.is_empty() {
+        let module = wasm::Module::new(built, policy)?;
+        let found = agrees_with(&module, whole, listens, deadline)?;
+        if found.is_some() || pieces.is_empty() {
+            return Ok(found);
+        }
+    }
+    let module = wasm::Module::new(built, policy.as_piece())?;
+    agrees_with(&module, pieces, listens, deadline)
 }
 
 /// [`agrees_wasm`]'s work.
@@ -4502,12 +4519,11 @@ pub fn agrees_wasm(
 /// Describes the first disagreement, what the model can't run, or that the time is up.
 fn agrees_with<P: Program>(
     image: &P,
-    cases: &[crate::testfile::Case],
+    mut cases: Vec<&crate::testfile::Case>,
     listens: bool,
     deadline: Instant,
 ) -> Result<Option<Verdict>, String> {
     // Smallest first: once one is too long for the model to follow, the larger ones are too.
-    let mut cases: Vec<&crate::testfile::Case> = cases.iter().collect();
     cases.sort_by_key(|case| {
         case.stdin.len()
             + case.files.values().map(String::len).sum::<usize>()

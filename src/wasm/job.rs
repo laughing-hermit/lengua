@@ -202,6 +202,9 @@ pub struct Done {
     pub random_asked: Option<usize>,
     /// Whether it listed a folder.
     pub listed: bool,
+    /// Whether it split its work into pieces.
+    #[serde(default)]
+    pub split: bool,
     /// What became of each connection, in order.
     pub connections: Vec<Reached>,
     /// Why lengua couldn't run it as asked, if it couldn't.
