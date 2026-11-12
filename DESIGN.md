@@ -1269,10 +1269,19 @@ The command line (`src/main.rs`):
 | `lengua-mcp` | The MCP server |
 | `lengua-mcp run <folder> [--in <folder>] [--env NAME=value]… [--trace] [--profile] [--stop-at <place>] [--show-memory <address>:<length>] [[--] args]` | Runs a checked program attached to the shell. Exits with the program's code, 134 when it trapped, 127 when it never started, and 125 when lengua won't run it or can't start it |
 | `lengua-mcp check <folder>` | The attester: 0 attested, 1 not |
+| `lengua-mcp lsp` | A first cut of a language server, for an editor: publishes the findings of a folder's idea.md and main.wat, each on its line |
 | `lengua-mcp doctor` | Checks this computer: the server, the engine (a module it compiles and runs), the CPU, z3 and cvc5 and their pinned versions, whether the data folder and `PLUGIN_DATA` can be written, and the clocks' resolution. Exits 0 only when nothing is wrong |
 | `lengua-mcp install [--check] [--link] [--prefix <folder>]` | Installs lengua from its unpacked release archive |
 | `lengua-mcp wasm <main.wat> [-o <file>]` | Writes the module |
 | `lengua-mcp measure …` | Runs one program in a process of its own and prints what it cost, for the benchmark |
+
+`lengua-mcp lsp` speaks the Language Server Protocol over standard input and output
+(`src/lsp.rs`). When an editor opens, changes, saves or closes a folder's idea.md or main.wat,
+it publishes the findings of both files as diagnostics, each on the whole of its line: idea.md's
+format and tests, main.wat's build, and main.wat's rules with what the idea grants. These are
+the functions `check` calls for the same text. It runs no test and no proof, reads no lock,
+writes nothing, and holds a program to no part it builds on, so a folder with no diagnostic is
+not a checked folder: `check` says that. It has no completion, hover or formatting.
 
 `--data-dir <absolute path>` comes before the command. An argument that isn't Unicode is refused,
 as not every system can pass one on.

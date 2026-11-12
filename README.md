@@ -512,8 +512,10 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
   calls, isn't started.
 - **W24, tools:** built: a trace of a run's calls to the host, a profile of its time by
   function, and a stop at a line or a function of `main.wat` that shows its values, each on
-  the `run` tool and from a shell. Not built: a step to the next line, a second stop, and a
-  language server for editors ([DESIGN.md](DESIGN.md), The tools of a run).
+  the `run` tool and from a shell, and a first cut of a language server for editors,
+  `lengua-mcp lsp`, which shows `check`'s findings of the two files on their lines. Not
+  built: a step to the next line and a second stop ([DESIGN.md](DESIGN.md), The tools of a
+  run).
 
 [ROADMAP.md](ROADMAP.md) has each milestone's design and the runs that verify it.
 

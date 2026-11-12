@@ -718,7 +718,7 @@ calls, is not started. Runs: todo.md's table.
 
 What a programmer expects beside `check`: a run that stops at a line of main.wat and shows its
 values, a profile of a run's time by function and line, and a trace of what a run asked the host
-for. Each is a tool call or a flag. *Built, but for a language server.*
+for. Each is a tool call or a flag. *Built, with a first cut of a language server.*
 
 **Built** (`src/wasm/tools.rs`, `src/wasm/host/trace.rs`, `src/server/wat/tools.rs`;
 `tests/tools.rs`):
@@ -750,8 +750,11 @@ or in an outside module.
 | A `- Splits:` line | the program's own calls | the program's own code | refused |
 | An outside module | given | given | refused |
 
-**Not built:** the language-server mode (`lengua-mcp lsp`, diagnostics from `check`'s findings
-for editors). The three tools took the milestone's time. Runs: todo.md's table.
+**A first cut of a language server** (`lengua-mcp lsp`, `src/lsp.rs`): over standard input and
+output, it publishes the findings of a folder's idea.md and main.wat as an editor opens, changes
+and saves them: the idea's format and tests, main.wat's build and its rules. It runs no test and
+no proof, and has no completion, hover or formatting. No editor was tried with it. Runs:
+todo.md's table.
 
 ## Before the pivot
 
