@@ -677,28 +677,75 @@ async fn sort64_s_proof_with_its_full_time() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// The clauses of crc32's contract that state what `$crc32_update` gives, as its idea.md lays
+/// them out.
+const CRC32_GIVES: &str = "; takes `$crc` from 0 to 0; takes `$length` from 0\n  to 64; `$at` \
+                           holds `$length` bytes; gives `crc32(at)`";
+
+/// checksums checked with its parts beside it, crc32's idea as it ships or, where `stated` is
+/// false, without the clauses that state what `$crc32_update` gives: crc32's reply, checksums's
+/// reply, checksums's folder and how long checksums's own check took, in seconds.
+async fn checksums_checked(session: &Session, stated: bool) -> (Value, Value, Program, f64) {
+    let checksums = Program::new();
+    for part in ["decimal", "lines", "crc32"] {
+        let folder = checksums.beside(part);
+        let idea = example(part, "idea.md");
+        let idea = if part == "crc32" && !stated {
+            changed(&idea, CRC32_GIVES, "")
+        } else {
+            idea
+        };
+        folder.write("idea.md", &idea);
+        folder.write("main.wat", &example(part, "main.wat"));
+        session.record(&folder).await;
+        let done = session.settle(&folder).await;
+        assert_eq!(done["state"], "done", "{part}: {done}");
+    }
+    let part = session.check(&checksums.beside("crc32")).await;
+    for file in ["idea.md", "main.wat"] {
+        checksums.write(file, &example("checksums", file));
+    }
+    let started = std::time::Instant::now();
+    session.record(&checksums).await;
+    let done = session.settle(&checksums).await;
+    let seconds = started.elapsed().as_secs_f64();
+    (part, done, checksums, seconds)
+}
+
 /// A contract that states what a function gives carries into the program built on the part:
 /// crc32's item says what one call of `$crc32_update` gives, as a formula. `check` on the part
 /// proves the formula of the function alone, and says so in `contract`. `check` on checksums,
 /// which takes the function, proves it again of its own copy and says so in `parts`, and its
 /// proofs, which take the formula's value at each call in place of the function's body, cover
-/// every input in each test's range. A copy that isn't the part's is refused before any of
-/// that, with `code_problems`, and its reply claims nothing of the contract.
+/// every input in each test's range. The same check with the clauses taken out of crc32's idea
+/// follows the function's body at each call: both are printed, with how long each took, for a
+/// person to compare. A copy that isn't the part's is refused before any of that, with
+/// `code_problems`, and its reply claims nothing of the contract.
 #[tokio::test]
-#[ignore = "proves crc32, its parts and checksums, a minute each: by hand, or on CI's dispatch"]
+#[ignore = "proves crc32, its parts and checksums twice, a minute each: by hand, or on CI's dispatch"]
 async fn a_contract_s_formula_carries_into_the_program_built_on_the_part() {
     let session = Session::proving_for(Protocol::Discover, 60).await;
-    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/checksums");
-    let checksums = Program::new();
-    session
-        .settle_parts(&checksums, &folder)
-        .await
-        .expect("lines, crc32 and decimal are done");
-    // The part: what its contract states, and the formula proven of the function alone.
-    let part = session.settle(&checksums.beside("crc32")).await;
+    // With no formula stated, the proofs follow the function's body at each call.
+    let (_, followed, _, seconds) = checksums_checked(&session, false).await;
+    assert_eq!(followed["state"], "done", "{followed}");
+    println!("CARRY the body followed: {seconds:.1} s");
+    for line in lines(&followed, "proofs") {
+        println!("CARRY the body followed: proofs: {line}");
+    }
+    assert!(
+        !lines(&followed, "parts")
+            .iter()
+            .any(|line| line.starts_with("contract ")),
+        "{followed}"
+    );
+    // The part as it ships: what its contract states, and the formula proven of the function
+    // alone.
+    let (part, done, checksums, seconds) = checksums_checked(&session, true).await;
     assert_eq!(part["state"], "done", "{part}");
     let stated = lines(&part, "contract");
-    println!("CARRY crc32's contract: {stated:#?}");
+    for line in &stated {
+        println!("CARRY crc32's contract: {line}");
+    }
     assert!(
         stated.iter().any(|line| line.starts_with(
             "$crc32_update: reads 4096 bytes at `$at`; takes `$crc` from 0 to 0; takes \
@@ -707,19 +754,20 @@ async fn a_contract_s_formula_carries_into_the_program_built_on_the_part() {
         "{part}"
     );
     assert!(
-        stated.iter().any(|line| line.starts_with("gives $crc32_update: ")
-            && line.contains("proven of the function alone, for every argument in its ranges")),
+        stated
+            .iter()
+            .any(|line| line.starts_with("gives $crc32_update: ")
+                && line
+                    .contains("proven of the function alone, for every argument in its ranges")),
         "{part}"
     );
     // The program built on it: the formula proven of its own copy, and its proofs.
-    for file in ["idea.md", "main.wat"] {
-        checksums.write(file, &example("checksums", file));
-    }
-    session.record(&checksums).await;
-    let done = session.settle(&checksums).await;
     assert_eq!(done["state"], "done", "{done}");
+    println!("CARRY the formula used: {seconds:.1} s");
     let built_on = lines(&done, "parts");
-    println!("CARRY checksums' parts: {built_on:#?}");
+    for line in &built_on {
+        println!("CARRY the formula used: parts: {line}");
+    }
     assert!(
         built_on
             .iter()
@@ -729,13 +777,13 @@ async fn a_contract_s_formula_carries_into_the_program_built_on_the_part() {
         "{done}"
     );
     let proofs = lines(&done, "proofs");
-    println!("CARRY checksums' proofs: {proofs:#?}");
+    for line in &proofs {
+        println!("CARRY the formula used: proofs: {line}");
+    }
     for id in ["B1", "B2", "B5"] {
         assert!(
-            proofs
-                .iter()
-                .any(|line| line.starts_with(&format!("generated {id}: proven for every input"))
-                    && !line.contains("tested, not proven")),
+            proofs.iter().any(|line| line
+                .starts_with(&format!("generated {id}: proven for every input in range"))),
             "{id}: {done}"
         );
     }
