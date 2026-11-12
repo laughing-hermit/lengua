@@ -27,6 +27,9 @@ The server has these routes:
 - `PUT /kv/` and a key puts the JSON value in the body of the request under that key.
 - `DELETE /kv/` and a key removes that key from the store.
 
+The server answers a `HEAD` request as it answers a `GET` request, but it does not send the
+body. The line of the log then has the length 0.
+
 The server keeps the store in the file `store.json`, with one member on each line and the keys
 in byte order. When there is no such file, the store is empty.
 
@@ -291,10 +294,10 @@ The names that start with a point, and the folder itself, are not files that the
 - And a client that sends `POST /kv HTTP/1.1\r\n\r\n`
 - And a client that sends `POST /kv/color HTTP/1.1\r\n\r\n`
 - When the program runs
-- Then the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
-- And the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
-- And the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
-- And the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET, PUT, DELETE\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
+- Then the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET, HEAD\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
+- And the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET, HEAD\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
+- And the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET, HEAD\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
+- And the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET, HEAD, PUT, DELETE\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
 - And it prints `POST /health 405 23\nPOST /files/notes.txt 405 23\nPOST /kv 405 23\nPOST /kv/color 405 23\n`
 - And it does not stop
 
@@ -304,16 +307,16 @@ The names that start with a point, and the folder itself, are not files that the
 - And a client that sends `{n} /kv HTTP/1.1\r\n\r\n`
 - And a client that sends `{m} /kv/color HTTP/1.1\r\n\r\n`
 - When the program runs
-- Then the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
-- And the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
-- And the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
-- And the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET, PUT, DELETE\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
+- Then the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET, HEAD\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
+- And the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET, HEAD\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
+- And the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET, HEAD\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
+- And the client receives `HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nAllow: GET, HEAD, PUT, DELETE\r\nConnection: close\r\n\r\n405 Method Not Allowed\n`
 - And it prints `{m} /health 405 23\n{n} /files/notes.txt 405 23\n{n} /kv 405 23\n{m} /kv/color 405 23\n`
 - And it does not stop
 
 | m | n | runs |
 |---|---|---|
-| `choice("POST", "HEAD", "PATCH", "OPTIONS", "TRACE")` | `choice("POST", "PUT", "DELETE", "HEAD", "PATCH")` | 10 |
+| `choice("POST", "PATCH", "OPTIONS", "TRACE")` | `choice("POST", "PUT", "DELETE", "PATCH")` | 10 |
 
 ## B11: Answers status 400 to a request that is not valid
 - Given a client that sends `GET hello HTTP/1.1\r\n\r\n`
@@ -600,7 +603,49 @@ The names that start with a point, and the folder itself, are not files that the
 |---|---|
 | `string(1, 64, "abcxyzXYZ019-._")` | 3 |
 
-## B23: Answers clients at once
+## B23: Answers a HEAD request with the head of the answer alone
+- Given a file `public/notes.txt` that contains `123456789`
+- And a file `store.json` that contains `{\n"a": 1\n}\n`
+- And a client that sends `HEAD /health HTTP/1.1\r\n\r\n`
+- And a client that sends `HEAD /files/notes.txt HTTP/1.1\r\n\r\n`
+- And a client that sends `HEAD /files/ HTTP/1.1\r\n\r\n`
+- And a client that sends `HEAD /kv HTTP/1.1\r\n\r\n`
+- And a client that sends `HEAD /kv/a HTTP/1.1\r\n\r\n`
+- And a client that sends `HEAD /other HTTP/1.1\r\n\r\n`
+- When the program runs
+- Then the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 3\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 9\r\nETag: "3421780262"\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 10\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 14\r\nConnection: close\r\n\r\n`
+- And it prints `HEAD /health 200 0\nHEAD /files/notes.txt 200 0\nHEAD /files/ 200 0\nHEAD /kv 200 0\nHEAD /kv/a 200 0\nHEAD /other 404 0\n`
+- And it does not stop
+
+### For any file and value
+- Given a file `public/notes.txt` that contains `{body}`
+- And a file `store.json` that contains `{{\n"a": {n}\n}}\n`
+- And a client that sends `HEAD /health HTTP/1.1\r\n\r\n`
+- And a client that sends `HEAD /files/notes.txt HTTP/1.1\r\n\r\n`
+- And a client that sends `HEAD /files/ HTTP/1.1\r\n\r\n`
+- And a client that sends `HEAD /kv HTTP/1.1\r\n\r\n`
+- And a client that sends `HEAD /kv/a HTTP/1.1\r\n\r\n`
+- And a client that sends `HEAD /other HTTP/1.1\r\n\r\n`
+- When the program runs
+- Then the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 3\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {len(body)}\r\nETag: "{crc32(body)}"\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 10\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(n) + 10}\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {len(n) + 1}\r\nConnection: close\r\n\r\n`
+- And the client receives `HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 14\r\nConnection: close\r\n\r\n`
+- And it prints `HEAD /health 200 0\nHEAD /files/notes.txt 200 0\nHEAD /files/ 200 0\nHEAD /kv 200 0\nHEAD /kv/a 200 0\nHEAD /other 404 0\n`
+- And it does not stop
+
+| body | n | runs |
+|---|---|---|
+| `string(0, 2000, "abcdefghijklmnopqrstuvwxyz0123456789 <>/\n")` | `choice("1", "22", "\"three\"", "[4,4]", "null")` | 10 |
+
+## B24: Answers clients at once
 - Given a client that sends `GET /health?a=1 HTTP/1.1\r\n\r\n`
 - And a client that sends `GET /health?b=1 HTTP/1.1\r\n\r\n`
 - And the clients connect at once

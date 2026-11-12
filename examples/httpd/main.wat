@@ -136,6 +136,9 @@
   (global $PUT i32 (i32.const 2))
   (global $DELETE i32 (i32.const 3))
   (global $DELETE_LENGTH i32 (i32.const 6))
+  ;; HEAD: a GET whose answer goes out with no body.
+  (global $HEAD i32 (i32.const 4))
+  (global $HEAD_LENGTH i32 (i32.const 4))
   ;; What content_length gives when the request has no such field, and for one that is no
   ;; number. What digits gives for no digits, and for text that is no number.
   (global $LENGTH_NONE i32 (i32.const -1))
@@ -163,6 +166,7 @@
   (global $WORD_PUT i32 (i32.const 0x20545550))
   (global $WORD_DELE i32 (i32.const 0x454c4544))
   (global $WORD_TE i32 (i32.const 0x4554))
+  (global $WORD_HEAD i32 (i32.const 0x44414548))
   (global $WORD_BYTE i32 (i32.const 0x65747962))
   (global $WORD_S_EQUALS i32 (i32.const 0x3d73))
   (global $WORD_STORE_START i32 (i32.const 0x0a7b))
@@ -186,6 +190,7 @@
   (global $END_GIF i64 (i64.const 0x666967))
   ;; Characters.
   (global $NEWLINE i32 (i32.const 10))
+  (global $SPACE i32 (i32.const 32))
   (global $QUOTE i32 (i32.const 34))
   (global $STAR i32 (i32.const 42))
   (global $COMMA i32 (i32.const 44))
@@ -211,50 +216,50 @@
   (global $T_ANY i32 (i32.const 83))
   (global $T_CLOSE i32 (i32.const 86))
   (global $T_ALLOW_GET i32 (i32.const 108))
-  (global $T_ALLOW_ALL i32 (i32.const 121))
-  (global $T_NEWLINE i32 (i32.const 147))
-  (global $T_SPACE i32 (i32.const 149))
-  (global $T_HYPHEN i32 (i32.const 151))
-  (global $T_SLASH i32 (i32.const 153))
-  (global $T_NO_LINE i32 (i32.const 155))
-  (global $T_OK i32 (i32.const 159))
-  (global $T_COMMA i32 (i32.const 163))
-  (global $T_COMMA_NEWLINE i32 (i32.const 165))
-  (global $T_STORE_END i32 (i32.const 168))
-  (global $T_NAME_END i32 (i32.const 172))
-  (global $T_STORE_FILE i32 (i32.const 176))
-  (global $P_HEALTH i32 (i32.const 187))
-  (global $P_FILES i32 (i32.const 195))
-  (global $P_STORE i32 (i32.const 203))
-  (global $P_KEY i32 (i32.const 207))
-  (global $R_200 i32 (i32.const 212))
-  (global $R_204 i32 (i32.const 219))
-  (global $R_206 i32 (i32.const 234))
-  (global $R_304 i32 (i32.const 254))
-  (global $R_400 i32 (i32.const 271))
-  (global $R_404 i32 (i32.const 287))
-  (global $R_405 i32 (i32.const 301))
-  (global $R_411 i32 (i32.const 324))
-  (global $R_413 i32 (i32.const 344))
-  (global $R_414 i32 (i32.const 366))
-  (global $R_416 i32 (i32.const 383))
-  (global $R_431 i32 (i32.const 409))
-  (global $R_500 i32 (i32.const 445))
-  (global $R_501 i32 (i32.const 471))
-  (global $R_505 i32 (i32.const 491))
-  (global $R_507 i32 (i32.const 522))
-  (global $M_PLAIN i32 (i32.const 547))
-  (global $M_HTML i32 (i32.const 558))
-  (global $M_CSS i32 (i32.const 568))
-  (global $M_CSV i32 (i32.const 577))
-  (global $M_SCRIPT i32 (i32.const 586))
-  (global $M_JSON i32 (i32.const 602))
-  (global $M_WASM i32 (i32.const 619))
-  (global $M_BYTES i32 (i32.const 636))
-  (global $M_SVG i32 (i32.const 661))
-  (global $M_PNG i32 (i32.const 675))
-  (global $M_JPEG i32 (i32.const 685))
-  (global $M_GIF i32 (i32.const 696))
+  (global $T_ALLOW_ALL i32 (i32.const 127))
+  (global $T_NEWLINE i32 (i32.const 159))
+  (global $T_SPACE i32 (i32.const 161))
+  (global $T_HYPHEN i32 (i32.const 163))
+  (global $T_SLASH i32 (i32.const 165))
+  (global $T_NO_LINE i32 (i32.const 167))
+  (global $T_OK i32 (i32.const 171))
+  (global $T_COMMA i32 (i32.const 175))
+  (global $T_COMMA_NEWLINE i32 (i32.const 177))
+  (global $T_STORE_END i32 (i32.const 180))
+  (global $T_NAME_END i32 (i32.const 184))
+  (global $T_STORE_FILE i32 (i32.const 188))
+  (global $P_HEALTH i32 (i32.const 199))
+  (global $P_FILES i32 (i32.const 207))
+  (global $P_STORE i32 (i32.const 215))
+  (global $P_KEY i32 (i32.const 219))
+  (global $R_200 i32 (i32.const 224))
+  (global $R_204 i32 (i32.const 231))
+  (global $R_206 i32 (i32.const 246))
+  (global $R_304 i32 (i32.const 266))
+  (global $R_400 i32 (i32.const 283))
+  (global $R_404 i32 (i32.const 299))
+  (global $R_405 i32 (i32.const 313))
+  (global $R_411 i32 (i32.const 336))
+  (global $R_413 i32 (i32.const 356))
+  (global $R_414 i32 (i32.const 378))
+  (global $R_416 i32 (i32.const 395))
+  (global $R_431 i32 (i32.const 421))
+  (global $R_500 i32 (i32.const 457))
+  (global $R_501 i32 (i32.const 483))
+  (global $R_505 i32 (i32.const 503))
+  (global $R_507 i32 (i32.const 534))
+  (global $M_PLAIN i32 (i32.const 559))
+  (global $M_HTML i32 (i32.const 570))
+  (global $M_CSS i32 (i32.const 580))
+  (global $M_CSV i32 (i32.const 589))
+  (global $M_SCRIPT i32 (i32.const 598))
+  (global $M_JSON i32 (i32.const 614))
+  (global $M_WASM i32 (i32.const 631))
+  (global $M_BYTES i32 (i32.const 648))
+  (global $M_SVG i32 (i32.const 673))
+  (global $M_PNG i32 (i32.const 687))
+  (global $M_JPEG i32 (i32.const 697))
+  (global $M_GIF i32 (i32.const 708))
   ;; No type and no other field, for head_start and fail.
   (global $NO_TEXT i32 (i32.const 0))
   ;; Where each field's name starts in $names, and its length.
@@ -425,7 +430,7 @@
 
   ;; Regions (rule 3, M1), from 1024 up. The literal texts, read-only, one after another.
   (global $texts i32 (i32.const 1024))
-  (global $texts.rosize i32 (i32.const 706))
+  (global $texts.rosize i32 (i32.const 718))
   (data (i32.const 1024) "HTTP/1.1 \00")
   (data (i32.const 1034) "\0d\0a\00")
   (data (i32.const 1037) "\0d\0aContent-Type: \00")
@@ -435,51 +440,51 @@
   (data (i32.const 1085) "Content-Range: bytes \00")
   (data (i32.const 1107) "*/\00")
   (data (i32.const 1110) "Connection: close\0d\0a\0d\0a\00")
-  (data (i32.const 1132) "Allow: GET\0d\0a\00")
-  (data (i32.const 1145) "Allow: GET, PUT, DELETE\0d\0a\00")
-  (data (i32.const 1171) "\0a\00")
-  (data (i32.const 1173) " \00")
-  (data (i32.const 1175) "-\00")
-  (data (i32.const 1177) "/\00")
-  (data (i32.const 1179) "- -\00")
-  (data (i32.const 1183) "ok\0a\00")
-  (data (i32.const 1187) ",\00")
-  (data (i32.const 1189) ",\0a\00")
-  (data (i32.const 1192) "\0a}\0a\00")
-  (data (i32.const 1196) "\22: \00")
-  (data (i32.const 1200) "store.json\00")
-  (data (i32.const 1211) "/health\00")
-  (data (i32.const 1219) "/files/\00")
-  (data (i32.const 1227) "/kv\00")
-  (data (i32.const 1231) "/kv/\00")
-  (data (i32.const 1236) "200 OK\00")
-  (data (i32.const 1243) "204 No Content\00")
-  (data (i32.const 1258) "206 Partial Content\00")
-  (data (i32.const 1278) "304 Not Modified\00")
-  (data (i32.const 1295) "400 Bad Request\00")
-  (data (i32.const 1311) "404 Not Found\00")
-  (data (i32.const 1325) "405 Method Not Allowed\00")
-  (data (i32.const 1348) "411 Length Required\00")
-  (data (i32.const 1368) "413 Content Too Large\00")
-  (data (i32.const 1390) "414 URI Too Long\00")
-  (data (i32.const 1407) "416 Range Not Satisfiable\00")
-  (data (i32.const 1433) "431 Request Header Fields Too Large\00")
-  (data (i32.const 1469) "500 Internal Server Error\00")
-  (data (i32.const 1495) "501 Not Implemented\00")
-  (data (i32.const 1515) "505 HTTP Version Not Supported\00")
-  (data (i32.const 1546) "507 Insufficient Storage\00")
-  (data (i32.const 1571) "text/plain\00")
-  (data (i32.const 1582) "text/html\00")
-  (data (i32.const 1592) "text/css\00")
-  (data (i32.const 1601) "text/csv\00")
-  (data (i32.const 1610) "text/javascript\00")
-  (data (i32.const 1626) "application/json\00")
-  (data (i32.const 1643) "application/wasm\00")
-  (data (i32.const 1660) "application/octet-stream\00")
-  (data (i32.const 1685) "image/svg+xml\00")
-  (data (i32.const 1699) "image/png\00")
-  (data (i32.const 1709) "image/jpeg\00")
-  (data (i32.const 1720) "image/gif\00")
+  (data (i32.const 1132) "Allow: GET, HEAD\0d\0a\00")
+  (data (i32.const 1151) "Allow: GET, HEAD, PUT, DELETE\0d\0a\00")
+  (data (i32.const 1183) "\0a\00")
+  (data (i32.const 1185) " \00")
+  (data (i32.const 1187) "-\00")
+  (data (i32.const 1189) "/\00")
+  (data (i32.const 1191) "- -\00")
+  (data (i32.const 1195) "ok\0a\00")
+  (data (i32.const 1199) ",\00")
+  (data (i32.const 1201) ",\0a\00")
+  (data (i32.const 1204) "\0a}\0a\00")
+  (data (i32.const 1208) "\22: \00")
+  (data (i32.const 1212) "store.json\00")
+  (data (i32.const 1223) "/health\00")
+  (data (i32.const 1231) "/files/\00")
+  (data (i32.const 1239) "/kv\00")
+  (data (i32.const 1243) "/kv/\00")
+  (data (i32.const 1248) "200 OK\00")
+  (data (i32.const 1255) "204 No Content\00")
+  (data (i32.const 1270) "206 Partial Content\00")
+  (data (i32.const 1290) "304 Not Modified\00")
+  (data (i32.const 1307) "400 Bad Request\00")
+  (data (i32.const 1323) "404 Not Found\00")
+  (data (i32.const 1337) "405 Method Not Allowed\00")
+  (data (i32.const 1360) "411 Length Required\00")
+  (data (i32.const 1380) "413 Content Too Large\00")
+  (data (i32.const 1402) "414 URI Too Long\00")
+  (data (i32.const 1419) "416 Range Not Satisfiable\00")
+  (data (i32.const 1445) "431 Request Header Fields Too Large\00")
+  (data (i32.const 1481) "500 Internal Server Error\00")
+  (data (i32.const 1507) "501 Not Implemented\00")
+  (data (i32.const 1527) "505 HTTP Version Not Supported\00")
+  (data (i32.const 1558) "507 Insufficient Storage\00")
+  (data (i32.const 1583) "text/plain\00")
+  (data (i32.const 1594) "text/html\00")
+  (data (i32.const 1604) "text/css\00")
+  (data (i32.const 1613) "text/csv\00")
+  (data (i32.const 1622) "text/javascript\00")
+  (data (i32.const 1638) "application/json\00")
+  (data (i32.const 1655) "application/wasm\00")
+  (data (i32.const 1672) "application/octet-stream\00")
+  (data (i32.const 1697) "image/svg+xml\00")
+  (data (i32.const 1711) "image/png\00")
+  (data (i32.const 1721) "image/jpeg\00")
+  (data (i32.const 1732) "image/gif\00")
   ;; The names of the header fields the server reads, in small letters, each in the HTTP_NAME
   ;; bytes that $http_name_is may read.
   (global $names i32 (i32.const 2048))
@@ -531,9 +536,10 @@
   ;; Content-Length field, and whether its request line could be read, 4 bytes each.
   (global $sizes i32 (i32.const 3216))  ;; shared: examine writes them, the routes and log read them
   (global $sizes.size i32 (i32.const 16))
-  ;; The answer's status and its body's length, for the log.
-  (global $logged i32 (i32.const 3232))  ;; shared: head_start writes them, log reads them
-  (global $logged.size i32 (i32.const 8))
+  ;; The answer's status and its body's length, for the log; whether the answer goes out with
+  ;; no body, as a HEAD asks; and where the answer's head ends in $out. 4 bytes each.
+  (global $logged i32 (i32.const 3232))  ;; shared: head_start, head_end and route write them, send and log read them
+  (global $logged.size i32 (i32.const 16))
   ;; A part of a file: range_read's first and last byte, 8 bytes each, then range_of's first
   ;; byte and count, 4 bytes each.
   (global $span i32 (i32.const 3248))  ;; shared: range_read and range_of write it, send_file reads it
@@ -848,6 +854,7 @@
       (then (call $assert_fail (i32.const 21)) unreachable))
     (i64.store (global.get $sizes) (i64.const 0))
     (i64.store offset=8 (global.get $sizes) (i64.const 0))
+    (i32.store offset=8 (global.get $logged) (i32.const 0))
     (local.set $limit (local.get $length))
     (if (i32.gt_u (local.get $limit) (global.get $HTTP_HEAD))
       (then (local.set $limit (global.get $HTTP_HEAD))))
@@ -951,6 +958,11 @@
     (if (i32.gt_u (local.get $length) (global.get $HTTP_METHOD))
       (then (call $assert_fail (i32.const 26)) unreachable))
     (local.set $method (call $method_of (local.get $length)))
+    ;; A HEAD is answered as a GET, and the answer goes out with no body.
+    (if (i32.eq (local.get $method) (global.get $HEAD))
+      (then
+        (i32.store offset=8 (global.get $logged) (i32.const 1))
+        (local.set $method (global.get $GET))))
     (local.set $start (i32.load offset=4 (global.get $line)))
     (local.set $length (i32.load offset=8 (global.get $line)))
     (if (i32.gt_u (local.get $start) (global.get $HTTP_HEAD))
@@ -992,7 +1004,7 @@
           (br $done)))
       (call $fail (local.get $fd) (global.get $S_NOT_FOUND) (global.get $NO_TEXT))))
 
-  ;; Says which method the request's $length first bytes are: GET, PUT, DELETE or
+  ;; Says which method the request's $length first bytes are: GET, PUT, DELETE, HEAD or
   ;; OTHER_METHOD. The request line has a space after its method.
   (func $method_of (param $length i32) (result i32)
     (local $word i32)
@@ -1011,6 +1023,12 @@
           (i32.eq (i32.load16_u offset=4 (global.get $request)) (global.get $WORD_TE)))
         (i32.eq (local.get $length) (global.get $DELETE_LENGTH)))
       (then (local.set $method (global.get $DELETE))))
+    (if
+      (i32.and
+        (i32.and (i32.eq (local.get $word) (global.get $WORD_HEAD))
+          (i32.eq (i32.load8_u offset=4 (global.get $request)) (global.get $SPACE)))
+        (i32.eq (local.get $length) (global.get $HEAD_LENGTH)))
+      (then (local.set $method (global.get $HEAD))))
     (local.get $method))
 
   ;; Gives the length of the literal text $text when the path of $size bytes starts with it,
@@ -1163,9 +1181,21 @@
           (call $put_number (local.get $at) (i64.extend_i32_u (local.get $length))))))
     (call $put (local.get $at) (global.get $T_LINE_END)))
 
-  ;; Sends the first $at bytes of $out on $fd. A client that has gone gets nothing, and the
+  ;; Writes the end of an answer's head, the Connection field and the blank line, at place $at
+  ;; of $out, notes where the head ends, and gives the place after it.
+  (func $head_end (param $at i32) (result i32)
+    (local.set $at (call $put (local.get $at) (global.get $T_CLOSE)))
+    (if (i32.gt_u (local.get $at) (global.get $out.size))
+      (then (call $assert_fail (i32.const 148)) unreachable))
+    (i32.store offset=12 (global.get $logged) (local.get $at))
+    (local.get $at))
+
+  ;; Sends the first $at bytes of $out on $fd: an answer's head and the short body after it. A
+  ;; HEAD gets the head alone. A client that has gone gets nothing, and the
   ;; server goes on.
   (func $send (param $fd i32) (param $at i32)
+    (if (i32.load offset=8 (global.get $logged))
+      (then (local.set $at (i32.load offset=12 (global.get $logged)))))
     (if (i32.gt_u (local.get $at) (global.get $out.size))
       (then (call $assert_fail (i32.const 43)) unreachable))
     (block $gone
@@ -1184,7 +1214,7 @@
     (local.set $at (call $head_start (local.get $status) (global.get $M_PLAIN) (local.get $at)))
     (if (i32.ne (local.get $extra) (global.get $NO_TEXT))
       (then (local.set $at (call $put (local.get $at) (local.get $extra)))))
-    (local.set $at (call $put (local.get $at) (global.get $T_CLOSE)))
+    (local.set $at (call $head_end (local.get $at)))
     (local.set $at (call $put (local.get $at) (local.get $text)))
     (local.set $at (call $put (local.get $at) (global.get $T_NEWLINE)))
     (call $send (local.get $fd) (local.get $at)))
@@ -1194,7 +1224,7 @@
     (local $at i32)
     (local.set $at
       (call $head_start (global.get $S_NO_CONTENT) (global.get $NO_TEXT) (i32.const 0)))
-    (local.set $at (call $put (local.get $at) (global.get $T_CLOSE)))
+    (local.set $at (call $head_end (local.get $at)))
     (if (i32.gt_u (local.get $at) (global.get $TEXT_MAX))
       (then (call $assert_fail (i32.const 45)) unreachable))
     (call $send (local.get $fd) (local.get $at)))
@@ -1224,9 +1254,11 @@
     (local.set $at
       (call $put_number (local.get $at) (i64.extend_i32_u (i32.load (global.get $logged)))))
     (local.set $at (call $put (local.get $at) (global.get $T_SPACE)))
-    (local.set $at
-      (call $put_number (local.get $at)
-        (i64.extend_i32_u (i32.load offset=4 (global.get $logged)))))
+    ;; The length of the body that went out: none for a HEAD.
+    (local.set $length (i32.load offset=4 (global.get $logged)))
+    (if (i32.load offset=8 (global.get $logged))
+      (then (local.set $length (i32.const 0))))
+    (local.set $at (call $put_number (local.get $at) (i64.extend_i32_u (local.get $length))))
     (local.set $at (call $put (local.get $at) (global.get $T_NEWLINE)))
     (if (i32.gt_u (local.get $at) (global.get $out.size))
       (then (call $assert_fail (i32.const 48)) unreachable))
@@ -1244,7 +1276,7 @@
       (local.set $at
         (call $head_start (global.get $S_OK) (global.get $M_PLAIN)
           (call $put (i32.const 0) (global.get $T_OK))))
-      (local.set $at (call $put (local.get $at) (global.get $T_CLOSE)))
+      (local.set $at (call $head_end (local.get $at)))
       (local.set $at (call $put (local.get $at) (global.get $T_OK)))
       (call $send (local.get $fd) (local.get $at))))
 
@@ -1489,7 +1521,7 @@
     (local.set $at
       (call $head_start (global.get $S_NOT_MODIFIED) (global.get $NO_TEXT) (i32.const 0)))
     (local.set $at (call $put_tag (local.get $at) (local.get $crc)))
-    (local.set $at (call $put (local.get $at) (global.get $T_CLOSE)))
+    (local.set $at (call $head_end (local.get $at)))
     (if (i32.gt_u (local.get $at) (global.get $out.size))
       (then (call $assert_fail (i32.const 64)) unreachable))
     (call $send (local.get $fd) (local.get $at)))
@@ -1642,11 +1674,13 @@
           (local.set $at
             (call $put_number (local.get $at) (i64.extend_i32_u (local.get $size))))
           (local.set $at (call $put (local.get $at) (global.get $T_LINE_END)))))
-      (local.set $at (call $put (local.get $at) (global.get $T_CLOSE)))
+      (local.set $at (call $head_end (local.get $at)))
       (if (i32.gt_u (local.get $at) (global.get $out.size))
         (then (call $assert_fail (i32.const 71)) unreachable))
       ;; A client that has gone gets no more.
       (br_if $done (call $write_all (local.get $fd) (global.get $out) (local.get $at)))
+      ;; A HEAD gets the head alone.
+      (br_if $done (i32.load offset=8 (global.get $logged)))
       (br_if $done
         (call $write_all (local.get $fd) (global.get $content) (local.get $count)))))
 
@@ -1666,7 +1700,7 @@
     (local.set $at (call $put (local.get $at) (global.get $T_ANY)))
     (local.set $at (call $put_number (local.get $at) (i64.extend_i32_u (local.get $size))))
     (local.set $at (call $put (local.get $at) (global.get $T_LINE_END)))
-    (local.set $at (call $put (local.get $at) (global.get $T_CLOSE)))
+    (local.set $at (call $head_end (local.get $at)))
     (local.set $at (call $put (local.get $at) (global.get $R_416)))
     (local.set $at (call $put (local.get $at) (global.get $T_NEWLINE)))
     (call $send (local.get $fd) (local.get $at)))
@@ -1783,11 +1817,13 @@
             (then (call $assert_fail (i32.const 81)) unreachable))
           (local.set $at
             (call $head_start (global.get $S_OK) (global.get $M_PLAIN) (local.get $bytes)))
-          (local.set $at (call $put (local.get $at) (global.get $T_CLOSE)))
+          (local.set $at (call $head_end (local.get $at)))
           (if (i32.gt_u (local.get $at) (global.get $out.size))
             (then (call $assert_fail (i32.const 82)) unreachable))
           ;; A client that has gone gets no more.
           (br_if $done (call $write_all (local.get $fd) (global.get $out) (local.get $at)))
+          ;; A HEAD gets the head alone.
+          (br_if $done (i32.load offset=8 (global.get $logged)))
           (br_if $done
             (call $write_all (local.get $fd) (global.get $listing) (local.get $bytes)))
           (br $done))
@@ -2009,11 +2045,13 @@
         (then (call $assert_fail (i32.const 99)) unreachable))
       (local.set $at
         (call $head_start (global.get $S_OK) (global.get $M_JSON) (local.get $length)))
-      (local.set $at (call $put (local.get $at) (global.get $T_CLOSE)))
+      (local.set $at (call $head_end (local.get $at)))
       (if (i32.gt_u (local.get $at) (global.get $out.size))
         (then (call $assert_fail (i32.const 100)) unreachable))
       ;; A client that has gone gets no more.
       (br_if $done (call $write_all (local.get $fd) (global.get $out) (local.get $at)))
+      ;; A HEAD gets the head alone.
+      (br_if $done (i32.load offset=8 (global.get $logged)))
       (br_if $done (call $write_all (local.get $fd) (global.get $store) (local.get $length)))))
 
   ;; GET, PUT and DELETE /kv/ and a key, for the path of $size bytes: the value of the key is
@@ -2144,11 +2182,13 @@
         (local.set $count (i32.add (local.get $count) (i32.const 1)))
         (local.set $at
           (call $head_start (global.get $S_OK) (global.get $M_JSON) (local.get $count)))
-        (local.set $at (call $put (local.get $at) (global.get $T_CLOSE)))
+        (local.set $at (call $head_end (local.get $at)))
         (if (i32.gt_u (local.get $at) (global.get $out.size))
           (then (call $assert_fail (i32.const 109)) unreachable))
         ;; A client that has gone gets no more.
         (br_if $done (call $write_all (local.get $fd) (global.get $out) (local.get $at)))
+        ;; A HEAD gets the head alone.
+        (br_if $done (i32.load offset=8 (global.get $logged)))
         (br_if $done (call $write_all (local.get $fd) (global.get $value) (local.get $count)))
         (br $done))
       ;; A member with no value, or one longer than a value may be.
