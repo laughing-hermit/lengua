@@ -160,3 +160,28 @@ agent's own and none in the 24 functions taken from parts: no index out of its r
 without its bound, no region shared without its mark, no bare number, no function over 180
 operators. Nothing here is a slip that a compiler's type check would have caught: the text
 parsed and validated at its first build.
+
+### Cycle 5 (run 43180086861, at 5b4e6bd): httpd is done
+
+| Folder | Lines | What `check` said |
+|---|---|---|
+| httpd | 3,617 (85 functions, 195 assertions) | **`done`**: `main.wat follows every rule and passed all 254 test runs`. First reply, with the tests, after 3.2 s; its four parts took 180.8 s before it, 60 s of proofs for each of three and less for decimal |
+
+Every one of the 23 behaviors passed at the first run of the tests: no test of the server
+failed once, in any cycle. The memory line: "the rules follow every address and division of
+main.wat, so they leave nothing to the proofs".
+
+The proofs: **none of the server's 24 generated tests is proven**. Each says `tested, not
+proven: a server's wait on poll_oneoff for its connections`. What is proven is in the parts'
+own programs, as the `parts` lines repeat: http's B1 (few texts) and B3 to B8 for every input
+in range, B1 (wide) to 3 of 100 bytes and B2 to 14 of 40; json's B3, B4, B5, B7, B8 and B9
+for every input in range and B1, B2 and B6 not; decimal's three; crc32 to one byte. And, as
+parts.md says, a part's proof is of the part's own program, not of the server that took its
+functions.
+
+**The build, in numbers.** Five cycles from the first dispatch to `done`: three stopped at an
+idea (cycles 1, 2 and 3: sentence lengths, examples outside their generators, a test's
+shape), one at one rule (cycle 4), and the fifth passed. No cycle was spent on a failed test
+or on text that didn't build. From the first dispatch (05:33 UTC) to `done` (08:40 UTC): 3
+hours 7 minutes, nearly all of it the runners' builds; `check` itself took 0.1 s for the rules
+and 3.2 s with the tests.
