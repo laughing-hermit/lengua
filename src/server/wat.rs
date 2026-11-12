@@ -1525,7 +1525,9 @@ impl LenguaServer {
                         &called.wasm,
                     );
                     if let Err(error) = kept {
-                        tracing::warn!("couldn't compile a called module ahead of its runs: {error}");
+                        tracing::warn!(
+                            "couldn't compile a called module ahead of its runs: {error}"
+                        );
                     }
                 }
             }

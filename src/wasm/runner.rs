@@ -139,9 +139,10 @@ fn ending_of(error: &wasmtime::Error, module: &Module) -> (Ending, Option<String
             Stop::TimedOut => (Ending::TimedOut, None),
             Stop::Stopped | Stop::Piece => (Ending::Stopped, None),
             Stop::OutsideMemory => (Ending::Trapped(Trap::OutOfBounds, offsets), None),
-            Stop::NoMemory | Stop::Reaches => {
-                (Ending::Trapped(Trap::Other, offsets), Some(stop.to_string()))
-            }
+            Stop::NoMemory | Stop::Reaches => (
+                Ending::Trapped(Trap::Other, offsets),
+                Some(stop.to_string()),
+            ),
         };
     }
     if let Some(trap) = error.downcast_ref::<wasmtime::Trap>() {

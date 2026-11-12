@@ -503,13 +503,14 @@ impl Checker<'_, '_, '_> {
                 }
                 let descriptor = callee.host().is_some()
                     && callee.import.as_ref().is_some_and(|(_, field)| {
-                    field.starts_with("fd_")
-                        || field.starts_with("sock_")
-                        || field.starts_with("path_")
-                        || field.starts_with("udp_send")
-                        || field.starts_with("udp_recv")
-                        || field == "term_is"
-                }) || callee.is_library("fill")
+                        field.starts_with("fd_")
+                            || field.starts_with("sock_")
+                            || field.starts_with("path_")
+                            || field.starts_with("udp_send")
+                            || field.starts_with("udp_recv")
+                            || field == "term_is"
+                    })
+                    || callee.is_library("fill")
                     || callee.is_library("write_all");
                 if descriptor && let Some(value) = literal(at, 0) {
                     self.violation(
@@ -800,7 +801,14 @@ impl Checker<'_, '_, '_> {
         let fix_remove = "remove it, or use it";
         // The functions `_start` reaches.
         let mut reached = BTreeSet::new();
-        let mut pending: Vec<u32> = module.entry().into_iter().collect();
+        // And the functions it exports for other programs, which an idea's `- Exports:` line
+        // lists: another program calls them, whether or not `_start` does.
+        let mut pending: Vec<u32> = module
+            .exports
+            .iter()
+            .filter(|export| export.kind == wasmparser::ExternalKind::Func)
+            .map(|export| export.index)
+            .collect();
         while let Some(index) = pending.pop() {
             if !reached.insert(index) {
                 continue;

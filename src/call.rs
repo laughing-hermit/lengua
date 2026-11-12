@@ -224,9 +224,8 @@ fn functions(text: &str, usage: &str) -> Result<Vec<Signature>, String> {
             .map(str::trim)
             .filter(|param| !param.is_empty())
         {
-            let ty = Type::read(param).ok_or_else(|| {
-                format!("`{param}` isn't a number's type, in `{name}`; {usage}")
-            })?;
+            let ty = Type::read(param)
+                .ok_or_else(|| format!("`{param}` isn't a number's type, in `{name}`; {usage}"))?;
             params.push(ty);
         }
         if params.len() > MAX_PARAMS {

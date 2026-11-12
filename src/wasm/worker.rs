@@ -93,7 +93,10 @@ impl Worker {
     /// `wanted`'s module from its file, checked against its hash.
     fn read(wanted: &Wanted<'_>) -> Result<Vec<u8>, String> {
         let bytes = std::fs::read(wanted.file).map_err(|error| {
-            format!("the module {} can't be read: {error}", wanted.file.display())
+            format!(
+                "the module {} can't be read: {error}",
+                wanted.file.display()
+            )
         })?;
         if Sha256Hex::of(&bytes).as_str() != wanted.hash {
             return Err(format!(
@@ -201,7 +204,8 @@ impl Worker {
                     module,
                 }),
                 Err(problem) => {
-                    let problem = format!("`{}`, a module the program calls: {problem}", called.name);
+                    let problem =
+                        format!("`{}`, a module the program calls: {problem}", called.name);
                     return runner::unstarted(job.id, problem, reached);
                 }
             }

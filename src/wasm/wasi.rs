@@ -1043,7 +1043,6 @@ pub const SPLIT_FUNCTIONS: &[Function] = &[
     given("piece", &[], SPLITS, NO_LENDS, &[NOENT, NOTCAPABLE]),
 ];
 
-
 /// The module lengua's own functions for a called module's bytes are imported from: a called
 /// module has a memory of its own, which the program reaches only through these two copies.
 pub const CALL_MODULE: &str = "lengua_call_1";
