@@ -2326,3 +2326,58 @@ fn a_server_that_waits_with_no_client_serves() {
     let done = ran(&text, policy, &given);
     assert_eq!(done.end, Ended::Other(format!("{:?}", Some(End::Serving))));
 }
+
+/// Every run of the shout server through its waits, with one client whose line arrives whole
+/// or in two pieces, every value known: each ends serving, with the line sent back in capitals,
+/// whenever the client's steps come between the waits.
+#[test]
+fn a_server_s_runs_through_its_waits_end_serving_with_the_answer() {
+    let text = fixture("shout-server", "main.wat");
+    let (_, policy) = blocks_of("shout-server");
+    let module = module(&text, policy);
+    let mut failures = Vec::new();
+    for (line, cut) in [(&b"\n"[..], 1), (&b"ab\n"[..], 3), (&b"ab\n"[..], 1)] {
+        let mut pool = Pool::default();
+        let bytes = exec::bytes(&mut pool, line);
+        let mut pieces = vec![bytes[..cut].to_vec(), bytes[cut..].to_vec()];
+        pieces.retain(|piece| !piece.is_empty());
+        let network = net::Network {
+            server: Vec::new(),
+            made: Vec::new(),
+            client: vec![net::Client {
+                pieces,
+                waits: true,
+                held: false,
+            }],
+            listening: true,
+            at_once: false,
+            eager: false,
+        };
+        let start = begin(&module, &mut pool, &[], &[], Vec::new()).with_network(network);
+        let runs =
+            exec::explore(&module, start, &mut pool, &mut exec::Concrete, 64).expect("the runs");
+        assert!(!runs.is_empty(), "no run of {line:?}");
+        let wanted: Vec<Option<u128>> = line
+            .iter()
+            .map(|byte| Some(u128::from(byte.to_ascii_uppercase())))
+            .collect();
+        for run in &runs {
+            let sent: Vec<Option<u128>> = run
+                .world
+                .connections
+                .iter()
+                .flat_map(|connection| connection.sent.iter())
+                .map(|term| pool.constant(*term))
+                .collect();
+            let said = format!(
+                "{line:?} cut at {cut}: {:?} after {} steps, sent {sent:?}",
+                run.world.end, run.world.steps
+            );
+            println!("{said}");
+            if run.world.end != Some(End::Serving) || sent != wanted {
+                failures.push(said);
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

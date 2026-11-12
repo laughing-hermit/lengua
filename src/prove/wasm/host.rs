@@ -513,6 +513,8 @@ fn wait_on_network(
     }
     state.world.start_polling()?;
     let mut choices = Vec::new();
+    // Whether the wait has something in some way the clients can stand.
+    let mut any = false;
     for world in state.world.stepped() {
         let ready: Vec<(Term, u64)> = watched
             .iter()
@@ -522,6 +524,7 @@ fn wait_on_network(
         if ready.is_empty() {
             continue;
         }
+        any = true;
         let mut choice = State {
             core: state.core.clone(),
             world,
@@ -561,7 +564,9 @@ fn wait_on_network(
             choices.push((pool.boolean(true), choice));
         }
     }
-    if choices.is_empty() {
+    // Nothing can come: the server waits forever. Where something can, and every way it comes
+    // was followed from another run already, this run goes no further.
+    if !any {
         return Err(state.world.idle());
     }
     Ok(Some(Step::Choose(choices)))

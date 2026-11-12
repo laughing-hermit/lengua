@@ -676,3 +676,85 @@ async fn sort64_s_proof_with_its_full_time() {
     assert_eq!(report["state"], "done", "{report}");
     session.service.cancel().await.expect("close the session");
 }
+
+/// A contract that states what a function gives carries into the program built on the part:
+/// crc32's item says what one call of `$crc32_update` gives, as a formula. `check` on the part
+/// proves the formula of the function alone, and says so in `contract`. `check` on checksums,
+/// which takes the function, proves it again of its own copy and says so in `parts`, and its
+/// proofs, which take the formula's value at each call in place of the function's body, cover
+/// every input in each test's range. A copy that isn't the part's is refused before any of
+/// that, with `code_problems`, and its reply claims nothing of the contract.
+#[tokio::test]
+#[ignore = "proves crc32, its parts and checksums, a minute each: by hand, or on CI's dispatch"]
+async fn a_contract_s_formula_carries_into_the_program_built_on_the_part() {
+    let session = Session::proving_for(Protocol::Discover, 60).await;
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/checksums");
+    let checksums = Program::new();
+    session
+        .settle_parts(&checksums, &folder)
+        .await
+        .expect("lines, crc32 and decimal are done");
+    // The part: what its contract states, and the formula proven of the function alone.
+    let part = session.settle(&checksums.beside("crc32")).await;
+    assert_eq!(part["state"], "done", "{part}");
+    let stated = lines(&part, "contract");
+    println!("CARRY crc32's contract: {stated:#?}");
+    assert!(
+        stated.iter().any(|line| line.starts_with(
+            "$crc32_update: reads 4096 bytes at `$at`; takes `$crc` from 0 to 0; takes \
+             `$length` from 0 to 64; `$at` holds `$length` bytes; gives `crc32(at)`"
+        )),
+        "{part}"
+    );
+    assert!(
+        stated.iter().any(|line| line.starts_with("gives $crc32_update: ")
+            && line.contains("proven of the function alone, for every argument in its ranges")),
+        "{part}"
+    );
+    // The program built on it: the formula proven of its own copy, and its proofs.
+    for file in ["idea.md", "main.wat"] {
+        checksums.write(file, &example("checksums", file));
+    }
+    session.record(&checksums).await;
+    let done = session.settle(&checksums).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let built_on = lines(&done, "parts");
+    println!("CARRY checksums' parts: {built_on:#?}");
+    assert!(
+        built_on
+            .iter()
+            .any(|line| line.starts_with("contract $crc32_update, from crc32: ")
+                && line.contains("proven of the function as this program holds it")
+                && line.contains("in place of the function's body")),
+        "{done}"
+    );
+    let proofs = lines(&done, "proofs");
+    println!("CARRY checksums' proofs: {proofs:#?}");
+    for id in ["B1", "B2", "B5"] {
+        assert!(
+            proofs
+                .iter()
+                .any(|line| line.starts_with(&format!("generated {id}: proven for every input"))
+                    && !line.contains("tested, not proven")),
+            "{id}: {done}"
+        );
+    }
+    // A copy of the function that isn't the part's: refused, with nothing said of a contract.
+    let code = example("checksums", "main.wat");
+    let tampered = changed(
+        &code,
+        "(i32.xor (i32.shr_u (local.get $c) (i32.const 1))",
+        "(i32.xor (i32.shr_u (local.get $c) (i32.const 2))",
+    );
+    checksums.write("main.wat", &tampered);
+    let refused = session.check(&checksums).await;
+    assert_eq!(refused["state"], "code_problems", "{refused}");
+    assert!(
+        refused["problems"]
+            .to_string()
+            .contains("main.wat's $crc32_update differs from"),
+        "{refused}"
+    );
+    assert!(refused["parts"].is_null(), "{refused}");
+    session.service.cancel().await.expect("close the session");
+}

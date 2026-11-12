@@ -14,7 +14,10 @@
 //! atoms, so for every input. A CRC step is linear over those bits (`crc_byte(p, s, b)` is
 //! `crc_byte(p, s ^ b, 0)`, and that is an exclusive or of the columns of one 32 by 32 matrix),
 //! so its form is computed from the same definition the solvers are given, and the term is
-//! replaced only when every one of its 32 bits has exactly the step's form. A test asks both
+//! replaced only when every one of its 32 bits has exactly the step's form. A byte whose
+//! range fixes some of its bits, as a small letter's fixes three, has them as the constants
+//! they are on both sides: a fact of every value in the range, which the pool already uses. A
+//! test asks both
 //! solvers the same of the terms as a program builds them, for every state and byte.
 
 use std::cmp::Ordering;
@@ -32,6 +35,14 @@ const MAX_WIDTH: u32 = 64;
 
 /// How deep one reading goes into terms not read before: deeper ones are atoms.
 const MAX_DEPTH: u32 = 48;
+
+/// The most terms whose bits are kept: past it they are forgotten, and read again when asked
+/// for, so code that is all exclusive ors and no CRC, such as a hash, keeps a bounded memory.
+const MAX_KNOWN: usize = 8192;
+
+/// The most terms whose bits are kept past a CRC step read: the next step is read from the
+/// step's own term, an atom, so nothing before it is needed again.
+const KEPT: usize = 1024;
 
 /// The columns one atom takes: one for each bit the widest term has.
 const ATOM_BITS: u32 = 128;
@@ -124,6 +135,13 @@ fn step_rows(poly: u32) -> [u32; 32] {
 }
 
 impl Pool {
+    /// Forgets the bits read so far, and the atoms they are over: a term asked for again is
+    /// read again, over atoms numbered afresh.
+    fn forget_forms(&mut self) {
+        self.forms.known.clear();
+        self.forms.atoms.clear();
+    }
+
     /// `term` as an atom: each of its `width` bits a column of its own.
     fn atom_bits(&mut self, term: Term, width: u32) -> Vec<Bit> {
         let number = u32::try_from(self.forms.atoms.len()).unwrap_or(u32::MAX / ATOM_BITS - 1);
@@ -265,6 +283,9 @@ impl Pool {
         {
             return None;
         }
+        if self.forms.known.len() > MAX_KNOWN {
+            self.forget_forms();
+        }
         let bits = self.bits_of(term, 0);
         // The atoms it is over: one byte, and at most one state.
         let mut byte: Option<u32> = None;
@@ -282,8 +303,10 @@ impl Pool {
             }
             *slot = Some(atom);
         }
-        let byte = byte?;
-        let byte_term = *self.forms.atoms.get(byte as usize)?;
+        let byte_term = match byte {
+            Some(atom) => Some(*self.forms.atoms.get(atom as usize)?),
+            None => None,
+        };
         let state_term = match state {
             Some(atom) => Some(*self.forms.atoms.get(atom as usize)?),
             None => None,
@@ -291,61 +314,114 @@ impl Pool {
         // Each bit as three masks: the byte's bits, the state's bits, and the constant.
         let mut byte_masks = [0_u32; 32];
         let mut state_masks = [0_u32; 32];
-        let mut ones = 0_u32;
-        for (place, bit) in (0..32_u32).zip(bits.iter()) {
+        let mut ones = [false; 32];
+        for ((bit, byte_mask), (state_mask, one)) in bits
+            .iter()
+            .zip(byte_masks.iter_mut())
+            .zip(state_masks.iter_mut().zip(ones.iter_mut()))
+        {
             for column in &bit.columns {
                 let (atom, at) = (column / ATOM_BITS, column % ATOM_BITS);
-                let masks = if atom == byte {
-                    &mut byte_masks
+                let mask = if Some(atom) == byte {
+                    &mut *byte_mask
                 } else {
-                    &mut state_masks
+                    &mut *state_mask
                 };
-                *masks.get_mut(place as usize)? |= 1_u32.checked_shl(at)?;
+                *mask |= 1_u32.checked_shl(at)?;
             }
-            if bit.one {
-                ones |= 1 << place;
-            }
+            *one = bit.one;
         }
+        // The bits of the byte its range fixes, which the pool may have written as the
+        // constants they are: every value from the least to the most shares the bits above the
+        // highest one where the two differ.
+        let (fixed, values) = match byte_term {
+            Some(byte) => fixed_bits(self.range(byte)),
+            // No byte among the atoms: the byte is a constant, every bit of it fixed, which the
+            // search below finds.
+            None => (0xff, 0),
+        };
+        let odd = |mask: u32| mask.count_ones() % 2 == 1;
         for poly in [ZLIB, CASTAGNOLI] {
             let rows = step_rows(poly);
-            // The byte comes in through the state's low 8 bits.
+            // The byte comes in through the state's low 8 bits: the bits its range leaves
+            // open are the step's, and the fixed ones are constants on both sides.
             if rows
                 .iter()
                 .zip(&byte_masks)
-                .any(|(row, mask)| row & 0xff != *mask)
+                .any(|(row, mask)| row & 0xff & !fixed != mask & !fixed)
             {
                 continue;
             }
-            let from = match state_term {
-                Some(before) => {
-                    if rows.iter().zip(&state_masks).any(|(row, mask)| row != mask) {
-                        continue;
-                    }
-                    // What the step makes of a state of all ones and a zero byte: the constant
-                    // a complemented state leaves in each bit.
-                    let complemented = crc_byte(poly, u32::MAX, 0);
-                    if ones == 0 {
-                        before
-                    } else if ones == complemented {
-                        self.not(before)
-                    } else {
-                        continue;
-                    }
+            if state_term.is_some() && rows.iter().zip(&state_masks).any(|(row, mask)| row != mask)
+            {
+                continue;
+            }
+            // What is left of each bit once the atoms' bits are the step's: a constant, which
+            // the state's own constant part and a byte that is a constant must make up.
+            let mut left = 0_u32;
+            for (place, ((row, mask), one)) in
+                (0..32_u32).zip(rows.iter().zip(&byte_masks).zip(&ones))
+            {
+                if *one ^ odd(mask & fixed & values) ^ odd(row & 0xff & fixed & values) {
+                    left |= 1 << place;
                 }
-                None => {
-                    let Some(start) = [u32::MAX, 0]
-                        .into_iter()
-                        .find(|start| crc_byte(poly, *start, 0) == ones)
-                    else {
+            }
+            // A step from the state `start`, a term or all ones or zero, with the byte `with`.
+            let starts = [(0_u32, false), (u32::MAX, true)];
+            let found = match (state_term, byte_term) {
+                (Some(before), Some(byte)) => starts
+                    .into_iter()
+                    .find(|(start, _)| crc_byte(poly, *start, 0) == left)
+                    .map(|(_, complemented)| (Some((before, complemented)), 0, byte)),
+                (None, Some(byte)) => starts
+                    .into_iter()
+                    .find(|(start, _)| crc_byte(poly, *start, 0) == left)
+                    .map(|(start, _)| (None, start, byte)),
+                (Some(before), None) => {
+                    let found = starts.into_iter().find_map(|(start, complemented)| {
+                        (0..=u8::MAX)
+                            .find(|with| crc_byte(poly, start, *with) == left)
+                            .map(|with| (complemented, with))
+                    });
+                    let Some((complemented, with)) = found else {
                         continue;
                     };
-                    self.bv(32, u128::from(start))
+                    let with = self.bv(8, u128::from(with));
+                    Some((Some((before, complemented)), 0, with))
                 }
+                (None, None) => None,
             };
-            return Some(self.crc(from, byte_term, poly));
+            let Some((state, start, with)) = found else {
+                continue;
+            };
+            let from = match state {
+                Some((before, false)) => before,
+                Some((before, true)) => self.not(before),
+                None => self.bv(32, u128::from(start)),
+            };
+            if self.forms.known.len() > KEPT {
+                self.forget_forms();
+            }
+            return Some(self.crc(from, with, poly));
         }
         None
     }
+}
+
+/// The bits every value from `low` to `high` shares, as a mask of a byte's bits and those
+/// bits' values: the ones above the highest bit where the two differ, or all of them where the
+/// two are one value.
+fn fixed_bits((low, high): (u128, u128)) -> (u32, u32) {
+    let (low, high) = (
+        u32::try_from(low & 0xff).unwrap_or(0),
+        u32::try_from(high & 0xff).unwrap_or(0xff),
+    );
+    let open = match (low ^ high).checked_ilog2() {
+        Some(highest) => (1_u32 << (highest + 1)) - 1,
+        None => 0,
+    };
+    let fixed = 0xff & !open;
+    (fixed, low & fixed)
 }
 
 #[cfg(test)]
@@ -401,6 +477,39 @@ mod tests {
                 formula = pool.crc(formula, next, poly);
                 assert_eq!(program, formula, "byte {index}");
             }
+        }
+    }
+
+    #[test]
+    fn a_crc_of_bytes_held_to_a_range_or_known_is_read_too() {
+        for poly in [ZLIB, CASTAGNOLI] {
+            let mut pool = Pool::default();
+            // A text's bytes are held to its characters' range, so the pool knows some of their
+            // bits: small letters share their three highest, and ASCII its highest.
+            let ones = pool.bv(32, u128::from(u32::MAX));
+            let (mut program, mut formula) = (ones, ones);
+            for (index, (low, high)) in [(0x61, 0x7a), (0x0a, 0x7a), (0x30, 0x39), (0, 255)]
+                .into_iter()
+                .enumerate()
+            {
+                let byte = pool.var_in(8, &format!("text.{index}"), low, high);
+                let shifted = by_shifts(&mut pool, program, byte, poly, 8);
+                program = pool
+                    .as_crc(shifted)
+                    .unwrap_or_else(|| panic!("byte {index}: {}", pool.sketch(shifted, 12)));
+                formula = pool.crc(formula, byte, poly);
+                assert_eq!(program, formula, "byte {index}");
+            }
+            // A byte the program knows, such as a newline between two texts.
+            let newline = pool.bv(8, 10);
+            let shifted = by_shifts(&mut pool, program, newline, poly, 8);
+            let expected = pool.crc(formula, newline, poly);
+            assert_eq!(pool.as_crc(shifted), Some(expected));
+            let state = pool.var(32, "state");
+            let inverted = pool.not(state);
+            let shifted = by_shifts(&mut pool, inverted, newline, poly, 8);
+            let expected = pool.crc(inverted, newline, poly);
+            assert_eq!(pool.as_crc(shifted), Some(expected));
         }
     }
 
