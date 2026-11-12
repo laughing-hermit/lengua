@@ -675,7 +675,7 @@ before W23 and W24, as the test the direction rests on. It passes if the agent b
 program of that size and can then change it with `check` still green; if it fails, what broke
 first chooses the next step (todo.md).
 
-Run on 2026-11-12, on the branch `wip/scale`: **passed with conditions**. A web server of 3,638
+Run on 2026-11-12, on main since 25d0fdb: **passed with conditions**. A web server of 3,638
 lines of main.wat, `examples/httpd`, on four parts, was built in five check cycles and changed
 three times (a feature that cuts across, a fix in the parser, a refactor into a part) with
 `check` green after each; no test failed, and two rules were broken in about 4,100 lines written

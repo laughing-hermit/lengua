@@ -435,7 +435,7 @@ Still open from it, for the owner:
 
 ### W22's scale test: passed with conditions (2026-11-12)
 
-On the branch `wip/scale`. [docs/scale/README.md](docs/scale/README.md) has the summary, the
+On main since 25d0fdb (2026-11-12). [docs/scale/README.md](docs/scale/README.md) has the summary, the
 measures and the verdict, and [docs/scale/log.md](docs/scale/log.md) every check cycle.
 
 What was built: a web server, `examples/httpd`, of 3,638 lines of main.wat (85 functions, 199
