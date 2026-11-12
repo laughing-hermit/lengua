@@ -521,6 +521,17 @@ Its runs, each a dispatch of ci.yml on the branch, on Linux on x86-64 unless it 
 - 43116222005 (the suite, at de12275, with main's lean runner merged in and a run held to the
   lock's parts): every test passed, lengua-run's among them; the format job's layout is
   applied at 488881f.
+- At d1fe52a, with main's W18 second part and lean runner merged in (main at 7336b5c):
+  43131739478 (the suite on all five systems): format, the five test jobs and the gate passed,
+  on Linux on x86-64 and ARM64, macOS on ARM64 and Windows on x86-64 and ARM64.
+  43131749430 (the golden runners view on all five): the checker's reports and the model's runs
+  are the same text on the five, and all 192 proof blocks, the seven new programs' among
+  them, have the same verdict on the five, none out of time on one alone.
+  43131758993 (the five parts' mutants, Linux on x86-64): of 40 mutants, 19 broke a rule or the
+  copy check, 18 failed a test, one of bytes was tested and not all proven, and two came out
+  proven, which the run failed on. Both change nothing a program does (`$argv.size` one
+  larger in decimal, `$out` one byte along in lines), and tests/mutation.rs now names each
+  with why.
 
 Still open from it, for the owner:
 - **A part's proof isn't used in the programs built on it.** The prover follows each taken

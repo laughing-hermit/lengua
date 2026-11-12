@@ -56,6 +56,16 @@ const EQUIVALENT: &[(&str, &str)] = &[
          bytes at 2048, and the next region, $argv, starts at 2064",
     ),
     (
+        "examples/decimal/main.wat L61:const+1",
+        "$argv.size grows from 8 to 9: no code reads the size, args_get still writes 8 bytes at \
+         2064, and the next region, $args, starts at 2080",
+    ),
+    (
+        "examples/lines/main.wat L52:const+1",
+        "$out moves from 6208 to 6209: its 21 bytes end at 6230, inside the one page, it is the \
+         last region, and $decimal_format and $write_all are both lent the same address",
+    ),
+    (
         "examples/copy/main.wat L60:const+1",
         "$buffer moves from 65536 to 65537: its 65,537 bytes end at 131,074, inside the three \
          pages, it is the last region, and $fill and $write_all are both lent the same address",
