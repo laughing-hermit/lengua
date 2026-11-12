@@ -1075,7 +1075,7 @@ goldens (43188485844); and the first two runs, which a lint stopped (43173164260
 
 W19's first step left two users of Wasmtime's own cache of compiled modules: the MCP `run`
 tool and the tests' workers. That cache loads a file's machine code as it finds it. Both are
-gone, on the branch `wip/sealed-run`.
+gone, on main since 08597b1 (2026-11-13).
 
 What was built:
 - **`check` keeps a second compiled form.** Once the tests pass it compiles the module for a
@@ -1152,7 +1152,7 @@ The runs: 43226059048 (the first compile check, which gave the Cargo.lock withou
 and rustfmt's patch); 43226203574 (a compile check that failed: six tests of the machine
 code's check still passed a cache); 43227042186 (the compile check, with clippy, green, on
 Linux on x86-64); 43230322720 (the suite on Linux on x86-64 at 6a30b13, green, with the new
-tests in it). The suite on all five runners is named in ROADMAP.md's W19 once it has run.
+tests in it). The suite on all five runners at 08597b1, which the landing on main rests on: 43244553691, green.
 
 ### What the permission checks refused
 
