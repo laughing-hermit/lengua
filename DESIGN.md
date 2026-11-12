@@ -920,18 +920,25 @@ idea grants the program (files, the clock, random bytes, the network, programs, 
 and not `split`, which answers `NOTCAPABLE` in a piece. So `_start` asks `piece()` first, and a
 piece is an ordinary program that reads standard input and prints.
 
+A piece reads its share out of the program's own memory: lengua lends those bytes for the
+call (`lengua_os::lent`), read-only, and each read of a piece copies from them into the
+piece's memory. Nothing writes them meanwhile, since the program waits in the call and no
+piece has its memory, and the call returns only once no thread holds them. So there is still
+no memory two runs can both write, and none a run can write that another reads.
+
 Two designs were weighed. WebAssembly's threads proposal shares one memory between threads, with
 atomics; it needs a rule that shows each thread writes only what no other reads or writes, the
 engine's threads feature on, which changes what compiled code depends on, and a prover that
 follows interleavings. Separate runs share nothing: no rule has to show the absence of a data
 race, since no byte of a piece's memory is another piece's or the program's; every rule and
 every proof holds for a piece as for any program, since a piece is one; the engine's settings
-don't change; and the code is the same on all five runners. The cost is two copies of each
-piece's bytes, one into lengua's memory and one into the piece's as it reads them, and one of
-its answer. lengua has the second design. Measured, that cost is more than the work of the one
-example: on 64 MiB its byte count with a piece for each core is 1.4 to 1.9 times as fast as
-with one piece at a time, and against the same count on one core it is slower on two runners,
-level on two and faster on one (ROADMAP.md, W20, has the table and why).
+don't change; and the code is the same on all five runners. The cost is that a piece's bytes
+are copied, once, from the program's memory into the piece's as it reads them, with one copy of
+its answer, and that each piece is a new store. lengua has the second design. Measured on two
+examples, a byte count and a CRC, with a piece for each core against the same work on one
+core: on 256 MiB the split takes 0.58 to 0.94 times the time on every runner; on 64 MiB it
+takes 0.74 to 0.97 times on three runners and 1.10 to 1.13 times on Linux on x86-64 and, for
+the count, on macOS (ROADMAP.md, W20, has the table and what still costs).
 
 What a call gives depends on its bytes and its numbers alone:
 - the cut is arithmetic: piece `k` of `n` holds the bytes from `floor(k × len / n)` to
@@ -955,8 +962,11 @@ The limits, which the idea's line and the rules give:
   that splits and never asks `piece()`, and one whose memory, times the line's pieces and one
   more for the program, is past 16,384 pages: a program and its pieces together hold at most
   1 GiB (`src/checker/wasm/split.rs`);
-- a piece can't split, so the pieces of a run are never more than the line's at once, each on
-  a thread of lengua's with a stack of 4 MiB;
+- a piece can't split, so the pieces of a run are never more than the line's at once. They run
+  on threads of lengua's, each with a stack of 4 MiB, started at the run's first call that
+  splits, as many as the line's pieces or the computer's cores, whichever is fewer, and kept
+  to the run's end. A thread is all a piece shares with the one before it: each piece is a
+  new store, with the module's first memory and globals;
 - the run's deadline is its pieces': in a test and in the `run` tool the engine's epochs stop
   a piece at it, and stop a piece that still runs once a piece before it in the order didn't
   end well. A run from a shell has no deadline and its engine stops nothing: there a piece

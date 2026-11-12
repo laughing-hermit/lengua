@@ -187,14 +187,16 @@ never by a path: lengua reads the argument and opens what it names, so the progr
 - **Size the memory for every run at once**: the module's pages, times the line's pieces and
   one more for the program, are at most 16,384. Read a large input a buffer-full at a time,
   and split each buffer-full.
-- **Read in one loop for both kinds of run**, as `examples/histogram-split` does: one call of
-  `$fill` in a loop, whose body counts when the run is a piece and calls `split` when it is
-  the whole program. A program that reads in one place is proven by induction as a piece.
-- **A split is not faster by itself.** Each piece's bytes are copied twice, and each call
-  starts its pieces anew. Measured on the runners, a byte count of 64 MiB split in eight was
-  slower than the same count on one core on two systems, level on two and faster on one. Split
-  only work that costs several times a copy of its bytes, megabytes at a time, and tell the
-  user what the split bought only after a run has shown it.
+- **Give a piece a small buffer of its own**, as `examples/crc32c-split` does: the whole
+  program reads megabytes at a time into a large region and splits them, and a piece reads its
+  share 64 KiB at a time into a small one, which stays in a core's cache. A program that reads
+  in two places is proven by length, not by induction.
+- **A split is not faster by itself.** Each piece is a new run that reads its bytes out of the
+  program's memory. Measured on the runners, with a piece for each of 3 or 4 cores, a count and
+  a CRC split in eight took 0.58 to 0.94 times the one-core program's time on 256 MiB, and on
+  64 MiB between 0.74 and 1.13 times: slower than one core on two of five systems. Split work
+  of hundreds of megabytes, or work that is heavy for each byte, megabytes at a time, and tell
+  the user what the split bought only after a run has shown it.
 
 ```wat
 (import "lengua_split_1" "split" (func $split (param i32 i32 i32 i32 i32) (result i32)))

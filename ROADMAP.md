@@ -516,7 +516,7 @@ WebAssembly's semantics, and main.wat stays the one shared artifact.
 
 ## W20. Parallelism
 
-*Built on the branch `wip/threads`.* A program uses more cores by splitting its work into
+*Built, on main; its speed on the branch `wip/split-speed`.* A program uses more cores by splitting its work into
 pieces that run at once and share no memory, so that no rule has to show the absence of a data
 race, and a result is the same on every run and every computer, which free threads in C, C++
 and Rust can't promise.
@@ -539,37 +539,74 @@ memory of its own (DESIGN.md, "The host", has the two designs weighed):
   it proves any program that reads standard input. The step that joins the answers is tested,
   not proven.
 
-`examples/histogram-split` counts the byte values of standard input 8 MiB at a time, each
-buffer-full in eight pieces. Measured by lengua-run on 64 MiB, the best of seven runs on the
-clock (`split_work_is_measured`, crates/lengua-run/tests/alone.rs; run 43148133679, at 92dec35), against
-tests/fixtures/histogram, which does the same work on one core:
+Two examples split their work: `examples/histogram-split` counts the byte values of standard
+input, and `examples/crc32c-split` takes its CRC-32C and joins the pieces' CRCs with the
+lengths of their shares. Each reads 8 MiB at a time and splits it in eight pieces.
 
-| Runner | Cores | One core (tests/fixtures/histogram) | Split, one piece at a time | Two at once | One for each core |
-|---|---|---|---|---|---|
-| Linux on x86-64 | 4 | 29.4 ms | 67.6 ms | 47.0 ms | 45.8 ms |
-| Linux on ARM64 | 4 | 37.7 ms | 75.2 ms | 46.9 ms | 39.6 ms |
-| macOS on ARM64 | 3 | 33.8 ms | 49.8 ms | 34.0 ms | 36.5 ms |
-| Windows on x86-64 | 4 | 66.7 ms | 140.6 ms | 112.7 ms | 102.8 ms |
-| Windows on ARM64 | 4 | 71.4 ms | 105.5 ms | 80.3 ms | 60.8 ms |
+The first measurement (43148133679, at 92dec35) showed that the split did not pay: with a
+piece for each core the histogram took 1.5 times the one-core program's time on Linux on
+x86-64 and on Windows on x86-64, was level on Linux on ARM64 and macOS, and ahead only on
+Windows on ARM64; with one piece at a time it took 1.5 to 2.3 times. Each piece's bytes were
+copied twice into new pages, and each call started its threads anew. Three changes followed
+(`wip/split-speed`):
+- the threads are started once, at a run's first call that splits, and kept to its end;
+- a piece reads its share straight from the program's memory, which lengua lends for the
+  call (`lengua_os::lent`): one copy, into the piece's buffer, and no page of lengua's own;
+- the examples' pieces read 64 KiB at a time, so a piece touches little of its memory.
 
-**For this work the split does not pay.** With a piece for each core the example is 1.4 to 1.9
-times as fast as itself with one piece at a time, so the pieces do run at once. But against
-the program that does the same work on one core it is slower on Linux on x86-64 and on Windows
-on x86-64 (1.5 times the time), level on Linux on ARM64 and on macOS on ARM64 (1.05 and 1.08
-times), and faster only on Windows on ARM64 (0.85 times). The run before it (43141059631, at
-55443fd, where a piece still read its share 4 KiB a read) gave the same picture: 35.1 ms
-against 19.0 ms on Linux on x86-64, 38.3 against 37.3 on Linux on ARM64, 78.5 against 40.2 on
-macOS, 55.3 against 45.5 on Windows on x86-64, and 66.9 against 75.4 on Windows on ARM64. The
-runners are shared machines of 3 or 4 cores, and a time moves by a third from run to run.
+A piece is still a new store of the engine's for each run, so it starts from the module's
+first memory and globals whatever ran on its thread before: the engine's instantiation is
+the guarantee, and `no_piece_sees_what_another_left` (tests/wasm_split.rs) holds it. A pool
+of memories kept by the engine was not taken: it zeroes a memory's kept pages for each use,
+and an example's memory is 8 MiB of which a piece touches 64 KiB.
 
-Why: the count takes about 0.3 ms a mebibyte on one core, and a piece costs more than that
-before it counts: its bytes are copied twice, into lengua's memory and then into the piece's,
-both into pages the system hands over for the first time, and each call starts its threads
-and its stores anew. One piece at a time, the split program takes 1.5 to 2.3 times the
-one-core program's time, and 3 or 4 cores, some of them two threads of one core, don't win
-that back. A split pays where a piece's work on a byte costs several times a copy of it,
-which none of lengua's examples yet does. What would cut the cost: threads kept through a
-run, and a piece's bytes handed over without a copy.
+Measured by lengua-run, the best of seven runs on the clock (`split_work_is_measured`,
+crates/lengua-run/tests/alone.rs; run 43178785543, at 3c7f522), each against the program that
+does the same work on one core (tests/fixtures/histogram, tests/fixtures/crc32c):
+
+| Runner | Cores | Work | Input | One core | Split, one piece at a time | Split, one for each core | Against one core |
+|---|---|---|---|---|---|---|---|
+| Linux on x86-64 | 4 | histogram | 64 MiB | 36.6 ms | 51.7 ms | 41.4 ms | 1.13× |
+| Linux on x86-64 | 4 | crc32c | 64 MiB | 37.1 ms | 49.4 ms | 41.2 ms | 1.11× |
+| Linux on x86-64 | 4 | histogram | 256 MiB | 136.0 ms | 182.3 ms | 120.5 ms | 0.89× |
+| Linux on x86-64 | 4 | crc32c | 256 MiB | 140.4 ms | 180.4 ms | 119.9 ms | 0.85× |
+| Linux on ARM64 | 4 | histogram | 64 MiB | 38.0 ms | 48.3 ms | 28.2 ms | 0.74× |
+| Linux on ARM64 | 4 | crc32c | 64 MiB | 35.5 ms | 45.0 ms | 28.7 ms | 0.81× |
+| Linux on ARM64 | 4 | histogram | 256 MiB | 146.7 ms | 174.9 ms | 85.8 ms | 0.58× |
+| Linux on ARM64 | 4 | crc32c | 256 MiB | 137.3 ms | 163.6 ms | 81.8 ms | 0.60× |
+| macOS on ARM64 | 3 | histogram | 64 MiB | 32.7 ms | 45.5 ms | 36.0 ms | 1.10× |
+| macOS on ARM64 | 3 | crc32c | 64 MiB | 43.0 ms | 58.7 ms | 40.5 ms | 0.94× |
+| macOS on ARM64 | 3 | histogram | 256 MiB | 141.5 ms | 175.3 ms | 133.0 ms | 0.94× |
+| macOS on ARM64 | 3 | crc32c | 256 MiB | 161.0 ms | 206.6 ms | 131.5 ms | 0.82× |
+| Windows on x86-64 | 4 | histogram | 64 MiB | 62.0 ms | 84.3 ms | 60.0 ms | 0.97× |
+| Windows on x86-64 | 4 | crc32c | 64 MiB | 64.9 ms | 81.0 ms | 61.6 ms | 0.95× |
+| Windows on x86-64 | 4 | histogram | 256 MiB | 200.3 ms | 275.2 ms | 182.8 ms | 0.91× |
+| Windows on x86-64 | 4 | crc32c | 256 MiB | 217.2 ms | 279.7 ms | 191.8 ms | 0.88× |
+| Windows on ARM64 | 4 | histogram | 64 MiB | 73.8 ms | 85.2 ms | 54.6 ms | 0.74× |
+| Windows on ARM64 | 4 | crc32c | 64 MiB | 69.7 ms | 81.6 ms | 54.0 ms | 0.77× |
+| Windows on ARM64 | 4 | histogram | 256 MiB | 223.0 ms | 262.7 ms | 142.7 ms | 0.64× |
+| Windows on ARM64 | 4 | crc32c | 256 MiB | 212.4 ms | 249.0 ms | 135.8 ms | 0.60× |
+
+**On 256 MiB the split is faster than one core on every runner, for both kinds of work**: 0.58
+to 0.94 times the one-core program's time. **On 64 MiB it is not, on two runners**: on Linux
+on x86-64 both examples take 1.11 and 1.13 times the one-core program's time, and on macOS
+the histogram 1.10 times; on the other rows it is level or ahead (0.74 to 0.97 times). So the
+mark set for this work, the CRC faster on every runner and the histogram no slower, is met at
+the larger size and missed at the smaller on Linux on x86-64, and for the histogram on macOS.
+One run on shared machines, where a time moves by a third from run to run, is what this
+rests on.
+
+What still costs: with one piece at a time the split program takes 1.15 to 1.41 times the
+one-core program's time (it took 1.5 to 2.3 before). The bytes still pass through the
+program's memory: the program reads 8 MiB into a buffer that no cache holds, and each piece
+reads its share back from there, where the one-core program reads 64 KiB at a time into a
+buffer that stays in a core's cache. And each piece is a new store with a memory of its own
+to map. The x86-64 runners' 4 cores are two cores of two threads each, which gives this
+work less than the ARM64 runners' four. The CRC is no heavier than the count on these
+runners, 0.5 to 1.2 ms a mebibyte each, so the two examples show the same thing; no example
+yet has work several times heavier for each byte. What would cut more: a call that has
+lengua read standard input and deal it to the pieces, so that the bytes never pass through
+the program's memory.
 
 What it leaves: pieces of another program than the program itself; a piece with arguments,
 files or a clock of its own; a piece that splits; a proof of the join, and of the whole

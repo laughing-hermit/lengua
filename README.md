@@ -490,9 +490,10 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
   sealed with your key. On Linux on x86-64 the empty program went from 2.20 ms and 11.4 MiB to
   1.33 ms and 5.50 MiB ([ROADMAP.md](ROADMAP.md)). Step 2 is an optional native build of
   the proven `main.wat` through wasm2c.
-- **W20, parallelism:** built on a branch: a program splits its work into pieces that run at
-  once and share no memory, so the result is the same on every computer. Measured on the
-  example, it is not faster than one core yet ([ROADMAP.md](ROADMAP.md)).
+- **W20, parallelism:** built: a program splits its work into pieces that run at
+  once and share no memory, so the result is the same on every computer. Measured on two
+  examples with 3 or 4 cores, it is faster than one core on 256 MiB on every runner, and on
+  64 MiB slower on two of five ([ROADMAP.md](ROADMAP.md)).
 - **W21, a library of proven parts** that programs build on with `- Builds on:`. Built: the
   mechanism (a part's contract, the copy `check` holds to the part, the lock's record) and five
   parts, `decimal`, `lines`, `crc32`, `bytes` and `sort64`, with two programs on them. Left:

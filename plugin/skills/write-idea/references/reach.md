@@ -127,9 +127,10 @@ than one core, and the result is the same on every computer.
 - **Name no secret.** `check` refuses an idea with a `- Splits:` line and a `- Secret:` line.
 - **Say in Purpose what a piece does and what the program does with the answers**, in plain
   words: the piece counts its share, and the program adds the counts.
-- **Don't promise the user more speed.** Each piece costs a start and two copies of its bytes:
-  measured, a byte count split in eight was slower than on one core on two of five systems, so
-  grant a split only for work that is heavy for each byte, in megabytes. Tell the user what it buys only
+- **Don't promise the user more speed.** Each piece costs a start and a copy of its bytes:
+  measured on 3 or 4 cores, a count split in eight was faster than one core on 256 MiB and
+  slower on 64 MiB on two of five systems, so
+  grant a split only for large inputs or work that is heavy for each byte. Tell the user what it buys only
   after `check`'s performance line, or a run, has shown it.
 - **Test a piece as a program.** A behavior with the step `the program is a piece` runs the
   program as a piece: standard input is the piece's share, and it prints its answer.

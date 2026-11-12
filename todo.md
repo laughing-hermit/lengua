@@ -859,7 +859,8 @@ What the runs show:
   runner where it is ahead. Against itself with one piece at a time it is 1.4 to 1.9 times as
   fast. A piece's cost before it works, two copies of its bytes into new pages and a thread
   and a store started for each call, is more than this count's own time. So the mechanism is
-  built, safe and the same everywhere, and its speed is not shown: the gap W20 was to close
+  built, safe and the same everywhere, and its speed was not shown here ("W20's speed", below,
+  has what changed since): the gap W20 was to close
   is still open.
 
 The decisions, each made without asking, as the brief said:
@@ -922,6 +923,71 @@ idea to done (43136507348); the tests of tests/wasm_split.rs and of lengua-run a
 failed after its tests, where GitHub didn't take its log); and the first compile, which
 found a test's missing field (43134989066). The commit that writes this paragraph changes
 documents alone.
+
+### W20's speed: threads kept, bytes lent, a second example (2026-11-12)
+
+On the branch `wip/split-speed`, not merged: the owner lands it. The task was to make the
+split pay, or to show with numbers that it can't in this design; the mark, with a piece for
+each core, the heavier example faster than its one-core program on every runner and the
+histogram no slower.
+
+What was built:
+1. **Threads kept through a run** (`Pool`, `src/wasm/host/split.rs`): started at the run's
+   first call that splits, as many as the line's pieces or the computer's cores, and ended
+   with the run. No call starts a thread.
+2. **A piece's share lent, not copied** (`lengua_os::lent`, `Input::Share`): a piece's read
+   copies from the program's own memory into the piece's buffer, where two copies into new
+   pages were. It is lengua-os's one new piece of unsafe code, a read-only pointer that
+   `lend` keeps valid until every holder is gone, with its test.
+3. **A piece is still a new store each time**, so it starts from the module's first memory
+   and globals: the engine's instantiation is the guarantee, and
+   `no_piece_sees_what_another_left` the test. Decided against: the engine's pool of
+   memories, which zeroes what it keeps for each use where a new mapping costs only the
+   pages a piece touches; and stores kept between pieces, which the engine can't put back to
+   a module's first state.
+4. **`examples/crc32c-split`**: the CRC-32C of standard input, each piece's CRC joined with
+   the length of its share in the CRC's own arithmetic. And the histogram's piece reads
+   64 KiB at a time.
+5. **What W20 left unexercised**, where it was cheap: a program that splits through the MCP
+   server's `run` tool (`the_run_tool_runs_a_program_that_splits_its_work`), and both
+   examples in the goldens' recordings (GOLDEN_WORDS).
+
+What the runs show (43178785543 at 3c7f522, all five runners; ROADMAP.md, W20, has all 20
+rows): with a piece for each core against the one-core program,
+- **on 256 MiB the mark is met**: both examples are faster on every runner, at 0.58 to 0.94
+  times the one-core program's time;
+- **on 64 MiB it is missed on two runners**: Linux on x86-64, where both examples take 1.11
+  and 1.13 times, and macOS on ARM64, where the histogram takes 1.10 times; elsewhere the
+  rows are level or ahead, at 0.74 to 0.97 times;
+- with one piece at a time the split program takes 1.15 to 1.41 times the one-core program's
+  time, where it took 1.5 to 2.3 before these changes;
+- the CRC is no heavier than the count on these runners, so the second example is not the
+  heavier work the task asked for: it shows the same as the first.
+It is one run on shared machines. The skills still tell the agent not to promise speed, and
+say for which sizes a split paid.
+
+What still costs, and what is left:
+- **The bytes pass through the program's memory**: the program reads 8 MiB into a buffer no
+  cache holds, and the pieces read it back from there. A call that has lengua read standard
+  input and deal it to the pieces would take that pass away; it is a new function of
+  `lengua_split_1`, not built.
+- **A new store for each piece**, with a memory to map: not measured apart.
+- **The x86-64 runners' 4 cores are 2 cores of 2 threads**; nothing with more cores was
+  measured.
+- **No example whose work is several times heavier for each byte** (a hash with a join, a
+  search): the formulas of the test format have no way to say such a result for a whole
+  input yet, but for `sha256`, which doesn't join.
+- **crc32c-split's proofs** (43188174836): the whole program's tests "tested, not proven: work
+  it splits into pieces"; its piece (B4) proven for the empty text alone, as the histogram's
+  is: the model doesn't follow the CRC's tables, "an access whose place the input chooses among
+  more than 256 places". The join, in `join` and `times`, is tested, not proven.
+- Everything "W20: work split into pieces" lists as left, but the `run` tool and the
+  goldens.
+
+Where the work left the rules: one commit staged with `git add -u` held to three folders,
+where the rule is named paths; the files were this branch's own.
+
+The runs: SPEED_RUNS
 
 ### What the permission checks refused
 
