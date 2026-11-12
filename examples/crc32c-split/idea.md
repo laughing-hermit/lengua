@@ -66,7 +66,7 @@ exits with code 3. The test of a write that fails gives it `1` to `64` bytes.
 
 | text | runs |
 |---|---|
-| `string(1, 64, "az09 \n")` | 20 |
+| `string(1, 64, "abc0123456789")` | 20 |
 
 ## B4: Prints the CRC of its share as a piece
 - Given standard input that contains `123456789`
