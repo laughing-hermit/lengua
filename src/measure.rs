@@ -399,13 +399,14 @@ fn module_folder(data_dir: &DataDir, idea: &[u8], wasm: &[u8]) -> Result<PathBuf
         ));
     }
     let (uses, network) = crate::idea::grants(text).map_err(unread)?;
-    let read = crate::wasm::outside::read(wasm.to_vec(), &Policy::of(&uses, &network))
-        .map_err(|problems| {
+    let read = crate::wasm::outside::read(wasm.to_vec(), &Policy::of(&uses, &network)).map_err(
+        |problems| {
             format!(
                 "{OUTSIDE_FILE} isn't a module lengua runs: {}",
                 problems.join("; ")
             )
-        })?;
+        },
+    )?;
     let key = Key::load_or_create(data_dir).map_err(|error| error.to_string())?;
     let module = Sha256Hex::of(wasm);
     let recorded = crate::trust::idea_hash(idea);
