@@ -2225,6 +2225,7 @@
   ;; such file, the store is an empty object. Gives STORE_BROKEN when the file can't be read,
   ;; is longer than STORE_MAX, or doesn't start with a brace on a line and end with one.
   (func $store_load (result i32)
+    (local $failed i32)
     (local $err i32)
     (local $from i32)
     (local $got i32)
@@ -2244,10 +2245,13 @@
         (local.set $got
           (call $fill (local.get $from) (global.get $store) (global.get $STORE_ROOM)
             (global.get $READ_TO_END)))
+        ;; The file is closed before a read that failed ends the load.
+        (if (i32.lt_s (local.get $got) (i32.const 0))
+          (then (local.set $failed (i32.const 1))))
         (block $closed
           (local.set $err (call $fd_close (local.get $from)))
           (br_if $closed (local.get $err)))
-        (br_if $done (i32.lt_s (local.get $got) (i32.const 0)))
+        (br_if $done (local.get $failed))
         (if (i32.gt_u (local.get $got) (global.get $STORE_ROOM))
           (then (call $assert_fail (i32.const 117)) unreachable))
         (br_if $done (i32.gt_u (local.get $got) (global.get $STORE_MAX)))
