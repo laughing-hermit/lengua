@@ -6,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::hash::Sha256Hex;
 use crate::lock::{self, Key, Lock, LockError};
+use crate::wasm::engine::Setup;
 
 /// The idea's file name inside a program folder.
 pub const IDEA_FILE: &str = "idea.md";
@@ -64,10 +65,20 @@ pub fn tested_module(data_dir: &Path, builder: u64, module: &Sha256Hex) -> PathB
 /// place of compiling.
 #[must_use]
 pub fn compiled_module(data_dir: &Path, builder: u64, module: &Sha256Hex) -> PathBuf {
+    compiled_for(data_dir, builder, module, Setup::Shell)
+}
+
+/// [`compiled_module`] for `setup`, the engine's configuration the module was compiled for:
+/// `<sha256>.shell.cwasm` for a run from a shell, and `<sha256>.run.cwasm` for the `run` tool,
+/// whose worker loads it, once its seal holds, in place of compiling. A test's module has no
+/// such file: its worker compiles it.
+#[must_use]
+pub fn compiled_for(data_dir: &Path, builder: u64, module: &Sha256Hex, setup: Setup) -> PathBuf {
+    let name = format!("{}.{}.cwasm", module.as_str(), setup.file_word());
     data_dir
         .join("tested")
         .join(format!("{builder:016x}"))
-        .join(format!("{}.shell.cwasm", module.as_str()))
+        .join(name)
 }
 
 /// Where lengua keeps what a proof found wrong about the module `module` of the idea `idea`

@@ -67,7 +67,7 @@ fn run(text: &str, world: World) -> Executed {
 
 /// Runs the module `text` given `world`, for `time` at most.
 fn run_for(text: &str, world: World, time: Duration) -> Executed {
-    let engine = engine::engine(Setup::Test, None).expect("the engine");
+    let engine = engine::engine(Setup::Test).expect("the engine");
     let linker = linker(&engine).expect("the host");
     let built = crate::wasm::text::build(text).unwrap_or_else(|problem| panic!("{problem}"));
     let module = engine::compile(&engine, &built.wasm).expect("it compiles");
@@ -824,7 +824,7 @@ fn fd_seek_and_path_filestat_get_give_places_and_sizes() {
 
 #[test]
 fn every_function_is_defined_with_the_tables_signature() {
-    let engine = engine::engine(Setup::Test, None).expect("the engine");
+    let engine = engine::engine(Setup::Test).expect("the engine");
     let linker = linker(&engine).expect("the host");
     let mut store = wasmtime::Store::new(&engine, Host::new(world(Policy::default())));
     let own = wasi::own_functions().map(|(_, function)| function);

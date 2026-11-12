@@ -82,6 +82,10 @@ pub struct Spec<'a> {
     pub max_written: Option<u64>,
     /// Whether it runs in a worker of its own, which goes with it.
     pub alone: bool,
+    /// Whether its worker loads the module's compiled form, kept in the data folder under the
+    /// user's seal, in place of compiling it, as the `run` tool's does: a module with no such
+    /// form the worker takes is compiled there, sealed and kept for the next run.
+    pub sealed: bool,
 }
 
 impl<'a> Spec<'a> {
@@ -113,6 +117,7 @@ impl<'a> Spec<'a> {
             setup: Setup::Test,
             max_written: Some(crate::wasm::host::limits::TEST_WRITTEN),
             alone: false,
+            sealed: false,
         }
     }
 }
@@ -131,8 +136,9 @@ struct Worker {
 struct Inner {
     /// This binary, which workers are started from.
     launcher: PathBuf,
-    /// Where compiled modules are kept, for the workers.
-    cache: Option<PathBuf>,
+    /// lengua's data folder, for the workers: where the compiled modules a run loads are kept
+    /// under the user's seal, and the key that sealed them.
+    data: Option<PathBuf>,
     /// The workers waiting for a job.
     idle: Mutex<Vec<Worker>>,
     /// The next job's number.
@@ -205,14 +211,16 @@ async fn listen_to(
 }
 
 impl Pool {
-    /// A pool that starts its workers from `launcher`, this binary, keeping compiled modules in
-    /// `cache` when given.
+    /// A pool that starts its workers from `launcher`, this binary. With `data`, lengua's data
+    /// folder, a worker loads the compiled module kept there for a job that asks for it
+    /// ([`Spec::sealed`]), once it carries the seal of the user's key; without, every worker
+    /// compiles what it runs.
     #[must_use]
-    pub fn new(launcher: PathBuf, cache: Option<PathBuf>) -> Self {
+    pub fn new(launcher: PathBuf, data: Option<PathBuf>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 launcher,
-                cache,
+                data,
                 idle: Mutex::new(Vec::new()),
                 next: AtomicU64::new(1),
             }),
@@ -233,13 +241,13 @@ impl Pool {
 
     /// A fresh worker.
     fn spawn(&self) -> io::Result<Worker> {
-        let cache = self.inner.cache.as_ref().map_or_else(
+        let data = self.inner.data.as_ref().map_or_else(
             || OsString::from("none"),
-            |cache| cache.as_os_str().to_owned(),
+            |data| data.as_os_str().to_owned(),
         );
         let mut child = Command::new(&self.inner.launcher)
             .arg(WORKER_FLAG)
-            .arg(cache)
+            .arg(data)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -349,6 +357,7 @@ impl Pool {
             module: program.file().to_path_buf(),
             hash: program.hash().to_owned(),
             setup: spec.setup,
+            sealed: spec.sealed,
             policy: spec.policy,
             args: spec.args.to_vec(),
             env: spec.env.clone(),

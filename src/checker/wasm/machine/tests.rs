@@ -269,7 +269,6 @@ fn planted(code: &str) -> (String, Result<Passed, Vec<Violation>>) {
         &built.wasm,
         &report.secret_operators,
         &[Setup::Run, Setup::Shell],
-        None,
     );
     (text, result)
 }
@@ -387,7 +386,7 @@ fn the_engines_branch_is_refused_only_for_the_operator_it_was_made_for() {
     );
     let cpu = Cpu::here().expect("lengua is built for x86-64 and ARM64");
     for setup in [Setup::Run, Setup::Shell] {
-        let refused = check(&built.wasm, std::slice::from_ref(&branch), &[setup], None)
+        let refused = check(&built.wasm, std::slice::from_ref(&branch), &[setup])
             .expect_err("the branch is the br_if's");
         let lines = shown(&refused);
         let expected = format!(
@@ -399,11 +398,11 @@ fn the_engines_branch_is_refused_only_for_the_operator_it_was_made_for() {
             lines.iter().any(|line| line.starts_with(&expected)),
             "{setup:?}: {lines:#?}"
         );
-        let passed = check(&built.wasm, std::slice::from_ref(&xor), &[setup], None)
+        let passed = check(&built.wasm, std::slice::from_ref(&xor), &[setup])
             .unwrap_or_else(|refused| panic!("{setup:?}: {:#?}", shown(&refused)));
         assert_eq!(passed.with_code, 1, "{setup:?}: {passed:?}");
         assert!(passed.instructions > 0, "{setup:?}: {passed:?}");
-        let nothing = check(&built.wasm, &[], &[setup], None)
+        let nothing = check(&built.wasm, &[], &[setup])
             .unwrap_or_else(|refused| panic!("{setup:?}: {:#?}", shown(&refused)));
         assert_eq!((nothing.with_code, nothing.instructions), (0, 0));
     }
@@ -444,7 +443,6 @@ fn secret_equal_s_machine_code_passes() {
         &built.wasm,
         &report.secret_operators,
         &[Setup::Run, Setup::Shell],
-        None,
     )
     .unwrap_or_else(|refused| panic!("{:#?}", shown(&refused)));
     assert_eq!(Some(passed.cpu), Cpu::here());
@@ -514,7 +512,7 @@ fn code_with_no_operator_is_held_in_a_function_that_computes_with_a_secret() {
 /// stretch of each function, with the operator's offset the address map gives it, whether that
 /// operator is one of `taken`, and its bytes.
 fn dump(wasm: &[u8], taken: &[Taken]) -> String {
-    let engine = engine::engine(Setup::Shell, None).expect("the engine");
+    let engine = engine::engine(Setup::Shell).expect("the engine");
     let code = Code::of(&engine, wasm).expect("the module compiles");
     let mut lines = Vec::new();
     for &(start, length) in &code.functions {
@@ -560,7 +558,6 @@ fn a_lane_shift_the_optimizer_makes_anew_is_refused_where_its_code_reads_a_table
         &built.wasm,
         &report.secret_operators,
         &[Setup::Run, Setup::Shell],
-        None,
     );
     let what = || dump(&built.wasm, &report.secret_operators);
     if Cpu::here() == Some(Cpu::X86_64) {

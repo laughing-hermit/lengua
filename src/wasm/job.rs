@@ -117,6 +117,11 @@ pub struct Job {
     pub hash: String,
     /// The engine's configuration it runs in.
     pub setup: Setup,
+    /// Whether the worker loads the module's compiled form from lengua's data folder, once it
+    /// carries the seal of the user's key, in place of compiling the module: where it has
+    /// none it takes, it compiles the module, seals what it made and keeps it there.
+    #[serde(default)]
+    pub sealed: bool,
     /// What the program's idea lets it reach.
     pub policy: Policy,
     /// Its arguments, after its name.
@@ -338,6 +343,7 @@ mod tests {
                 module: PathBuf::from("main.wasm"),
                 hash: "ab".repeat(32),
                 setup: Setup::Test,
+                sealed: true,
                 policy: Policy::default(),
                 args: vec!["first".to_owned()],
                 env: BTreeMap::from([("NAME".to_owned(), "value".to_owned())]),

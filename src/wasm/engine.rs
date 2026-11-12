@@ -7,15 +7,19 @@
 //! stops at its deadline the same way and counts nothing; a run from a shell, or a benchmark's,
 //! does neither, so it pays for nothing it doesn't use.
 //!
-//! Two engines for each: one that compiles ([`engine`]), with Wasmtime's own cache of compiled
-//! modules in the `cache` folder of lengua's data folder, which the tests' workers and the `run`
-//! tool use; and one that only runs ([`runner`]), with no compiler in it, which a run from a
-//! shell loads a module into that was compiled ahead of the run and sealed with the user's key
-//! ([`crate::lock::Key::compile_sealed`]). The two take the same settings wherever a compiled
-//! module depends on them ([`shared`]), so the second takes what the first compiled. lengua-run
-//! is built without the compiler (the `compiler` feature off) and holds only the second.
+//! Two engines for each: one that compiles ([`engine`]), which check, the tests' workers and the
+//! `run` tool's worker use; and one that only runs ([`runner`]), with no compiler in it, which a
+//! run from a shell loads a module into that was compiled ahead of the run and sealed with the
+//! user's key ([`crate::lock::Key::compile_sealed`]). The two take the same settings wherever a
+//! compiled module depends on them ([`shared`]), so the second takes what the first compiled.
+//! lengua-run is built without the compiler (the `compiler` feature off) and holds only the
+//! second.
+//!
+//! No engine has Wasmtime's own cache of compiled modules: the feature is not built in. The only
+//! compiled code lengua loads from a file is code that carries the seal of the user's key
+//! ([`crate::lock::Key::load_sealed_for`]); everything else an engine runs, it compiled itself, in
+//! this process.
 
-use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -23,7 +27,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use wasmparser::WasmFeatures;
 #[cfg(feature = "compiler")]
-use wasmtime::{Cache, CacheConfig, Strategy};
+use wasmtime::Strategy;
 use wasmtime::{Config, Engine, Module};
 
 /// The WebAssembly features lengua's programs may use, the engine's and the validator's alike:
@@ -121,6 +125,17 @@ impl Setup {
         matches!(self, Self::Test)
     }
 
+    /// The word for it in the name of a compiled module's file and in its seal:
+    /// `<sha256>.<word>.cwasm` ([`crate::state::compiled_for`]).
+    #[must_use]
+    pub const fn file_word(self) -> &'static str {
+        match self {
+            Self::Test => "test",
+            Self::Run => "run",
+            Self::Shell => "shell",
+        }
+    }
+
     /// Whether a deadline, or lengua, can stop a program in the middle of its work.
     #[must_use]
     pub const fn interrupts(self) -> bool {
@@ -213,14 +228,14 @@ pub fn runner() -> Result<Engine, String> {
         .clone()
 }
 
-/// The configuration of the engine that compiles for `setup`, keeping compiled modules in
-/// `cache` when given.
+/// The configuration of the engine that compiles for `setup`. It has no cache of compiled
+/// modules: what it runs, it compiled in this process, or it carries the user's seal.
 ///
 /// # Errors
 ///
-/// When the cache can't be set up in that folder, or this process has no compiler.
+/// When this process has no compiler.
 #[cfg(feature = "compiler")]
-pub fn config(setup: Setup, cache: Option<&Path>) -> Result<Config, String> {
+pub fn config(setup: Setup) -> Result<Config, String> {
     if !compiles() {
         return Err(NO_COMPILER.to_owned());
     }
@@ -229,23 +244,6 @@ pub fn config(setup: Setup, cache: Option<&Path>) -> Result<Config, String> {
     shared(&mut config, setup);
     config.cranelift_nan_canonicalization(true);
     config.parallel_compilation(true);
-    if let Some(folder) = cache {
-        let mut settings = CacheConfig::new();
-        settings.with_directory(folder);
-        // A module is never compressed again at zstd's higher level, which the cache's worker
-        // does at a module's 256th use by default, during whichever run that is: a run's exit
-        // can cut that short and leave its lock behind, and while the lock lasts every later use
-        // of the module lists the cache's folder. Modules stay at the baseline level, so the
-        // folder holds more.
-        settings.with_optimized_compression_usage_counter_threshold(u64::MAX);
-        let cache = Cache::new(settings).map_err(|error| {
-            format!(
-                "lengua can't keep compiled modules in {}: {error}",
-                folder.display()
-            )
-        })?;
-        config.cache(Some(cache));
-    }
     Ok(config)
 }
 
@@ -255,18 +253,17 @@ pub fn config(setup: Setup, cache: Option<&Path>) -> Result<Config, String> {
 ///
 /// Always: this build has no compiler.
 #[cfg(not(feature = "compiler"))]
-pub fn config(_setup: Setup, _cache: Option<&Path>) -> Result<Config, String> {
+pub fn config(_setup: Setup) -> Result<Config, String> {
     Err(NO_COMPILER.to_owned())
 }
 
-/// This process's engine that compiles for `setup`, made at its first use with compiled modules
-/// kept in `cache`, which later calls don't change: a process has one data folder. An engine
-/// that stops programs has a thread that moves its epoch on every [`TICK`].
+/// This process's engine that compiles for `setup`, made at its first use. An engine that stops
+/// programs has a thread that moves its epoch on every [`TICK`].
 ///
 /// # Errors
 ///
 /// When the engine can't be made here, or this process has no compiler.
-pub fn engine(setup: Setup, cache: Option<&Path>) -> Result<Engine, String> {
+pub fn engine(setup: Setup) -> Result<Engine, String> {
     static TEST: OnceLock<Result<Engine, String>> = OnceLock::new();
     static RUN: OnceLock<Result<Engine, String>> = OnceLock::new();
     static SHELL: OnceLock<Result<Engine, String>> = OnceLock::new();
@@ -276,7 +273,7 @@ pub fn engine(setup: Setup, cache: Option<&Path>) -> Result<Engine, String> {
         Setup::Shell => &SHELL,
     };
     slot.get_or_init(|| -> Result<Engine, String> {
-        let engine = Engine::new(&config(setup, cache)?)
+        let engine = Engine::new(&config(setup)?)
             .map_err(|error| format!("the WebAssembly engine couldn't start: {error}"))?;
         if setup.interrupts() {
             let ticking = engine.clone();
@@ -290,8 +287,7 @@ pub fn engine(setup: Setup, cache: Option<&Path>) -> Result<Engine, String> {
     .clone()
 }
 
-/// The module `wasm`, compiled by `engine`, one of [`engine`]'s, or loaded from its cache of
-/// compiled modules.
+/// The module `wasm`, compiled by `engine`, one of [`engine`]'s, in this process.
 ///
 /// # Errors
 ///
@@ -316,27 +312,6 @@ fn tick(engine: &Engine) {
     }
 }
 
-/// The data folder the agent's harness gives the plugin, when it gives one: `PLUGIN_DATA`, as
-/// Agent Plugins names it, or else `CLAUDE_PLUGIN_DATA`, as Claude Code sets it.
-#[must_use]
-pub fn plugin_data() -> Option<std::ffi::OsString> {
-    std::env::var_os("PLUGIN_DATA").or_else(|| std::env::var_os("CLAUDE_PLUGIN_DATA"))
-}
-
-/// Where compiled modules are kept: the `cache` folder of the plugin's data folder when the
-/// agent's harness gives one ([`plugin_data`]), else the `cache` folder of lengua's own. The
-/// lock's signing key stays in lengua's own folder either way.
-#[must_use]
-pub fn cache_folder(data_dir: &crate::data_dir::DataDir) -> PathBuf {
-    match plugin_data()
-        .map(PathBuf::from)
-        .filter(|folder| folder.is_absolute())
-    {
-        Some(folder) => folder.join("cache"),
-        None => data_dir.path().join("cache"),
-    }
-}
-
 /// Validates `wasm` as the engine would take it: with exactly [`FEATURES`].
 ///
 /// # Errors
@@ -357,7 +332,7 @@ mod tests {
         let wasm = crate::wasm::text::build(text)
             .map_err(|problem| problem.to_string())?
             .wasm;
-        let engine = engine(setup, None)?;
+        let engine = engine(setup)?;
         compile(&engine, &wasm)
             .map(|_| ())
             .map_err(|error| error.to_string())
@@ -395,7 +370,7 @@ mod tests {
             for text in [simd, bulk, saturating, sign, values, table, grows] {
                 assert_eq!(taken(setup, text), Ok(()), "{setup:?}: {text}");
             }
-            let engine = engine(setup, None).expect("the engine");
+            let engine = engine(setup).expect("the engine");
             let module = compile(&engine, OVERLONG);
             assert!(module.is_ok(), "{setup:?}: {:?}", module.err());
         }
@@ -431,6 +406,30 @@ mod tests {
         assert!(
             manifest.contains(&format!("wasmtime = {{ version = \"={ENGINE_VERSION}\"")),
             "Cargo.toml pins another wasmtime than {ENGINE_VERSION}"
+        );
+    }
+
+    /// No engine of lengua's has Wasmtime's cache of compiled modules, which loads compiled
+    /// code from files nothing authenticates: the feature isn't asked for in Cargo.toml, of
+    /// this crate or of lengua-os, and the crate that holds the cache is in no build.
+    #[test]
+    fn wasmtime_s_cache_of_compiled_modules_is_not_built_in() {
+        let manifests = [
+            include_str!("../../Cargo.toml"),
+            include_str!("../../crates/lengua-os/Cargo.toml"),
+            include_str!("../../crates/lengua-run/Cargo.toml"),
+        ];
+        for manifest in manifests {
+            let asked = manifest
+                .lines()
+                .filter(|line| !line.trim_start().starts_with('#'))
+                .any(|line| line.contains("wasmtime/cache") || line.contains("\"cache\""));
+            assert!(!asked, "a manifest asks for Wasmtime's cache");
+        }
+        let lock = include_str!("../../Cargo.lock");
+        assert!(
+            !lock.contains("name = \"wasmtime-internal-cache\""),
+            "Cargo.lock holds Wasmtime's cache"
         );
     }
 
@@ -480,7 +479,7 @@ mod tests {
         let hash = crate::hash::Sha256Hex::of(&wasm);
         let key = crate::lock::Key::from_bytes([7; 32]);
         let sealed = |setup: Setup| {
-            let compiler = engine(setup, None).expect("the engine that compiles");
+            let compiler = engine(setup).expect("the engine that compiles");
             key.compile_sealed(&compiler, &hash, &wasm)
                 .expect("it compiles")
         };
@@ -515,20 +514,5 @@ mod tests {
         assert!(Setup::Test.counts() && Setup::Test.interrupts());
         assert!(!Setup::Run.counts() && Setup::Run.interrupts());
         assert!(!Setup::Shell.counts() && !Setup::Shell.interrupts());
-    }
-
-    #[test]
-    fn compiled_modules_are_kept_in_the_data_folders_cache() {
-        let folder = tempfile::tempdir().expect("a folder");
-        let data_dir = crate::data_dir::DataDir::new(folder.path().join("data"));
-        if plugin_data().is_none() {
-            assert_eq!(
-                cache_folder(&data_dir),
-                folder.path().join("data").join("cache")
-            );
-        }
-        let config = config(Setup::Test, Some(&folder.path().join("cache")));
-        assert!(config.is_ok(), "{:?}", config.err());
-        assert!(folder.path().join("cache").is_dir());
     }
 }

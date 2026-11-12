@@ -44,7 +44,6 @@
 //! offsets of the operators its code came from.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use wasmtime::{Engine, Module};
 
@@ -197,8 +196,7 @@ pub struct Code {
 }
 
 impl Code {
-    /// The code `engine`, one that compiles, makes of the module `wasm`, or loads from its cache
-    /// of compiled modules, which holds the same bytes.
+    /// The code `engine`, one that compiles, makes of the module `wasm`.
     ///
     /// # Errors
     ///
@@ -435,19 +433,14 @@ impl Passed {
 }
 
 /// Checks the machine code of the module `wasm` for this CPU, as the engine compiles it in each
-/// of `setups`, with compiled modules kept in `cache`: the code made for each operator of
+/// of `setups`: the code made for each operator of
 /// `taken`, the operators the secret rule found to take a secret, has nothing the rule refuses.
 ///
 /// # Errors
 ///
 /// What the code has, as violations of the secret rule on main.wat's lines; or why the code
 /// couldn't be checked, as one with no line.
-pub fn check(
-    wasm: &[u8],
-    taken: &[Taken],
-    setups: &[Setup],
-    cache: Option<&Path>,
-) -> Result<Passed, Vec<Violation>> {
+pub fn check(wasm: &[u8], taken: &[Taken], setups: &[Setup]) -> Result<Passed, Vec<Violation>> {
     let Some(cpu) = Cpu::here() else {
         return Err(unchecked(
             "it reads the code of x86-64 and ARM64 CPUs, and this CPU is neither",
@@ -461,7 +454,7 @@ pub fn check(
     };
     let mut refused: Vec<Violation> = Vec::new();
     for &setup in setups {
-        let engine = engine::engine(setup, cache).map_err(|error| unchecked(&error))?;
+        let engine = engine::engine(setup).map_err(|error| unchecked(&error))?;
         let code = Code::of(&engine, wasm).map_err(|error| unchecked(&error))?;
         judge_into(cpu, &code, taken, &mut passed, &mut refused);
     }

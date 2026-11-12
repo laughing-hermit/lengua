@@ -1,14 +1,15 @@
 //! `lengua-mcp doctor`, the same on every system: one line for each thing it checks, in order,
 //! a sentence under each problem saying what to do, the verdict last, and exit code 0 only when
-//! nothing is wrong. The engine runs WebAssembly on every runner. A data folder or `PLUGIN_DATA`
-//! that can't be written is a problem. The solvers are found where the prover finds them: in the
-//! solvers folder beside the server first, as a release archive keeps them, then on PATH.
+//! nothing is wrong. The engine runs WebAssembly on every runner. A data folder that can't be
+//! written is a problem, and `PLUGIN_DATA`, where lengua keeps nothing, has no line. The solvers
+//! are found where the prover finds them: in the solvers folder beside the server first, as a
+//! release archive keeps them, then on PATH.
 
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::process::Command;
 
 /// What doctor checks, in the order of its lines.
-const CHECKED: [&str; 9] = [
+const CHECKED: [&str; 8] = [
     "server: ",
     "runner: ",
     "engine: ",
@@ -16,7 +17,6 @@ const CHECKED: [&str; 9] = [
     "z3: ",
     "cvc5: ",
     "data folder: ",
-    "PLUGIN_DATA: ",
     "clock: ",
 ];
 
@@ -89,8 +89,7 @@ fn ready(path: &Path) {
 
 /// Each thing doctor checks has its line, in order; each problem's sentence is under its line;
 /// the verdict, last, counts the problems, and the exit code is 0 exactly when there are none.
-/// The engine compiles and runs WebAssembly here, the data folder is written, and an unset
-/// `PLUGIN_DATA` is no problem.
+/// The engine compiles and runs WebAssembly here, and the data folder is written.
 #[test]
 fn doctor_says_each_thing_on_its_line() {
     let root = tempfile::tempdir().expect("a folder");
@@ -140,15 +139,12 @@ fn doctor_says_each_thing_on_its_line() {
     );
     assert_eq!(problem, None, "{said}");
     assert!(data.is_dir(), "doctor didn't make the data folder");
-    let (plugin_data, problem) = line_of(&said, "PLUGIN_DATA: ");
-    let unset = "PLUGIN_DATA: not set, so compiled modules are kept in the data folder";
-    assert_eq!(plugin_data, unset, "{said}");
-    assert_eq!(problem, None, "{said}");
 }
 
-/// A data folder or a `PLUGIN_DATA` that can't be written, here because a file stands where a
-/// folder would go, is a problem whose sentence says what to do, and doctor exits 1. A relative
-/// `PLUGIN_DATA`, which lengua passes over, isn't one.
+/// A data folder that can't be written, here because a file stands where a folder would go, is
+/// a problem whose sentence says what to do, and doctor exits 1. `PLUGIN_DATA` is none, whatever
+/// it names, a folder that can't be written or a relative path: lengua keeps nothing there, and
+/// doctor has no line for it.
 #[test]
 fn a_folder_that_can_t_be_written_is_a_problem() {
     let root = tempfile::tempdir().expect("a folder");
@@ -162,16 +158,20 @@ fn a_folder_that_can_t_be_written_is_a_problem() {
         problem.is_some_and(|problem| problem.contains("--data-dir")),
         "{said}"
     );
-    let (plugin_data, problem) = line_of(&said, "PLUGIN_DATA: ");
-    assert!(plugin_data.contains("which lengua can't write"), "{said}");
+    assert!(!said.contains("PLUGIN_DATA"), "{said}");
+    let (_, said) = doctor(
+        &root.path().join("data"),
+        Some(file.join("plugin").as_path()),
+    );
+    let (_, problem) = line_of(&said, "data folder: ");
+    assert_eq!(problem, None, "{said}");
+    assert!(!said.contains("PLUGIN_DATA"), "{said}");
     assert!(
-        problem.is_some_and(|problem| problem.contains("agent harness")),
-        "{said}"
+        !file.join("plugin").exists(),
+        "doctor wrote where PLUGIN_DATA names"
     );
     let (_, said) = doctor(&root.path().join("data"), Some(Path::new("relative")));
-    let (plugin_data, problem) = line_of(&said, "PLUGIN_DATA: ");
-    assert!(plugin_data.contains("not an absolute path"), "{said}");
-    assert_eq!(problem, None, "{said}");
+    assert!(!said.contains("PLUGIN_DATA"), "{said}");
 }
 
 /// `lengua-mcp` copied into `<plugin>/server`, as a release archive lays it out, with an empty

@@ -76,9 +76,10 @@ fn said(ran: &Output) -> String {
 
 /// Finding 1. A program whose idea uses files reads and writes everything beneath its working
 /// folder, so the working folder is never lengua's data folder, which holds the key that signs
-/// locks, nor the folder of compiled modules, whose machine code the engine runs as it finds it,
-/// nor a folder inside one of them: `run` refuses it, from MCP and from a shell, before anything
-/// runs. The program's own folder is a working folder like any other.
+/// locks and seals the compiled modules kept there, nor a folder inside it or one that holds
+/// it: `run` refuses it, from MCP and from a shell, before anything runs. The folder the agent's
+/// harness gives the plugin, `PLUGIN_DATA`, is none of lengua's: lengua keeps nothing there, so
+/// it is a working folder like any other, as the program's own folder is.
 #[tokio::test]
 async fn a_working_folder_is_never_one_of_lengua_s_own() {
     let session = Session::start(Protocol::Discover).await;
@@ -107,25 +108,28 @@ async fn a_working_folder_is_never_one_of_lengua_s_own() {
         assert!(ran.stdout.is_empty(), "{ran:?}");
         assert!(said(&ran).contains("lengua's data folder"), "{ran:?}");
     }
-    // The folder of compiled modules the agent's harness gives the plugin, and a folder that
-    // holds it.
+    // The folder the agent's harness gives the plugin holds nothing of lengua's: a run works
+    // there, and makes no folder of compiled modules in it.
     let harness = tempfile::tempdir().expect("the harness's folder");
     let plugin = harness.path().join("plugin");
-    std::fs::create_dir_all(plugin.join("cache")).expect("the cache's folder");
-    for folder in [plugin.join("cache"), plugin.clone()] {
-        let ran = from_shell(
-            &session,
-            &[
-                OsStr::new("run"),
-                program.path().as_os_str(),
-                OsStr::new("--in"),
-                folder.as_os_str(),
-            ],
-            Some(&plugin),
-        );
-        assert_eq!(ran.status.code(), Some(125), "{ran:?}");
-        assert!(said(&ran).contains("compiled modules"), "{ran:?}");
-    }
+    std::fs::create_dir_all(&plugin).expect("the plugin's folder");
+    std::fs::write(plugin.join("a.txt"), "hello").expect("a file");
+    let ran = from_shell(
+        &session,
+        &[
+            OsStr::new("run"),
+            program.path().as_os_str(),
+            OsStr::new("--in"),
+            plugin.as_os_str(),
+        ],
+        Some(&plugin),
+    );
+    assert_eq!(ran.status.code(), Some(0), "{ran:?}");
+    assert_eq!(ran.stdout, b"1 5\n", "{ran:?}");
+    assert!(
+        !plugin.join("cache").exists(),
+        "lengua kept something in PLUGIN_DATA"
+    );
     // The program's own folder, and any other, is a working folder.
     let own = session
         .call_ok("run", in_folder(&program, program.path()))
