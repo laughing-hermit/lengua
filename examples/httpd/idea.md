@@ -54,10 +54,10 @@ the target is too long. The server does not stop when it cannot print this line.
 
 # Behaviors
 ## B1: Says that it runs
-- Given a client that sends `GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n`
+- Given a client that sends `GET /health?a=1 HTTP/1.1\r\nHost: localhost\r\nX-a: b\r\n\r\n`
 - When the program runs
 - Then the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n`
-- And it prints `GET /health 200 3` and a newline
+- And it prints `GET /health?a=1 200 3` and a newline
 - And it does not stop
 
 ### For any query and header field
@@ -143,10 +143,10 @@ the target is too long. The server does not stop when it cannot print this line.
 
 ## B4: Answers status 304 when the client has the file
 - Given a file `public/notes.txt` that contains `123456789`
-- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nIf-None-Match: "3421780262"\r\n\r\n`
+- And a client that sends `GET /files/notes.txt?a=1 HTTP/1.1\r\nIf-None-Match: "3421780262"\r\n\r\n`
 - When the program runs
 - Then the client receives `HTTP/1.1 304 Not Modified\r\nETag: "3421780262"\r\nConnection: close\r\n\r\n`
-- And it prints `GET /files/notes.txt 304 0` and a newline
+- And it prints `GET /files/notes.txt?a=1 304 0` and a newline
 - And it does not stop
 
 ### For any query
@@ -238,12 +238,12 @@ the target is too long. The server does not stop when it cannot print this line.
 - And a file `public/a.txt` that contains `a`
 - And a file `public/Z.txt` that contains `z`
 - And a file `public/sub/c.txt` that contains `c`
-- And a client that sends `GET /files/ HTTP/1.1\r\n\r\n`
+- And a client that sends `GET /files/?a=1 HTTP/1.1\r\n\r\n`
 - And a client that sends `GET /files/sub/ HTTP/1.1\r\n\r\n`
 - When the program runs
 - Then the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nConnection: close\r\n\r\nZ.txt\na.txt\nb.txt\nsub/\n`
 - And the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 6\r\nConnection: close\r\n\r\nc.txt\n`
-- And it prints `GET /files/ 200 23\nGET /files/sub/ 200 6\n`
+- And it prints `GET /files/?a=1 200 23\nGET /files/sub/ 200 6\n`
 - And it does not stop
 
 ### For any query
@@ -416,7 +416,7 @@ The names that start with a point, and the folder itself, are not files that the
 
 | k | j | runs |
 |---|---|---|
-| `string(1, 64, "abcXYZ019-._")` | `string(1, 64, "abcXYZ019-._")` | 6 |
+| `string(1, 64, "abcdefghijklmnopqrstuvwxyzXYZ019-._")` | `string(1, 64, "abcdefghijklmnopqrstuvwxyzXYZ019-._")` | 6 |
 
 ## B16: Puts a value in the store and gives it back
 - Given a client that sends `PUT /kv/color HTTP/1.1\r\nContent-Length: 21\r\n\r\n[ "bluegrey" , true ]`
@@ -440,7 +440,7 @@ The names that start with a point, and the folder itself, are not files that the
 
 | k | v | runs |
 |---|---|---|
-| `string(1, 64, "abcXYZ019-._")` | `string(8, 8, "abcdefghijklmnopqrstuvwxyz ")` | 10 |
+| `string(1, 64, "abcdefghijklmnopqrstuvwxyzXYZ019-._")` | `string(8, 8, "abcdefghijklmnopqrstuvwxyz ")` | 10 |
 
 ## B17: Keeps the keys of the store in byte order
 - Given a file `store.json` that contains `{\n"b": "oldvalue",\n"d": "ddddvalu"\n}\n`
@@ -534,7 +534,7 @@ The names that start with a point, and the folder itself, are not files that the
 
 | k | body | runs |
 |---|---|---|
-| `string(1, 64, "abcXYZ019-._")` | `choice("[1,]", "tru ", "\"abc", "[1 2", "    ", "1.e1", "nul]", "{a:1")` | 8 |
+| `string(1, 64, "abcdefghijklmnopqrstuvwxyzXYZ019-._")` | `choice("[1,]", "tru ", "\"abc", "[1 2", "    ", "1.e1", "nul]", "{a:1")` | 8 |
 
 ## B20: Answers status 500 when the store is not in its form
 - Given a file `store.json` that contains `not a store`
@@ -558,14 +558,14 @@ The names that start with a point, and the folder itself, are not files that the
 
 | text | k | runs |
 |---|---|---|
-| `choice("not a store", "", "{}", "{\n}", "[\n]\n", "{\n\"a\": 1\n")` | `string(1, 64, "abcXYZ019-._")` | 6 |
+| `choice("not a store", "", "{}", "{\n}", "[\n]\n", "{\n\"a\": 1\n")` | `string(1, 64, "abcdefghijklmnopqrstuvwxyzXYZ019-._")` | 6 |
 
 ## B21: Answers status 500 when a file is too large
 - Given a file `public/big.bin` that contains `a` `1048577` times
-- And a client that sends `GET /files/big.bin HTTP/1.1\r\n\r\n`
+- And a client that sends `GET /files/big.bin?a=1 HTTP/1.1\r\n\r\n`
 - When the program runs
 - Then the client receives `HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: 26\r\nConnection: close\r\n\r\n500 Internal Server Error\n`
-- And it prints `GET /files/big.bin 500 26` and a newline
+- And it prints `GET /files/big.bin?a=1 500 26` and a newline
 - And it does not stop
 
 ### For any query
@@ -598,16 +598,16 @@ The names that start with a point, and the folder itself, are not files that the
 
 | k | runs |
 |---|---|
-| `string(1, 64, "abcXYZ019-._")` | 3 |
+| `string(1, 64, "abcxyzXYZ019-._")` | 3 |
 
 ## B23: Answers clients at once
-- Given a client that sends `GET /health?first HTTP/1.1\r\n\r\n`
-- And a client that sends `GET /health?second HTTP/1.1\r\n\r\n`
+- Given a client that sends `GET /health?a=1 HTTP/1.1\r\n\r\n`
+- And a client that sends `GET /health?b=2 HTTP/1.1\r\n\r\n`
 - And the clients connect at once
 - When the program runs
 - Then the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n`
 - And the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n`
-- And it prints `GET /health?second 200 3\nGET /health?first 200 3\n`
+- And it prints `GET /health?b=2 200 3\nGET /health?a=1 200 3\n`
 - And it does not stop
 
 ### For any two queries

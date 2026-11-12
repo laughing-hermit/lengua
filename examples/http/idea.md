@@ -45,7 +45,7 @@ the program cannot write its output, it exits with code 4.
 - And it exits with code `0`
 
 ### For any method, path and fields
-The second row has short texts, so that a proof can cover more of them.
+The second row has few texts, so that a proof can cover all of them.
 
 - Given standard input that contains `{method} /{path} HTTP/1.{minor}\r\nUser-Agent: curl/8.0\r\nhOsT:  {host} \r\nX-{name}: {value}\r\n\r\n`
 - When the program runs
@@ -54,8 +54,8 @@ The second row has short texts, so that a proof can cover more of them.
 
 | method | path | minor | host | name | value | runs |
 |---|---|---|---|---|---|---|
-| `choice("GET", "PUT", "DELETE", "HEAD", "POST", "OPTIONS")` | `string(0, 100, "abcxyz0189/._-~")` | `choice(0, 1)` | `string(1, 40, "abcdefghijklmnopqrstuvwxyz0123456789.-:")` | `string(0, 10, "abcXYZ-")` | `string(0, 40, "abc xyz:,;=\t")` | 60 |
-| `choice("GET")` | `string(0, 4, "a/")` | `choice(1)` | `string(1, 4, "a.")` | `choice("a")` | `choice("b")` | 40 |
+| `choice("GET", "PUT", "DELETE", "HEAD", "POST", "OPTIONS")` | `string(0, 100, "abcdefghijklmnopqrstuvwxyz0189/._-~")` | `choice(0, 1)` | `string(1, 40, "abcdefghijklmnopqrstuvwxyz0123456789.-:")` | `string(0, 10, "abcXYZ-")` | `string(0, 40, "abc xyz:,;=\t")` | 60 |
+| `choice("GET", "PUT")` | `choice("hello.txt", "", "a/b")` | `choice(0, 1)` | `choice("example.com", "a")` | `choice("a")` | `choice("b")` | 24 |
 
 ## B2: Decodes the percent escapes of a path and drops the query
 - Given standard input that contains `GET /a%20b%2fc?a=b HTTP/1.1\r\n\r\n`
