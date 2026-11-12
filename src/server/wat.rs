@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
+use super::calls;
 use super::parts;
 use super::{
     BlockProof, CheckParams, CheckReport, Checking, ConnectionReport, FURTHER, Found, IdeaStage,
@@ -438,6 +439,22 @@ fn bytes_text(bytes: u64) -> String {
     }
 }
 
+/// The modules `opened`, which a program calls, each kept in a file of its own for the pool's
+/// workers.
+fn called_modules(opened: &[calls::Opened]) -> Result<Vec<crate::wasm::CalledModule>, String> {
+    opened
+        .iter()
+        .map(|opened| {
+            crate::wasm::CalledModule::new(&opened.called.name, &opened.wasm).map_err(|error| {
+                format!(
+                    "lengua couldn't keep the module of {}: {error}",
+                    opened.called.place()
+                )
+            })
+        })
+        .collect()
+}
+
 /// The next step after main.wat's own problems.
 fn fix_code(folder: &ProgramFolder) -> String {
     format!(
@@ -493,6 +510,8 @@ pub(super) struct WasmCode {
     /// For an idea with a `- Secret:` line, what the check of the engine's machine code read on
     /// this CPU, in one line.
     machine_code: Option<String>,
+    /// The modules main.wat calls, as its tests run with them and lengua.lock records them.
+    calls: Vec<calls::Opened>,
     /// How full main.wat's functions are, as the reply says it ([`CheckReport::functions`]).
     pub(super) functions: Vec<String>,
     /// main.wat's named texts, as the reply says them ([`CheckReport::data`]).
@@ -572,6 +591,9 @@ struct Runnable {
     /// The inputs its `- Secret:` line names: for an idea that names any, the machine code of
     /// the module is checked on this computer before it runs ([`keeps_secrets`]).
     secrets: Vec<idea::Source>,
+    /// The modules its idea calls, each opened as check opened it and held to what lengua.lock
+    /// records: what runs beside the program.
+    calls: Vec<calls::Opened>,
     /// The SHA-256 of the module check tested.
     module: Sha256Hex,
     /// The user's key, which verified the lock: a run from a shell loads the module's compiled
@@ -739,6 +761,9 @@ fn runnable(
     // bytes: main.wasm for an idea with a `- Module:` line, whose stamp must be an outside
     // module's too, so that nothing checked as one kind runs as the other.
     let named = idea::outside(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
+    // The modules the idea calls, opened as check opened them: an outside module read again,
+    // a called program with its lock verified again, and each the module the tests ran with.
+    let called = calls::as_stamped(data_dir, folder, &network.reach.calls, &stamp.calls)?;
     if named.is_some() != snapshot.outside || named.is_some() != stamp.outside() {
         return Err(format!(
             "lengua.lock doesn't record this kind of code for {folder}. Call check with path \
@@ -772,6 +797,7 @@ fn runnable(
         uses,
         network,
         secrets,
+        calls: called,
         module: stamp.module_sha256.clone(),
         key,
     })
@@ -1013,6 +1039,8 @@ struct Checked<'r> {
     ready: Runnable,
     /// That module, compiled, in the engine that runs it.
     compiled: wasmtime::Module,
+    /// The modules its idea calls, each compiled, in that same engine.
+    calls: Vec<crate::wasm::host::call::Loaded>,
     /// The connections lengua makes for it, in order.
     connections: Vec<Made>,
     /// lengua's own folders, where no file or folder an argument names may lie.
@@ -1024,6 +1052,10 @@ struct Checked<'r> {
 impl Order for Checked<'_> {
     fn module(&self) -> &wasmtime::Module {
         &self.compiled
+    }
+
+    fn calls(&self) -> &[crate::wasm::host::call::Loaded] {
+        &self.calls
     }
 
     fn equipment(&self) -> Option<&crate::wasm::tools::Equipment> {
@@ -1093,6 +1125,7 @@ pub(super) fn run_from_shell(
         // module every run loads.
         let mut equipment = tools::for_shell(&request.tools, &folder, &ready)?;
         let asked_for = equipment.as_mut().and_then(|(_, module)| module.take());
+        let for_this_run = asked_for.is_some();
         let compiled = match asked_for {
             Some(module) => module,
             None => loaded_or_compiled(data_dir, &ready.key, &ready.module, || {
@@ -1100,6 +1133,29 @@ pub(super) fn run_from_shell(
             })?,
         };
         loaded_keeps_secrets(&folder, &ready, &compiled)?;
+        // The modules the idea calls, each in the engine the program runs in: the compiled
+        // form kept under the user's seal, loaded as the program's own is; or, where the
+        // program's module was compiled here for this one run, for a profile or a stop,
+        // compiled here beside it.
+        let mut calls = Vec::with_capacity(ready.calls.len());
+        for called in &ready.calls {
+            let module = if for_this_run {
+                engine::compile(compiled.engine(), &called.wasm).map_err(|error| {
+                    NotRun::Refused(format!(
+                        "the engine couldn't compile {}, a module the program calls: {error:#}",
+                        called.called.place()
+                    ))
+                })?
+            } else {
+                loaded_or_compiled(data_dir, &ready.key, &called.module, || {
+                    Ok(called.wasm.clone())
+                })?
+            };
+            calls.push(crate::wasm::host::call::Loaded {
+                name: called.called.name.clone(),
+                module,
+            });
+        }
         let connections = reaches(&ready.network)
             .iter()
             .map(|reach| made(reach, &request.args))
@@ -1120,6 +1176,7 @@ pub(super) fn run_from_shell(
             workspace,
             ready,
             compiled,
+            calls,
             connections,
             own,
             equipment: equipment.map(|(equipment, _)| equipment),
@@ -1180,10 +1237,16 @@ impl LenguaServer {
         let files = [idea_hash, Sha256Hex::of(code.as_bytes())];
         let prove_further = params.prove_further;
         let builds_on = idea.parts.clone();
+        let called = idea.network.reach.calls.clone();
         // A job on these very files stands only while the lock records the parts as they are
         // now: after a part was checked again, the code is stamped again with it.
         let current = match self.current_checking(folder, &files, prove_further).await {
-            Some(checking) if self.parts_as_stamped(folder, &builds_on, &code) => Some(checking),
+            Some(checking)
+                if self.parts_as_stamped(folder, &builds_on, &code)
+                    && self.calls_as_stamped(folder, &called, &code) =>
+            {
+                Some(checking)
+            }
             _ => None,
         };
         let checking = match current {
@@ -1214,6 +1277,18 @@ impl LenguaServer {
                 ));
             }
         };
+        // The modules it calls as they are now, for the same reason: a job on these very files
+        // may be older than a change to one of them.
+        let opened = match calls::open(&self.data_dir, folder, &called) {
+            Ok(opened) => opened,
+            Err(problems) => {
+                return Ok(CheckReport::problems(
+                    "code_problems",
+                    problems,
+                    fix_code(folder),
+                ));
+            }
+        };
         wait_for(&checking, began + check_wait()).await;
         if *checking.stage.borrow() == Stage::Ended {
             self.verify_once_passed(folder, &checking).await;
@@ -1229,6 +1304,12 @@ impl LenguaServer {
         report.functions.clone_from(&checking.functions);
         report.data.clone_from(&checking.data);
         report.parts = parts::lines(&taken);
+        report.calls = calls::lines(&opened);
+        if matches!(report.state.as_str(), "done" | "proving")
+            && let Some(note) = calls::trusted_note(&opened)
+        {
+            report.next_step.push_str(&note);
+        }
         report.contract = parts::contract_lines(idea_text);
         // What each contract says a function gives, as its proof of the function alone settled
         // it: a part's own with its contract, a taken function's with the parts.
@@ -1273,6 +1354,32 @@ impl LenguaServer {
             .is_none_or(|stamp| stamp.parts == parts::stamps(&taken))
     }
 
+    /// Whether lengua.lock records the modules main.wat, `code`, calls as they are now, or
+    /// doesn't record this main.wat yet, or a called module isn't one lengua takes, which the
+    /// check that follows says.
+    fn calls_as_stamped(
+        &self,
+        folder: &ProgramFolder,
+        called: &[crate::call::Called],
+        code: &str,
+    ) -> bool {
+        if called.is_empty() {
+            return true;
+        }
+        let Ok(opened) = calls::open(&self.data_dir, folder, called) else {
+            return true;
+        };
+        let stamped = Key::load(&self.data_dir)
+            .ok()
+            .flatten()
+            .and_then(|key| lock::read(folder.path(), Some(&key)).ok().flatten())
+            .and_then(|lock| lock.code);
+        let current = Sha256Hex::of(code.as_bytes());
+        stamped
+            .filter(|stamp| stamp.sha256 == current)
+            .is_none_or(|stamp| stamp.calls == calls::stamps(&opened))
+    }
+
     /// main.wat's `code` built, held to its parts and checked against every rule of the
     /// WebAssembly dialect, ready for its tests; or what's wrong, each on its line.
     fn wasm_code(
@@ -1285,6 +1392,7 @@ impl LenguaServer {
     ) -> Result<WasmCode, Refused> {
         let built = text::build(code).map_err(|problem| vec![problem.to_string()])?;
         let taken = parts::taken(&self.data_dir, folder, &idea.parts, code)?;
+        let opened = calls::open(&self.data_dir, folder, &idea.network.reach.calls)?;
         let context = checker::wasm::Context {
             uses: &idea.uses,
             network: &idea.network,
@@ -1329,7 +1437,8 @@ impl LenguaServer {
         let features = engine::features_used(&built.wasm);
         let module = Sha256Hex::of(&built.wasm);
         let program = Program::new(built)
-            .map_err(|error| vec![format!("lengua couldn't keep main.wat's module: {error}")])?;
+            .map_err(|error| vec![format!("lengua couldn't keep main.wat's module: {error}")])?
+            .with_calls(called_modules(&opened).map_err(|problem| vec![problem])?);
         Ok(WasmCode {
             idea,
             suite,
@@ -1341,6 +1450,7 @@ impl LenguaServer {
             obligations: report.facts.obligations.clone(),
             parts: parts::stamps(&taken),
             claims,
+            calls: opened,
             machine_code,
             functions,
             data,
@@ -1384,6 +1494,7 @@ impl LenguaServer {
             functions: code.functions.clone(),
             data: code.data.clone(),
             outside: code.outside.clone(),
+            calls: !code.calls.is_empty(),
         });
         if let Some(old) = self
             .checks
@@ -1457,6 +1568,29 @@ impl LenguaServer {
                 }
             }
         }
+        // The modules it calls, kept and compiled ahead of its runs as its own module is: a
+        // run loads each in its compiled form, under the user's seal, or not at all.
+        for called in &code.calls {
+            if let Err(error) = keep_tested(&self.data_dir, &called.module, &called.wasm) {
+                return fail(vec![error]);
+            }
+            if let Ok(Some(key)) = Key::load(&self.data_dir) {
+                for setup in [Setup::Shell, Setup::Run] {
+                    let kept = compile_and_keep_for(
+                        setup,
+                        &self.data_dir,
+                        &key,
+                        &called.module,
+                        &called.wasm,
+                    );
+                    if let Err(error) = kept {
+                        tracing::warn!(
+                            "couldn't compile a called module ahead of its runs: {error}"
+                        );
+                    }
+                }
+            }
+        }
         // An outside module's stamp says what it is in the lock's own text: its two hashes are
         // one, and its engine's line ends in the note.
         let engine = if code.outside.is_some() {
@@ -1472,6 +1606,7 @@ impl LenguaServer {
             unsafe_blocks: u32::try_from(code.unsafe_blocks).unwrap_or(u32::MAX),
             features: code.features.clone(),
             parts: code.parts.clone(),
+            calls: calls::stamps(&code.calls),
         };
         if let Err(error) = self.stamp_code(folder, &idea_hash, stamp).await {
             return fail(vec![error]);
@@ -1547,7 +1682,9 @@ impl LenguaServer {
     pub(super) async fn write_verified(&self, folder: &ProgramFolder, checking: &Checking) -> bool {
         // lengua's entry says lengua checked the idea and its main.wat: an outside module, which
         // it tested and holds to no rule and no proof, gets none.
-        if checking.outside.is_some() {
+        // Nor does a program that calls a module: the entry names an idea and its main.wat, and
+        // what such a program does rests on a third file, which the entry can't name.
+        if checking.outside.is_some() || checking.calls {
             return false;
         }
         let [idea, code] = &checking.files;
@@ -1735,7 +1872,8 @@ impl LenguaServer {
         let assertions = built.assertions.clone();
         let program = Arc::new(
             Program::new(instead.unwrap_or(built))
-                .map_err(|error| format!("lengua couldn't keep the module: {error}"))?,
+                .map_err(|error| format!("lengua couldn't keep the module: {error}"))?
+                .with_calls(called_modules(&ready.calls)?),
         );
         let connections = reaches(&network);
         let own = if network.reach.files.is_empty() {
@@ -1933,6 +2071,13 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     }
     if let Some(problem) = threads_problem(&idea_text, &idea) {
         lines.push(format!("{IDEA_FILE} {problem}"));
+        return false;
+    }
+    // A program that calls a module isn't attested: the attester attests an idea and its
+    // main.wat, with no lock and no key, and what such a program does rests on a module that
+    // neither file is.
+    if !idea.network.reach.calls.is_empty() {
+        lines.push(calls::NOT_ATTESTED.to_owned());
         return false;
     }
     let suite = match testfile::check(&idea) {

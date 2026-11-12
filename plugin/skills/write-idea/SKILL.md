@@ -153,7 +153,8 @@ by one concrete example in its steps, and its generated tests try that rule with
   or `- Uses: nothing`. lengua programs can't handle signals, and their memory
   is fixed by the idea's limits. lengua holds the program to this line when it runs, so it's a promise the user can rely
   on, and it means the same on every kind of computer. `# Constraints` holds only `- Uses:`,
-  `- Network:`, `- Files:`, `- Runs:`, `- Splits:`, `- Secret:` and `- Builds on:` lines, and
+  `- Network:`, `- Files:`, `- Runs:`, `- Splits:`, `- Secret:`, `- Builds on:`, `- Calls:` and
+  `- Exports:` lines ([reach](references/reach.md) has the last two), and
   `- Module:` for an outside module; the rest goes in Purpose. A program
   uses more cores only through a `- Splits:` line ([reach](references/reach.md)); `check` refuses `- Threads:`.
 - **Secret inputs:** when the user says an input is secret, or the program compares or

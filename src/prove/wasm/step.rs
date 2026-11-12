@@ -491,6 +491,15 @@ fn call(
     if state.core.window.is_some() && !callee.own {
         return Err(state.core.trap(module, at, unit::STOPS));
     }
+    // A function of a module the program calls: the model follows no other module, and doesn't
+    // know what the call gives back, so the run stops here.
+    if callee.called {
+        return Err(unsupported(format!(
+            "a call of {}, a function of a module it calls, which the model doesn't follow: the \
+             program is tested, not proven, where it depends on the call",
+            callee.name.as_deref().unwrap_or("a function")
+        )));
+    }
     if let Some(function) = callee.import {
         return host::call(module, state, pool, function, at);
     }

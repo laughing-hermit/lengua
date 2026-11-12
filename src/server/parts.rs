@@ -60,37 +60,41 @@ fn listed(ids: &[String]) -> String {
     }
 }
 
+/// What a program's own lock records of its proofs, `proofs`, in words; `shown` is its folder.
+pub(super) fn proofs_words(proofs: Option<&ProofStamp>, shown: &str) -> String {
+    let Some(proofs) = proofs else {
+        return format!(
+            "its own proofs aren't recorded yet: call check with path {shown} to see them"
+        );
+    };
+    let mut said = Vec::new();
+    if !proofs.proven.is_empty() {
+        said.push(format!(
+            "{} proven for every input in range",
+            listed(&proofs.proven)
+        ));
+    }
+    for bounded in &proofs.bounded {
+        said.push(format!(
+            "{} proven for every input with text up to {} of {} bytes",
+            bounded.id, bounded.bytes, bounded.of
+        ));
+    }
+    let unproven: Vec<String> = proofs.unproven.iter().map(|(id, _)| id.clone()).collect();
+    if !unproven.is_empty() {
+        said.push(format!("{} tested, not proven", listed(&unproven)));
+    }
+    if said.is_empty() {
+        "its own idea has no generated test to prove".to_owned()
+    } else {
+        format!("its own proofs: {}", said.join("; "))
+    }
+}
+
 impl Taken {
     /// What its own lock records of its proofs, in words.
     fn proofs_line(&self) -> String {
-        let Some(proofs) = &self.proofs else {
-            return format!(
-                "its own proofs aren't recorded yet: call check with path {} to see them",
-                self.shown
-            );
-        };
-        let mut said = Vec::new();
-        if !proofs.proven.is_empty() {
-            said.push(format!(
-                "{} proven for every input in range",
-                listed(&proofs.proven)
-            ));
-        }
-        for bounded in &proofs.bounded {
-            said.push(format!(
-                "{} proven for every input with text up to {} of {} bytes",
-                bounded.id, bounded.bytes, bounded.of
-            ));
-        }
-        let unproven: Vec<String> = proofs.unproven.iter().map(|(id, _)| id.clone()).collect();
-        if !unproven.is_empty() {
-            said.push(format!("{} tested, not proven", listed(&unproven)));
-        }
-        if said.is_empty() {
-            "its own idea has no generated test to prove".to_owned()
-        } else {
-            format!("its own proofs: {}", said.join("; "))
-        }
+        proofs_words(self.proofs.as_deref(), &self.shown)
     }
 
     /// The part in one line of `check`'s reply.

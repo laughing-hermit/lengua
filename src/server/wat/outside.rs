@@ -175,6 +175,7 @@ impl LenguaServer {
                     parts: Vec::new(),
                     claims: Vec::new(),
                     machine_code: None,
+                    calls: Vec::new(),
                     outside: Some(said),
                     functions: Vec::new(),
                     data: Vec::new(),

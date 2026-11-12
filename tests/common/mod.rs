@@ -494,3 +494,79 @@ impl Session {
         Ok(())
     }
 }
+
+/// Where CI's outside-wasm job put the modules it built from the repository's Rust and C, when
+/// this run has them (`LENGUA_OUTSIDE_WASM`): `<name>.wasm` for each. A run on GitHub's runners
+/// without them fails, so no such run passes having skipped the compilers' output.
+pub fn compiled(name: &str) -> Option<Vec<u8>> {
+    let Some(folder) = std::env::var_os("LENGUA_OUTSIDE_WASM").filter(|folder| !folder.is_empty())
+    else {
+        assert!(
+            std::env::var_os("GITHUB_ACTIONS").is_none(),
+            "LENGUA_OUTSIDE_WASM names no folder of the modules built from Rust and C"
+        );
+        lengua::skiplog::note(
+            "LENGUA_OUTSIDE_WASM names no folder, so no module a compiler made from Rust or C \
+             was checked or run (cargo xtask outside-wasm builds them)",
+        );
+        return None;
+    };
+    let file = Path::new(&folder).join(format!("{name}.wasm"));
+    Some(std::fs::read(&file).unwrap_or_else(|error| panic!("{}: {error}", file.display())))
+}
+
+/// The modules that the program in `folder` calls, as its idea's `- Calls:` lines name them. A
+/// folder whose idea doesn't parse has none.
+pub fn calls_of(folder: &Path) -> Vec<lengua::call::Called> {
+    std::fs::read_to_string(folder.join("idea.md"))
+        .ok()
+        .and_then(|idea| lengua::idea::parse(&idea).ok())
+        .map(|idea| idea.network.reach.calls)
+        .unwrap_or_default()
+}
+
+impl Session {
+    /// Lays out for `program` each module that the program in `folder`, a folder of the
+    /// repository, calls: a lengua program beside it, under its own folder name, taken to done
+    /// with its own parts first; and an outside module in `program`'s folder, as the module
+    /// CI's outside-wasm job built from the source beside the example, `<example>.<module>`.
+    /// Gives false when this run has no such modules, which only a run off GitHub's runners
+    /// may; and the first called program that isn't done, with check's reply.
+    pub async fn settle_calls(&self, program: &Program, folder: &Path) -> Result<bool, String> {
+        for called in calls_of(folder) {
+            match &called.kind {
+                lengua::call::Kind::Program { .. } => {
+                    let joined = folder.join(called.place());
+                    let theirs = std::fs::canonicalize(&joined).unwrap_or(joined);
+                    let beside = program.beside(&called.name);
+                    for file in ["idea.md", "main.wat"] {
+                        let text = std::fs::read_to_string(theirs.join(file))
+                            .map_err(|error| format!("{}/{file}: {error}", theirs.display()))?;
+                        beside.write(file, &text);
+                    }
+                    self.settle_parts(&beside, &theirs).await?;
+                    self.record(&beside).await;
+                    let done = self.settle(&beside).await;
+                    if done["state"] != "done" {
+                        return Err(format!(
+                            "the called program {} isn't done: {done}",
+                            called.name
+                        ));
+                    }
+                }
+                lengua::call::Kind::Outside { .. } => {
+                    let example = folder
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .expect("an example's folder has a UTF-8 name");
+                    let Some(module) = compiled(&format!("{example}.{}", called.name)) else {
+                        return Ok(false);
+                    };
+                    std::fs::write(program.file(&called.place()), module)
+                        .map_err(|error| format!("{}: {error}", called.place()))?;
+                }
+            }
+        }
+        Ok(true)
+    }
+}

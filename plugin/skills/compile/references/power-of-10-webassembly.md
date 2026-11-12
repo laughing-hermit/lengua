@@ -48,13 +48,19 @@ its own memory, and it reaches the computer only through the calls its idea allo
 - **Imports** come only from `wasi_snapshot_preview1`, and, for what a program reaches by itself
   while it runs (the network, the files its arguments name, a program it starts, the terminal),
   from lengua's own modules, `lengua_net_1`, `lengua_fs_1`, `lengua_run_1` and `lengua_term_1`,
-  and `lengua_split_1` for work split into pieces;
+  `lengua_split_1` for work split into pieces, and `lengua_call_1` for the bytes of a module
+  the program calls;
   and only the functions the idea allows:
   [the host](host.md) says which each `- Uses:`, `- Network:`, `- Files:`, `- Runs:` and
-  `- Splits:` line
+  `- Splits:` and `- Calls:` line
   grants. `check` refuses any
   other import, so a program can't even name a call it isn't allowed.
-- **Exports** are exactly the function `_start` and the memory `memory`.
+  For an idea with a `- Calls:` line, `main.wat` also imports each function the line names,
+  from the module named as the called module is, with the type the line gives it
+  ([calls](calls.md)).
+- **Exports** are exactly the function `_start` and the memory `memory`; and, for an idea
+  with an `- Exports:` line, each function the line lists, with the listed type, which takes
+  numbers and never an address ([calls](calls.md)).
 - **One memory**, declared once with its minimum equal to its maximum (rule 3), of at most 16,384
   pages, 1 GiB. No `memory.grow`.
 - **No start function, no tables, no element segments**, so no `call_indirect` (rule 9).
@@ -154,7 +160,8 @@ which `check` reports as the assertion's line. lengua's own assertions are numbe
 Values live in locals; a global that changes holds only what the program keeps across calls and
 says why with `;; shared: <reason>` on its line. A writable region belongs to one function, which
 lends it to others as an address and a length, unless the region is marked `;; shared: <reason>`.
-Read-only regions are never written. Only `_start` and the memory are exported.
+Read-only regions are never written. Only `_start` and the memory are exported, and the
+functions an idea's `- Exports:` line lists.
 
 ### 7. Checked results
 
@@ -170,6 +177,9 @@ branches, before any result the call wrote is read:
 A program's own function that can fail is marked `;; returns: result` on its line and returns 0
 for success or an error number; its callers test it the same way. Parameters and the program's
 input are validated before they're used.
+
+What a function of a called module gives back ([calls](calls.md)) is no error number: it is
+a number of that module's, which the program validates as it validates its input.
 
 ### 8. No macros, named constants
 

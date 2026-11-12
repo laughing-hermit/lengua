@@ -400,6 +400,15 @@ impl Pool {
                 max_written: spec.max_written,
             },
             tools: spec.tools,
+            calls: program
+                .calls()
+                .iter()
+                .map(|called| job::Called {
+                    name: called.name.clone(),
+                    module: called.file.clone(),
+                    hash: called.hash.as_str().to_owned(),
+                })
+                .collect(),
         };
         let request = Request::Run(Box::new(job));
         let idle = if spec.alone { None } else { self.take() };

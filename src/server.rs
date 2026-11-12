@@ -2,6 +2,7 @@
 //! the code of an idea that is an Attested Computation, checked and run as WebAssembly the same
 //! way on every system ([`wat`]).
 
+mod calls;
 mod parts;
 mod wat;
 
@@ -239,6 +240,9 @@ struct Checking {
     /// proven, what doesn't hold for it and what lengua's host holds
     /// ([`crate::wasm::outside::said`]). `None` for main.wat.
     outside: Option<Vec<String>>,
+    /// Whether main.wat calls a module ([`crate::call`]): lengua then writes no entry for it in
+    /// idea.md's `verified`, which names an idea and its main.wat alone.
+    calls: bool,
 }
 
 impl std::fmt::Debug for Checking {
@@ -408,6 +412,12 @@ pub struct CheckReport {
     /// unchanged; and what the part's own lock records of its proofs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<String>,
+    /// The modules the program calls, one a line, for an idea with a `- Calls:` line: an outside
+    /// module, which is `trusted, not proven`, with what the idea says it was built from and
+    /// what lengua's host holds for it; or a lengua program, which is `checked` on this
+    /// computer, with what its own lock records of its proofs. Tell the user each line.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calls: Vec<String>,
     /// For a part, an idea with a `# Contract` section: each function it offers to the
     /// programs that build on it, with what the rules found it reads and writes through the
     /// addresses it is lent, which is what the section states.
@@ -3027,6 +3037,7 @@ mod tests {
             unsafe_blocks: 0,
             features: Vec::new(),
             parts: Vec::new(),
+            calls: Vec::new(),
         };
         let proofs = |module: &[u8]| {
             Box::new(ProofStamp {
@@ -3097,6 +3108,7 @@ mod tests {
                 unsafe_blocks: 0,
                 features: Vec::new(),
                 parts: Vec::new(),
+                calls: Vec::new(),
             }),
             proofs: proofs.map(Box::new),
         };
@@ -3198,6 +3210,7 @@ mod tests {
             obligations: Vec::new(),
             machine_code: None,
             outside: None,
+            calls: false,
             functions: Vec::new(),
             data: Vec::new(),
         });

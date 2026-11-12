@@ -2406,3 +2406,57 @@ fn a_server_s_runs_through_its_waits_end_serving_with_the_answer() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// A program whose idea calls a module: with no argument it ends before any call, with one it
+/// calls a function of the module, and with two it copies bytes to it.
+const CALLS_A_MODULE: &str = r#"(module
+  (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+  (import "wasi_snapshot_preview1" "args_sizes_get"
+    (func $sizes (param i32 i32) (result i32)))
+  (import "lengua_call_1" "give" (func $give (param i32 i32 i32 i32) (result i32)))
+  (import "lib" "double" (func $double (param i32) (result i32)))
+  (memory (export "memory") 1 1)
+  (func (export "_start")
+    (drop (call $sizes (i32.const 0) (i32.const 4)))
+    (if (i32.le_u (i32.load (i32.const 0)) (i32.const 1))
+      (then (call $exit (i32.const 7))))
+    (if (i32.eq (i32.load (i32.const 0)) (i32.const 2))
+      (then (call $exit (call $double (i32.const 2)))))
+    (call $exit (call $give (i32.const 0) (i32.const 0) (i32.const 64) (i32.const 4)))))
+"#;
+
+/// The model follows one module. A run that ends before any call of a called module is followed
+/// to its end, so a proof of it holds; a run that reaches a call of a called function, or a
+/// copy to or from a called module, stops there, tested and not proven, since the model doesn't
+/// know what the call gives back.
+#[test]
+fn a_run_stops_at_a_call_of_another_module_and_is_followed_before_it() {
+    let (uses, network) = crate::idea::constraints_of(&[
+        "- Uses: nothing",
+        "- Calls: lib.wasm, built from WebAssembly text, in a test; its functions: double(i32) \
+         -> i32",
+    ])
+    .expect("the lines read");
+    let policy = Policy::of(&uses, &network);
+    let with = |args: &[&str]| Given {
+        args: args.iter().map(|arg| arg.as_bytes().to_vec()).collect(),
+        ..Given::default()
+    };
+    assert_eq!(ran(CALLS_A_MODULE, policy, &with(&[])).end, Ended::Exit(7));
+    let called = ran(CALLS_A_MODULE, policy, &with(&["x"]));
+    let Ended::NotModelled(why) = &called.end else {
+        panic!("{:?}", called.end);
+    };
+    assert!(
+        why.contains("a call of lib.double, a function of a module it calls"),
+        "{why}"
+    );
+    let copied = ran(CALLS_A_MODULE, policy, &with(&["x", "y"]));
+    let Ended::NotModelled(why) = &copied.end else {
+        panic!("{:?}", copied.end);
+    };
+    assert!(
+        why.contains("bytes it copies to or from a module it calls"),
+        "{why}"
+    );
+}

@@ -411,6 +411,7 @@ fn written_lock() -> Vec<u8> {
             unsafe_blocks: 0,
             features: vec!["bulk-memory".into(), "simd".into()],
             parts: Vec::new(),
+            calls: Vec::new(),
         }),
         proofs: Some(Box::new(ProofStamp {
             module_sha256: Sha256Hex::of(b"module"),

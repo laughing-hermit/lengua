@@ -977,6 +977,7 @@ fn a_worker_ends_when_its_server_does() {
             max_written: None,
         },
         tools: lengua::wasm::tools::Tools::default(),
+        calls: Vec::new(),
     };
     job::write_message(&mut requests, &Request::Run(Box::new(job))).expect("the job");
     // The program runs; then the server goes, and its end of the worker's input with it.

@@ -112,6 +112,50 @@ fn lends(module: &model::Module<'_>, analysis: &memory::Analysis) -> Vec<Lends> 
         .collect()
 }
 
+/// Rule 6, for an idea with an `- Exports:` line: a function another program calls takes
+/// numbers, never an address. The caller's memory is another memory, so a number it passes
+/// names nothing here, and the rules can hold no caller to what the function would reach
+/// through it: an exported function works in main.wat's own regions alone.
+fn offered(
+    module: &model::Module<'_>,
+    analysis: &memory::Analysis,
+    policy: &Policy,
+    violations: &mut Vec<Violation>,
+) {
+    for offered in &policy.reach.get().exports {
+        let function = module
+            .exports
+            .iter()
+            .find(|export| {
+                export.kind == wasmparser::ExternalKind::Func && export.name == offered.name
+            })
+            .and_then(|export| module.function(export.index));
+        let Some(function) = function else {
+            continue;
+        };
+        let Some(summary) = analysis.summaries.get(&function.index) else {
+            continue;
+        };
+        for param in summary.borrows.keys() {
+            violations.push(Violation {
+                rule: Rule::Scope,
+                line: function.line,
+                problem: format!(
+                    "{} uses its parameter {} as an address, and the idea's `- Exports:` line \
+                     offers it to other programs, whose memory is another memory: a number a \
+                     caller passes names nothing in this one",
+                    function.shown(),
+                    function.local_shown(*param)
+                ),
+                fix: "keep the bytes in a region of main.wat, give its address with an exported \
+                      function, and let the caller copy bytes there with `give` and from there \
+                      with `take`; the function then takes a length or an index, which it checks"
+                    .to_owned(),
+            });
+        }
+    }
+}
+
 /// One of main.wat's own functions as rule 4 counts it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Size {
@@ -338,6 +382,7 @@ pub fn check(text: &str, built: &Built, context: &Context<'_>) -> Report {
     split::check(&module, &flows, &policy, &mut violations);
     let analysis = memory::analyze(&module, &flows);
     let lends = lends(&module, &analysis);
+    offered(&module, &analysis, &policy, &mut violations);
     memory::check(&module, &flows, &analysis, &mut violations, &mut facts);
     rules::check(&module, &flows, &analysis, &mut violations, &mut facts);
     determinism::check(&module, &analysis, &mut violations, &mut facts);

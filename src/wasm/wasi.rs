@@ -293,6 +293,8 @@ pub enum Allowance {
     NamedFolder,
     /// A program whose idea lets it split its work into pieces: a `- Splits:` line.
     Splits,
+    /// A program whose idea lets it call a module: a `- Calls:` line.
+    Calls,
     /// A program whose idea lets it start a program: a `- Runs:` line.
     Runs,
 }
@@ -1041,6 +1043,40 @@ pub const SPLIT_FUNCTIONS: &[Function] = &[
     given("piece", &[], SPLITS, NO_LENDS, &[NOENT, NOTCAPABLE]),
 ];
 
+/// The module lengua's own functions for a called module's bytes are imported from: a called
+/// module has a memory of its own, which the program reaches only through these two copies.
+pub const CALL_MODULE: &str = "lengua_call_1";
+
+/// A program whose idea lets it call a module.
+const CALLS: &[Allowance] = &[Allowance::Calls];
+
+/// lengua's own functions for the bytes of a module the program calls, for an idea with a
+/// `- Calls:` line ([`crate::call`]). A called module is an instance of its own, with a memory
+/// of its own: numbers pass in a call of one of its functions, and bytes pass by copy, here.
+/// `module` counts the idea's `- Calls:` lines from 0, in their order.
+///
+/// - `give(module, at, from, len)`: copies the `len` bytes at `from` in the program's memory to
+///   `at` in the called module's memory. `INVAL` when the idea calls no such module, the module
+///   has no memory, or the bytes at `at` don't lie inside its memory, and nothing is copied.
+/// - `take(module, at, into, len)`: copies the `len` bytes at `at` in the called module's
+///   memory to `into` in the program's memory. `INVAL` as for `give`.
+pub const CALL_FUNCTIONS: &[Function] = &[
+    given(
+        "give",
+        &[I32, I32, I32, I32],
+        CALLS,
+        &[read(2, Bytes::Argument(3))],
+        &[INVAL, NOTCAPABLE],
+    ),
+    given(
+        "take",
+        &[I32, I32, I32, I32],
+        CALLS,
+        &[written(2, Bytes::Argument(3))],
+        &[INVAL, NOTCAPABLE],
+    ),
+];
+
 /// lengua's own modules, each with its functions: what a program imports besides WASI preview
 /// 1's, for what its idea grants it to reach by itself while it runs.
 pub const OWN: &[(&str, &[Function])] = &[
@@ -1049,6 +1085,7 @@ pub const OWN: &[(&str, &[Function])] = &[
     (RUN_MODULE, RUN_FUNCTIONS),
     (TERM_MODULE, TERM_FUNCTIONS),
     (SPLIT_MODULE, SPLIT_FUNCTIONS),
+    (CALL_MODULE, CALL_FUNCTIONS),
 ];
 
 /// Whether `module` is one of lengua's own.
@@ -1138,7 +1175,7 @@ mod tests {
     fn lenguas_own_functions_are_in_their_own_module() {
         let names: BTreeSet<&str> = own_functions().map(|(_, function)| function.name).collect();
         assert_eq!(names.len(), own_functions().count());
-        assert_eq!(names.len(), 15);
+        assert_eq!(names.len(), 17);
         for (module, function) in own_functions() {
             assert!(own_module(module) && module != MODULE);
             assert_eq!(imported(module, function.name), Some(function));

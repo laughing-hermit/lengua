@@ -3,7 +3,8 @@
 A `main.wat` program reaches the computer only through WASI preview 1's functions
 (`wasi_snapshot_preview1`) and, for what it reaches by itself while it runs, lengua's own
 (`lengua_net_1` for the network, `lengua_fs_1` for the files its arguments name,
-`lengua_run_1` to start a program, `lengua_term_1` for the terminal, `lengua_split_1` for work it
+`lengua_run_1` to start a program, `lengua_term_1` for the terminal, `lengua_call_1` for the
+bytes of a module it calls, `lengua_split_1` for work it
 splits into pieces that run at once), and only those its idea
 allows. lengua implements them itself, the same way on
 every computer, so a program does the same thing everywhere. `check` refuses any other import
@@ -29,6 +30,7 @@ every computer, so a program does the same thing everywhere. `check` refuses any
 | `- Files: reads the folder its first argument names` (a line that names a folder) | from `lengua_fs_1`: `folder_open`; and on the folder it gives, what `- Uses: files` allows on descriptor 3: `path_open`, `path_filestat_get`, `fd_readdir`, `path_create_directory`, `path_remove_directory`, `path_unlink_file`, `path_rename` |
 | ``- Runs: `hostname` with no arguments`` (any `- Runs:` line) | from `lengua_run_1`: `program_run` |
 | `- Splits: its work into up to 8 pieces, …` | from `lengua_split_1`: `split`, `piece` |
+| `- Calls: crc32.wasm, built from …; its functions: …` (any `- Calls:` line) | from `lengua_call_1`: `give`, `take`; and from the called module, by its name, each function the line lists |
 
 ## Descriptors
 
@@ -219,6 +221,28 @@ never by a path: lengua reads the argument and opens what it names, so the progr
     (if (local.get $err)
       (then (call $assert_fail (i32.const 2)) unreachable))
 ```
+
+## A called module's bytes: `lengua_call_1`
+
+| Import, with its type | What it does |
+|---|---|
+| `give (param i32 i32 i32 i32) (result i32)`: module, address there, address here, length | Copies the bytes at the address in this program's memory to the address in the called module's memory |
+| `take (param i32 i32 i32 i32) (result i32)`: module, address there, address here, length | Copies the bytes at the address in the called module's memory to the address in this program's memory |
+
+- **A called module is another instance, with another memory.** An idea's `- Calls:` line names
+  it and its functions, and `main.wat` imports each function from the module named as the
+  called module is: `(import "crc32" "crc32" (func $crc32 (param i32) (result i32)))`. A call
+  passes numbers and gets a number back. Nothing else crosses but these two copies.
+- **`module` counts the idea's `- Calls:` lines from 0.** Name it with a constant.
+- **Ask the called module for the address there**, with one of its functions; it is a number
+  to this program, not an address of its own memory.
+- **Test the error each copy returns**: `INVAL` (28) when the idea calls no such module, the
+  module has no memory, or the bytes there are not inside its memory, and then nothing is
+  copied. `NOTCAPABLE` for an idea with no `- Calls:` line.
+- **The called module reaches nothing of the host**: no file, no network, no clock, no output.
+  A call it makes to the host ends the run, as a trap in it does.
+
+[Calls between modules](calls.md) has the whole of it.
 
 ## The terminal: `lengua_term_1`
 

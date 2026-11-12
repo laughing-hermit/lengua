@@ -11,6 +11,10 @@
 //!   outside module, which has no main.wat, gets none;
 //! - a trace and a profile of a program that splits its work are of the program itself, not of
 //!   its pieces.
+//! - a program that calls a module ([`crate::call`]) gets all three: a trace has the copies it
+//!   made to and from the module, since a call of the module's function is no call of the
+//!   host; a profile counts a sample inside the module for the line of main.wat that called
+//!   it; and a stop is in main.wat, as for any program.
 
 use super::super::RunReport;
 use super::{Code, NotRun, Runnable, built_as_tested};
@@ -72,6 +76,7 @@ pub(super) fn equipped(asked: &Asked, ready: &Runnable, built: &Built) -> Result
     }
     let secret = !ready.secrets.is_empty();
     let splits = ready.network.reach.split.is_some();
+    let calls = !ready.network.reach.calls.is_empty();
     let text = match &ready.code {
         Code::Text(text) => Some(text.as_str()),
         Code::Outside { .. } => None,
@@ -82,6 +87,7 @@ pub(super) fn equipped(asked: &Asked, ready: &Runnable, built: &Built) -> Result
         }
         let mut names = text.map_or_else(Names::default, |text| Names::of(text, built));
         names.splits = splits;
+        names.calls = calls;
         return Ok(Equipped {
             tools: tools_of(asked, secret, None),
             names,
@@ -114,6 +120,7 @@ pub(super) fn equipped(asked: &Asked, ready: &Runnable, built: &Built) -> Result
     })?;
     let mut names = Names::of(&plan.text, &copy);
     names.stop = Some(plan);
+    names.calls = calls;
     Ok(Equipped {
         tools: tools_of(asked, secret, Some(Show { memory })),
         names,
@@ -180,6 +187,7 @@ pub(super) fn for_shell(
         }
         let names = Names {
             splits: ready.network.reach.split.is_some(),
+            calls: !ready.network.reach.calls.is_empty(),
             ..Names::default()
         };
         let equipment = Equipment {

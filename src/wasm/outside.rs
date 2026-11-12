@@ -352,6 +352,194 @@ pub fn read(wasm: Vec<u8>, policy: &Policy) -> Result<Outside, Vec<String>> {
     })
 }
 
+/// An outside module that a program calls ([`crate::call`]), as lengua may start it beside the
+/// program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalledOutside {
+    /// The module's bytes, as they are.
+    pub wasm: Vec<u8>,
+    /// The WebAssembly features it uses beyond WebAssembly 1.0.
+    pub features: Vec<String>,
+    /// The pages its memory starts with and the most it may grow to, when it has a memory.
+    pub pages: Option<(u64, u64)>,
+}
+
+/// A type of the idea's, as WebAssembly's.
+const fn called_type(ty: crate::call::Type) -> ValType {
+    match ty {
+        crate::call::Type::I32 => ValType::I32,
+        crate::call::Type::I64 => ValType::I64,
+        crate::call::Type::F32 => ValType::F32,
+        crate::call::Type::F64 => ValType::F64,
+    }
+}
+
+/// Reads `wasm`, the bytes of the outside module that an idea's `- Calls:` line names as
+/// `called`: what lengua may start beside the program, or every reason it won't, each saying
+/// how to build the module so that it will. Nothing of the module is compiled or run here. It
+/// refuses what it refuses of an outside module that is the program ([`read`]), but for the
+/// `_start` a library doesn't have, and besides:
+///
+/// - any import: a called module gets no function of lengua's host, so nothing the program's
+///   idea grants is the called module's;
+/// - a function the idea's line names that the module doesn't export with the type the line
+///   gives it.
+///
+/// Its memory, when it has one, is exported as `memory`, which `give` and `take` copy through,
+/// with a maximum of at most [`MAX_PAGES`].
+///
+/// # Errors
+///
+/// What lengua refuses of the module, one line each.
+pub fn read_called(
+    wasm: Vec<u8>,
+    called: &crate::call::Called,
+) -> Result<CalledOutside, Vec<String>> {
+    let file = format!("{}.wasm", called.name);
+    if wasm.len() > MAX_BYTES {
+        return Err(vec![format!(
+            "{file} holds {} bytes, and an outside module holds at most {} MiB: build it for \
+             size, with its names and debug sections stripped",
+            wasm.len(),
+            MAX_BYTES / 1024 / 1024
+        )]);
+    }
+    if let Err(error) = engine::validate(&wasm) {
+        return Err(vec![format!(
+            "{file} isn't a WebAssembly module lengua's engine takes: {error}. The engine has \
+             WebAssembly 1.0 with {}, and no threads, tail calls, exceptions, 64-bit or multiple \
+             memories, GC, relaxed SIMD, wide arithmetic or components: build a plain module \
+             without them",
+            engine::OPTIONAL_FEATURES.join(", ")
+        )]);
+    }
+    let sections = Sections::of(&wasm).map_err(|problem| vec![problem.replace(FILE, &file)])?;
+    let mut problems = Vec::new();
+    for (module, name, _) in &sections.imports {
+        problems.push(format!(
+            "{file} imports {module}.{name}, and a module that a program calls imports nothing: \
+             it gets no function of lengua's host, so that nothing the program's idea grants is \
+             the module's. Build it as a library with nothing left for a host to give: for \
+             Rust, `--target wasm32-unknown-unknown` with `--crate-type cdylib`; for C, \
+             `-nostdlib -Wl,--no-entry` with each function exported"
+        ));
+    }
+    let exported_memory = sections
+        .exports
+        .iter()
+        .find(|(name, ..)| name == "memory")
+        .map(|(_, kind, index)| (*kind, *index));
+    let pages = match sections.memories.as_slice() {
+        [] => {
+            if exported_memory.is_some() {
+                problems.push(format!(
+                    "{file} exports something named `memory` that isn't a memory it defines"
+                ));
+            }
+            None
+        }
+        [(first, maximum)] => {
+            if exported_memory != Some((ExternalKind::Memory, 0)) {
+                problems.push(format!(
+                    "{file} doesn't export its memory as `memory`, which the program's `give` \
+                     and `take` copy bytes through, and which lengua holds to the size it \
+                     declares: export it, as a toolchain's linker does by default"
+                ));
+            }
+            match maximum {
+                None => problems.push(format!(
+                    "{file}'s memory declares no maximum, and lengua holds a module to the \
+                     memory it declares: build it with one of at most {MAX_PAGES} pages (1 GiB), \
+                     such as `-Wl,--max-memory=16777216` for clang or `-C \
+                     link-arg=--max-memory=16777216` for rustc (16 MiB)"
+                )),
+                Some(most) if *most > MAX_PAGES || *first > MAX_PAGES => problems.push(format!(
+                    "{file}'s memory may grow to {most} pages, and a module's memory holds at \
+                     most {MAX_PAGES} pages (1 GiB): build it with a lower maximum"
+                )),
+                Some(_) => {}
+            }
+            Some((*first, maximum.unwrap_or(*first)))
+        }
+        _ => {
+            problems.push(format!("{file} defines more than one memory"));
+            None
+        }
+    };
+    for signature in &called.functions {
+        let wanted_params: Vec<ValType> =
+            signature.params.iter().copied().map(called_type).collect();
+        let wanted_results: Vec<ValType> = signature.result.into_iter().map(called_type).collect();
+        let exported = sections
+            .exports
+            .iter()
+            .find(|(name, kind, _)| *name == signature.name && *kind == ExternalKind::Func)
+            .map(|(.., index)| *index);
+        match exported.map(|index| sections.function(index)) {
+            Some(Some((params, results)))
+                if *params == wanted_params && *results == wanted_results => {}
+            Some(Some((params, results))) => problems.push(format!(
+                "{file} exports `{}` as {}, and the idea's `- Calls:` line says `{}`: make the \
+                 two the same",
+                signature.name,
+                signature_text(params, results),
+                signature.shown()
+            )),
+            Some(None) => problems.push(format!(
+                "{file} exports a `{}` that isn't a function lengua can read",
+                signature.name
+            )),
+            None => problems.push(format!(
+                "{file} exports no function `{}`, which the idea's `- Calls:` line names: \
+                 export it under that name (`#[unsafe(no_mangle)] pub extern \"C\" fn` in Rust, \
+                 `__attribute__((export_name(\"{0}\")))` in C), or take it off the line",
+                signature.name
+            )),
+        }
+    }
+    if !problems.is_empty() {
+        return Err(problems);
+    }
+    let features = engine::features_used(&wasm);
+    Ok(CalledOutside {
+        wasm,
+        features,
+        pages,
+    })
+}
+
+/// What `check` says of an outside module that the program calls, in one line: that it is
+/// trusted, not proven, what the idea says it was built from, and what holds it.
+#[must_use]
+pub fn called_line(called: &crate::call::Called, module: &CalledOutside) -> String {
+    let built_from = match &called.kind {
+        crate::call::Kind::Outside { built_from } => built_from.as_str(),
+        crate::call::Kind::Program { .. } => "",
+    };
+    let memory = module.pages.map_or_else(
+        || "it has no memory".to_owned(),
+        |(first, most)| {
+            format!(
+                "its memory is its own, starts at {first} pages and grows to at most {most} ({} \
+                 MiB)",
+                most.saturating_mul(PAGE) / 1024 / 1024
+            )
+        },
+    );
+    format!(
+        "{}.wasm: {TRUST}: an outside module, which the idea says was built from {built_from}; \
+         lengua didn't build it, holds it to none of main.wat's rules and proves nothing of it. \
+         The program calls {} of it. Held, by lengua's host: it runs beside the program as an \
+         instance of its own; {memory}; it imports nothing and gets no function of the host, so \
+         it reaches no file, no network and nothing else the idea grants the program; the \
+         run's deadline and the engine's stack bound it with the program. Not held: what its \
+         functions give back, which the program's tests show for the inputs they tried and no \
+         proof covers",
+        called.name,
+        called.listed()
+    )
+}
+
 /// `names` as a reply lists them: the first [`SHOWN`], and how many more.
 fn listed(names: &[&str]) -> String {
     let mut shown: Vec<String> = names

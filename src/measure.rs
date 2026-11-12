@@ -447,6 +447,7 @@ fn module_folder(data_dir: &DataDir, idea: &[u8], wasm: &[u8]) -> Result<PathBuf
                 unsafe_blocks: 0,
                 features: read.features,
                 parts: Vec::new(),
+                calls: Vec::new(),
             }),
             proofs: None,
         };

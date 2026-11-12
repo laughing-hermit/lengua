@@ -164,12 +164,22 @@ impl Limits {
 /// than trap.
 #[must_use]
 pub fn store_limits(memory: usize) -> StoreLimits {
+    store_limits_with(memory, 0)
+}
+
+/// [`store_limits`] for a program that calls `called` modules ([`crate::wasm::host::call`]): an
+/// instance, a memory and a table more for each, every memory of at most `memory` bytes, the
+/// largest any of the modules declares. The engine holds each memory to its own module's
+/// maximum besides.
+#[must_use]
+pub fn store_limits_with(memory: usize, called: usize) -> StoreLimits {
+    let each = called.saturating_add(1);
     StoreLimitsBuilder::new()
         .memory_size(memory)
         .table_elements(TABLE_ELEMENTS)
-        .instances(1)
-        .memories(1)
-        .tables(1)
+        .instances(each)
+        .memories(each)
+        .tables(each)
         .trap_on_grow_failure(false)
         .build()
 }

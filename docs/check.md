@@ -131,6 +131,40 @@ Each line of `proofs` says `not proven`, and the reply has no `memory` line. The
 against, with the test of each, are in
 [docs/reviews/outside-2026-11-12.md](reviews/outside-2026-11-12.md).
 
+## A program that calls a module is not attested
+
+An idea with a `- Calls:` line names a module its `main.wat` calls: an outside module beside it,
+`<name>.wasm`, or another lengua program of the same bundle. What such a program does rests on
+that module, which is neither of the two files this page attests, so `lengua-mcp check` says so
+and stops:
+
+```text
+main.wat calls a module, which its idea's `- Calls:` line names: lengua attests an idea and its main.wat, and what this program does rests on a module that is neither. `check` tests the program with the module, and lengua.lock records the module's hash
+not attested
+```
+
+lengua's `check` tool takes such a folder to `done`. Beside the steps above, it:
+
+1. opens each module the idea calls. An outside module is read as `main.wasm` is, a regular file
+   of at most 16 MiB that the validator takes with the engine's features, with a memory
+   exported as `memory` and a maximum of at most 16,384 pages; it needs no `_start`; and it is
+   refused for any import, and for a function of the idea's line that it doesn't export with
+   the line's type. A lengua program must be checked on this computer, with its lock verified,
+   no proof that found it wrong, and each function in its idea's `- Exports:` line;
+2. holds `main.wat`'s imports to the idea's line (rule 3), and, for an idea with an
+   `- Exports:` line, its exports to that line (rule 6): each listed function exported, its
+   own, with the listed type, taking no address;
+3. runs every test with the modules beside the program, each an instance of its own with no
+   function of the host;
+4. records each module's SHA-256 in `lengua.lock`, on the stamp's `calls` line.
+
+Its reply has `calls`, one line for each module, which starts with the module and
+`trusted, not proven` for an outside module or `checked` for a lengua program. A generated test
+whose runs reach a call says `not proven` in `proofs`, with the call named; one that ends before
+any call is proven as any other. lengua writes no entry in the idea's `verified` list for the
+program. What a called module can and can't reach is in
+[docs/reviews/calls-2026-11-12.md](reviews/calls-2026-11-12.md).
+
 ## lengua's entry in `verified`
 
 When lengua's `check` tool takes a program to done, it adds its entry to the idea's `verified`

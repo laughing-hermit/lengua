@@ -2271,7 +2271,11 @@ impl Interpreter<'_, '_> {
     /// What a call of `function` with `arguments` gives back.
     fn results(&self, function: &Function<'_>, arguments: &[Value]) -> Vec<Value> {
         let summary = self.summaries.get(&function.index);
-        let host = matches!(function.kind, Kind::Import | Kind::LibraryImport);
+        // A function of a module the idea calls is no function of the host: what it gives is a
+        // number of its own, never an error number and never an address of this memory.
+        let imported = matches!(function.kind, Kind::Import | Kind::LibraryImport);
+        let host = imported && function.host().is_some();
+        let called = imported && !host;
         function
             .results
             .iter()
@@ -2279,6 +2283,7 @@ impl Interpreter<'_, '_> {
                 // A host call gives an error number.
                 (ValType::I32, _) if host => Value::Number(Range::between(0, 65_535)),
                 (ValType::I32, Kind::Library) => Value::Number(Range::full()),
+                (ValType::I32, _) if called => Value::Number(Range::full()),
                 (ValType::I32, Kind::Own) if function.results.len() == 1 => {
                     match summary.and_then(|summary| summary.returns.clone()) {
                         Some(value) => returned(value, arguments),
