@@ -8,7 +8,8 @@
 //! when a signal or the console's closing ends the process; and on Windows, a job that ends a
 //! started program with every process it started. And on every system,
 //! a module the engine compiled ahead of its runs, loaded into the engine only when it carries
-//! the seal of the user's key ([`load_sealed`]).
+//! the seal of the user's key ([`load_sealed`]); and bytes lent to other threads for as long
+//! as a call lasts ([`lent`]).
 
 /// One of the CPU's caches, as Windows describes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1709,5 +1710,146 @@ mod sealed_tests {
         let plain = wasmtime::Engine::default();
         let refused = load_sealed(&plain, &KEYS[0], b"empty", &sealed).err();
         assert!(matches!(refused, Some(Unsealed::Engine(_))), "{refused:?}");
+    }
+}
+
+/// Bytes lent to other threads for as long as a call lasts, without a copy: a program's
+/// share of memory handed to the runs of its split work, which read it from threads kept
+/// through the run, where a borrow can't reach.
+///
+/// [`lend`] gives its work a [`Lent`], which can be cloned and sent to other threads, and
+/// returns only once every clone is gone, so none reads the bytes after the borrow ends. A
+/// clone that is never dropped keeps `lend` waiting: it hangs rather than let the bytes be
+/// read too late.
+pub mod lent {
+    use std::sync::Arc;
+
+    /// Where the lent bytes are.
+    struct Place {
+        /// Their first byte.
+        at: *const u8,
+        /// How many they are.
+        len: usize,
+    }
+
+    // SAFETY: a `Place` is only read, through `Lent::copy_to`, and `lend` holds the shared
+    // borrow its pointer came from until every `Lent` is dropped: reading shared bytes from
+    // several threads is what `&[u8]`, which is `Send` and `Sync`, allows.
+    unsafe impl Send for Place {}
+    // SAFETY: as above.
+    unsafe impl Sync for Place {}
+
+    /// Bytes [`lend`] lent: read-only, and there until its last clone is dropped.
+    #[derive(Clone)]
+    pub struct Lent {
+        /// Where they are.
+        place: Arc<Place>,
+    }
+
+    impl std::fmt::Debug for Lent {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "Lent({} bytes)", self.place.len)
+        }
+    }
+
+    impl Lent {
+        /// How many bytes were lent.
+        #[must_use]
+        pub fn len(&self) -> usize {
+            self.place.len
+        }
+
+        /// Whether no bytes were lent.
+        #[must_use]
+        pub fn is_empty(&self) -> bool {
+            self.place.len == 0
+        }
+
+        /// Copies the lent bytes from `from` on into `to`, as many as it holds or are left,
+        /// and gives how many.
+        pub fn copy_to(&self, from: usize, to: &mut [u8]) -> usize {
+            let left = self.place.len.saturating_sub(from);
+            let count = left.min(to.len());
+            if count == 0 {
+                return 0;
+            }
+            // SAFETY: `at` points to `len` readable bytes, borrowed by `lend` for as long as
+            // this `Lent` lives; `from + count <= len`, by the two lines above; and `to` is a
+            // unique borrow of other bytes, so the two don't overlap.
+            unsafe {
+                std::ptr::copy_nonoverlapping(self.place.at.add(from), to.as_mut_ptr(), count);
+            }
+            count
+        }
+    }
+
+    /// Waits until its place is no one else's.
+    struct Wait(Arc<Place>);
+
+    impl Drop for Wait {
+        fn drop(&mut self) {
+            // A clone is made only from a `Lent`, so once this is the last, none can come.
+            while Arc::strong_count(&self.0) > 1 {
+                std::thread::yield_now();
+            }
+            // The count is read without an ordering; this fence ties the read to the last
+            // holder's drop (a release), so what that holder read comes before whatever the
+            // lender does to the bytes next. `Arc` does the same before it frees.
+            std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+        }
+    }
+
+    /// Lends `bytes` to `work` and whatever threads it hands its [`Lent`] to, and gives what
+    /// `work` gives once every clone of that `Lent` is dropped, also when `work` panics.
+    pub fn lend<R>(bytes: &[u8], work: impl FnOnce(Lent) -> R) -> R {
+        let place = Arc::new(Place {
+            at: bytes.as_ptr(),
+            len: bytes.len(),
+        });
+        let wait = Wait(Arc::clone(&place));
+        let result = work(Lent { place });
+        drop(wait);
+        result
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::lend;
+
+        /// Other threads read the lent bytes while the call lasts, each part of them and
+        /// nothing past their end, and the call returns only once the last clone is dropped.
+        #[test]
+        fn lent_bytes_are_read_from_other_threads_until_the_call_returns() {
+            let bytes: Vec<u8> = (0..=255).collect();
+            let (sent, received) = std::sync::mpsc::channel();
+            let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let seen = std::sync::Arc::clone(&dropped);
+            let reader = std::thread::spawn(move || {
+                let lent: super::Lent = received.recv().expect("the bytes are lent");
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                let mut part = [0_u8; 8];
+                assert_eq!(lent.copy_to(250, &mut part), 6);
+                assert_eq!(part[..6], [250, 251, 252, 253, 254, 255]);
+                assert_eq!(lent.copy_to(256, &mut part), 0);
+                assert_eq!(lent.copy_to(usize::MAX, &mut part), 0);
+                assert_eq!((lent.len(), lent.is_empty()), (256, false));
+                seen.store(true, std::sync::atomic::Ordering::SeqCst);
+                drop(lent);
+            });
+            let length = lend(&bytes, |lent| {
+                sent.send(lent.clone()).expect("the reader takes them");
+                let mut first = [0_u8; 4];
+                assert_eq!(lent.copy_to(0, &mut first), 4);
+                assert_eq!(first, [0, 1, 2, 3]);
+                lent.len()
+            });
+            assert_eq!(length, 256);
+            assert!(
+                dropped.load(std::sync::atomic::Ordering::SeqCst),
+                "the call returned while a reader still held the bytes"
+            );
+            reader.join().expect("the reader ends");
+            assert!(lend(&[], |lent| lent.is_empty()));
+        }
     }
 }

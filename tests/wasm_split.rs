@@ -8,6 +8,8 @@
 //! pieces after it stopped; the run's deadline holds its pieces; and what a piece prints is
 //! held to its room.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -64,7 +66,8 @@ impl Shape<'_> {
 /// answered, `C` reads the clock and exits with what that call answered, `L` prints a byte
 /// more than its room, and `M` answers with the digit of the byte at 1500 of its memory, where
 /// the program wrote an `X` before it split, and writes a `Y` at 1600, which the program then
-/// exits with code 99 for when it finds one there.
+/// exits with code 99 for when it finds one there. `R` answers with the digit of the byte at
+/// 1700 of its memory added to a global of its own, then makes the byte 4 and the global 3.
 fn text(shape: Shape<'_>) -> String {
     let Shape { pieces, room, held } = shape;
     let (data, taken) = match held {
@@ -87,6 +90,7 @@ fn text(shape: Shape<'_>) -> String {
   (import "lengua_split_1" "split" (func $split (param i32 i32 i32 i32 i32) (result i32)))
   (import "lengua_split_1" "piece" (func $piece (result i32)))
   (memory (export "memory") 1 1)
+  (global $seen (mut i32) (i32.const 0))
   {data}
   (func $spin (param $rounds i32)
     (loop $more
@@ -126,6 +130,14 @@ fn text(shape: Shape<'_>) -> String {
       (then
         (i32.store8 (i32.const 1600) (i32.const 89))
         (i32.store8 (i32.const 4096) (i32.add (i32.const 48) (i32.load8_u (i32.const 1500))))
+        (call $print (i32.const 4096) (i32.const 1))
+        (call $exit (i32.const 0))))
+    (if (i32.eq (local.get $first) (i32.const 82))
+      (then
+        (i32.store8 (i32.const 4096)
+          (i32.add (i32.const 48) (i32.add (i32.load8_u (i32.const 1700)) (global.get $seen))))
+        (i32.store8 (i32.const 1700) (i32.const 4))
+        (global.set $seen (i32.const 3))
         (call $print (i32.const 4096) (i32.const 1))
         (call $exit (i32.const 0))))
     (i32.store8 (i32.add (i32.const 4096) (local.get $n)) (i32.const 124))
@@ -604,4 +616,55 @@ fn the_idea_holds_the_line_to_the_rest_of_the_idea() {
         "{:?}",
         problems(&unsplit)
     );
+}
+
+/// A piece starts from the module's first state whatever ran before it on its thread: each
+/// piece is a new store of the engine's, with a new memory and new globals, though the threads
+/// are kept through the run. Four pieces that each leave a byte and a global changed, run one
+/// after the other on one thread, and four at once, each find both as the module declares
+/// them; and so do the pieces of a second run in the same worker.
+#[tokio::test(flavor = "multi_thread")]
+async fn no_piece_sees_what_another_left() {
+    let fresh = answers(&["0", "0", "0", "0"]);
+    for reversed in [true, false, true] {
+        let ran = run_as(
+            Shape::USUAL,
+            "RaaaRbbbRcccRddd",
+            policy(&LINES),
+            |spec| Spec { reversed, ..spec },
+            Limits::default(),
+        )
+        .await;
+        assert_eq!(ran.end, End::Exited(0), "reversed: {reversed}");
+        assert_eq!(ran.stdout, fresh, "reversed: {reversed}");
+    }
+}
+
+/// The MCP server's `run` tool runs a program that splits its work, once `check` says done:
+/// the example's counts of a short input, and the grant in words.
+#[tokio::test]
+async fn the_run_tool_runs_a_program_that_splits_its_work() {
+    let session = common::Session::start(common::Protocol::Handshake).await;
+    let program = common::Program::new();
+    program.write("idea.md", IDEA);
+    session.record(&program).await;
+    program.write("main.wat", CODE);
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let mut arguments = program.arguments();
+    arguments["stdin"] = serde_json::json!("\n aa a\n");
+    let ran = session.call_ok("run", arguments).await;
+    assert_eq!(ran["stdout"], "10 2\n32 2\n97 3\n", "{ran}");
+    assert!(
+        ran.to_string()
+            .contains("it may split its work into up to 8 pieces"),
+        "{ran}"
+    );
+    // Enough for each of the eight pieces to have work.
+    let long = "ab\n".repeat(100_000);
+    let mut arguments = program.arguments();
+    arguments["stdin"] = serde_json::json!(long);
+    let ran = session.call_ok("run", arguments).await;
+    assert_eq!(ran["stdout"], "10 100000\n97 100000\n98 100000\n", "{ran}");
+    session.service.cancel().await.expect("close the session");
 }

@@ -190,11 +190,7 @@ pub(crate) fn execute_until(
     host.limits.store = limits::store_limits(limits::memory_limit(module));
     host.limits.deadline = deadline;
     if host.policy.reach.get().split.is_some() && !host.policy.piece {
-        host.splitting = Some(Splitting {
-            module: module.clone(),
-            linker: linker.clone(),
-            setup,
-        });
+        host.splitting = Some(Splitting::new(module.clone(), linker.clone(), setup));
     }
     let stop = Arc::clone(&host.limits.stop);
     let mut store = Store::new(engine, host);
