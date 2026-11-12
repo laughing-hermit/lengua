@@ -935,6 +935,72 @@ async fn a_server_says_what_became_of_its_connections_once_it_serves() {
     drop(listener);
 }
 
+/// A program whose memory starts at one page and may grow to `most`, with `body` as what it
+/// does.
+fn growing_to(most: u32, body: &str) -> Program {
+    program(&format!(
+        "(module (memory (export \"memory\") 1 {most}) (func (export \"_start\") {body}))"
+    ))
+}
+
+/// The tests that run at once hold no more memory together than the pool's all, by what each
+/// program declares as its most. In a pool of 3 pages, while a test of a program that may grow
+/// to 2 pages runs, a second such test waits for room, and a test of a program of 1 page runs
+/// beside the first; once the first has ended, the second runs. In a pool with the room that
+/// lengua gives, 4 GiB, the second runs beside the first: the wait was for the memory alone.
+#[tokio::test]
+async fn tests_at_once_stay_within_the_pool_s_memory() {
+    let looping = growing_to(2, "(loop $forever (br $forever))");
+    let large = growing_to(2, "");
+    let small = growing_to(1, "");
+    assert_eq!((looping.pages(), small.pages()), (2, 1));
+    let spec = || Spec::new(&[], &[], Policy::default());
+    let short = Limits {
+        timeout: Duration::from_secs(3),
+        ..Limits::default()
+    };
+
+    let pool = Pool::with_memory(launcher(), None, 3);
+    let first = pool
+        .start(&looping, spec(), short)
+        .await
+        .expect("it starts");
+    let waits = tokio::time::timeout(
+        Duration::from_millis(700),
+        pool.start(&large, spec(), Limits::default()),
+    )
+    .await;
+    assert!(waits.is_err(), "2 pages more don't fit beside 2 of 3");
+    let beside = pool
+        .run(&small, spec(), Limits::default())
+        .await
+        .expect("it runs");
+    assert_eq!(exited(&beside), 0);
+    let ended = first.wait().await.expect("it ends");
+    assert_eq!(ended.end, End::TimedOut, "{:?}", ended.supplied);
+    let after = pool
+        .run(&large, spec(), Limits::default())
+        .await
+        .expect("it runs");
+    assert_eq!(exited(&after), 0);
+
+    let roomy = Pool::new(launcher(), None);
+    let first = roomy
+        .start(&looping, spec(), short)
+        .await
+        .expect("it starts");
+    let beside = tokio::time::timeout(
+        Duration::from_secs(60),
+        roomy.run(&large, spec(), Limits::default()),
+    )
+    .await
+    .expect("it doesn't wait for the first")
+    .expect("it runs");
+    assert_eq!(exited(&beside), 0);
+    let ended = first.wait().await.expect("it ends");
+    assert_eq!(ended.end, End::TimedOut, "{:?}", ended.supplied);
+}
+
 #[test]
 fn a_worker_ends_when_its_server_does() {
     let looping = program(&module(

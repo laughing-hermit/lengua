@@ -97,6 +97,27 @@ pub fn wrong_record(data_dir: &Path, idea: &Sha256Hex, module: &Sha256Hex) -> Pa
 /// refused, not read.
 pub const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
+/// The most bytes lengua reads of an idea.md: 1 MiB. The largest idea of the repository,
+/// examples/httpd's, holds 45 KiB, tests included. `check` reads an idea whole, several times,
+/// in the server, so a larger one is refused, not read.
+pub const MAX_IDEA_BYTES: u64 = 1024 * 1024;
+
+/// The most bytes lengua reads of a main.wat: 4 MiB. The largest main.wat of the repository,
+/// examples/httpd's 3,600 lines, holds 190 KiB. `check` builds main.wat and reads it by the
+/// rules in the server, so a larger one is refused before it is built.
+pub const MAX_CODE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The most bytes lengua reads of the file at `path`, by its name: an idea.md's
+/// [`MAX_IDEA_BYTES`], a main.wat's [`MAX_CODE_BYTES`], and [`MAX_FILE_BYTES`] of any other.
+#[must_use]
+pub fn most_bytes(path: &Path) -> u64 {
+    match path.file_name().and_then(|name| name.to_str()) {
+        Some(IDEA_FILE) => MAX_IDEA_BYTES,
+        Some(CODE_FILE) => MAX_CODE_BYTES,
+        _ => MAX_FILE_BYTES,
+    }
+}
+
 /// What a file of a program folder that lengua won't read is refused with.
 fn refused(path: &Path, why: &str) -> io::Error {
     let name = path.file_name().map_or_else(
@@ -106,9 +127,9 @@ fn refused(path: &Path, why: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, format!("{name} {why}"))
 }
 
-/// The bytes of the file at `path`, a file of a program folder, which may come from anyone:
-/// `None` when nothing has that name. Only a regular file is read, and at most
-/// [`MAX_FILE_BYTES`] of it: a link isn't followed, so a folder's file never stands for one
+/// `None` when nothing has that name. Only a regular file is read, and at most as many bytes as
+/// its name may hold ([`most_bytes`]): a link isn't followed, so a folder's file never stands for one
+/// name of it ([`most_bytes`]): a link isn't followed, so a folder's file never stands for one
 /// elsewhere on this computer; a named pipe, a device or a folder isn't opened, so no read waits
 /// for ever or never ends; and a file past the size isn't read at all. The file that opens is
 /// looked at again, since another may have taken the name in between.
@@ -120,9 +141,15 @@ pub fn read_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     use std::io::Read as _;
     let irregular = "isn't a regular file: lengua follows no link in a program's folder, and \
                      reads no folder, pipe or device as one of its files";
+    let most = most_bytes(path);
     let large = format!(
-        "holds more than {} MiB, the most lengua reads of a program's file",
-        MAX_FILE_BYTES / 1024 / 1024
+        "holds more than {} MiB, the most lengua reads of {}",
+        most / 1024 / 1024,
+        match most {
+            MAX_IDEA_BYTES => "an idea.md",
+            MAX_CODE_BYTES => "a main.wat",
+            _ => "a program's file",
+        }
     );
     let named = match std::fs::symlink_metadata(path) {
         Ok(named) => named,
@@ -132,7 +159,7 @@ pub fn read_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     if !named.file_type().is_file() {
         return Err(refused(path, irregular));
     }
-    if named.len() > MAX_FILE_BYTES {
+    if named.len() > most {
         return Err(refused(path, &large));
     }
     let file = std::fs::File::open(path)?;
@@ -140,10 +167,10 @@ pub fn read_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
     if !opened.is_file() {
         return Err(refused(path, irregular));
     }
-    let room = usize::try_from(opened.len().min(MAX_FILE_BYTES)).unwrap_or(0);
+    let room = usize::try_from(opened.len().min(most)).unwrap_or(0);
     let mut bytes = Vec::with_capacity(room);
-    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
+    file.take(most + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > most {
         return Err(refused(path, &large));
     }
     Ok(Some(bytes))
@@ -728,5 +755,19 @@ mod tests {
         );
         std::fs::write(at("large.md"), vec![b' '; most + 1]).expect("a file");
         assert!(refused("large.md").contains("holds more than 32 MiB"));
+        // An idea.md and a main.wat have sizes of their own, far below any other file's.
+        for (name, most, said) in [
+            (IDEA_FILE, MAX_IDEA_BYTES, "idea.md holds more than 1 MiB"),
+            (CODE_FILE, MAX_CODE_BYTES, "main.wat holds more than 4 MiB"),
+        ] {
+            let most = usize::try_from(most).expect("a size");
+            std::fs::write(at(name), vec![b' '; most]).expect("a file");
+            assert_eq!(
+                read_file(&at(name)).expect("it").map(|bytes| bytes.len()),
+                Some(most)
+            );
+            std::fs::write(at(name), vec![b' '; most + 1]).expect("a file");
+            assert!(refused(name).contains(said), "{}", refused(name));
+        }
     }
 }

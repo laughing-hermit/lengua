@@ -1052,6 +1052,44 @@ fn an_idea_that_calls_names_no_secret_and_does_not_split() {
     assert_eq!(network.reach.exports.len(), 2);
 }
 
+/// An idea with a `- Module:` line, an outside module's, is refused a `- Calls:` line and an
+/// `- Exports:` line, each on its line of the idea, with what to do: lengua holds main.wat's
+/// imports and exports to those lines, and main.wasm is held to no rule. Without either line
+/// the idea reads.
+#[test]
+fn an_outside_module_s_idea_calls_no_module_and_offers_no_function() {
+    let outside = common::ADD_IDEA
+        .replace("computation: main.wat", "computation: main.wasm")
+        .replace(
+            "- Uses: nothing",
+            "- Uses: nothing\n- Module: main.wasm, built from WebAssembly text, in a test",
+        );
+    assert_ne!(outside, common::ADD_IDEA);
+    if let Err(problems) = lengua::idea::parse(&outside) {
+        panic!("an outside module's idea reads: {problems:#?}");
+    }
+    for line in [
+        "- Calls: crc32.wasm, built from C; its functions: crc32(i32) -> i32",
+        "- Exports: sum(i32, i32) -> i32",
+    ] {
+        let idea = format!("{outside}{line}\n");
+        let at = idea.lines().count();
+        let problems: Vec<String> = lengua::idea::parse(&idea)
+            .expect_err("refused")
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let refusal = format!(
+            "line {at}: an outside module calls no other module and offers no function"
+        );
+        assert!(
+            problems.iter().any(|problem| problem.starts_with(&refusal)
+                && problem.contains("Remove the `- Calls:` and `- Exports:` lines")),
+            "{line}: {problems:#?}"
+        );
+    }
+}
+
 /// A program folder beside `program` with examples/crc32-library's idea and `code`, checked
 /// to done.
 async fn library_beside(session: &Session, program: &Program, code: &str) -> Program {

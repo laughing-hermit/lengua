@@ -50,6 +50,8 @@ pub struct Program {
     file: PathBuf,
     /// The folder that holds it.
     _folder: tempfile::TempDir,
+    /// The pages its own memory may grow to ([`most_pages`]).
+    pages: u64,
     /// The modules it calls, in the order of its idea's `- Calls:` lines.
     calls: Vec<CalledModule>,
 }
@@ -66,6 +68,7 @@ impl Program {
         std::fs::write(&file, &built.wasm)?;
         Ok(Self {
             hash: crate::hash::Sha256Hex::of(&built.wasm),
+            pages: most_pages(&built.wasm),
             lines: Arc::new((built.lines.clone(), built.bodies.clone())),
             built,
             file,
@@ -98,6 +101,15 @@ impl Program {
         &self.calls
     }
 
+    /// The pages of 64 KiB that a run of it may come to hold: what its own memory may grow to,
+    /// and the memory of each module it calls.
+    #[must_use]
+    pub fn pages(&self) -> u64 {
+        self.calls
+            .iter()
+            .fold(self.pages, |pages, called| pages.saturating_add(called.pages))
+    }
+
     /// What the build made.
     #[must_use]
     pub const fn built(&self) -> &Built {
@@ -123,6 +135,25 @@ impl Program {
     }
 }
 
+/// The pages of 64 KiB that the memories of the module `wasm` may grow to in all: each memory's
+/// maximum, or what it starts with when it declares none. Nothing for bytes that are no module.
+#[must_use]
+pub fn most_pages(wasm: &[u8]) -> u64 {
+    let mut pages = 0_u64;
+    for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+        match payload {
+            Ok(wasmparser::Payload::MemorySection(reader)) => {
+                for memory in reader.into_iter().flatten() {
+                    pages = pages.saturating_add(memory.maximum.unwrap_or(memory.initial));
+                }
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    pages
+}
+
 /// A module a program calls ([`crate::call`]), kept in a file of its own for the pool's
 /// workers, as the program's own module is.
 #[derive(Debug)]
@@ -135,6 +166,8 @@ pub struct CalledModule {
     pub file: PathBuf,
     /// The folder that holds it.
     _folder: tempfile::TempDir,
+    /// The pages its memory may grow to ([`most_pages`]).
+    pages: u64,
 }
 
 impl CalledModule {
@@ -150,6 +183,7 @@ impl CalledModule {
         Ok(Self {
             name: name.to_owned(),
             hash: crate::hash::Sha256Hex::of(wasm),
+            pages: most_pages(wasm),
             file,
             _folder: folder,
         })

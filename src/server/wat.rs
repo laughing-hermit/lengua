@@ -31,7 +31,8 @@ use super::{
     BlockProof, CheckParams, CheckReport, Checking, ConnectionReport, FURTHER, Found, IdeaStage,
     LenguaServer, Model, Passed, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun, Stage,
     VERIFIED_NOTE, Witness, already_serving, background_limits, check_wait, cost_line, counted,
-    ended_report, idea_problems, keep_tested, may_reach, own_folder_problem, own_folders,
+    ended_report, idea_alone, idea_problems, keep_tested, may_reach, own_folder_problem,
+    own_folders,
     proof_time, proven_detail, random_seed, reaches, read_optional, settled, state_for_run,
     wait_for, working_folder,
 };
@@ -586,7 +587,7 @@ struct Runnable {
     /// What it may do on the network, from its `- Network:` line.
     network: idea::Network,
     /// The inputs its `- Secret:` line names: for an idea that names any, the machine code of
-    /// the module is checked on this computer before it runs ([`keeps_secrets`]).
+    /// the module is checked on this computer before it runs ([`kept_keeps_secrets`]).
     secrets: Vec<idea::Source>,
     /// The modules its idea calls, each opened as check opened it and held to what lengua.lock
     /// records: what runs beside the program.
@@ -632,23 +633,50 @@ fn leaks(folder: &ProgramFolder, refused: &[String]) -> String {
     )
 }
 
-/// For a program whose idea names secrets, checks the machine code the engine compiles `built`
-/// to on this computer in `setup`, the configuration about to run it, as `check` does: the rules
-/// find the operators that take a secret, and the code made for each keeps the secret rule
-/// ([`machine`]). So the code of every run is checked on the CPU that runs it, whichever
-/// computer checked the folder. A program whose idea names no secret is checked for nothing,
-/// and nothing is compiled for it here.
-fn keeps_secrets(
+/// For a program whose idea names secrets, checks the machine code that the `run` tool's worker
+/// is about to load, as `check` checks what the engine compiles: the rules find the operators of
+/// `built`, the module check tested, that take a secret, and the code made for each keeps the
+/// secret rule ([`machine`]). The code read is the compiled form the data folder keeps for the
+/// tool's runs ([`compiled_for`], [`Setup::Run`]), loaded here as the worker loads it: only
+/// under the seal of the user's key as this module's, compiled for this configuration. Where
+/// no form loads, it is compiled here, sealed and kept, as the worker would, and what was kept
+/// is read. So the code of every run is checked on the CPU that runs it, whichever computer
+/// checked the folder, and it is the kept code, not another compilation of the module. A
+/// program whose idea names no secret is checked for nothing, and nothing is loaded or
+/// compiled for it here.
+fn kept_keeps_secrets(
+    data_dir: &DataDir,
     folder: &ProgramFolder,
     ready: &Runnable,
     built: &Built,
-    setup: Setup,
 ) -> Result<(), String> {
     if ready.secrets.is_empty() {
         return Ok(());
     }
     let operators = secret_operators(folder, ready, built)?;
-    match machine::check(&built.wasm, &operators, &[setup]) {
+    let setup = Setup::Run;
+    // The engine a worker makes for the tool's runs, here in the server.
+    let engine = engine::engine(setup)?;
+    let path = compiled_for(data_dir.path(), text::BUILDER, &ready.module, setup);
+    let kept = std::fs::read(&path).ok().and_then(|sealed| {
+        ready
+            .key
+            .load_sealed_for(setup, &engine, &ready.module, &sealed)
+            .ok()
+    });
+    let loaded = match kept {
+        Some(loaded) => loaded,
+        None => {
+            let sealed =
+                compile_and_keep_for(setup, data_dir, &ready.key, &ready.module, &built.wasm)
+                    .map_err(|error| format!("the engine couldn't compile the module: {error}"))?;
+            ready
+                .key
+                .load_sealed_for(setup, &engine, &ready.module, &sealed)
+                .map_err(|unsealed| format!("lengua couldn't load what it compiled: {unsealed}"))?
+        }
+    };
+    match machine::check_loaded(&loaded, &operators) {
         Ok(_) => Ok(()),
         Err(refused) => {
             let refused: Vec<String> = refused.iter().map(ToString::to_string).collect();
@@ -657,7 +685,7 @@ fn keeps_secrets(
     }
 }
 
-/// [`keeps_secrets`] for a run from a shell, over `compiled`, the compiled module the run has
+/// [`kept_keeps_secrets`] for a run from a shell, over `compiled`, the compiled module it has
 /// loaded and is about to execute: the rules find the operators that take a secret in main.wat's
 /// build, which must be the module check tested, and the code `compiled` holds for each keeps
 /// the secret rule. The code read is the code that runs, not another compilation of the module.
@@ -1813,8 +1841,8 @@ impl LenguaServer {
         // The tool's reply and its worker need the build's assertions and lines: it builds
         // main.wat, held to the module check tested.
         let built = built_as_tested(folder, &ready)?;
-        // An idea that names a secret: the code this computer runs is checked first.
-        keeps_secrets(folder, &ready, &built, Setup::Run)?;
+        // An idea that names a secret: the compiled form the worker loads is read first.
+        kept_keeps_secrets(&self.data_dir, folder, &ready, &built)?;
         // The tools the run asks for: a stop runs a copy of main.wat built for this run.
         let asked = crate::wasm::tools::Asked {
             trace: params.trace,
@@ -1988,6 +2016,20 @@ pub async fn attest(path: &str) -> Attestation {
     }
 }
 
+/// A problem of an idea, as `check` words it, as a line of the attester: with idea.md's name
+/// before it, unless the problem names idea.md itself after its line.
+fn attester_line(problem: &str) -> String {
+    let said = problem
+        .split_once(": ")
+        .filter(|(place, _)| place.starts_with("line "))
+        .map_or(problem, |(_, said)| said);
+    if said.starts_with(IDEA_FILE) {
+        problem.to_owned()
+    } else {
+        format!("{IDEA_FILE} {problem}")
+    }
+}
+
 /// [`attest`]'s work, each finding a line in `lines`: whether the folder is attested.
 async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     let found = std::env::current_dir()
@@ -2036,26 +2078,18 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     };
     // The trust record first: comparing it needs nothing built.
     let mut attests = verified_lines(&idea_text, &code, lines);
-    let idea = match idea::parse(&idea_text) {
-        Ok(idea) => idea,
-        Err(problems) => {
-            lines.extend(
-                problems
-                    .iter()
-                    .map(|problem| format!("{IDEA_FILE} {problem}")),
-            );
+    // The idea, read as check reads it: every problem of its words, its tests, its type and
+    // its threads at once, in the order of its lines.
+    let read = idea_alone(&idea_text);
+    let (idea, suite) = match (read.idea, read.suite) {
+        (Some(idea), Some(suite)) if read.problems.is_empty() => (idea, suite),
+        _ => {
+            for problem in &read.problems {
+                lines.push(attester_line(problem));
+            }
             return false;
         }
     };
-    // The type's problem names idea.md itself; the threads' is on a line of it.
-    if let Some(problem) = type_problem(&idea_text, &idea) {
-        lines.push(problem);
-        return false;
-    }
-    if let Some(problem) = threads_problem(&idea_text, &idea) {
-        lines.push(format!("{IDEA_FILE} {problem}"));
-        return false;
-    }
     // A program that calls a module isn't attested: the attester attests an idea and its
     // main.wat, with no lock and no key, and what such a program does rests on a module that
     // neither file is.
@@ -2063,17 +2097,6 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
         lines.push(calls::NOT_ATTESTED.to_owned());
         return false;
     }
-    let suite = match testfile::check(&idea) {
-        Ok(suite) => suite,
-        Err(problems) => {
-            lines.extend(
-                problems
-                    .iter()
-                    .map(|problem| format!("{IDEA_FILE} {problem}")),
-            );
-            return false;
-        }
-    };
     let built = match text::build(&code) {
         Ok(built) => built,
         Err(problem) => {
@@ -2328,6 +2351,64 @@ mod tests {
 
     /// The add idea as an Attested Computation.
     const IDEA: &str = include_str!("../../tests/fixtures/add/idea.md");
+
+    /// For an idea that names a secret, the `run` tool reads the compiled form its worker
+    /// loads, not a compile of its own. With no form kept, it compiles one, keeps it and reads
+    /// it: secret-equal's passes. With another module's code kept under this module's seal,
+    /// here secret-equal with its xor of the secret bytes made a division, the tool refuses
+    /// the run for the division, though the module's own code, compiled again, still passes:
+    /// before, the tool read that compile and ran the kept code unread.
+    #[test]
+    fn the_run_tool_reads_the_compiled_form_its_worker_loads() {
+        let idea_text = include_str!("../../examples/secret-equal/idea.md");
+        let code = include_str!("../../examples/secret-equal/main.wat");
+        let data = tempfile::tempdir().expect("a data folder");
+        let data_dir = DataDir::new(data.path().join("data"));
+        let key = Key::load_or_create(&data_dir).expect("a key");
+        let program = tempfile::tempdir().expect("a folder");
+        let folder =
+            ProgramFolder::new(program.path().to_str().expect("UTF-8")).expect("absolute");
+        let (uses, network) = idea::grants(idea_text).expect("its grants");
+        let secrets = idea::secrets(idea_text).expect("its secrets");
+        assert!(!secrets.is_empty());
+        let built = text::build(code).expect("it builds");
+        let ready = Runnable {
+            code: Code::Text(code.to_owned()),
+            uses,
+            network,
+            secrets,
+            calls: Vec::new(),
+            module: Sha256Hex::of(&built.wasm),
+            key,
+        };
+        let setup = Setup::Run;
+        let path = compiled_for(data_dir.path(), text::BUILDER, &ready.module, setup);
+        assert!(!path.exists());
+        kept_keeps_secrets(&data_dir, &folder, &ready, &built).expect("it keeps its secret");
+        assert!(path.is_file(), "the compiled form is kept for the worker");
+
+        let divides = code.replace("(i32.xor", "(i32.div_u");
+        assert_ne!(divides, code);
+        let other = text::build(&divides).expect("it builds");
+        assert_eq!(other.wasm.len(), built.wasm.len());
+        let engine = engine::engine(setup).expect("the engine");
+        let sealed = ready
+            .key
+            .compile_sealed_for(setup, &engine, &ready.module, &other.wasm)
+            .expect("it compiles");
+        std::fs::write(&path, sealed).expect("kept in its place");
+        let refused = kept_keeps_secrets(&data_dir, &folder, &ready, &built)
+            .expect_err("the kept code divides by a secret");
+        assert!(
+            (refused.contains("a division") || refused.contains("a conditional branch"))
+                && refused.contains("so it won't run"),
+            "{refused}"
+        );
+        let operators = secret_operators(&folder, &ready, &built).expect("the rules pass");
+        if let Err(refused) = machine::check(&built.wasm, &operators, &[setup]) {
+            panic!("the module's own code passes: {refused:#?}");
+        }
+    }
 
     /// What the review of the host left open (todo.md), held by a test that failed before its
     /// fix: on Linux and macOS, where the test can make the link it swaps in.

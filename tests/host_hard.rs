@@ -336,17 +336,64 @@ fn attest_within(folder: &Path, patience: Duration) -> String {
 const PATIENCE: Duration = Duration::from_secs(60);
 
 /// Finding 3. A file of a handed folder that holds more than lengua reads of one is refused by
-/// its size, not read whole: an idea.md of 32 MiB and a byte.
+/// its size, not read whole, and the refusal names the size: an idea.md of 1 MiB and a byte, and
+/// a main.wat of 4 MiB and a byte, which is never built.
 #[test]
 fn a_file_past_its_size_is_not_read() {
     let program = Folder::new();
     let mut idea = String::from(ADD_IDEA);
-    idea.push_str(&" ".repeat(32 * 1024 * 1024 + 1 - idea.len()));
+    idea.push_str(&" ".repeat(1024 * 1024 + 1 - idea.len()));
     program.write("idea.md", &idea);
     program.write("main.wat", ADD_CODE);
     let said = attest_within(program.path(), PATIENCE);
-    assert!(said.contains("holds more than"), "{said}");
+    assert!(said.contains("idea.md holds more than 1 MiB"), "{said}");
     assert!(said.contains("not attested"), "{said}");
+
+    let program = Folder::with_add_idea();
+    program.write("main.wat", &large_code());
+    let said = attest_within(program.path(), PATIENCE);
+    assert!(said.contains("main.wat holds more than 4 MiB"), "{said}");
+    assert!(said.contains("not attested"), "{said}");
+}
+
+/// The add program's main.wat with spaces after it, to 4 MiB and a byte: text that builds, and
+/// that is a byte past what lengua reads of a main.wat.
+fn large_code() -> String {
+    let mut code = String::from(ADD_CODE);
+    code.push_str(&" ".repeat(4 * 1024 * 1024 + 1 - code.len()));
+    code
+}
+
+/// The size, through the server: `check` refuses a main.wat of 4 MiB and a byte, and an idea.md
+/// of 1 MiB and a byte, each with the size in its words, and builds and records nothing. The
+/// folder then goes to done with the add program's own main.wat.
+#[tokio::test]
+async fn check_refuses_a_main_wat_or_an_idea_past_its_size() {
+    let session = Session::start(Protocol::Discover).await;
+    let program = Folder::with_add_idea();
+    session.record(&program).await;
+    let large = large_code();
+    program.write("main.wat", &large);
+    let refused = session.call_error("check", program.arguments()).await;
+    assert!(
+        refused.contains("main.wat holds more than 4 MiB, the most lengua reads of a main.wat"),
+        "{refused}"
+    );
+    program.write("main.wat", ADD_CODE);
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+
+    let other = Folder::new();
+    let mut idea = String::from(ADD_IDEA);
+    idea.push_str(&" ".repeat(1024 * 1024 + 1 - idea.len()));
+    other.write("idea.md", &idea);
+    let refused = session.call_error("check", other.arguments()).await;
+    assert!(
+        refused.contains("idea.md holds more than 1 MiB, the most lengua reads of an idea.md"),
+        "{refused}"
+    );
+    assert!(!other.file("lengua.lock").exists(), "nothing is recorded");
+    session.service.cancel().await.expect("close the session");
 }
 
 /// Finding 3, on a Unix. A file of a handed folder that is a link is not followed, and one that

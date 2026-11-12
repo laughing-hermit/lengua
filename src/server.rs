@@ -2760,20 +2760,16 @@ fn in_line_order(found: Vec<String>) -> Vec<String> {
     ordered
 }
 
-/// The idea of `folder`, `idea_text`, with its tests; or every problem that a check finds in it
-/// without running code, at once and in the order of its lines: its own problems; and, when
-/// those are of its words alone (so the idea still reads), also the problems of its tests,
-/// that it is of the native lengua's type or has threads, the parts it links to that are
-/// missing, and a cycle of its `- Builds on:` links. Each problem is worded as its own reading
-/// words it.
-fn idea_findings(
-    folder: &ProgramFolder,
-    idea_text: &str,
-) -> Result<(Idea, TestSuite), Vec<String>> {
+/// The idea `idea_text` as far as it reads, with its tests when they check, and every problem
+/// that a reading of the text alone finds, in the readings' order: its own problems; and, when
+/// those are of its words alone (so the idea still reads), also the problems of its tests, and
+/// that it is of the native lengua's type or has threads. Each problem is worded as its own
+/// reading words it.
+fn idea_readings(idea_text: &str) -> (Option<(Idea, Option<TestSuite>)>, Vec<String>) {
     let reading = idea::read(idea_text);
     let mut found: Vec<String> = reading.problems.iter().map(ToString::to_string).collect();
     let Some(idea) = reading.idea else {
-        return Err(in_line_order(found));
+        return (None, found);
     };
     let suite = match testfile::check(&idea) {
         Ok(suite) => Some(suite),
@@ -2785,6 +2781,45 @@ fn idea_findings(
     // An idea of the native lengua's type, then one with threads.
     found.extend(wat::type_problem(idea_text, &idea));
     found.extend(wat::threads_problem(idea_text, &idea));
+    (Some((idea, suite)), found)
+}
+
+/// An idea's text read alone, as [`idea_alone`] reads it.
+pub(crate) struct IdeaAlone {
+    /// The idea, when it reads ([`idea::Reading::idea`]).
+    pub(crate) idea: Option<Idea>,
+    /// Its tests, when the idea reads and they check.
+    pub(crate) suite: Option<TestSuite>,
+    /// Every problem found, in the order of the idea's lines; none for an idea to record.
+    pub(crate) problems: Vec<String>,
+}
+
+/// The idea `idea_text` with its tests, and every problem that a check finds in the text
+/// alone, at once and in the order of its lines ([`idea_readings`]). The attester and the
+/// editor's server read an idea so, and say what `check` says of it, but for what stands
+/// beside it: its parts.
+pub(crate) fn idea_alone(idea_text: &str) -> IdeaAlone {
+    let (read, found) = idea_readings(idea_text);
+    let (idea, suite) = read.map_or((None, None), |(idea, suite)| (Some(idea), suite));
+    IdeaAlone {
+        idea,
+        suite,
+        problems: in_line_order(found),
+    }
+}
+
+/// The idea of `folder`, `idea_text`, with its tests; or every problem that a check finds in it
+/// without running code, at once and in the order of its lines: those of the text alone
+/// ([`idea_readings`]); and, when the idea still reads, also the parts it links to that are
+/// missing, and a cycle of its `- Builds on:` links.
+fn idea_findings(
+    folder: &ProgramFolder,
+    idea_text: &str,
+) -> Result<(Idea, TestSuite), Vec<String>> {
+    let (read, mut found) = idea_readings(idea_text);
+    let Some((idea, suite)) = read else {
+        return Err(in_line_order(found));
+    };
     found.extend(missing_parts(folder, &idea));
     // A cycle of `- Builds on:` links blocks the programs in it, and only them.
     found.extend(graph::builds_on_cycle(folder.path()));

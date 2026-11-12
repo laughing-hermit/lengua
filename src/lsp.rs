@@ -1,8 +1,9 @@
 //! `lengua-mcp lsp`: a first cut of a language server, over standard input and output, for an
 //! editor that shows a program folder's idea.md and main.wat. It does one thing: when one of
 //! the two files is opened, changed, saved or closed, it publishes the findings of both, each
-//! on its line. The findings are `check`'s own for the text: idea.md's format and its tests
-//! ([`crate::idea::parse`], [`crate::testfile::check`]), main.wat's build
+//! on its line. The findings are `check`'s own for the text: every problem of idea.md at once, as
+//! `check` reads it (its format, its words, its tests, its type and its threads;
+//! [`crate::idea::read`], [`crate::testfile::check`]), main.wat's build
 //! ([`crate::wasm::text::build`]) and main.wat's rules ([`crate::checker::wasm::check`]).
 //!
 //! It runs no test and no proof, reads no lock, writes nothing, and holds a program to no part
@@ -17,7 +18,6 @@ use serde_json::{Value, json};
 use crate::checker::wasm::{self as rules, Context};
 use crate::idea;
 use crate::state::IDEA_FILE;
-use crate::testfile;
 use crate::wasm::{CODE_FILE, text};
 
 /// The longest message the server reads.
@@ -38,6 +38,25 @@ pub struct Finding {
     pub message: String,
 }
 
+/// A problem of an idea, as `check` words it, as a finding: on its line when it starts with
+/// `line N: `.
+fn finding_of(problem: String) -> Finding {
+    let placed = problem
+        .strip_prefix("line ")
+        .and_then(|rest| rest.split_once(": "))
+        .and_then(|(number, message)| Some((number.parse().ok()?, message.to_owned())));
+    match placed {
+        Some((line, message)) => Finding {
+            line: Some(line),
+            message,
+        },
+        None => Finding {
+            line: None,
+            message: problem,
+        },
+    }
+}
+
 /// What `check` finds in idea.md's text and in main.wat's, as far as the two texts say it:
 /// idea.md's findings, then main.wat's. main.wat is held to the rules with what the idea
 /// grants, so an idea that can't be read leaves the rules unchecked, and main.wat's findings
@@ -46,23 +65,12 @@ pub struct Finding {
 pub fn findings(idea_text: Option<&str>, code: Option<&str>) -> (Vec<Finding>, Vec<Finding>) {
     let mut of_idea = Vec::new();
     let mut of_code = Vec::new();
-    let idea = idea_text.and_then(|text| match idea::parse(text) {
-        Ok(idea) => {
-            if let Err(problems) = testfile::check(&idea) {
-                of_idea.extend(problems.into_iter().map(|problem| Finding {
-                    line: problem.line,
-                    message: problem.message,
-                }));
-            }
-            Some(idea)
-        }
-        Err(problems) => {
-            of_idea.extend(problems.into_iter().map(|problem| Finding {
-                line: problem.line,
-                message: problem.message,
-            }));
-            None
-        }
+    // The idea as `check` reads its text: every problem at once, in the order of its lines,
+    // and the idea itself whenever it still reads, so that main.wat is held to its grants.
+    let idea = idea_text.and_then(|text| {
+        let read = crate::server::idea_alone(text);
+        of_idea.extend(read.problems.into_iter().map(finding_of));
+        read.idea
     });
     // An idea of an outside module has no main.wat to hold to a rule.
     let outside = idea_text.is_some_and(|text| !matches!(idea::outside(text), Ok(None)));
@@ -199,7 +207,8 @@ fn write_message(output: &mut impl Write, message: &Value) -> io::Result<()> {
 
 /// Publishes the findings of the folder of `uri`, when `uri` names an idea.md or a main.wat:
 /// for each of the two files that is there, its findings, or none. A file's text is the one
-/// the editor has open, else the one on disk.
+/// the editor has open, else the one on disk, read as `check` reads a program's file: a regular
+/// file within its size ([`crate::state::read_file`]).
 fn publish(output: &mut impl Write, open: &BTreeMap<String, String>, uri: &str) -> io::Result<()> {
     let Some((base, name)) = uri.rsplit_once('/') else {
         return Ok(());
@@ -211,7 +220,7 @@ fn publish(output: &mut impl Write, open: &BTreeMap<String, String>, uri: &str) 
         let uri = format!("{base}/{file}");
         open.get(&uri)
             .cloned()
-            .or_else(|| path_of(&uri).and_then(|path| std::fs::read_to_string(path).ok()))
+            .or_else(|| path_of(&uri).and_then(|path| crate::state::read_text(&path).ok().flatten()))
     };
     let idea_text = text_of(IDEA_FILE);
     let code = text_of(CODE_FILE);
@@ -395,6 +404,33 @@ mod tests {
             of_code[0].message.contains("aren't checked"),
             "{of_code:#?}"
         );
+    }
+
+    /// An idea with a problem of its sentences and a problem of its tests has both findings,
+    /// each on its line and in the order of the lines, as `check` gives them: before, the
+    /// first hid the second. Such an idea still reads, so main.wat is held to its rules.
+    #[test]
+    fn every_problem_of_an_idea_is_a_finding_at_once() {
+        let purpose = "The program adds two whole numbers between `-1000000000` and `1000000000`.";
+        let long = "The program is small and it is quick and it is plain and it is exact and it \
+                    is safe and it is good and it is here and it is done.";
+        let both = IDEA
+            .replace(purpose, &format!("{purpose} {long}"))
+            .replace("{a + b}", "{a - b}");
+        let (of_idea, of_code) = findings(Some(&both), Some(CODE));
+        let sentence = of_idea
+            .iter()
+            .position(|finding| finding.message.starts_with("STE: this sentence has 32 words"));
+        let formula = of_idea
+            .iter()
+            .position(|finding| finding.message.contains("formula disagrees with the idea"));
+        assert!(sentence.is_some() && formula.is_some(), "{of_idea:#?}");
+        assert!(sentence < formula, "{of_idea:#?}");
+        assert!(
+            of_idea.iter().all(|finding| finding.line.is_some()),
+            "{of_idea:#?}"
+        );
+        assert!(of_code.is_empty(), "{of_code:#?}");
     }
 
     /// An editor opens a folder's main.wat with text that doesn't build, then changes it to

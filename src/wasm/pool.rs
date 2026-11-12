@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::oneshot;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 
 use crate::connect::{CONNECT_TIMEOUT, Reach};
 use crate::reach::Stand;
@@ -33,6 +33,14 @@ use crate::wasm::{Program, WORKER_FLAG, runner};
 /// How much longer than its program's own time limit a job may take before lengua gives up on
 /// its worker: the module's compiling and the worker's start.
 const GRACE: Duration = Duration::from_secs(20);
+
+/// The most memory that the programs of a pool's tests may grow to together, in WebAssembly's
+/// pages of 64 KiB: 65,536 pages, 4 GiB. A test's run starts once the memory its program
+/// declares as its most, with that of the modules it calls, fits beside the tests that run
+/// ([`Pool::start`]). So the tests of a program that may grow to 1 GiB run four at a time,
+/// however many cores the computer has, and those of several folders checked at once share
+/// the four; a program of a few pages, as most are, waits for nothing.
+pub const TEST_PAGES: u32 = 65_536;
 
 /// What to run a program with.
 #[derive(Debug, Clone, Copy)]
@@ -148,6 +156,10 @@ struct Inner {
     data: Option<PathBuf>,
     /// The workers waiting for a job.
     idle: Mutex<Vec<Worker>>,
+    /// The memory left for the tests that start, in pages, of `most` in all ([`TEST_PAGES`]).
+    memory: Arc<Semaphore>,
+    /// The most memory the tests that run may grow to together, in pages.
+    most: u32,
     /// The next job's number.
     next: AtomicU64,
 }
@@ -224,14 +236,41 @@ impl Pool {
     /// compiles what it runs.
     #[must_use]
     pub fn new(launcher: PathBuf, data: Option<PathBuf>) -> Self {
+        Self::with_memory(launcher, data, TEST_PAGES)
+    }
+
+    /// [`Self::new`], with `pages` as the most memory its tests' programs may grow to together
+    /// in place of [`TEST_PAGES`], and at least one page.
+    #[must_use]
+    pub fn with_memory(launcher: PathBuf, data: Option<PathBuf>, pages: u32) -> Self {
+        let most = pages.max(1);
         Self {
             inner: Arc::new(Inner {
                 launcher,
                 data,
                 idle: Mutex::new(Vec::new()),
+                memory: Arc::new(Semaphore::new(
+                    usize::try_from(most).unwrap_or(Semaphore::MAX_PERMITS),
+                )),
+                most,
                 next: AtomicU64::new(1),
             }),
         }
+    }
+
+    /// Room for a test's run of `program` among the tests that run: the pages its memories may
+    /// grow to, at least one and at most the pool's all, taken from what is left, once that
+    /// much is left. The run holds them until it has ended. Those that wait are served in
+    /// their order, so a program that asks for much is not kept waiting by ones that ask for
+    /// little.
+    async fn room_for(&self, program: &Program) -> io::Result<OwnedSemaphorePermit> {
+        let pages = u32::try_from(program.pages())
+            .unwrap_or(u32::MAX)
+            .clamp(1, self.inner.most);
+        Arc::clone(&self.inner.memory)
+            .acquire_many_owned(pages)
+            .await
+            .map_err(io::Error::other)
     }
 
     /// A worker waiting for a job, if one is.
@@ -276,7 +315,8 @@ impl Pool {
     }
 
     /// Starts `program` as `spec` says, within `limits`, and returns once it is running, with
-    /// its port when it serves and the ends of its connections to the test's own servers.
+    /// its port when it serves and the ends of its connections to the test's own servers. A
+    /// test's run first waits for room for its memory ([`TEST_PAGES`]).
     ///
     /// # Errors
     ///
@@ -289,6 +329,12 @@ impl Pool {
         limits: Limits,
     ) -> io::Result<Running> {
         crate::runner::portable_run(spec.args, spec.env).map_err(io::Error::other)?;
+        // A test waits here, before it takes a worker, until its memory fits beside the tests
+        // that run. A run of the `run` tool is the user's own, and waits for nothing.
+        let memory = match spec.setup {
+            Setup::Test => Some(self.room_for(program).await?),
+            Setup::Run | Setup::Shell => None,
+        };
         let id = self.inner.next.fetch_add(1, Ordering::SeqCst);
         // The working folder: the run's own, or a fresh one holding the test's files.
         let (scratch, work, folder) = match spec.folder {
@@ -476,6 +522,7 @@ impl Pool {
             _scratch: scratch,
             lines: program.lines(),
             alone: spec.alone,
+            _memory: memory,
         })
     }
 
@@ -549,6 +596,8 @@ pub struct Running {
     _scratch: Option<tempfile::TempDir>,
     /// main.wat's lines, for a trap's.
     lines: Lines,
+    /// The room a test's run holds among the tests that run, until this is dropped.
+    _memory: Option<OwnedSemaphorePermit>,
     /// Whether its worker is its own.
     alone: bool,
 }

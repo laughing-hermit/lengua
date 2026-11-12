@@ -97,6 +97,39 @@ async fn every_problem_of_an_idea_comes_in_one_reply() {
     session.service.cancel().await.expect("close the session");
 }
 
+/// The attester, `lengua-mcp check <folder>`, reads an idea as the `check` tool does: a problem
+/// of the idea's sentences and a problem of its tests come in one answer, in the order of the
+/// idea's lines, each as a line of idea.md. Before, it read the idea in stages, and the first
+/// hid the second.
+#[test]
+fn the_attester_says_every_problem_of_an_idea_at_once() {
+    let program = Program::new();
+    let long = ADD_IDEA.replace(PURPOSE, &format!("{PURPOSE} {LONG}"));
+    let both = long.replace("{a + b}", "{a - b}");
+    assert_ne!(both, long);
+    program.write("idea.md", &both);
+    program.write("main.wat", ADD_CODE);
+    let attested = std::process::Command::new(env!("CARGO_BIN_EXE_lengua-mcp"))
+        .arg("check")
+        .arg(program.path())
+        .env("LENGUA_PROOF_SECONDS", "0")
+        .output()
+        .expect("lengua-mcp runs");
+    let said = String::from_utf8_lossy(&attested.stdout).into_owned();
+    assert_eq!(attested.status.code(), Some(1), "{said}");
+    let said: Vec<&str> = said.lines().collect();
+    let sentence = said.iter().position(|line| {
+        line.starts_with("idea.md line ") && line.contains("STE: this sentence has 32 words")
+    });
+    let formula = said.iter().position(|line| {
+        line.starts_with("idea.md line ") && line.contains("formula disagrees with the idea")
+    });
+    assert!(sentence.is_some(), "the sentence's problem: {said:#?}");
+    assert!(formula.is_some(), "the test's problem: {said:#?}");
+    assert!(sentence < formula, "in the order of the lines: {said:#?}");
+    assert_eq!(said.last(), Some(&"not attested"), "{said:#?}");
+}
+
 /// add's main.wat with its usage text named, and its region's size marked as the text's length.
 fn named_add() -> String {
     let data = "(data (i32.const 1024) \"usage: add <a> <b>\\0a\")";
