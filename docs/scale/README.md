@@ -225,7 +225,10 @@ It passed: one agent built a real program of 3,638 lines of `main.wat`, 5,129 wi
 parts, from an idea of 24 behaviors; `check` said `done` at the fifth cycle; and the agent
 then made a feature that cuts across, a fix in the parser, and a refactor into a part, in two
 cycles, two and one, with `check` green after each. No test failed at any point, and the
-rules found two things in 4,100 lines. FINAL_RUNS
+rules found two things in 4,100 lines. The suite, which takes every program of `examples/`
+from its request to `done`, is green on all five systems with the three programs in it (run
+43209854658, at b649eab, with main's 77835f0 merged in): Linux on x86-64 and on ARM64, macOS
+on ARM64, Windows on x86-64 and on ARM64.
 
 The conditions, each from a number above:
 

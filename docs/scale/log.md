@@ -299,11 +299,14 @@ where the rules can't follow a number that comes from two paths (rule 9).
 - **The mutation test** (run 43197373671, at 734c729, 314 s): json, http and httpd were added
   to `tests/mutation.rs`, 8 mutants each. 16 failed a test, 6 broke a rule, 2 of the parts'
   were tested and not all proven, and none survived. All 8 of httpd's were caught: 4 by a
-  rule (three of them in functions taken from parts, which the copy check holds) and 4 by a
+  rule (two of those in a constant and a function taken from a part) and 4 by a
   test.
 - **main merged in twice**, at 42507ef (W20's splits and W23's outside modules) and at 77835f0
   (the gate that measures the same way). Each time `examples/index.md` was the one conflict:
   main had added a program between the lines the branch had added.
 - **The suite on all five systems**: 43202341879 (at 6d36aae) was cancelled by the dispatch
   that followed the second merge, after the tests on Linux on x86-64 and on ARM64 had passed.
-  FINAL_SUITE_LOG
+  43209854658 (at b649eab, which holds main's 77835f0) passed: format, the five test jobs
+  and the gate, on Linux on x86-64 and ARM64, macOS on ARM64 and Windows on x86-64 and
+  ARM64. The suite takes every program of `examples/` from its request to `done`, so the
+  server and its parts were checked and tested on each of the five.
