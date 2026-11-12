@@ -154,7 +154,8 @@ rewritten (`write-idea`'s format reference; `compile`'s references for the diale
 rules and speed, and its WebAssembly templates); version 0.2.0; and the parity ledger: every
 verdict that changed from the native lengua, with its reason
 ([docs/history/PARITY.md](docs/history/PARITY.md)). The server template waits with `poll_oneoff`,
-which the model doesn't follow yet, so its proofs stop there. A program that reads keys from the
+which the model didn't follow then, so its proofs stopped there (it follows that wait since
+2026-11-12: DESIGN.md, "A server's wait"). A program that reads keys from the
 terminal has no template: it waits for the host to give the terminal's raw mode and window size,
 which W18 has since given. *Verified by:* every program's rules and tests on all five runners, each
 run with
@@ -683,8 +684,15 @@ look for a part first.
 so `examples/sum`; sort64 for two numbers in order, three tested; crc32 for a text of 2
 characters in five minutes, tested beyond, and so `examples/checksums`.
 
-What it doesn't do yet: the prover proves a taken function again in each program, since a
-contract states what a function reaches and not what it computes, so a program built on parts
+*Since 2026-11-12, on `wip/proofs`:* a contract's item may state what its function gives, as a
+formula (`takes`, `holds` and `gives` clauses). `check` proves it of the function alone, and
+the proofs of a program that took the function use the formula at each call. crc32 states
+`crc32(at)` for a text of up to 64 bytes, and the model reads a CRC's step out of a program's
+shifts, so crc32's own proof reaches 478 of 4,096 bytes in a minute and `examples/checksums`
+two lines of 20 of 24 bytes each (todo.md, "Proof depth").
+
+What it doesn't do yet: a function that writes memory has no formula, so the prover follows it
+again in each program (decimal, lines and sort64 are such), and such a program
 is no faster to prove; a part's limits are fixed, 20 bytes for a number, 4096 for a text and
 256 numbers for a sort; and of the set above, hash tables, SHA-256, the lines of an HTTP
 request, a sort faster than by selection, JSON, compression and dates have no part (todo.md,

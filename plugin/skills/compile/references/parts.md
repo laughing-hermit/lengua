@@ -104,16 +104,19 @@ When a part changes, check the part again, then copy its functions again.
 ## What is proven
 
 How far each part of the library is proven, by its own program, on lengua's runners: `decimal`,
-`lines` and `bytes` for every input in their ideas' ranges. `crc32` is tested, not proven: its
-proof covers a text of 1 byte in a minute and of 2 characters in five, and longer texts are
-only tested. `sort64` is proven for two numbers in five minutes and tested for three; its tests
+`lines` and `bytes` for every input in their ideas' ranges. `crc32` is proven for a text of up
+to 478 of its 4,096 bytes in a minute, and its function alone for every text of up to 64 bytes;
+longer texts are only tested. `sort64` is proven for two numbers in five minutes and tested for three; its tests
 sort no more than three. `check` on a part says what
 holds on this computer.
 
 A part's proofs are of the part's own program, for the inputs its idea gives: `check` on the
 part says how far they go, and the `parts` line of a program built on it repeats what the part's
 lock records. They are evidence about the function. They are not a proof about your program.
-lengua doesn't yet carry a part's proof into the programs that take from it: the prover follows
+A function whose contract states what it gives, as `$crc32_update` does, is the exception:
+`check` proves the formula of your program's own copy of the function, and your program's
+proofs use the formula at each call in its ranges; the `parts` say so on a `contract` line.
+For every other function, the prover follows
 each taken function again, inside your program, for your program's generated tests. So what
 `proofs` says of your program is what holds of it, the taken functions included, and a program
 built on parts takes as long to prove as one that wrote the same functions itself.
@@ -150,6 +153,34 @@ Add a `# Contract` section to its `idea.md`, an item for each function a program
   and globals by `$name`, never by number; each function of the part that it calls is in the
   contract too; and the part defines it itself, so it isn't one the part took from another
   part. `check` refuses a contract that offers any other function.
+- **Say what a function gives, as a formula, when you can.** Three more clauses go before the
+  full stop: ``takes `$param` from A to B`` for each number the formula names, with its least
+  and its most value (a least value below 0 reads the parameter with a sign);
+  `` `$at` holds `$length` bytes `` for each address the function reads, with the parameter
+  that says how many bytes; and ``gives `formula` ``, in the language of the idea's tests
+  ([test-format.md](../../write-idea/references/test-format.md)), with the parameters' names
+  without `$`. An address's name stands for its bytes, as text:
+
+  ```markdown
+  - `$crc32_update`: reads 4096 bytes at `$at`; takes `$crc` from 0 to 0; takes `$length` from
+    0 to 64; `$at` holds `$length` bytes; gives `crc32(at)`. Its arguments are …
+  - `$percent`: uses no memory; takes `$part` from 0 to 1000; takes `$whole` from 1 to 1000;
+    gives `part * 100 / whole`. It gives …
+  ```
+
+  `check` proves the formula of the function alone, for every argument in the ranges and every
+  byte, and says so on a `gives` line of `contract`. In a program that takes the function,
+  `check` proves it again of the program's own copy, and the program's proofs then use the
+  formula at each call in the ranges, in place of the function's body: its `parts` say so on a
+  `contract` line. A formula that isn't proven costs nothing but the line: the proofs follow
+  the body, as they do without one.
+- **A function can have a formula only if** it writes nothing (no `writes` clause), calls no
+  host function and none of lengua's library but `$assert_fail`, sets no global, uses each
+  address only to read at it (`(i32.load8_u (i32.add (local.get $at) (local.get $i)))`, never
+  a comparison, a copy to a local or an argument of a call), and reads only the first
+  `$length` bytes there. A text's lengths are proven one at a time, so take `$length` in the
+  smallest range the programs need: 0 to 64 takes seconds, 0 to 4096 doesn't end in a
+  check's time. No assertion of the function may be reached by an argument in the ranges.
 - **Bound every index with a named constant** of the part, such as `$DECIMAL_TEXT`, inside the
   function: the rules then know how far it reaches. A function whose reach depends on an
   argument the rules can't bound has no contract.

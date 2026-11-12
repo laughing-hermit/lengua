@@ -733,11 +733,15 @@ Its runs, each a dispatch of ci.yml on the branch, on Linux on x86-64 unless it 
   in; the head they give is held by a compile run, as documents are.
 
 Still open from it, for the owner:
-- **A part's proof isn't used in the programs built on it.** The prover follows each taken
+- **A part's proof isn't used in the programs built on it.** (Since 2026-11-12, on `wip/proofs`: a
+  contract may state what a function gives, and the proofs use it; "Proof depth", below.)
+  The prover follows each taken
   function again in each program. What it would take is with the decisions (W21's parts): a
   contract that states what a function computes, a proof of the body against it for every
   argument and every memory, and the prover's use of it at each call.
-- **crc32 is tested, not proven, past two characters.** The program's CRC, made by shifts and
+- **crc32 is tested, not proven, past two characters.** (Since 2026-11-12, on `wip/proofs`: the
+  model reads the step, and the proof reaches 478 bytes in a minute; "Proof depth", below.)
+  The program's CRC, made by shifts and
   xors, and the formula's, a chain of CRC steps, are two terms of one number, and each is
   printed in decimal. In a minute the proof covers a text of 1 byte. In five minutes (run
   43101505066) it covers 2 characters of the short test's 64, each question confirmed by z3
@@ -1373,6 +1377,109 @@ x86-64: `tests/tools.rs`, 6 of 6, and the unit tests of the tools, green, the fi
 ran); 43230111360 (at a0e4961 on Linux on x86-64: the language server compiles under clippy; its
 format job's layout is applied at 6860c47). The later runs are in the table below.
 
+### Proof depth: a contract's formula, a server's wait, a CRC's step (2026-11-12)
+
+On the branch `wip/proofs`, not merged: the owner lands it. DESIGN.md has the design as built
+and each soundness argument ("Parts", the proofs; "A CRC a bit at a time"; "A server's wait"),
+and the compile skill's parts.md what an agent writes. The task was W22's largest gap, in the
+order of its value: a part's proof carried into its taker, a proof that reaches a server, and
+one of the open proofs.
+
+What was built:
+1. **A contract states what a function gives, and the proofs use it.** Three more kinds of
+   clause in a `# Contract` item: `takes` a parameter in a range, an address `holds` as many
+   bytes as a parameter says, `gives` a formula of the test language
+   (`src/wasm/contract.rs`). `check` proves the formula of the function alone, for every
+   argument in the ranges and every byte (`src/prove/contract.rs`), under rules read off the
+   module that make that proof hold at every call (`src/prove/wasm/unit.rs`): no store, no
+   host call, no global set, an address used only to load at it. A program that took the
+   function has the formula proven of its own copy, and its proofs take the formula's value at
+   each call in the ranges, in place of the body. crc32's item states `crc32(at)` for a text
+   of up to 64 bytes.
+2. **The model follows a server's wait on `poll_oneoff`** for its listener and the
+   connections it took (`wait_on_network` in `src/prove/wasm/host.rs`, the clients' steps in
+   `src/prove/world/net.rs`), as the native model's poll did: the test's clients take any of
+   the steps open to them before each wait, each way a run of its own, and a run back in a
+   state another run came back in goes no further. The proof is of the whole server, wait
+   included, not of a handler alone, so no line of the idea names a handler.
+3. **A CRC a program computes a bit at a time is the formula's own term**
+   (`src/prove/term/gf2.rs`): each bit read as an exclusive or of atoms' bits, and the term
+   replaced by the CRC step where all 32 agree. z3 and cvc5 confirm the reading for every
+   state and byte in a test.
+
+What it gives, each on Linux on x86-64 with a minute for a build's proofs:
+
+| Program | Before | Now | Run |
+|---|---|---|---|
+| crc32 (part), its CRC | a text of 1 byte of 4,096 (2 characters in five minutes) | 478 of 4,096 bytes; its test of a write that fails for every input in range | 43299067452 |
+| crc32's `$crc32_update` alone | no such proof | every text of up to 64 bytes: 65 lengths, settled by the terms | 43299067452 |
+| checksums, B1 and B2 | a line of 1 byte of 24 | two lines of up to 20 of 24 bytes with the formula at each call (466 input combinations); up to 18 with the body followed (385) | 43299067452 |
+| checksums, B5 | tested (crc32's limit) | every input in range | 43299067452 |
+| shout-server (the event-loop server), 3 tests | 0 proven: the wait on poll_oneoff | B2 for every input in range; B1 to 1,021 of 1,023 bytes; B3, two clients at once, to 11 of 1,023 | 43299050025 |
+| httpd, 25 tests | 0 proven: the wait on poll_oneoff | 7 for every input in range (B4, B9, B11, both of B12, B13, B14), 8 to a length (B1, B2, B7, B8, B15, B19, B20, B21), 1 found wrong (B5, below), 9 tested, not proven | 43299050025, before B5's fix |
+
+The same check of checksums took 33.5 s with the formula and 34.4 s with the body followed
+(43299067452): the time goes to the paths of the decimal printing, 85 a combination, not to
+the CRC, so the formula buys two more bytes of each line in the same time, not a faster check.
+
+**What the proof found in httpd.** B5 said that a request with another ETag gets the file.
+The proof, which follows the CRC now, found a body whose CRC-32 is the ETag the test sent:
+body `haagedfg`, `If-None-Match: "2179"`. The server answers 304, rightly, and a real run
+confirmed it, so `check` said `tests_failed`. The test was wrong, not the server: it drew
+the ETag from 0 to 999,999, which a file's CRC-32 can be. B5 now draws it above what 32 bits
+hold (examples/httpd/idea.md).
+
+httpd's nine tests still tested, not proven, and why: B3, B6, B10 and B23, more than 256
+paths through the code; B16, B17 and B18, "reading a file the program wrote", the store;
+B22, out of time after 1 of 256 input combinations; B24, two clients at once, where the model
+found an order of the clients' steps that prints the two lines of the log the other way
+round, which the real run, with the test's own timing, did not show.
+
+Its runs, each a dispatch of ci.yml on the branch, on Linux on x86-64:
+- 43284404832 (at c55edc4): one clippy finding, a type too long; nothing else of the first
+  commit failed to build.
+- 43285658413 (at 1d0f649): the 15 tests of the reading, the contract's clauses, a unit's
+  proof and a call's use of a claim passed, both solvers confirming the reading.
+- 43285891952 (at e49e2ef): the shout server's proof gave inputs for B1 that are none: a wait
+  whose every way was followed from another run already was taken for one where nothing can
+  come. Fixed at 00b8495.
+- 43285723525 and 43285911491: cancelled. The second printed, before that, that crc32's own
+  CRC stopped at 1 byte still: a text's bytes are held to their characters' range, the pool
+  writes the bits that range fixes as constants, and the reading asked for the byte's own bits
+  there. Fixed at 00b8495: the reading takes the fixed bits as fixed on both sides.
+- 43294059336 and 43294093455 (at 244673b): the tests passed but the shout server's third
+  (64 paths in the test's budget) and the old words of an assertion; both changed.
+- 43299033050 and 43299067452 (at a7c1364, with main's 443b91e merged in): the 19 tests of
+  the library and the test of checksums with and without the formula passed.
+- 43299050025 (at a7c1364): the shout server and httpd checked, the table's lines.
+
+What is left, for the owner:
+- **A function that writes has no formula.** `$decimal_parse`, `$decimal_format`,
+  `$lines_read`, `$lines_end` (which reads, and whose result is a place the test language has
+  no word for) and `$sort64` are followed in each program as before. It would take a value
+  for memory after a call in the formula language, and a frame clause.
+- **A claim is proven again in each program**, on its own copy, and lengua.lock records
+  none. It costs a second or two a check, and keeps each program's proofs about its own
+  module alone. Storing it would change what the lock holds.
+- **A formula the proof finds false is said and not refused.** The reply's `contract` line
+  says "tested, not proven of the function alone" with the reason, and no proof uses it;
+  `check` still says done.
+- **A text's lengths are proven one at a time**, so crc32's formula stops at 64 bytes. A
+  proof for every length would be an induction over the function's own loop.
+- **checksums is proven to 20 of 24 bytes in a minute, not for every input in range**: the
+  decimal printing's paths take the time. `prove_further` goes on from there.
+- **The server's proofs are for the test's clients**, as the test's four deliveries cut what
+  they send, in every order of their steps: the claim a server without the wait already had.
+  Two clients at once reach 11 bytes in a minute. A wait that mixes connections with a
+  clock, a write, standard input or a file is still refused.
+- **The 64 KiB buffer's induction, sort64 past two numbers**: not tried.
+- **SHA-256 and AES-128: out of reach of this prover.** Their rounds are additions modulo
+  2^32 and table lookups mixed with exclusive ors, so no reading like the CRC's makes a
+  program's term the formula's, and the solvers don't settle the equality of two such
+  terms: the formula functions stay "the proof doesn't model".
+- **A CRC by a table** (crc32c-split) is not read: its lookups are not exclusive ors of the
+  input's bits in the model's terms.
+
 ### What the permission checks refused
 
 Claude Code's permission checks refused these actions. Each refusal was taken as given, with
@@ -1999,6 +2106,36 @@ Each can be reversed.
     own assertions from 1 to 799.
   - **The attester holds a part's contract to its main.wat, and holds no program to its
     parts**: it reads one folder, and a part is checked where it is used.
+
+- **Proof depth (2026-11-12)**, each made without asking, on the owner's standing word, and
+  each one the owner may reverse:
+  - **A claim is proven of the function alone in every program that holds it, and the lock
+    records none.** The other way was to record a part's proven claims in its lock and trust
+    them in the programs that take the function. Proving again keeps every proof a statement
+    about the one module it ran on, needs no new field in the lock, and costs a second or
+    two a check.
+  - **A formula only for a function that writes nothing.** The frame is then a rule of the
+    unit, read off the operators (no store, no host call), not a clause to trust.
+  - **A call uses a claim only where the terms themselves show its arguments in range**, and
+    the address and length are numbers the run knows. Any other call follows the body. No
+    solver is asked at a call.
+  - **A part's own proofs follow its function's body**, claim or no claim: the claim is used
+    only at the calls of a function a program took.
+  - **A formula's value is the result's bits**: a negative value is its two's complement, and
+    a parameter is read with a sign only where its range starts below 0.
+  - **A false formula is not a failed check.** It is said on its line and never used.
+  - **The server's proof is of the whole server**, through the model's own wait, not of a
+    handler the idea names: no new line of the idea, and the reply's words are the ones a
+    server without the wait already had.
+  - **A wait on the listener alone, with no client, ends a run serving**, where the model
+    said stuck before: it is what lengua's host tells a test of a server that keeps serving.
+  - **A connection's count of bytes and its flags, in a wait's event, are any value**, one
+    variable for each moment of a connection, not the count the model could work out: the
+    host's own count depends on how it took the bytes in.
+  - **The CRC's reading tries two polynomials**, zlib's and Castagnoli's, and a state that is
+    a term, its complement, all ones or zero.
+  - **httpd's B5 changed** (the ETag above 32 bits), though the server is another agent's
+    work: the suite takes every example to done, and the proof found the test false.
 
 ## Roadmap: the pivot's milestones (2026-11-06)
 

@@ -60,4 +60,9 @@ function a program may take:
   which arguments stop the program.
 - `check` holds each clause to `main.wat`, and says the clause to write when they differ, so
   write the section with the compile skill, once the functions exist.
+- Where a function gives a number that a formula of the test language states, as
+  `$crc32_update` gives `crc32(at)`, the item can state the formula too, with `takes`,
+  `holds` and `gives` clauses: the compile skill's
+  [parts.md](../../compile/references/parts.md) has their form. `check` proves the formula of
+  the function alone, and the proofs of a program built on the part use it at each call.
 - State the part's limits in `# Purpose` too, in backticks: its own tests draw from them.
