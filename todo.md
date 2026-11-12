@@ -609,6 +609,10 @@ Its runs, each a dispatch of ci.yml on the branch:
   own expectations were wrong (rule 8's line for a region's size, which the test had not
   expected; and an idea that the test took to have a second kind of problem, which had one);
   the two tests of `tests/wasm_scale.rs` passed; the format job failed and gave a patch.
+- 43254949991 (Linux on x86-64, at f438352, the library's tests and `wasm_scale`, `skills`,
+  `wasm_every_program`, `wasm_red_team` and `wasm_templates`): every test passed, httpd with
+  its named texts among the programs that go from their request to done; the format job
+  failed on two of the tests' lines and gave a patch, which is applied.
 
 ### W21's parts: functions a program takes, already checked (2026-11-11)
 
