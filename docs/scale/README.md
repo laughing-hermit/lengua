@@ -201,7 +201,21 @@ Not built, on purpose, since each is more than a small fix; each has its evidenc
 
 ## The mutation test
 
-MUTATION_RESULT
+The three programs are in `tests/mutation.rs`: json and http with the proven programs, httpd
+with the programs that are tested and not proven, where a mutant that comes out `done` has
+survived. The test takes 8 mutants of each program, spread evenly over its lines. Run
+43197373671 (Linux on x86-64, at 734c729, 314 s):
+
+| Program | Mutants | Failed a test | Broke a rule | Tested and not all proven | Survived |
+|---|---|---|---|---|---|
+| json | 8 | 7 | 0 | 1 | 0 |
+| http | 8 | 5 | 2 | 1 | 0 |
+| httpd | 8 | 4 | 4 | 0 | 0 |
+
+No mutant survived, and none had to be named as one that changes nothing. It is feasible at
+this size, and it is thin: 8 mutants over httpd's 3,638 lines is one in 455 lines, where the
+add fixture has one in 20. The test's count a program is fixed; a count by size would say
+more of a program this large and take longer.
 
 ## The verdict
 
