@@ -613,6 +613,10 @@ Its runs, each a dispatch of ci.yml on the branch:
   `wasm_every_program`, `wasm_red_team` and `wasm_templates`): every test passed, httpd with
   its named texts among the programs that go from their request to done; the format job
   failed on two of the tests' lines and gave a patch, which is applied.
+- 43262384846 (the suite on all five systems, at 5f7c803, with main's 7d1a450 merged in, a
+  merge with no conflict): format, the five test jobs and the gate passed, on Linux on x86-64
+  and on ARM64, macOS on ARM64, and Windows on x86-64 and on ARM64. This record's last lines
+  were written after it.
 
 ### W21's parts: functions a program takes, already checked (2026-11-11)
 
