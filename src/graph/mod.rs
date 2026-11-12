@@ -55,8 +55,11 @@ pub struct Node {
     pub path: String,
     /// Its idea.md.
     pub idea: PathBuf,
-    /// Its code file's name, [`CODE_FILE`], when it holds one.
+    /// Its code file's name, when it holds one: [`CODE_FILE`], or main.wasm for an idea that
+    /// names an outside module.
     pub code: Option<&'static str>,
+    /// The code file its idea names, there or not: [`CODE_FILE`], or main.wasm.
+    pub code_name: &'static str,
     /// The idea's title, or the folder's name when it has none.
     pub title: String,
     /// The idea's description, when it has one.
@@ -300,7 +303,13 @@ impl Node {
             .unwrap_or_default();
         let text = String::from_utf8_lossy(&bytes);
         let front = okf::frontmatter(&text).unwrap_or_default();
-        let code = folder.join(CODE_FILE).is_file().then_some(CODE_FILE);
+        // An idea with a `- Module:` line names main.wasm, an outside module, as its code.
+        let file = if crate::state::names_outside(&bytes) {
+            crate::state::OUTSIDE_FILE
+        } else {
+            CODE_FILE
+        };
+        let code = folder.join(file).is_file().then_some(file);
         let links = okf::idea_links(&text);
         let follow = |(line, target): (usize, String)| Link {
             path: resolve(root, folder, &target),
@@ -317,6 +326,7 @@ impl Node {
             folder: folder.to_path_buf(),
             idea,
             code,
+            code_name: file,
         }
     }
 }

@@ -8,6 +8,13 @@
 //! `lengua-mcp check`, the idea's attester, attests the folder on any computer, with no lock and
 //! no key, proving it too. A folder that holds the native lengua's main.s, or an idea of its
 //! type, is told where the native lengua went.
+//!
+//! An idea with a `- Module:` line names main.wasm instead, an outside module that a compiler
+//! made from another language ([`outside`]): lengua validates and tests it, runs it in the same
+//! host under the same grants, holds it to no rule, proves nothing of it, and says "trusted, not
+//! proven" in every reply and before every run.
+
+mod outside;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -40,8 +47,8 @@ use crate::platform::{Cache, CacheHolds, Machine};
 use crate::prove::{self, Verdict};
 use crate::runner::{End, Limits};
 use crate::state::{
-    CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, ProgramFolder, State, compiled_module, tested_module,
-    wrong_record,
+    CODE_FILE, IDEA_FILE, NATIVE_CODE_FILE, OUTSIDE_FILE, ProgramFolder, State, compiled_module,
+    tested_module, wrong_record,
 };
 use crate::testfile::{self, TestSuite};
 use crate::testrun;
@@ -479,6 +486,8 @@ pub(super) struct WasmCode {
     /// For an idea with a `- Secret:` line, what the check of the engine's machine code read on
     /// this CPU, in one line.
     machine_code: Option<String>,
+    /// For an outside module, main.wasm, what every reply says of it; `None` for main.wat.
+    outside: Option<Vec<String>>,
 }
 
 /// What keeps main.wat from building on its idea's parts: a part that isn't checked on this
@@ -588,11 +597,35 @@ fn text_of(
         .transpose()
 }
 
+/// A program's code as the state's read kept it.
+enum Code {
+    /// main.wat's text.
+    Text(String),
+    /// main.wasm's bytes, an outside module, with what lengua says of it before it runs
+    /// ([`crate::wasm::outside::words`]).
+    Outside {
+        /// The module.
+        wasm: Vec<u8>,
+        /// That it is trusted, not proven.
+        words: String,
+    },
+}
+
+impl Code {
+    /// What lengua says before it runs an outside module; nothing of main.wat.
+    fn words(&self) -> Option<&str> {
+        match self {
+            Self::Text(_) => None,
+            Self::Outside { words, .. } => Some(words),
+        }
+    }
+}
+
 /// What `run` may run in a folder once its checks pass: main.wat as the state's read kept it,
 /// what its idea grants, and the module check tested, by the hash lengua.lock records.
 struct Runnable {
-    /// main.wat's text, the very bytes whose hash the lock was held to.
-    code: String,
+    /// The code, the very bytes whose hash the lock was held to.
+    code: Code,
     /// What the idea lets the program use, from its `- Uses:` line.
     uses: Vec<Use>,
     /// What it may do on the network, from its `- Network:` line.
@@ -619,7 +652,11 @@ fn secret_operators(
         network: &ready.network,
         secrets: &ready.secrets,
     };
-    let report = checker::wasm::check(&ready.code, built, &context);
+    // The secret rule reads main.wat: an outside module has none, and keeps no secret.
+    let Code::Text(code) = &ready.code else {
+        return Err(leaks(folder, &[outside::NO_SECRET.to_owned()]));
+    };
+    let report = checker::wasm::check(code, built, &context);
     if report.passed() {
         Ok(report.secret_operators)
     } else {
@@ -702,10 +739,15 @@ fn runnable(
 ) -> Result<Runnable, String> {
     let (state, snapshot, files, key) = state_for_run(data_dir, folder)?;
     if state != State::Ready {
+        // The state's next step names main.wat: an outside module's is check's to say.
+        let next = if snapshot.outside {
+            format!("Next: call check with path {folder}.")
+        } else {
+            state.next_step(folder)
+        };
         return Err(format!(
             "lengua runs a program only when its idea and code match lengua.lock, and {folder} \
-             doesn't. {}",
-            state.next_step(folder)
+             doesn't. {next}"
         ));
     }
     // The lock the state's read verified with lengua's key: a run reads and verifies it once.
@@ -745,15 +787,38 @@ fn runnable(
             wrong.join("; ")
         ));
     }
-    let code = text_of(folder, CODE_FILE, files.code)?.ok_or_else(|| {
-        format!("There's no {CODE_FILE} in {folder}. Write it with the compile skill.")
-    })?;
     let idea_text = text_of(folder, IDEA_FILE, files.idea)?.ok_or_else(|| {
         format!("There's no {IDEA_FILE} in {folder}. Write it with the write-idea skill first.")
     })?;
     let (uses, network) =
         idea::grants(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
     let secrets = idea::secrets(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
+    // Which file the code is comes from the idea, as the state's read took it from these very
+    // bytes: main.wasm for an idea with a `- Module:` line, whose stamp must be an outside
+    // module's too, so that nothing checked as one kind runs as the other.
+    let named = idea::outside(&idea_text).map_err(|problems| idea_problems(folder, &problems))?;
+    if named.is_some() != snapshot.outside || named.is_some() != stamp.outside() {
+        return Err(format!(
+            "lengua.lock doesn't record this kind of code for {folder}. Call check with path \
+             {folder}."
+        ));
+    }
+    let code = match named {
+        None => Code::Text(text_of(folder, CODE_FILE, files.code)?.ok_or_else(|| {
+            format!("There's no {CODE_FILE} in {folder}. Write it with the compile skill.")
+        })?),
+        Some(named) => {
+            if !secrets.is_empty() {
+                return Err(format!("{}: it won't run.", outside::NO_SECRET));
+            }
+            Code::Outside {
+                wasm: files
+                    .code
+                    .ok_or_else(|| format!("There's no {OUTSIDE_FILE} in {folder}. Call check."))?,
+                words: crate::wasm::outside::words(&named.built_from),
+            }
+        }
+    };
     if !env.is_empty() && !uses.contains(&Use::Environment) {
         return Err(format!(
             "{IDEA_FILE} doesn't use the environment, so the program gets no environment \
@@ -773,8 +838,14 @@ fn runnable(
 /// The module main.wat in `ready` builds, provided it is byte for byte the module check tested:
 /// another build, as after lengua itself changed, doesn't run.
 fn built_as_tested(folder: &ProgramFolder, ready: &Runnable) -> Result<Built, String> {
-    let built = text::build(&ready.code)
-        .map_err(|problem| format!("{CODE_FILE} doesn't build: {problem}"))?;
+    let code = match &ready.code {
+        Code::Text(code) => code,
+        // An outside module is its own build: held to the module check tested by its hash, and
+        // read again as check read it, with what its idea grants.
+        Code::Outside { wasm, .. } => return outside::as_tested(folder, ready, wasm),
+    };
+    let built =
+        text::build(code).map_err(|problem| format!("{CODE_FILE} doesn't build: {problem}"))?;
     if Sha256Hex::of(&built.wasm) != ready.module {
         return Err(format!(
             "This build of {CODE_FILE} differs from the module check tested, as after lengua \
@@ -1003,10 +1074,14 @@ impl Order for Checked<'_> {
             listen: network.listens.map(|port| (port, network.serves_anywhere)),
             connections: &self.connections,
             own: &self.own,
-            // main.wat is built only if the program traps, to place the trap on its line.
-            source: Source::Text {
-                text: &self.ready.code,
-                module: &self.ready.module,
+            // main.wat is built only if the program traps, to place the trap on its line; an
+            // outside module has no line to place one on.
+            source: match &self.ready.code {
+                Code::Text(text) => Source::Text {
+                    text,
+                    module: &self.ready.module,
+                },
+                Code::Outside { .. } => Source::Unknown,
             },
         }
     }
@@ -1063,6 +1138,10 @@ pub(super) fn run_from_shell(
         } else {
             own_folders(data_dir)
         };
+        // Every check has passed: an outside module is said to be one before it starts.
+        if let Some(words) = ready.code.words() {
+            eprintln!("{}: {words}", engine::name());
+        }
         Ok(Checked {
             request,
             workspace,
@@ -1110,6 +1189,12 @@ impl LenguaServer {
         // main.wat is there, needs no words again.
         if let Some(report) = both_code_files(folder).or_else(|| native_code(folder)) {
             return Ok(report);
+        }
+        // An idea with a `- Module:` line: its program is main.wasm, an outside module.
+        if idea.outside.is_some() {
+            return self
+                .check_outside(folder, events, began, idea_text, idea, suite)
+                .await;
         }
         let Some(code) = read_optional(folder, CODE_FILE)? else {
             return Ok(CheckReport {
@@ -1210,6 +1295,7 @@ impl LenguaServer {
             unsafe_blocks: report.unsafe_blocks.len(),
             obligations: report.facts.obligations.clone(),
             machine_code,
+            outside: None,
         })
     }
 
@@ -1246,6 +1332,7 @@ impl LenguaServer {
             further,
             obligations: code.obligations.clone(),
             machine_code: code.machine_code.clone(),
+            outside: code.outside.clone(),
         });
         if let Some(old) = self
             .checks
@@ -1321,10 +1408,17 @@ impl LenguaServer {
         {
             tracing::warn!("couldn't compile the module ahead of its runs: {error}");
         }
+        // An outside module's stamp says what it is in the lock's own text: its two hashes are
+        // one, and its engine's line ends in the note.
+        let engine = if code.outside.is_some() {
+            format!("{}{}", engine::ENGINE, lock::OUTSIDE_NOTE)
+        } else {
+            engine::ENGINE.to_owned()
+        };
         let stamp = CodeStamp {
             sha256: code_hash,
             module_sha256: checking.module.clone(),
-            engine: engine::ENGINE.to_owned(),
+            engine,
             max_stack_bytes: code.max_stack_bytes,
             unsafe_blocks: u32::try_from(code.unsafe_blocks).unwrap_or(u32::MAX),
             features: code.features.clone(),
@@ -1350,6 +1444,16 @@ impl LenguaServer {
                 performance,
                 shown: outcome.shown,
             });
+        }
+        // An outside module ends here: nothing of it is proven, and lengua writes no entry for
+        // it in idea.md's `verified`.
+        if code.outside.is_some() {
+            if let Ok(mut found) = checking.found.lock() {
+                for proof in &mut found.proofs {
+                    proof.detail = Some(outside::NOT_PROVEN.to_owned());
+                }
+            }
+            return;
         }
         checking.stage.send_replace(Stage::Proving(Instant::now()));
         match self.recorded_proofs(folder, checking, &code.suite) {
@@ -1391,6 +1495,11 @@ impl LenguaServer {
     /// still holds. Gives whether idea.md holds that entry once it returns, so that a reply
     /// claims only an entry that's there.
     pub(super) async fn write_verified(&self, folder: &ProgramFolder, checking: &Checking) -> bool {
+        // lengua's entry says lengua checked the idea and its main.wat: an outside module, which
+        // it tested and holds to no rule and no proof, gets none.
+        if checking.outside.is_some() {
+            return false;
+        }
         let [idea, code] = &checking.files;
         let _writing = self.lock_writes.lock().await;
         // Under the lock of the writes: a proof that finds main.wat wrong records it in
@@ -1536,6 +1645,8 @@ impl LenguaServer {
         let built = built_as_tested(folder, &ready)?;
         // An idea that names a secret: the code this computer runs is checked first.
         keeps_secrets(&self.data_dir, folder, &ready, &built, Setup::Run)?;
+        // An outside module's every reply says what it is.
+        let said = ready.code.words().map(str::to_owned);
         let (uses, network) = (ready.uses, ready.network);
         let workspace = params.folder.as_deref().map(working_folder).transpose()?;
         // A folder the run reads or writes in, for a program that uses files or for its standard
@@ -1589,6 +1700,7 @@ impl LenguaServer {
                 .serve_wasm_in_background(folder, &program, spec, assertions)
                 .await?;
             report.may_reach = may_reach;
+            report.outside = said;
             return Ok(report);
         }
         let limits = Limits {
@@ -1603,6 +1715,7 @@ impl LenguaServer {
             .map_err(|error| format!("couldn't run the program: {error}"))?;
         let mut report = ended_report(&run, &assertions, limits);
         report.may_reach = may_reach;
+        report.outside = said;
         Ok(report)
     }
 
@@ -1701,6 +1814,14 @@ async fn attest_into(path: &str, lines: &mut Vec<String>) -> bool {
     // read: the line says where the native lengua went, as check's reply does.
     if let Some(native) = native_code(&folder) {
         lines.extend(native.problems);
+        return false;
+    }
+    // An outside module is never attested: the attester attests an idea and its main.wat, by
+    // the rules and the proofs, and main.wasm is held to neither.
+    if let Ok(Some(text)) = read_optional(&folder, IDEA_FILE)
+        && crate::state::names_outside(text.as_bytes())
+    {
+        lines.push(outside::NOT_ATTESTED.to_owned());
         return false;
     }
     let (idea_text, code) = match (
