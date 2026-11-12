@@ -616,7 +616,11 @@ that take no secret, in such a function, is refused as well.
 
 `check`'s `tests` say which CPU's code was read. `run`, a run from a shell and the attester read
 the code again before they run it, each for its own configuration, so the code that runs was read
-on the computer that runs it, whichever computer wrote lengua.lock; the lock records no CPU. An
+on the computer that runs it, whichever computer wrote lengua.lock; the lock records no CPU. A
+run from a shell reads the module it loaded. The `run` tool reads the compiled form its worker
+loads, the one the data folder keeps for the tool's runs, loaded in the server only under the
+user's seal as that module's; where none loads, the server compiles, seals and keeps one, and
+reads what it kept (`kept_keeps_secrets`, `src/server/wat.rs`). An
 idea with no `- Secret:` line compiles nothing for this, in `check` or in a run.
 
 What the check of the machine code trusts, on both CPUs: the time the CPU takes for the
@@ -629,7 +633,11 @@ group's bits say, since nothing else of a word is decoded.
 
 ## The tests
 
-The tests run in the server's pool of workers, one at a time per CPU core (`src/testrun.rs`). The
+The tests run in the server's pool of workers, one at a time per CPU core (`src/testrun.rs`). A
+test's run starts once the memory its program declares as its most, with that of the modules it
+calls, fits beside the tests that run: 4 GiB in all for a pool (`TEST_PAGES`,
+`src/wasm/pool.rs`). So the tests of a program that may grow to 1 GiB run four at a time, on
+any number of cores, and a program of a few pages waits for nothing. The
 examples run first. Then each generated block's runs go in parallel, each drawing its inputs and
 expected results as it starts; once one fails, no later run of that block starts. At most 10
 failures are reported, and all the tests must end within 90 seconds. Each test run has 2 seconds,
@@ -1311,9 +1319,12 @@ the frontmatter's YAML is parsed without the lines of those two keys, so a key w
 alias of an anchor inside them names nothing and the idea is refused.
 
 A program folder may come from anyone, so `check`, the attester and `run` read its files, and a
-bundle's index.md and log.md, only as regular files of at most 32 MiB (`read_file`,
-`src/state.rs`): a link isn't followed, a named pipe or a device isn't opened, and a larger file
-isn't read. lengua.lock is read the same way, within its own 64 KiB.
+bundle's index.md and log.md, only as regular files of a bounded size (`read_file`,
+`src/state.rs`): an idea.md of at most 1 MiB, a main.wat of at most 4 MiB, which is refused
+before it is built, and any other file of at most 32 MiB. The largest idea.md and main.wat of
+the repository, examples/httpd's, hold 45 KiB and 190 KiB. A link isn't followed, a named pipe
+or a device isn't opened, and a larger file isn't read: the refusal names the size.
+lengua.lock is read the same way, within its own 64 KiB.
 
 ### What run checks
 
@@ -1345,7 +1356,9 @@ A build that differs from the tested one, as after lengua itself changed, doesn'
 `lengua-mcp check <folder>` attests a folder on any computer, as the idea's attester names it. It
 needs no lock and no key, and writes no lock, no index.md, no log.md and no cache: only the
 temporary folders its module and its tests run in. It checks lengua's last `verified` entry
-against the idea's hash and main.wat's SHA-256; parses the idea and its tests; builds main.wat and
+against the idea's hash and main.wat's SHA-256; reads the idea and its tests as `check` reads
+their text, and says every problem of them at once, in the order of the idea's lines; builds
+main.wat and
 checks every rule; runs every test in workers of its own, from a fresh seed; and, when everything
 else passed and the entry names both files, proves each generated test within 300 seconds, the
 model held to 24 sample runs. A proof that doesn't finish leaves the folder attested; a confirmed
@@ -1424,8 +1437,9 @@ The command line (`src/main.rs`):
 
 `lengua-mcp lsp` speaks the Language Server Protocol over standard input and output
 (`src/lsp.rs`). When an editor opens, changes, saves or closes a folder's idea.md or main.wat,
-it publishes the findings of both files as diagnostics, each on the whole of its line: idea.md's
-format and tests, main.wat's build, and main.wat's rules with what the idea grants. These are
+it publishes the findings of both files as diagnostics, each on the whole of its line: every
+problem of idea.md at once, as `check` reads its text (its format, its words, its tests, its
+type and its threads), main.wat's build, and main.wat's rules with what the idea grants. These are
 the functions `check` calls for the same text. It runs no test and no proof, reads no lock,
 writes nothing, and holds a program to no part it builds on, so a folder with no diagnostic is
 not a checked folder: `check` says that. It has no completion, hover or formatting.
@@ -1627,7 +1641,8 @@ listed below.
   rule refuses a branch, an address, a length, a loop's count, a division or a float operation
   that depends on a secret, in main.wat; and in the machine code the engine made on this CPU for
   each operator that takes a secret, a branch, a table, a call or a division. A run from a shell
-  reads the code of the very module it loaded and is about to run. A secret never names a
+  reads the code of the very module it loaded and is about to run, and the `run` tool the
+  compiled form its worker loads, under the user's seal. A secret never names a
   computer or a port a program opens, and since no branch or loop depends on one, neither does
   how many connections a program opens, nor when.
 - **A module lengua didn't build, and that passed no rule.** An outside module, `main.wasm`, is a

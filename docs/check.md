@@ -12,12 +12,14 @@ lengua-mcp check <program folder>
 
 It takes one program folder, its path absolute or from the current folder, and needs no data
 folder, no lock and no key, so anyone with the folder can check it on their own computer. It
-reads the folder's `idea.md` and `main.wat`, then, in order:
+reads the folder's `idea.md` and `main.wat`, an `idea.md` of at most 1 MiB and a `main.wat` of at
+most 4 MiB, each a regular file, then, in order:
 
 1. compares lengua's last entry in the idea's `verified` list with the files: `idea`, lengua's
    SHA-256 of `idea.md` with its `verified` and `generated` keys left out, and `code`, the
    SHA-256 of `main.wat`;
-2. reads the idea as `check` does: it must parse, be an Attested Computation with no
+2. reads the idea as `check` does, and says every problem of it at once, in the order of its
+   lines: it must parse, be an Attested Computation with no
    `- Threads:` line, and hold tests that check; an idea may split its work with a `- Splits:`
    line, and a test of a piece runs as a piece;
 3. builds `main.wat` into its WebAssembly module, as [`run`](run.md) does;

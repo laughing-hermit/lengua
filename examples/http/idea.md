@@ -25,9 +25,9 @@ two numbers of the range. It prints a hyphen in place of a number that the range
 have. It prints a question mark when the field is not one range of bytes. The tests give
 numbers from `0` to `999999`.
 
-A number has at most 19 digits. For a larger number of 19 digits, the program prints
-`9223372036854775807`. The tests also give numbers from `1000000000000000000` to
-`9223372036854775807`.
+A number has at most 19 digits. For a number of 19 digits that is larger than
+`9223372036854775807`, the program prints `9223372036854775807`. The tests also give numbers
+from `1000000000000000000` to `9223372036854775807`.
 
 - The head has at most `4096` bytes. Input of `4097` to `5000` bytes is too long.
 - The request line is a method, a space, a target, a space and the version, 1.0 or 1.1.
