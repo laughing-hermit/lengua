@@ -53,7 +53,10 @@ async fn check_one_folder() {
         // have run or the tests have started, and all of it up to the last proof.
         println!("PORT seconds: parts {parts_seconds:.1}, first reply {first_seconds:.1}");
         println!("PORT first state: {}", recorded["state"]);
-        println!("PORT seconds in all: {:.1}", started.elapsed().as_secs_f64());
+        println!(
+            "PORT seconds in all: {:.1}",
+            started.elapsed().as_secs_f64()
+        );
         for field in ["problems", "tests", "proofs", "parts", "contract", "memory"] {
             let lines = match &report[field] {
                 Value::String(line) => vec![line.as_str()],

@@ -182,31 +182,31 @@ the target is too long. The server does not stop when it cannot print this line.
 | `string(8, 8, "abcdefgh")` | `int(0, 999999)` | 6 |
 
 ## B6: Sends a part of a file
-- Given a file `public/notes.txt` that contains `helloworldagain`
-- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=5-9\r\n\r\n`
-- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=10-\r\n\r\n`
+- Given a file `public/notes.txt` that contains `hello-world-again`
+- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=6-10\r\n\r\n`
+- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=12-\r\n\r\n`
 - And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=-5\r\n\r\n`
-- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=0-4,10-14\r\n\r\n`
+- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=0-4,12-16\r\n\r\n`
 - When the program runs
-- Then the client receives text that matches `HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nETag: "{any(0, 4294967295)}"\r\nContent-Range: bytes 5-9/15\r\nConnection: close\r\n\r\nworld`
-- And the client receives text that matches `HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nETag: "{any(0, 4294967295)}"\r\nContent-Range: bytes 10-14/15\r\nConnection: close\r\n\r\nagain`
-- And the client receives text that matches `HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nETag: "{any(0, 4294967295)}"\r\nContent-Range: bytes 10-14/15\r\nConnection: close\r\n\r\nagain`
-- And the client receives text that matches `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 15\r\nETag: "{any(0, 4294967295)}"\r\nConnection: close\r\n\r\nhelloworldagain`
-- And it prints `GET /files/notes.txt 206 5\nGET /files/notes.txt 206 5\nGET /files/notes.txt 206 5\nGET /files/notes.txt 200 15\n`
+- Then the client receives text that matches `HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nETag: "{any(0, 4294967295)}"\r\nContent-Range: bytes 6-10/17\r\nConnection: close\r\n\r\nworld`
+- And the client receives text that matches `HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nETag: "{any(0, 4294967295)}"\r\nContent-Range: bytes 12-16/17\r\nConnection: close\r\n\r\nagain`
+- And the client receives text that matches `HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nETag: "{any(0, 4294967295)}"\r\nContent-Range: bytes 12-16/17\r\nConnection: close\r\n\r\nagain`
+- And the client receives text that matches `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 17\r\nETag: "{any(0, 4294967295)}"\r\nConnection: close\r\n\r\nhello-world-again`
+- And it prints `GET /files/notes.txt 206 5\nGET /files/notes.txt 206 5\nGET /files/notes.txt 206 5\nGET /files/notes.txt 200 17\n`
 - And it does not stop
 
 ### For any three parts
-- Given a file `public/notes.txt` that contains `{a}{b}{c}`
-- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=5-9\r\n\r\n`
-- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=10-\r\n\r\n`
+- Given a file `public/notes.txt` that contains `{a}-{b}-{c}`
+- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=6-10\r\n\r\n`
+- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=12-\r\n\r\n`
 - And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=-5\r\n\r\n`
-- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=0-4,10-14\r\n\r\n`
+- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nRange: bytes=0-4,12-16\r\n\r\n`
 - When the program runs
-- Then the client receives `HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nETag: "{crc32(a + b + c)}"\r\nContent-Range: bytes 5-9/15\r\nConnection: close\r\n\r\n{b}`
-- And the client receives `HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nETag: "{crc32(a + b + c)}"\r\nContent-Range: bytes 10-14/15\r\nConnection: close\r\n\r\n{c}`
-- And the client receives `HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nETag: "{crc32(a + b + c)}"\r\nContent-Range: bytes 10-14/15\r\nConnection: close\r\n\r\n{c}`
-- And the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 15\r\nETag: "{crc32(a + b + c)}"\r\nConnection: close\r\n\r\n{a}{b}{c}`
-- And it prints `GET /files/notes.txt 206 5\nGET /files/notes.txt 206 5\nGET /files/notes.txt 206 5\nGET /files/notes.txt 200 15\n`
+- Then the client receives `HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nETag: "{crc32(a + "-" + b + "-" + c)}"\r\nContent-Range: bytes 6-10/17\r\nConnection: close\r\n\r\n{b}`
+- And the client receives `HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nETag: "{crc32(a + "-" + b + "-" + c)}"\r\nContent-Range: bytes 12-16/17\r\nConnection: close\r\n\r\n{c}`
+- And the client receives `HTTP/1.1 206 Partial Content\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nETag: "{crc32(a + "-" + b + "-" + c)}"\r\nContent-Range: bytes 12-16/17\r\nConnection: close\r\n\r\n{c}`
+- And the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 17\r\nETag: "{crc32(a + "-" + b + "-" + c)}"\r\nConnection: close\r\n\r\n{a}-{b}-{c}`
+- And it prints `GET /files/notes.txt 206 5\nGET /files/notes.txt 206 5\nGET /files/notes.txt 206 5\nGET /files/notes.txt 200 17\n`
 - And it does not stop
 
 | a | b | c | runs |
@@ -534,7 +534,7 @@ The names that start with a point, and the folder itself, are not files that the
 
 | k | body | runs |
 |---|---|---|
-| `string(1, 64, "abcdefghijklmnopqrstuvwxyzXYZ019-._")` | `choice("[1,]", "tru ", "\"abc", "[1 2", "    ", "1.e1", "nul]", "{a:1")` | 8 |
+| `string(1, 64, "abcdefghijklmnopqrstuvwxyzXYZ019-._")` | `choice("[1,]", "tru ", "\"abc", "[1 2", "    ", "1.e1", "nul]", "{a:1")` | 24 |
 
 ## B20: Answers status 500 when the store is not in its form
 - Given a file `store.json` that contains `not a store`
@@ -558,7 +558,7 @@ The names that start with a point, and the folder itself, are not files that the
 
 | text | k | runs |
 |---|---|---|
-| `choice("not a store", "", "{}", "{\n}", "[\n]\n", "{\n\"a\": 1\n")` | `string(1, 64, "abcdefghijklmnopqrstuvwxyzXYZ019-._")` | 6 |
+| `choice("not a store", "", "{}", "{\n}", "[\n]\n", "{\n\"a\": 1\n")` | `string(1, 64, "abcdefghijklmnopqrstuvwxyzXYZ019-._")` | 24 |
 
 ## B21: Answers status 500 when a file is too large
 - Given a file `public/big.bin` that contains `a` `1048577` times
@@ -602,12 +602,12 @@ The names that start with a point, and the folder itself, are not files that the
 
 ## B23: Answers clients at once
 - Given a client that sends `GET /health?a=1 HTTP/1.1\r\n\r\n`
-- And a client that sends `GET /health?b=2 HTTP/1.1\r\n\r\n`
+- And a client that sends `GET /health?b=1 HTTP/1.1\r\n\r\n`
 - And the clients connect at once
 - When the program runs
 - Then the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n`
 - And the client receives `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n`
-- And it prints `GET /health?b=2 200 3\nGET /health?a=1 200 3\n`
+- And it prints `GET /health?b=1 200 3\nGET /health?a=1 200 3\n`
 - And it does not stop
 
 ### For any two queries
