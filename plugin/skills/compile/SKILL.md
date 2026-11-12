@@ -276,6 +276,38 @@ for this computer. `lengua-mcp check <folder>` is the idea's attester: it builds
 and proves a folder with no lock and no key, writes nothing, and ends with `attested` or
 `not attested`.
 
+## Finding what a run does
+
+`run` has three tools for a run that ends. Each is off unless you ask for it, and a run that
+asks for none is the run it always was. Use them when a test fails and the code doesn't say
+why, or when the user asks where a program's time goes.
+
+- `trace: true` gives `host_calls`: every call the program made to the host, in order, as
+  `fd_write(1, 16, 1, 32) = 0`: the function, the numbers the program passed, and the error
+  number the host answered, 0 for none. The numbers are descriptors, addresses and lengths,
+  never the bytes at them. It keeps the first 512 calls and counts the rest. For an idea with a
+  `- Secret:` line a call is its name and the answer only, as `fd_read = 0`.
+- `profile: true` gives `profile`: how many samples fell in each function of `main.wat`, by
+  its `$name`, and on which lines, with one sample about each millisecond while the program's
+  own code runs. A run shorter than that has no sample, and the report says so. The counts
+  change from run to run.
+- `stop_at` stops the run at a line of `main.wat`, as `"42"`, or where a function starts, as
+  `"$parse"`, before the instruction there runs. `stopped` gives the function's parameters and
+  locals by their names, the globals the program changes, and with
+  `show_memory: "<address>:<length>"` up to 1,024 bytes of its memory in hex. When the run ends
+  before the place, `stopped.reached` is false and `ended` says how it ended. What runs is a
+  copy of `main.wat` with the stop written in: `check` never tests or stamps the copy, and the
+  folder and its lock stay as they were.
+
+lengua refuses `stop_at` for an idea with a `- Secret:` line, since a stop shows values; for an
+idea with a `- Splits:` line, since the pieces' values are not kept; and for an outside module,
+which has no `main.wat`. A trace and a profile of a program that splits its work are of the
+program itself, not of its pieces. A server gets none of the three. From a shell the same tools
+are `--trace`, `--profile`, `--stop-at <line or $function>` and
+`--show-memory <address>:<length>`, before the program's arguments; each report goes to standard
+error once the program has ended, in lines that start `lengua-mcp: trace:`,
+`lengua-mcp: profile:` or `lengua-mcp: stop:` (`lengua-run:` when lengua-run traced the run).
+
 ## A program in another language
 
 `main.wat` is the default, because only it is checked against the rules and proven. When the

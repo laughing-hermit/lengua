@@ -62,11 +62,7 @@ pub(super) struct Equipped {
 /// # Errors
 ///
 /// When a tool isn't for this program, or main.wat has no such place to stop at.
-pub(super) fn equipped(
-    asked: &Asked,
-    ready: &Runnable,
-    built: &Built,
-) -> Result<Equipped, String> {
+pub(super) fn equipped(asked: &Asked, ready: &Runnable, built: &Built) -> Result<Equipped, String> {
     if !asked.any() {
         return Ok(Equipped {
             tools: Tools::default(),

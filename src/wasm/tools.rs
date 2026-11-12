@@ -717,8 +717,11 @@ pub fn plan(text: &str, built: &Built, place: &Place) -> Result<Plan, String> {
                 if known {
                     format!("${name} has no instruction to stop at")
                 } else {
-                    let names: Vec<String> =
-                        own.iter().take(32).map(|function| function.shown()).collect();
+                    let names: Vec<String> = own
+                        .iter()
+                        .take(32)
+                        .map(|function| function.shown())
+                        .collect();
                     format!(
                         "main.wat defines no function ${name}; its functions are {}",
                         names.join(", ")
@@ -1284,7 +1287,10 @@ mod tests {
         let why = no_function.expect_err("no such function");
         assert!(why.contains("$twice"), "{why}");
         let no_line = plan(TEXT, &built, &Place::Line(4)).expect_err("no instruction there");
-        assert!(no_line.contains("line 4") && no_line.contains('7'), "{no_line}");
+        assert!(
+            no_line.contains("line 4") && no_line.contains('7'),
+            "{no_line}"
+        );
         assert_eq!(Place::parse("$twice"), Ok(Place::Function("twice".into())));
         assert_eq!(Place::parse(" 12 "), Ok(Place::Line(12)));
         assert!(Place::parse("0").is_err());

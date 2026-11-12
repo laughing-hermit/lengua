@@ -107,7 +107,10 @@ async fn a_run_traces_the_programs_calls_to_the_host() {
         assert!(plain.get(part).is_none(), "{part} without asking: {plain}");
     }
     let traced = session
-        .call_ok("run", asking(&program, &["2", "3"], &json!({ "trace": true })))
+        .call_ok(
+            "run",
+            asking(&program, &["2", "3"], &json!({ "trace": true })),
+        )
         .await;
     assert_eq!(traced["stdout"], "5\n", "{traced}");
     assert_eq!(traced["exit_code"], 0, "{traced}");
@@ -144,7 +147,12 @@ async fn a_run_traces_the_programs_calls_to_the_host() {
         if !first.is_empty() {
             words.push(OsStr::new(first));
         }
-        words.extend([folder, OsStr::new("--trace"), OsStr::new("2"), OsStr::new("3")]);
+        words.extend([
+            folder,
+            OsStr::new("--trace"),
+            OsStr::new("2"),
+            OsStr::new("3"),
+        ]);
         words
     };
     let ran = from_shell(&launcher(), &session, &words("run"));
@@ -265,7 +273,10 @@ async fn a_run_stops_at_a_function_or_a_line_and_shows_its_values() {
     let refused = session
         .call_error("run", asking(&program, &["2", "3"], &more))
         .await;
-    assert!(refused.contains("defines no function $nothing"), "{refused}");
+    assert!(
+        refused.contains("defines no function $nothing"),
+        "{refused}"
+    );
     assert!(refused.contains("$parse_i64"), "{refused}");
     let more = json!({ "stop_at": "1" });
     let refused = session
@@ -496,8 +507,8 @@ async fn an_outside_module_gets_a_trace_and_a_profile_and_no_stop() {
     let program = Program::new();
     program.write("idea.md", &outside_idea());
     // The module with its names, as a compiler leaves them in.
-    let built = lengua::wasm::text::build(&spinning_module())
-        .unwrap_or_else(|problem| panic!("{problem}"));
+    let built =
+        lengua::wasm::text::build(&spinning_module()).unwrap_or_else(|problem| panic!("{problem}"));
     std::fs::write(program.file("main.wasm"), &built.named).expect("write main.wasm");
     session.call_ok("check", program.request(REQUEST)).await;
     let reply = session.settle(&program).await;
@@ -537,7 +548,9 @@ async fn an_outside_module_gets_a_trace_and_a_profile_and_no_stop() {
     );
 
     let more = json!({ "stop_at": "$spin" });
-    let refused = session.call_error("run", asking(&program, &[], &more)).await;
+    let refused = session
+        .call_error("run", asking(&program, &[], &more))
+        .await;
     assert!(refused.contains("an outside module"), "{refused}");
 
     // From a shell: the profile is said on standard error, in lines of one form.
@@ -559,10 +572,9 @@ async fn an_outside_module_gets_a_trace_and_a_profile_and_no_stop() {
         .filter(|line| line.starts_with("lengua-mcp: profile: function "))
         .collect();
     assert!(
-        shares
-            .first()
-            .is_some_and(|line| line.starts_with("lengua-mcp: profile: function $spin: ")
-                && line.ends_with(" with calls")),
+        shares.first().is_some_and(|line| line
+            .starts_with("lengua-mcp: profile: function $spin: ")
+            && line.ends_with(" with calls")),
         "{said}"
     );
     session.service.cancel().await.expect("close the session");

@@ -1051,6 +1051,65 @@ either program loads it. For an idea that names a secret, it builds main.wat, fi
 that take a secret, and reads the code of the module it loaded before it runs it. It runs the
 program on a thread of its own.
 
+### The tools of a run
+
+A run can be asked for a trace of its calls to the host, a profile of its time, and a stop at a
+place in main.wat (`src/wasm/tools.rs`; [docs/run.md](docs/run.md) shows each report). Each is
+off by default. What each costs a run that doesn't ask:
+
+- **A trace** costs nothing. Only a traced run gets a linker of its own, in which each function
+  of the host is defined inside another that writes the call into the trace
+  (`src/wasm/host/trace.rs`). Every other run's linker holds the functions as they always
+  were. The trace holds what crosses the host's edge: the function's name, the numbers the
+  program passed and the host's answer. It reads nothing from the program's memory.
+- **A profile** costs a run with a deadline one test of an empty field each time its engine's
+  clock has moved, every 10 ms, and a run from a shell nothing. It uses what the engine
+  already does for a run with a deadline:
+  the compiled code looks at the engine's clock where a function starts and at each loop's
+  head, and calls lengua when the clock has moved. A profiled run starts a thread that moves
+  the clock each millisecond, and at each call lengua takes Wasmtime's backtrace of the
+  program's stack (`WasmBacktrace::force_capture`) and counts its functions. Nothing is compiled
+  in for it. From the `run` tool, the module is the one every run of the tool compiles. From a
+  shell, where a run's engine has no clock, `lengua-mcp run --profile` compiles the module for
+  the engine that has one.
+- **A stop** costs one test of an empty field after the run. Wasmtime 50 has no way to stop a
+  program at a place that lengua can use: it stops a program at a deadline, at a count of
+  operations or at a trap, and it shows a stopped program's exports, not its locals. So lengua
+  writes the stop into a copy of main.wat (`tools::plan`): just before the first instruction of
+  the place, as wast's own parse places it, each local goes to a global the copy adds and
+  exports, a flag is set, and the copy traps. The copy also exports each global the program may
+  change. The stop goes on the line it stops at, and the new globals after the module's last
+  field, so every line of the copy is main.wat's line and no function, global or local changes
+  its number. Once the run has ended, lengua reads the flag, the globals and the memory from
+  the instance. The copy is built, run once and dropped. It is never stamped, kept or sealed,
+  and a copy that doesn't build is refused with the builder's words.
+
+The copy with a stop is not the module `check` tested, and that is said in every report of a
+stop. What still holds for it is the host: it runs under the idea's grants, with the run's
+limits. What doesn't hold is every rule and proof, which nobody checked for the copy.
+
+A secret, a split and an outside module each change what a tool gives, decided in one place
+(`src/server/wat/tools.rs`) and pinned by `tests/tools.rs`:
+
+- With a `- Secret:` line, a trace keeps each call's name and the host's answer, and none of
+  the numbers the program passed. The secret rule proves that no secret decides a branch, an
+  address or a loop's count; it does not prove that a program never passes a secret to the
+  host as a number, as an exit code or a length. So the trace holds none. A stop shows locals
+  and memory, which may be the secret, and is refused. A profile shows no value and is given:
+  for such an idea the code is constant-time by the same rule, so where its time goes says
+  nothing of the secret.
+- With a `- Splits:` line, a trace and a profile are of the program itself. Its pieces run at
+  once in the same linker; a traced function leaves a piece's call out, so that the trace stays
+  one program's calls in order, and a piece's store takes no sample. A stop is refused: a piece
+  that reached it would end the run with its values lost in the piece's own instance.
+- An outside module gets a trace and a profile as main.wat does, with the function names its
+  own `name` section has. It has no main.wat to write a stop into, so a stop is refused.
+
+Not built: a step to the next line, more than one stop, a stop on a condition, a changed value,
+a stop inside a piece or an outside module, and time by instruction. A profile samples only
+where the engine looks at its clock, so a long stretch of code with no loop and no call shows
+at the next such place.
+
 ## The lock, the key and trust
 
 ### lengua.lock
@@ -1195,9 +1254,11 @@ a restart loses them.
 `run` takes `path`, `args`, `stdin` or `stdin_file` (a file in `folder`, at most 16 MiB, opened
 once beneath the folder and read from the file that opened, so no name or link leads out and
 nothing that takes its name afterwards is read), `folder`,
-`timeout_seconds`, `env` and `stop`. Its reply gives standard output and error, the exit code, how
+`timeout_seconds`, `env` and `stop`, and for the tools of a run `trace`, `profile`, `stop_at` and
+`show_memory`. Its reply gives standard output and error, the exit code, how
 the program ended, its time on the clock, where a server serves, the connections lengua made, and
-for an outside module `outside`, that what ran is trusted, not proven.
+for an outside module `outside`, that what ran is trusted, not proven, and for each tool asked
+for `host_calls`, `profile` or `stopped` (The tools of a run).
 An idea that listens starts a server in the background, at most one per folder, reached at
 127.0.0.1 on its port.
 
@@ -1206,7 +1267,7 @@ The command line (`src/main.rs`):
 | Command | Does |
 |---|---|
 | `lengua-mcp` | The MCP server |
-| `lengua-mcp run <folder> [--in <folder>] [--env NAME=value]… [[--] args]` | Runs a checked program attached to the shell. Exits with the program's code, 134 when it trapped, 127 when it never started, and 125 when lengua won't run it or can't start it |
+| `lengua-mcp run <folder> [--in <folder>] [--env NAME=value]… [--trace] [--profile] [--stop-at <place>] [--show-memory <address>:<length>] [[--] args]` | Runs a checked program attached to the shell. Exits with the program's code, 134 when it trapped, 127 when it never started, and 125 when lengua won't run it or can't start it |
 | `lengua-mcp check <folder>` | The attester: 0 attested, 1 not |
 | `lengua-mcp doctor` | Checks this computer: the server, the engine (a module it compiles and runs), the CPU, z3 and cvc5 and their pinned versions, whether the data folder and `PLUGIN_DATA` can be written, and the clocks' resolution. Exits 0 only when nothing is wrong |
 | `lengua-mcp install [--check] [--link] [--prefix <folder>]` | Installs lengua from its unpacked release archive |
