@@ -656,7 +656,8 @@ async fn the_run_tool_runs_a_program_that_splits_its_work() {
     let ran = session.call_ok("run", arguments).await;
     assert_eq!(ran["stdout"], "10 2\n32 2\n97 3\n", "{ran}");
     assert!(
-        ran.to_string().contains("it may split its work into up to 8 pieces"),
+        ran.to_string()
+            .contains("it may split its work into up to 8 pieces"),
         "{ran}"
     );
     // Enough for each of the eight pieces to have work.

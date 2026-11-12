@@ -122,11 +122,7 @@ struct Leaving(Arc<Work>);
 
 impl Drop for Leaving {
     fn drop(&mut self) {
-        let mut busy = self
-            .0
-            .busy
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut busy = self.0.busy.lock().unwrap_or_else(PoisonError::into_inner);
         *busy = busy.saturating_sub(1);
         self.0.idle.notify_all();
     }
@@ -328,10 +324,7 @@ impl Work {
     fn wait(&self) -> Vec<Option<Ended>> {
         let mut busy = self.busy.lock().unwrap_or_else(PoisonError::into_inner);
         while *busy > 0 {
-            busy = self
-                .idle
-                .wait(busy)
-                .unwrap_or_else(PoisonError::into_inner);
+            busy = self.idle.wait(busy).unwrap_or_else(PoisonError::into_inner);
         }
         drop(busy);
         self.ended

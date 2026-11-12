@@ -751,7 +751,12 @@ fn split_work_gives_the_same_on_one_core_and_on_many() {
     let input = every_value(20 * 1024 * 1024 + 5);
     let programs = [
         (SPLIT_IDEA, SPLIT_CODE, histogram_of(&input), Vec::new()),
-        (CRC_SPLIT_IDEA, CRC_SPLIT_CODE, crc32c_of(&input), b"0\n".to_vec()),
+        (
+            CRC_SPLIT_IDEA,
+            CRC_SPLIT_CODE,
+            crc32c_of(&input),
+            b"0\n".to_vec(),
+        ),
     ];
     for (idea, code, expected, of_nothing) in programs {
         let checked = Checked::new(idea, code);
@@ -775,6 +780,10 @@ fn split_work_gives_the_same_on_one_core_and_on_many() {
     }
 }
 
+/// A kind of work: its name, the idea and the code of the program that does it on one core and
+/// of the one that splits it, and what it gives for an input.
+type Kind = (&'static str, [&'static str; 4], fn(&[u8]) -> Vec<u8>);
+
 /// How long two kinds of work take by lengua-run on 64 MiB and on 256 MiB, the best of seven
 /// runs each on the clock: the byte counts and the CRC-32C, each by the program that works on
 /// one core (tests/fixtures) and by the one that splits its work (examples), with one piece at
@@ -784,7 +793,7 @@ fn split_work_gives_the_same_on_one_core_and_on_many() {
 #[ignore = "a measurement: run alone, by name"]
 fn split_work_is_measured() {
     let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
-    let kinds: [(&str, [&str; 4], fn(&[u8]) -> Vec<u8>); 2] = [
+    let kinds: [Kind; 2] = [
         (
             "histogram",
             [WHOLE_IDEA, WHOLE_CODE, SPLIT_IDEA, SPLIT_CODE],
@@ -811,7 +820,10 @@ fn split_work_is_measured() {
                 for _ in 0..7 {
                     let (ran, took) = checked.run_on(&file, at_once);
                     assert_eq!(ran.status.code(), Some(0), "{at_once:?}: {}", said(&ran));
-                    assert!(ran.stdout == expected, "{kind}, {at_once:?}: another result");
+                    assert!(
+                        ran.stdout == expected,
+                        "{kind}, {at_once:?}: another result"
+                    );
                     least = least.min(took);
                 }
                 least.as_secs_f64() * 1000.0
