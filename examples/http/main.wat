@@ -104,7 +104,7 @@
   (global $text.size i32 (i32.const 4097))
   ;; What $http_request_line writes: the method's length, where the target starts, the target's
   ;; length and the version's last digit, 4 bytes each.
-  (global $line i32 (i32.const 6208))
+  (global $line i32 (i32.const 6208))  ;; shared: main has it written, report reads it
   (global $line.size i32 (i32.const 16))
   ;; What $http_header writes: where a field's value starts and its length.
   (global $field i32 (i32.const 6240))
@@ -121,8 +121,6 @@
     (local $head i32)
     (local $status i32)
     (local $at i32)
-    (local $start i32)
-    (local $length i32)
     (block $write_failed
       (block $read_failed
         (block $too_long
@@ -146,47 +144,12 @@
               (br_if $bad (local.get $status))
               (br_if $bad
                 (i32.eqz (call $http_headers_valid (global.get $text) (local.get $head))))
-              ;; The method, which starts the head.
-              (local.set $length (i32.load (global.get $line)))
-              (if (i32.gt_u (local.get $length) (global.get $HTTP_METHOD))
+              (local.set $at (call $report (local.get $head)))
+              (br_if $bad (i32.eq (local.get $at) (global.get $HTTP_NO)))
+              (if (i32.gt_u (local.get $at) (global.get $out.size))
                 (then (call $assert_fail (i32.const 3)) unreachable))
-              (local.set $at (call $emit (i32.const 0) (i32.const 0) (local.get $length)))
-              (if (i32.gt_u (local.get $at) (global.get $HTTP_METHOD))
-                (then (call $assert_fail (i32.const 4)) unreachable))
-              (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get $HTTP_SPACE))
-              (local.set $at (i32.add (local.get $at) (i32.const 1)))
-              ;; The path, decoded where it goes in the output.
-              (local.set $start (i32.load offset=4 (global.get $line)))
-              (local.set $length (i32.load offset=8 (global.get $line)))
-              (if (i32.gt_u (local.get $start) (global.get $HTTP_HEAD))
-                (then (call $assert_fail (i32.const 5)) unreachable))
-              (if (i32.gt_u (local.get $length) (global.get $HTTP_HEAD))
-                (then (call $assert_fail (i32.const 6)) unreachable))
-              (local.set $length
-                (call $http_path (global.get $text) (local.get $start)
-                  (i32.add (local.get $start) (local.get $length))
-                  (i32.add (global.get $out) (local.get $at))))
-              (br_if $bad (i32.eq (local.get $length) (global.get $HTTP_NO)))
-              (local.set $at (i32.add (local.get $at) (local.get $length)))
-              (if (i32.gt_u (local.get $at) (global.get $FIRST_LINE))
-                (then (call $assert_fail (i32.const 7)) unreachable))
-              (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get $NEWLINE))
-              (local.set $at (i32.add (local.get $at) (i32.const 1)))
-              ;; The Host field's value, when the head has the field.
-              (if
-                (call $http_header (global.get $text) (local.get $head) (global.get $host)
-                  (global.get $HOST_LENGTH) (global.get $field))
-                (then
-                  (local.set $start (i32.load (global.get $field)))
-                  (local.set $length (i32.load offset=4 (global.get $field)))
-                  (local.set $at
-                    (call $emit (local.get $at) (local.get $start) (local.get $length)))))
-              (if (i32.ge_u (local.get $at) (global.get $out.size))
-                (then (call $assert_fail (i32.const 8)) unreachable))
-              (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get $NEWLINE))
               (br_if $write_failed
-                (call $write_all (global.get $STDOUT) (global.get $out)
-                  (i32.add (local.get $at) (i32.const 1))))
+                (call $write_all (global.get $STDOUT) (global.get $out) (local.get $at)))
               (call $proc_exit (global.get $EXIT_OK))
               unreachable)
             (br_if $write_failed
@@ -208,6 +171,59 @@
       unreachable)
     (call $proc_exit (global.get $EXIT_WRITE_FAILED))
     unreachable)
+
+  ;; Writes the output for the head of $head bytes at the input's start: the method, a space,
+  ;; the decoded path and a newline, then the Host field's value and a newline. Gives the
+  ;; output's length, or HTTP_NO when the path is not valid.
+  (func $report (param $head i32) (result i32)
+    (local $at i32)
+    (local $start i32)
+    (local $length i32)
+    (local $result i32)
+    (if (i32.gt_u (local.get $head) (global.get $HTTP_HEAD))
+      (then (call $assert_fail (i32.const 4)) unreachable))
+    (local.set $result (global.get $HTTP_NO))
+    (block $bad
+      ;; The method, which starts the head.
+      (local.set $length (i32.load (global.get $line)))
+      (if (i32.gt_u (local.get $length) (global.get $HTTP_METHOD))
+        (then (call $assert_fail (i32.const 5)) unreachable))
+      (local.set $at (call $emit (i32.const 0) (i32.const 0) (local.get $length)))
+      (if (i32.gt_u (local.get $at) (global.get $HTTP_METHOD))
+        (then (call $assert_fail (i32.const 6)) unreachable))
+      (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get $HTTP_SPACE))
+      (local.set $at (i32.add (local.get $at) (i32.const 1)))
+      ;; The path, decoded where it goes in the output.
+      (local.set $start (i32.load offset=4 (global.get $line)))
+      (local.set $length (i32.load offset=8 (global.get $line)))
+      (if (i32.gt_u (local.get $start) (global.get $HTTP_HEAD))
+        (then (call $assert_fail (i32.const 7)) unreachable))
+      (if (i32.gt_u (local.get $length) (global.get $HTTP_HEAD))
+        (then (call $assert_fail (i32.const 8)) unreachable))
+      (local.set $length
+        (call $http_path (global.get $text) (local.get $start)
+          (i32.add (local.get $start) (local.get $length))
+          (i32.add (global.get $out) (local.get $at))))
+      (br_if $bad (i32.eq (local.get $length) (global.get $HTTP_NO)))
+      (local.set $at (i32.add (local.get $at) (local.get $length)))
+      (if (i32.gt_u (local.get $at) (global.get $FIRST_LINE))
+        (then (call $assert_fail (i32.const 12)) unreachable))
+      (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get $NEWLINE))
+      (local.set $at (i32.add (local.get $at) (i32.const 1)))
+      ;; The Host field's value, when the head has the field.
+      (if
+        (call $http_header (global.get $text) (local.get $head) (global.get $host)
+          (global.get $HOST_LENGTH) (global.get $field))
+        (then
+          (local.set $start (i32.load (global.get $field)))
+          (local.set $length (i32.load offset=4 (global.get $field)))
+          (local.set $at
+            (call $emit (local.get $at) (local.get $start) (local.get $length)))))
+      (if (i32.ge_u (local.get $at) (global.get $out.size))
+        (then (call $assert_fail (i32.const 13)) unreachable))
+      (i32.store8 (i32.add (global.get $out) (local.get $at)) (global.get $NEWLINE))
+      (local.set $result (i32.add (local.get $at) (i32.const 1))))
+    (local.get $result))
 
   ;; Copies $count bytes from place $from of the input to place $at of the output, one at a
   ;; time, each place checked, and gives the place after the last byte it wrote.
