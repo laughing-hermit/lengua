@@ -115,6 +115,9 @@ const PROGRAMS: &[(&str, &str)] = &[
     ("examples/crc32/idea.md", "examples/crc32/main.wat"),
     ("examples/bytes/idea.md", "examples/bytes/main.wat"),
     ("examples/sort64/idea.md", "examples/sort64/main.wat"),
+    // The parts of W22's server.
+    ("examples/json/idea.md", "examples/json/main.wat"),
+    ("examples/http/idea.md", "examples/http/main.wat"),
     ("examples/upcase/idea.md", "examples/upcase/main.wat"),
     ("examples/fetch/idea.md", "examples/fetch/main.wat"),
     (
@@ -141,6 +144,8 @@ const TESTED: &[(&str, &str)] = &[
     ("examples/copy/idea.md", "examples/copy/main.wat"),
     ("examples/computer/idea.md", "examples/computer/main.wat"),
     ("examples/key/idea.md", "examples/key/main.wat"),
+    // W22's server, of 3,600 lines: a server's wait is not proven, so its tests stand alone.
+    ("examples/httpd/idea.md", "examples/httpd/main.wat"),
 ];
 
 fn read(path: &str) -> String {
