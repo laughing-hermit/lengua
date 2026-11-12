@@ -176,6 +176,8 @@ impl LenguaServer {
                     machine_code: None,
                     calls: Vec::new(),
                     outside: Some(said),
+                    functions: Vec::new(),
+                    data: Vec::new(),
                 };
                 self.start_wasm_checking(folder, files, code, false).await
             }

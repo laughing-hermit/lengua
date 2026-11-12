@@ -509,8 +509,33 @@ pub(super) struct WasmCode {
     machine_code: Option<String>,
     /// The modules main.wat calls, as its tests run with them and lengua.lock records them.
     calls: Vec<calls::Opened>,
+    /// How full main.wat's functions are, as the reply says it ([`CheckReport::functions`]).
+    pub(super) functions: Vec<String>,
+    /// main.wat's named texts, as the reply says them ([`CheckReport::data`]).
+    pub(super) data: Vec<String>,
     /// For an outside module, main.wasm, what every reply says of it; `None` for main.wat.
     outside: Option<Vec<String>>,
+}
+
+/// Why main.wat isn't ready for its tests: what's wrong, each on its line, with what the rules
+/// read of it all the same, when they read it.
+#[derive(Debug, Default)]
+struct Refused {
+    /// What's wrong.
+    problems: Vec<String>,
+    /// How full its functions are ([`CheckReport::functions`]).
+    functions: Vec<String>,
+    /// Its named texts ([`CheckReport::data`]).
+    data: Vec<String>,
+}
+
+impl From<Vec<String>> for Refused {
+    fn from(problems: Vec<String>) -> Self {
+        Self {
+            problems,
+            ..Self::default()
+        }
+    }
 }
 
 /// A file's text from the bytes a read kept, `bytes`: `None` when the file wasn't there.
@@ -1228,12 +1253,12 @@ impl LenguaServer {
                     self.start_wasm_checking(folder, files, code, prove_further)
                         .await
                 }
-                Err(problems) => {
-                    return Ok(CheckReport::problems(
-                        "code_problems",
-                        problems,
-                        fix_code(folder),
-                    ));
+                Err(refused) => {
+                    return Ok(CheckReport {
+                        functions: refused.functions,
+                        data: refused.data,
+                        ..CheckReport::problems("code_problems", refused.problems, fix_code(folder))
+                    });
                 }
             },
         };
@@ -1273,6 +1298,8 @@ impl LenguaServer {
             report = self.checking_report(folder, &checking);
             report.next_step = report.next_step.replace(VERIFIED_NOTE, "");
         }
+        report.functions.clone_from(&checking.functions);
+        report.data.clone_from(&checking.data);
         report.parts = parts::lines(&taken);
         report.calls = calls::lines(&opened);
         if matches!(report.state.as_str(), "done" | "proving")
@@ -1348,7 +1375,7 @@ impl LenguaServer {
         code: &str,
         idea: Idea,
         suite: TestSuite,
-    ) -> Result<WasmCode, Vec<String>> {
+    ) -> Result<WasmCode, Refused> {
         let built = text::build(code).map_err(|problem| vec![problem.to_string()])?;
         let taken = parts::taken(&self.data_dir, folder, &idea.parts, code)?;
         let opened = calls::open(&self.data_dir, folder, &idea.network.reach.calls)?;
@@ -1358,13 +1385,24 @@ impl LenguaServer {
             secrets: &idea.secrets,
         };
         let report = checker::wasm::check(code, &built, &context);
+        // What the reply says of main.wat's size and its named texts, whether or not it passes.
+        let functions = report.size_lines();
+        let data = report.texts.lines();
         if !report.passed() {
-            return Err(report.lines());
+            return Err(Refused {
+                problems: report.lines(),
+                functions,
+                data,
+            });
         }
         // A part's contract, held to what the rules found of the functions it offers.
         let stated = parts::contract_problems(idea_text, code, &report.lends);
         if !stated.is_empty() {
-            return Err(stated);
+            return Err(Refused {
+                problems: stated,
+                functions,
+                data,
+            });
         }
         // An idea with a `- Secret:` line: the code the engine compiles the module to on this
         // CPU, as `run` and a run from a shell compile it, keeps the secret rule too. An idea
@@ -1397,6 +1435,8 @@ impl LenguaServer {
             parts: parts::stamps(&taken),
             calls: opened,
             machine_code,
+            functions,
+            data,
             outside: None,
         })
     }
@@ -1434,6 +1474,8 @@ impl LenguaServer {
             further,
             obligations: code.obligations.clone(),
             machine_code: code.machine_code.clone(),
+            functions: code.functions.clone(),
+            data: code.data.clone(),
             outside: code.outside.clone(),
             calls: !code.calls.is_empty(),
         });

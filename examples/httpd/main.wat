@@ -200,60 +200,60 @@
   (global $UNDERSCORE i32 (i32.const 95))
 
   ;; Where each literal text starts in $texts. Each ends with a NUL.
-  (global $T_HTTP i32 (i32.const 0))
-  (global $T_LINE_END i32 (i32.const 10))
-  (global $T_TYPE i32 (i32.const 13))
-  (global $T_LENGTH i32 (i32.const 30))
-  (global $T_TAG i32 (i32.const 49))
-  (global $T_TAG_END i32 (i32.const 57))
-  (global $T_RANGE i32 (i32.const 61))
-  (global $T_ANY i32 (i32.const 83))
-  (global $T_CLOSE i32 (i32.const 86))
-  (global $T_ALLOW_GET i32 (i32.const 108))
-  (global $T_ALLOW_ALL i32 (i32.const 127))
-  (global $T_NEWLINE i32 (i32.const 159))
-  (global $T_SPACE i32 (i32.const 161))
-  (global $T_HYPHEN i32 (i32.const 163))
-  (global $T_SLASH i32 (i32.const 165))
-  (global $T_NO_LINE i32 (i32.const 167))
-  (global $T_OK i32 (i32.const 171))
-  (global $T_COMMA i32 (i32.const 175))
-  (global $T_COMMA_NEWLINE i32 (i32.const 177))
-  (global $T_STORE_END i32 (i32.const 180))
-  (global $T_NAME_END i32 (i32.const 184))
-  (global $T_STORE_FILE i32 (i32.const 188))
-  (global $P_HEALTH i32 (i32.const 199))
-  (global $P_FILES i32 (i32.const 207))
-  (global $P_STORE i32 (i32.const 215))
-  (global $P_KEY i32 (i32.const 219))
-  (global $R_200 i32 (i32.const 224))
-  (global $R_204 i32 (i32.const 231))
-  (global $R_206 i32 (i32.const 246))
-  (global $R_304 i32 (i32.const 266))
-  (global $R_400 i32 (i32.const 283))
-  (global $R_404 i32 (i32.const 299))
-  (global $R_405 i32 (i32.const 313))
-  (global $R_411 i32 (i32.const 336))
-  (global $R_413 i32 (i32.const 356))
-  (global $R_414 i32 (i32.const 378))
-  (global $R_416 i32 (i32.const 395))
-  (global $R_431 i32 (i32.const 421))
-  (global $R_500 i32 (i32.const 457))
-  (global $R_501 i32 (i32.const 483))
-  (global $R_505 i32 (i32.const 503))
-  (global $R_507 i32 (i32.const 534))
-  (global $M_PLAIN i32 (i32.const 559))
-  (global $M_HTML i32 (i32.const 570))
-  (global $M_CSS i32 (i32.const 580))
-  (global $M_CSV i32 (i32.const 589))
-  (global $M_SCRIPT i32 (i32.const 598))
-  (global $M_JSON i32 (i32.const 614))
-  (global $M_WASM i32 (i32.const 631))
-  (global $M_BYTES i32 (i32.const 648))
-  (global $M_SVG i32 (i32.const 673))
-  (global $M_PNG i32 (i32.const 687))
-  (global $M_JPEG i32 (i32.const 697))
-  (global $M_GIF i32 (i32.const 708))
+  (global $T_HTTP i32 (i32.const 0))  ;; offset: t_http
+  (global $T_LINE_END i32 (i32.const 10))  ;; offset: t_line_end
+  (global $T_TYPE i32 (i32.const 13))  ;; offset: t_type
+  (global $T_LENGTH i32 (i32.const 30))  ;; offset: t_length
+  (global $T_TAG i32 (i32.const 49))  ;; offset: t_tag
+  (global $T_TAG_END i32 (i32.const 57))  ;; offset: t_tag_end
+  (global $T_RANGE i32 (i32.const 61))  ;; offset: t_range
+  (global $T_ANY i32 (i32.const 83))  ;; offset: t_any
+  (global $T_CLOSE i32 (i32.const 86))  ;; offset: t_close
+  (global $T_ALLOW_GET i32 (i32.const 108))  ;; offset: t_allow_get
+  (global $T_ALLOW_ALL i32 (i32.const 127))  ;; offset: t_allow_all
+  (global $T_NEWLINE i32 (i32.const 159))  ;; offset: t_newline
+  (global $T_SPACE i32 (i32.const 161))  ;; offset: t_space
+  (global $T_HYPHEN i32 (i32.const 163))  ;; offset: t_hyphen
+  (global $T_SLASH i32 (i32.const 165))  ;; offset: t_slash
+  (global $T_NO_LINE i32 (i32.const 167))  ;; offset: t_no_line
+  (global $T_OK i32 (i32.const 171))  ;; offset: t_ok
+  (global $T_COMMA i32 (i32.const 175))  ;; offset: t_comma
+  (global $T_COMMA_NEWLINE i32 (i32.const 177))  ;; offset: t_comma_newline
+  (global $T_STORE_END i32 (i32.const 180))  ;; offset: t_store_end
+  (global $T_NAME_END i32 (i32.const 184))  ;; offset: t_name_end
+  (global $T_STORE_FILE i32 (i32.const 188))  ;; offset: t_store_file
+  (global $P_HEALTH i32 (i32.const 199))  ;; offset: p_health
+  (global $P_FILES i32 (i32.const 207))  ;; offset: p_files
+  (global $P_STORE i32 (i32.const 215))  ;; offset: p_store
+  (global $P_KEY i32 (i32.const 219))  ;; offset: p_key
+  (global $R_200 i32 (i32.const 224))  ;; offset: r_200
+  (global $R_204 i32 (i32.const 231))  ;; offset: r_204
+  (global $R_206 i32 (i32.const 246))  ;; offset: r_206
+  (global $R_304 i32 (i32.const 266))  ;; offset: r_304
+  (global $R_400 i32 (i32.const 283))  ;; offset: r_400
+  (global $R_404 i32 (i32.const 299))  ;; offset: r_404
+  (global $R_405 i32 (i32.const 313))  ;; offset: r_405
+  (global $R_411 i32 (i32.const 336))  ;; offset: r_411
+  (global $R_413 i32 (i32.const 356))  ;; offset: r_413
+  (global $R_414 i32 (i32.const 378))  ;; offset: r_414
+  (global $R_416 i32 (i32.const 395))  ;; offset: r_416
+  (global $R_431 i32 (i32.const 421))  ;; offset: r_431
+  (global $R_500 i32 (i32.const 457))  ;; offset: r_500
+  (global $R_501 i32 (i32.const 483))  ;; offset: r_501
+  (global $R_505 i32 (i32.const 503))  ;; offset: r_505
+  (global $R_507 i32 (i32.const 534))  ;; offset: r_507
+  (global $M_PLAIN i32 (i32.const 559))  ;; offset: m_plain
+  (global $M_HTML i32 (i32.const 570))  ;; offset: m_html
+  (global $M_CSS i32 (i32.const 580))  ;; offset: m_css
+  (global $M_CSV i32 (i32.const 589))  ;; offset: m_csv
+  (global $M_SCRIPT i32 (i32.const 598))  ;; offset: m_script
+  (global $M_JSON i32 (i32.const 614))  ;; offset: m_json
+  (global $M_WASM i32 (i32.const 631))  ;; offset: m_wasm
+  (global $M_BYTES i32 (i32.const 648))  ;; offset: m_bytes
+  (global $M_SVG i32 (i32.const 673))  ;; offset: m_svg
+  (global $M_PNG i32 (i32.const 687))  ;; offset: m_png
+  (global $M_JPEG i32 (i32.const 697))  ;; offset: m_jpeg
+  (global $M_GIF i32 (i32.const 708))  ;; offset: m_gif
   ;; No type and no other field, for head_start and fail.
   (global $NO_TEXT i32 (i32.const 0))
   ;; Where each field's name starts in $names, and its length.
@@ -430,61 +430,62 @@
 
   ;; Regions (rule 3, M1), from 1024 up. The literal texts, read-only, one after another.
   (global $texts i32 (i32.const 1024))
-  (global $texts.rosize i32 (i32.const 718))
-  (data (i32.const 1024) "HTTP/1.1 \00")
-  (data (i32.const 1034) "\0d\0a\00")
-  (data (i32.const 1037) "\0d\0aContent-Type: \00")
-  (data (i32.const 1054) "\0d\0aContent-Length: \00")
-  (data (i32.const 1073) "ETag: \22\00")
-  (data (i32.const 1081) "\22\0d\0a\00")
-  (data (i32.const 1085) "Content-Range: bytes \00")
-  (data (i32.const 1107) "*/\00")
-  (data (i32.const 1110) "Connection: close\0d\0a\0d\0a\00")
-  (data (i32.const 1132) "Allow: GET, HEAD\0d\0a\00")
-  (data (i32.const 1151) "Allow: GET, HEAD, PUT, DELETE\0d\0a\00")
-  (data (i32.const 1183) "\0a\00")
-  (data (i32.const 1185) " \00")
-  (data (i32.const 1187) "-\00")
-  (data (i32.const 1189) "/\00")
-  (data (i32.const 1191) "- -\00")
-  (data (i32.const 1195) "ok\0a\00")
-  (data (i32.const 1199) ",\00")
-  (data (i32.const 1201) ",\0a\00")
-  (data (i32.const 1204) "\0a}\0a\00")
-  (data (i32.const 1208) "\22: \00")
-  (data (i32.const 1212) "store.json\00")
-  (data (i32.const 1223) "/health\00")
-  (data (i32.const 1231) "/files/\00")
-  (data (i32.const 1239) "/kv\00")
-  (data (i32.const 1243) "/kv/\00")
-  (data (i32.const 1248) "200 OK\00")
-  (data (i32.const 1255) "204 No Content\00")
-  (data (i32.const 1270) "206 Partial Content\00")
-  (data (i32.const 1290) "304 Not Modified\00")
-  (data (i32.const 1307) "400 Bad Request\00")
-  (data (i32.const 1323) "404 Not Found\00")
-  (data (i32.const 1337) "405 Method Not Allowed\00")
-  (data (i32.const 1360) "411 Length Required\00")
-  (data (i32.const 1380) "413 Content Too Large\00")
-  (data (i32.const 1402) "414 URI Too Long\00")
-  (data (i32.const 1419) "416 Range Not Satisfiable\00")
-  (data (i32.const 1445) "431 Request Header Fields Too Large\00")
-  (data (i32.const 1481) "500 Internal Server Error\00")
-  (data (i32.const 1507) "501 Not Implemented\00")
-  (data (i32.const 1527) "505 HTTP Version Not Supported\00")
-  (data (i32.const 1558) "507 Insufficient Storage\00")
-  (data (i32.const 1583) "text/plain\00")
-  (data (i32.const 1594) "text/html\00")
-  (data (i32.const 1604) "text/css\00")
-  (data (i32.const 1613) "text/csv\00")
-  (data (i32.const 1622) "text/javascript\00")
-  (data (i32.const 1638) "application/json\00")
-  (data (i32.const 1655) "application/wasm\00")
-  (data (i32.const 1672) "application/octet-stream\00")
-  (data (i32.const 1697) "image/svg+xml\00")
-  (data (i32.const 1711) "image/png\00")
-  (data (i32.const 1721) "image/jpeg\00")
-  (data (i32.const 1732) "image/gif\00")
+  (global $texts.rosize i32 (i32.const 718))  ;; len: texts
+  (data (i32.const 1024)  ;; text: texts
+    "HTTP/1.1 \00"  ;; text: t_http
+    "\0d\0a\00"  ;; text: t_line_end
+    "\0d\0aContent-Type: \00"  ;; text: t_type
+    "\0d\0aContent-Length: \00"  ;; text: t_length
+    "ETag: \22\00"  ;; text: t_tag
+    "\22\0d\0a\00"  ;; text: t_tag_end
+    "Content-Range: bytes \00"  ;; text: t_range
+    "*/\00"  ;; text: t_any
+    "Connection: close\0d\0a\0d\0a\00"  ;; text: t_close
+    "Allow: GET, HEAD\0d\0a\00"  ;; text: t_allow_get
+    "Allow: GET, HEAD, PUT, DELETE\0d\0a\00"  ;; text: t_allow_all
+    "\0a\00"  ;; text: t_newline
+    " \00"  ;; text: t_space
+    "-\00"  ;; text: t_hyphen
+    "/\00"  ;; text: t_slash
+    "- -\00"  ;; text: t_no_line
+    "ok\0a\00"  ;; text: t_ok
+    ",\00"  ;; text: t_comma
+    ",\0a\00"  ;; text: t_comma_newline
+    "\0a}\0a\00"  ;; text: t_store_end
+    "\22: \00"  ;; text: t_name_end
+    "store.json\00"  ;; text: t_store_file
+    "/health\00"  ;; text: p_health
+    "/files/\00"  ;; text: p_files
+    "/kv\00"  ;; text: p_store
+    "/kv/\00"  ;; text: p_key
+    "200 OK\00"  ;; text: r_200
+    "204 No Content\00"  ;; text: r_204
+    "206 Partial Content\00"  ;; text: r_206
+    "304 Not Modified\00"  ;; text: r_304
+    "400 Bad Request\00"  ;; text: r_400
+    "404 Not Found\00"  ;; text: r_404
+    "405 Method Not Allowed\00"  ;; text: r_405
+    "411 Length Required\00"  ;; text: r_411
+    "413 Content Too Large\00"  ;; text: r_413
+    "414 URI Too Long\00"  ;; text: r_414
+    "416 Range Not Satisfiable\00"  ;; text: r_416
+    "431 Request Header Fields Too Large\00"  ;; text: r_431
+    "500 Internal Server Error\00"  ;; text: r_500
+    "501 Not Implemented\00"  ;; text: r_501
+    "505 HTTP Version Not Supported\00"  ;; text: r_505
+    "507 Insufficient Storage\00"  ;; text: r_507
+    "text/plain\00"  ;; text: m_plain
+    "text/html\00"  ;; text: m_html
+    "text/css\00"  ;; text: m_css
+    "text/csv\00"  ;; text: m_csv
+    "text/javascript\00"  ;; text: m_script
+    "application/json\00"  ;; text: m_json
+    "application/wasm\00"  ;; text: m_wasm
+    "application/octet-stream\00"  ;; text: m_bytes
+    "image/svg+xml\00"  ;; text: m_svg
+    "image/png\00"  ;; text: m_png
+    "image/jpeg\00"  ;; text: m_jpeg
+    "image/gif\00")  ;; text: m_gif
   ;; The names of the header fields the server reads, in small letters, each in the HTTP_NAME
   ;; bytes that $http_name_is may read.
   (global $names i32 (i32.const 2048))
