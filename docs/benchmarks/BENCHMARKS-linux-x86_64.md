@@ -1,12 +1,12 @@
 # lengua against C, C++ and Rust on linux-x86_64
 
-Measured on linux-x86_64 (AMD EPYC 7763 64-Core Processor, 4 threads at once) by `cargo bench --bench against_rust_and_c`, at commit 45b507bf262dab89bff38a1f9c35bdd5590c8965, in https://github.com/laughing-hermit/lengua/actions/runs/43084459708. Every number here is that run's: the bench writes this file from the run's results alone, target/bench/results-linux-x86_64.json in its artifacts.
+Measured on linux-x86_64 (AMD EPYC 9V74 80-Core Processor, 4 threads at once) by `cargo bench --bench against_rust_and_c`, at commit 43813aef065cae8d91368d4891f6823f48ad9d82, in https://github.com/laughing-hermit/lengua/actions/runs/43131768685. Every number here is that run's: the bench writes this file from the run's results alone, target/bench/results-linux-x86_64.json in its artifacts.
 
 Every version of a workload does the same work in its own language's way: lengua's program in the fastest form lengua's dialect allows, with SIMD128 written by hand where the work is bytes, and C, C++ and Rust with their standard libraries and plain loops, written for their compilers to vectorize, with no SIMD written by hand. Each workload below says how each version does its work.
 
-Every version of a workload gets the same arguments, input and files, and gives the same output, checked before anything is measured. Each runs as people run it, in a process of its own, measured by `lengua-mcp measure`: its CPU time (in user space and in the kernel) and its peak resident memory as the system counts them for the process, its wall time on the clock, and the size of what ran. lengua's program runs through `lengua-run`, with every check a run makes; C, C++ and Rust compiled to WebAssembly run in lengua's host, by the same lengua-run in the same engine (wasmtime 50.0.1), each from its compiled form, kept under the user's key as a checked program's is; their native builds, made on this runner, run as a shell starts them. Linux begins a process's count of its peak memory at what the process it was started from held, so there every version starts from lengua-spawn, a small process of lengua's that forks it and counts it, and writes the counts and the version's time on the clock for `measure`: the count begins at the few hundred KiB of lengua-spawn's copy, not at lengua-mcp's megabytes.
+Every version of a workload gets the same arguments, input and files, and gives the same output, checked before anything is measured. Each runs as people run it, in a process of its own, measured by `lengua-mcp measure`: its CPU time (in user space and in the kernel) and its peak resident memory as the system counts them for the process, its wall time on the clock, and the size of what ran. lengua's program runs through `lengua-run`, with every check a run makes; C, C++ and Rust compiled to WebAssembly run in lengua's host, by the same lengua-run in the same engine (wasmtime 50.0.1), each from its compiled form, kept under the user's key as a checked program's is, and with every check lengua's run makes: each has a lengua.lock of its own, signed with the same key, which records lengua's idea and the module, and its run reads and checks the three as lengua's does, since a module lengua runs for a user always pays them (the last section gives the same modules without); their native builds, made on this runner, run as a shell starts them. Linux begins a process's count of its peak memory at what the process it was started from held, so there every version starts from lengua-spawn, a small process of lengua's that forks it and counts it, and writes the counts and the version's time on the clock for `measure`: the count begins at the few hundred KiB of lengua-spawn's copy, not at lengua-mcp's megabytes.
 
-Size is a module's bytes on the rows against other modules, which run in the same lengua-run. Against a native build, lengua's size is its module's and that of the lengua-run it needs to run (5.87 MiB), and the native build's is its executable's alone: what it loads from the system's libraries, C's C library and C++'s where they are linked dynamically, isn't counted, and Rust's standard library, linked in, is.
+Size is a module's bytes on the rows against other modules, which run in the same lengua-run. Against a native build, lengua's size is its module's and that of the lengua-run it needs to run (6.01 MiB), and the native build's is its executable's alone: what it loads from the system's libraries, C's C library and C++'s where they are linked dynamically, isn't counted, and Rust's standard library, linked in, is.
 
 The runs alternate: each round runs every version once, in an order shuffled from round to round, after each version's checked run and 2 rounds that aren't counted. On each row, lengua against one other version, the gate decides CPU and wall time with a one-sided Mann-Whitney U test at p < 0.01: it looks at the row after 20, 40, 80, 160, 320, 640, 1280, 2000 runs of each version, each look deciding at p < 0.00125 (0.01 split over the looks), until both of the row's tests decide, up to 2000 runs or 600 seconds. Peak memory, the median of the runs' peaks, and size are compared as measured.
 
@@ -28,47 +28,28 @@ lengua against each version, on CPU time, wall time, peak memory and size, in th
 
 | workload | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|
-| empty | ✗ ✗ ≈ ✓ | ✗ ✗ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| empty | ✗ ✗ ≈ ✓ | ✗ ✗ ≈ ✓ | ✓ ✓ ✓ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
 | add | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
 | hypotenuse | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| upcase | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| upcase | ✓ ≈ ≈ ✓ | ≈ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
 | upcase-stdin | ✓ ✓ ≈ ✗ | ✓ ✓ ≈ ✗ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| shout | ≈ ≈ ≈ ✓ | ≈ ✗ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| shout | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
 | wc | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✓ ✓ ✗ ✗ | ✗ ✗ ✗ ✗ |
 | histogram | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
 | crc32c | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
-| sort | ✓ ✓ ≈ ✓ | ✓ ✓ ✓ ✓ | ✓ ✓ ✓ ✓ | ✓ ✓ ✓ ✗ | ✓ ✓ ✓ ✗ | ≈ ≈ ≈ ✗ |
+| sort | ✓ ✓ ≈ ✓ | ✓ ✓ ✓ ✓ | ✓ ✓ ✓ ✓ | ✓ ✓ ✓ ✗ | ✓ ✓ ✓ ✗ | ✗ ✗ ≈ ✗ |
 | tally | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✓ ✓ ✗ ✗ | ✓ ✓ ✗ ✗ | ✓ ✓ ✗ ✗ |
-| server | ≈ ✓ ≈ ✓ | ≈ ✓ ≈ ✓ | ≈ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ≈ ✗ ✗ ✗ |
-| files | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
+| server | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ≈ ≈ ≈ ✓ | ✗ ≈ ✗ ✗ | ✗ ✗ ✗ ✗ | ✓ ✗ ✗ ✗ |
+| files | ✓ ✓ ≈ ✓ | ≈ ≈ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
 | readings | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✓ ✓ ≈ ✓ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ | ✗ ✗ ✗ ✗ |
 
 Where the run and KNOWN_BEHIND disagree:
 
 - linux-x86_64 empty c-wasm wall: lengua is behind by more than the margin, and KNOWN_BEHIND doesn't name the row: make lengua's program or its engine faster, where the list may not grow
-- linux-x86_64 empty c-wasm memory: lengua is level now, and KNOWN_BEHIND line 39 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
 - linux-x86_64 empty cpp-wasm wall: lengua is behind by more than the margin, and KNOWN_BEHIND doesn't name the row: make lengua's program or its engine faster, where the list may not grow
-- linux-x86_64 empty cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 41 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 empty rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 42 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 add c-wasm memory: lengua is level now, and KNOWN_BEHIND line 55 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 add cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 56 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 add rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 57 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 hypotenuse c-wasm memory: lengua is level now, and KNOWN_BEHIND line 70 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 hypotenuse cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 71 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 hypotenuse rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 72 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 upcase c-wasm memory: lengua is level now, and KNOWN_BEHIND line 85 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 upcase cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 86 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 shout c-wasm cpu: lengua is level now, and KNOWN_BEHIND line 113 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 shout c-wasm memory: lengua is level now, and KNOWN_BEHIND line 114 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 shout cpp-wasm wall: lengua is behind by more than the margin, and KNOWN_BEHIND doesn't name the row: make lengua's program or its engine faster, where the list may not grow
-- linux-x86_64 shout cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 115 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 shout rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 116 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 sort rust cpu: lengua is level now, and KNOWN_BEHIND line 165 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 sort rust wall: lengua is level now, and KNOWN_BEHIND line 166 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 sort rust memory: lengua is level now, and KNOWN_BEHIND line 167 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 tally c-wasm memory: lengua is level now, and KNOWN_BEHIND line 169 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 tally cpp-wasm memory: lengua is level now, and KNOWN_BEHIND line 170 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
-- linux-x86_64 tally rust-wasm memory: lengua is level now, and KNOWN_BEHIND line 171 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
+- linux-x86_64 sort rust cpu: lengua is behind by more than the margin, and KNOWN_BEHIND doesn't name the row: make lengua's program or its engine faster, where the list may not grow
+- linux-x86_64 sort rust wall: lengua is behind by more than the margin, and KNOWN_BEHIND doesn't name the row: make lengua's program or its engine faster, where the list may not grow
+- linux-x86_64 server c wall: lengua is level now, and KNOWN_BEHIND line 162 names the row: take it out, as the list names only rows behind by more than the margin, and only shrinks
 
 ## The native gaps
 
@@ -76,20 +57,20 @@ lengua's median over that of the best native build, C's, C++'s or Rust's, on eac
 
 | workload | CPU time | wall time | peak memory | size |
 |---|---|---|---|---|
-| empty | 2.64× | 2.44× | 4.73× | 429.12× |
-| add | 2.31× | 2.15× | 3.73× | 425.15× |
-| hypotenuse | 2.10× | 1.94× | 3.21× | 425.17× |
-| upcase | 1.81× | 1.86× | 3.25× | 425.20× |
-| upcase-stdin | 1.62× | 1.65× | 6.13× | 425.15× |
-| shout | 1.86× | 1.81× | 2.84× | 425.15× |
-| wc | 1.42× | 1.41× | 4.88× | 425.20× |
-| histogram | 1.18× | 1.18× | 5.07× | 425.17× |
-| crc32c | 2.93× | 2.91× | 5.08× | 425.18× |
-| sort | 1.05× | 1.05× | 1.01× | 425.33× |
-| tally | 0.51× | 0.51× | 4.13× | 425.37× |
-| server | 1.08× | 1.88× | 7.12× | 425.19× |
-| files | 3.24× | 3.22× | 5.31× | 425.18× |
-| readings | 3.51× | 3.50× | 5.00× | 425.15× |
+| empty | 2.70× | 2.47× | 4.50× | 439.79× |
+| add | 2.30× | 2.11× | 3.66× | 435.72× |
+| hypotenuse | 2.03× | 1.94× | 3.26× | 435.75× |
+| upcase | 1.82× | 1.80× | 3.34× | 435.77× |
+| upcase-stdin | 1.60× | 1.60× | 6.27× | 435.72× |
+| shout | 1.83× | 1.86× | 3.09× | 435.73× |
+| wc | 1.41× | 1.41× | 5.07× | 435.77× |
+| histogram | 1.09× | 1.09× | 5.16× | 435.75× |
+| crc32c | 2.81× | 2.80× | 5.17× | 435.75× |
+| sort | 1.08× | 1.08× | 1.01× | 435.91× |
+| tally | 0.44× | 0.44× | 4.21× | 435.95× |
+| server | 1.06× | 1.81× | 7.50× | 435.77× |
+| files | 3.29× | 3.28× | 5.44× | 435.76× |
+| readings | 3.15× | 3.14× | 5.10× | 435.72× |
 
 ## Every row
 
@@ -97,90 +78,90 @@ Each measure's verdict (ahead, level, behind, or not measured), lengua's median 
 
 | workload | against | runs | CPU time | wall time | peak memory | size |
 |---|---|---|---|---|---|---|
-| empty | c-wasm | 20 | behind, 1.06×, p 4.6e-4 | behind, 1.05×, p 3.4e-4 | level, 1.01× | ahead, 0.89× |
-| empty | cpp-wasm | 20 | behind, 1.07×, p 2.6e-6 | behind, 1.07×, p 1.7e-6 | level, 1.02× | ahead, 0.89× |
-| empty | rust-wasm | 40 | ahead, 0.89×, p 1.4e-8 | ahead, 0.90×, p 2.2e-8 | level, 1.00× | ahead, 0.01× |
-| empty | c | 20 | behind, 2.60×, p 3.4e-8 | behind, 2.41×, p 3.4e-8 | behind, 4.50× | behind, 429.12× |
-| empty | cpp | 20 | behind, 2.64×, p 3.4e-8 | behind, 2.44×, p 3.4e-8 | behind, 4.73× | behind, 429.12× |
-| empty | rust | 20 | behind, 1.87×, p 3.4e-8 | behind, 1.78×, p 3.4e-8 | behind, 3.19× | behind, 21.63× |
-| add | c-wasm | 20 | ahead, 0.85×, p 4.0e-6 | ahead, 0.85×, p 4.9e-6 | level, 1.00× | ahead, 0.04× |
-| add | cpp-wasm | 20 | ahead, 0.86×, p 2.9e-6 | ahead, 0.86×, p 2.6e-6 | level, 0.99× | ahead, 0.04× |
-| add | rust-wasm | 20 | ahead, 0.75×, p 3.4e-8 | ahead, 0.76×, p 3.4e-8 | level, 0.98× | ahead, 0.02× |
-| add | c | 20 | behind, 2.25×, p 3.4e-8 | behind, 2.10×, p 3.4e-8 | behind, 3.44× | behind, 425.15× |
-| add | cpp | 20 | behind, 2.31×, p 3.4e-8 | behind, 2.15×, p 3.4e-8 | behind, 3.73× | behind, 425.15× |
-| add | rust | 20 | behind, 1.73×, p 3.4e-8 | behind, 1.66×, p 3.4e-8 | behind, 3.19× | behind, 20.99× |
-| hypotenuse | c-wasm | 40 | ahead, 0.89×, p 5.3e-4 | ahead, 0.89×, p 3.1e-4 | level, 1.00× | ahead, 0.05× |
-| hypotenuse | cpp-wasm | 80 | ahead, 0.89×, p 2.0e-8 | ahead, 0.89×, p 6.5e-9 | level, 0.99× | ahead, 0.05× |
-| hypotenuse | rust-wasm | 20 | ahead, 0.77×, p 1.0e-7 | ahead, 0.77×, p 9.6e-8 | level, 0.98× | ahead, 0.03× |
-| hypotenuse | c | 20 | behind, 2.10×, p 3.4e-8 | behind, 1.94×, p 3.4e-8 | behind, 2.90× | behind, 425.17× |
-| hypotenuse | cpp | 20 | behind, 2.02×, p 3.4e-8 | behind, 1.91×, p 3.4e-8 | behind, 2.94× | behind, 425.17× |
-| hypotenuse | rust | 20 | behind, 1.82×, p 3.4e-8 | behind, 1.73×, p 3.4e-8 | behind, 3.21× | behind, 20.81× |
-| upcase | c-wasm | 2000 | level, 0.99×, p 0.051 | level, 0.99×, p 0.003 | level, 0.98× | ahead, 0.06× |
-| upcase | cpp-wasm | 2000 | level, 0.99×, p 0.006 | level, 0.99×, p 3.2e-4 | level, 0.98× | ahead, 0.06× |
-| upcase | rust-wasm | 160 | ahead, 0.92×, p 3.4e-12 | ahead, 0.93×, p 1.0e-6 | level, 0.99× | ahead, 0.03× |
-| upcase | c | 20 | behind, 1.81×, p 3.4e-8 | behind, 1.86×, p 3.4e-8 | behind, 3.25× | behind, 425.20× |
-| upcase | cpp | 20 | behind, 1.80×, p 3.4e-8 | behind, 1.83×, p 3.4e-8 | behind, 3.25× | behind, 425.20× |
-| upcase | rust | 20 | behind, 1.37×, p 1.1e-7 | behind, 1.42×, p 1.1e-7 | behind, 2.83× | behind, 21.03× |
-| upcase-stdin | c-wasm | 20 | ahead, 0.33×, p 3.4e-8 | ahead, 0.34×, p 3.4e-8 | level, 0.99× | behind, 1.35× |
-| upcase-stdin | cpp-wasm | 20 | ahead, 0.33×, p 3.4e-8 | ahead, 0.34×, p 3.4e-8 | level, 0.99× | behind, 1.32× |
-| upcase-stdin | rust-wasm | 160 | ahead, 0.94×, p 5.0e-11 | ahead, 0.95×, p 3.7e-10 | level, 0.99× | ahead, 0.03× |
-| upcase-stdin | c | 20 | behind, 1.62×, p 3.4e-8 | behind, 1.65×, p 3.4e-8 | behind, 5.86× | behind, 425.15× |
-| upcase-stdin | cpp | 20 | behind, 1.62×, p 3.4e-8 | behind, 1.65×, p 3.4e-8 | behind, 6.13× | behind, 425.15× |
-| upcase-stdin | rust | 20 | behind, 1.56×, p 3.4e-8 | behind, 1.59×, p 3.4e-8 | behind, 4.31× | behind, 21.41× |
-| shout | c-wasm | 160 | level, 1.05×, p 3.4e-7 | level, 1.04×, p 3.4e-4 | level, 1.00× | ahead, 0.40× |
-| shout | cpp-wasm | 160 | level, 1.04×, p 1.2e-7 | behind, 1.05×, p 5.0e-5 | level, 0.99× | ahead, 0.40× |
-| shout | rust-wasm | 320 | ahead, 0.94×, p 2.8e-19 | ahead, 0.95×, p 0.001 | level, 0.95× | ahead, 0.03× |
-| shout | c | 20 | behind, 1.85×, p 3.4e-8 | behind, 1.81×, p 2.3e-7 | behind, 2.84× | behind, 425.15× |
-| shout | cpp | 20 | behind, 1.86×, p 3.4e-8 | behind, 1.81×, p 3.4e-8 | behind, 2.84× | behind, 425.15× |
-| shout | rust | 20 | behind, 1.28×, p 4.5e-7 | behind, 1.27×, p 2.3e-7 | behind, 2.49× | behind, 21.15× |
-| wc | c-wasm | 20 | ahead, 0.86×, p 2.9e-6 | ahead, 0.86×, p 3.3e-6 | level, 1.00× | ahead, 0.10× |
+| empty | c-wasm | 40 | behind, 1.13×, p 5.4e-5 | behind, 1.12×, p 4.8e-5 | level, 1.01× | ahead, 0.89× |
+| empty | cpp-wasm | 40 | behind, 1.12×, p 3.7e-4 | behind, 1.12×, p 4.3e-4 | level, 1.00× | ahead, 0.89× |
+| empty | rust-wasm | 20 | ahead, 0.90×, p 3.4e-8 | ahead, 0.91×, p 1.5e-7 | ahead, 0.93× | ahead, 0.01× |
+| empty | c | 20 | behind, 2.70×, p 3.4e-8 | behind, 2.47×, p 3.4e-8 | behind, 4.50× | behind, 439.79× |
+| empty | cpp | 20 | behind, 2.67×, p 3.4e-8 | behind, 2.47×, p 3.4e-8 | behind, 4.50× | behind, 439.79× |
+| empty | rust | 20 | behind, 1.89×, p 3.4e-8 | behind, 1.82×, p 3.4e-8 | behind, 3.23× | behind, 22.17× |
+| add | c-wasm | 20 | ahead, 0.78×, p 6.1e-8 | ahead, 0.79×, p 3.0e-7 | level, 0.96× | ahead, 0.04× |
+| add | cpp-wasm | 20 | ahead, 0.80×, p 1.4e-7 | ahead, 0.80×, p 6.0e-7 | level, 0.96× | ahead, 0.04× |
+| add | rust-wasm | 20 | ahead, 0.69×, p 3.4e-8 | ahead, 0.70×, p 3.4e-8 | level, 0.96× | ahead, 0.02× |
+| add | c | 20 | behind, 2.26×, p 3.4e-8 | behind, 2.09×, p 3.4e-8 | behind, 3.46× | behind, 435.72× |
+| add | cpp | 20 | behind, 2.30×, p 3.4e-8 | behind, 2.11×, p 3.4e-8 | behind, 3.66× | behind, 435.72× |
+| add | rust | 20 | behind, 1.74×, p 3.4e-8 | behind, 1.66×, p 3.4e-8 | behind, 3.21× | behind, 21.51× |
+| hypotenuse | c-wasm | 20 | ahead, 0.80×, p 2.0e-7 | ahead, 0.82×, p 2.6e-7 | level, 0.98× | ahead, 0.05× |
+| hypotenuse | cpp-wasm | 20 | ahead, 0.80×, p 1.2e-6 | ahead, 0.82×, p 9.0e-7 | level, 0.97× | ahead, 0.05× |
+| hypotenuse | rust-wasm | 20 | ahead, 0.71×, p 3.4e-8 | ahead, 0.73×, p 3.4e-8 | level, 0.98× | ahead, 0.03× |
+| hypotenuse | c | 20 | behind, 2.03×, p 3.4e-8 | behind, 1.94×, p 3.4e-8 | behind, 3.07× | behind, 435.75× |
+| hypotenuse | cpp | 20 | behind, 2.00×, p 3.4e-8 | behind, 1.92×, p 3.4e-8 | behind, 3.00× | behind, 435.75× |
+| hypotenuse | rust | 20 | behind, 1.78×, p 3.4e-8 | behind, 1.71×, p 3.4e-8 | behind, 3.26× | behind, 21.33× |
+| upcase | c-wasm | 40 | ahead, 0.94×, p 6.8e-6 | level, 0.95×, p 0.001 | level, 0.99× | ahead, 0.06× |
+| upcase | cpp-wasm | 80 | level, 0.96×, p 1.1e-6 | ahead, 0.95×, p 5.4e-5 | level, 0.99× | ahead, 0.06× |
+| upcase | rust-wasm | 40 | ahead, 0.89×, p 6.3e-11 | ahead, 0.91×, p 2.5e-6 | level, 0.98× | ahead, 0.03× |
+| upcase | c | 20 | behind, 1.82×, p 3.4e-8 | behind, 1.80×, p 3.4e-8 | behind, 3.34× | behind, 435.77× |
+| upcase | cpp | 20 | behind, 1.82×, p 3.4e-8 | behind, 1.79×, p 5.3e-8 | behind, 3.34× | behind, 435.77× |
+| upcase | rust | 20 | behind, 1.61×, p 3.4e-8 | behind, 1.60×, p 3.4e-8 | behind, 2.90× | behind, 21.56× |
+| upcase-stdin | c-wasm | 40 | ahead, 0.92×, p 0.001 | ahead, 0.92×, p 0.001 | level, 1.00× | behind, 1.35× |
+| upcase-stdin | cpp-wasm | 20 | ahead, 0.35×, p 3.4e-8 | ahead, 0.35×, p 3.4e-8 | level, 0.99× | behind, 1.32× |
+| upcase-stdin | rust-wasm | 40 | ahead, 0.91×, p 8.6e-5 | ahead, 0.90×, p 8.6e-5 | level, 0.97× | ahead, 0.03× |
+| upcase-stdin | c | 20 | behind, 1.49×, p 3.4e-8 | behind, 1.49×, p 3.4e-8 | behind, 6.16× | behind, 435.72× |
+| upcase-stdin | cpp | 20 | behind, 1.49×, p 3.4e-8 | behind, 1.49×, p 3.4e-8 | behind, 6.27× | behind, 435.72× |
+| upcase-stdin | rust | 20 | behind, 1.60×, p 3.4e-8 | behind, 1.60×, p 3.4e-8 | behind, 4.39× | behind, 21.94× |
+| shout | c-wasm | 2000 | level, 0.99×, p 7.5e-10 | level, 0.98×, p 0.092 | level, 1.00× | ahead, 0.40× |
+| shout | cpp-wasm | 2000 | level, 0.99×, p 6.4e-9 | level, 0.98×, p 0.173 | level, 1.00× | ahead, 0.40× |
+| shout | rust-wasm | 40 | ahead, 0.86×, p 5.3e-11 | ahead, 0.85×, p 3.9e-5 | level, 0.96× | ahead, 0.03× |
+| shout | c | 20 | behind, 1.83×, p 3.4e-8 | behind, 1.86×, p 3.4e-8 | behind, 3.09× | behind, 435.73× |
+| shout | cpp | 20 | behind, 1.83×, p 3.4e-8 | behind, 1.86×, p 3.4e-8 | behind, 3.04× | behind, 435.73× |
+| shout | rust | 20 | behind, 1.54×, p 3.4e-8 | behind, 1.56×, p 3.4e-8 | behind, 2.61× | behind, 21.68× |
+| wc | c-wasm | 20 | ahead, 0.91×, p 3.4e-8 | ahead, 0.91×, p 3.4e-8 | level, 1.00× | ahead, 0.10× |
 | wc | cpp-wasm | 20 | ahead, 0.10×, p 3.4e-8 | ahead, 0.10×, p 3.4e-8 | level, 1.00× | ahead, 0.11× |
-| wc | rust-wasm | 20 | ahead, 0.84×, p 5.3e-8 | ahead, 0.84×, p 5.3e-8 | level, 0.99× | ahead, 0.04× |
-| wc | c | 20 | behind, 1.42×, p 3.4e-8 | behind, 1.41×, p 3.4e-8 | behind, 4.88× | behind, 425.20× |
-| wc | cpp | 20 | ahead, 0.14×, p 3.4e-8 | ahead, 0.14×, p 3.4e-8 | behind, 4.88× | behind, 425.20× |
-| wc | rust | 20 | behind, 1.22×, p 3.4e-8 | behind, 1.21×, p 3.4e-8 | behind, 4.41× | behind, 20.62× |
-| histogram | c-wasm | 20 | ahead, 0.71×, p 3.4e-8 | ahead, 0.71×, p 3.4e-8 | level, 1.00× | ahead, 0.09× |
-| histogram | cpp-wasm | 20 | ahead, 0.72×, p 3.4e-8 | ahead, 0.72×, p 3.4e-8 | level, 1.00× | ahead, 0.09× |
-| histogram | rust-wasm | 20 | ahead, 0.78×, p 3.4e-8 | ahead, 0.77×, p 3.4e-8 | level, 0.99× | ahead, 0.03× |
-| histogram | c | 20 | behind, 1.15×, p 3.4e-8 | behind, 1.15×, p 3.4e-8 | behind, 5.07× | behind, 425.17× |
-| histogram | cpp | 20 | behind, 1.15×, p 3.4e-8 | behind, 1.15×, p 3.4e-8 | behind, 5.07× | behind, 425.17× |
-| histogram | rust | 20 | behind, 1.18×, p 3.4e-8 | behind, 1.18×, p 3.4e-8 | behind, 4.44× | behind, 20.65× |
-| crc32c | c-wasm | 20 | ahead, 0.80×, p 3.4e-8 | ahead, 0.80×, p 3.4e-8 | level, 1.00× | ahead, 0.08× |
-| crc32c | cpp-wasm | 20 | ahead, 0.79×, p 3.4e-8 | ahead, 0.80×, p 3.4e-8 | level, 1.01× | ahead, 0.08× |
-| crc32c | rust-wasm | 20 | ahead, 0.79×, p 3.4e-8 | ahead, 0.79×, p 3.4e-8 | level, 0.99× | ahead, 0.04× |
-| crc32c | c | 20 | behind, 2.92×, p 3.4e-8 | behind, 2.91×, p 3.4e-8 | behind, 5.08× | behind, 425.18× |
-| crc32c | cpp | 20 | behind, 2.93×, p 3.4e-8 | behind, 2.91×, p 3.4e-8 | behind, 5.08× | behind, 425.18× |
-| crc32c | rust | 20 | behind, 2.89×, p 3.4e-8 | behind, 2.87×, p 3.4e-8 | behind, 4.43× | behind, 21.19× |
-| sort | c-wasm | 20 | ahead, 0.21×, p 3.4e-8 | ahead, 0.21×, p 3.4e-8 | level, 1.00× | ahead, 0.27× |
-| sort | cpp-wasm | 20 | ahead, 0.59×, p 3.4e-8 | ahead, 0.59×, p 3.4e-8 | ahead, 0.91× | ahead, 0.11× |
-| sort | rust-wasm | 20 | ahead, 0.64×, p 3.4e-8 | ahead, 0.64×, p 3.4e-8 | ahead, 0.91× | ahead, 0.07× |
-| sort | c | 20 | ahead, 0.63×, p 3.4e-8 | ahead, 0.63×, p 3.4e-8 | ahead, 0.89× | behind, 425.33× |
-| sort | cpp | 20 | ahead, 0.73×, p 3.4e-8 | ahead, 0.73×, p 3.4e-8 | ahead, 0.93× | behind, 329.80× |
-| sort | rust | 20 | level, 1.05×, p 4.9e-6 | level, 1.05×, p 4.9e-6 | level, 1.01× | behind, 20.66× |
-| tally | c-wasm | 20 | ahead, 0.40×, p 3.4e-8 | ahead, 0.40×, p 3.4e-8 | level, 1.03× | ahead, 0.20× |
-| tally | cpp-wasm | 20 | ahead, 0.40×, p 3.4e-8 | ahead, 0.40×, p 3.4e-8 | level, 1.01× | ahead, 0.12× |
-| tally | rust-wasm | 20 | ahead, 0.32×, p 3.4e-8 | ahead, 0.32×, p 3.4e-8 | level, 1.05× | ahead, 0.08× |
-| tally | c | 20 | ahead, 0.48×, p 3.4e-8 | ahead, 0.48×, p 3.4e-8 | behind, 4.04× | behind, 425.37× |
-| tally | cpp | 20 | ahead, 0.51×, p 3.4e-8 | ahead, 0.51×, p 3.4e-8 | behind, 1.98× | behind, 331.54× |
-| tally | rust | 20 | ahead, 0.46×, p 3.4e-8 | ahead, 0.46×, p 3.4e-8 | behind, 4.13× | behind, 20.10× |
-| server | c-wasm | 160 | level, 1.00×, p 5.5e-4 | ahead, 0.92×, p 1.1e-44 | level, 1.01× | ahead, 0.12× |
-| server | cpp-wasm | 40 | level, 0.99×, p 0.001 | ahead, 0.82×, p 2.1e-13 | level, 0.99× | ahead, 0.06× |
-| server | rust-wasm | 80 | level, 1.00×, p 0.001 | ahead, 0.94×, p 1.0e-22 | level, 0.98× | ahead, 0.03× |
-| server | c | 20 | behind, 1.08×, p 3.4e-8 | behind, 1.07×, p 3.4e-8 | behind, 7.12× | behind, 425.19× |
-| server | cpp | 20 | behind, 1.07×, p 3.4e-8 | behind, 1.07×, p 3.4e-8 | behind, 2.55× | behind, 422.39× |
-| server | rust | 20 | level, 0.97×, p 3.4e-8 | behind, 1.88×, p 3.4e-8 | behind, 3.25× | behind, 19.25× |
-| files | c-wasm | 20 | ahead, 0.92×, p 8.3e-8 | ahead, 0.92×, p 8.3e-8 | level, 1.00× | ahead, 0.05× |
-| files | cpp-wasm | 20 | ahead, 0.91×, p 7.2e-8 | ahead, 0.91×, p 7.2e-8 | level, 1.00× | ahead, 0.05× |
-| files | rust-wasm | 20 | ahead, 0.90×, p 3.4e-8 | ahead, 0.90×, p 3.4e-8 | level, 0.98× | ahead, 0.03× |
-| files | c | 20 | behind, 2.57×, p 3.4e-8 | behind, 2.57×, p 3.4e-8 | behind, 5.31× | behind, 425.18× |
-| files | cpp | 20 | behind, 2.57×, p 3.4e-8 | behind, 2.57×, p 3.4e-8 | behind, 5.12× | behind, 425.18× |
-| files | rust | 20 | behind, 3.24×, p 3.4e-8 | behind, 3.22×, p 3.4e-8 | behind, 4.34× | behind, 20.73× |
-| readings | c-wasm | 20 | ahead, 0.92×, p 3.4e-8 | ahead, 0.92×, p 3.4e-8 | level, 0.99× | ahead, 0.04× |
-| readings | cpp-wasm | 20 | ahead, 0.94×, p 3.4e-8 | ahead, 0.94×, p 3.4e-8 | level, 0.98× | ahead, 0.04× |
-| readings | rust-wasm | 20 | ahead, 0.93×, p 3.4e-8 | ahead, 0.93×, p 3.4e-8 | level, 0.97× | ahead, 0.02× |
-| readings | c | 20 | behind, 3.51×, p 3.4e-8 | behind, 3.50×, p 3.4e-8 | behind, 5.00× | behind, 425.15× |
-| readings | cpp | 20 | behind, 3.21×, p 3.4e-8 | behind, 3.21×, p 3.4e-8 | behind, 2.13× | behind, 425.15× |
-| readings | rust | 20 | behind, 3.46×, p 3.4e-8 | behind, 3.45×, p 3.4e-8 | behind, 4.60× | behind, 20.64× |
+| wc | rust-wasm | 20 | ahead, 0.86×, p 3.4e-8 | ahead, 0.86×, p 3.4e-8 | level, 0.99× | ahead, 0.04× |
+| wc | c | 20 | behind, 1.41×, p 3.4e-8 | behind, 1.41×, p 3.4e-8 | behind, 4.97× | behind, 435.77× |
+| wc | cpp | 20 | ahead, 0.14×, p 3.4e-8 | ahead, 0.14×, p 3.4e-8 | behind, 5.07× | behind, 435.77× |
+| wc | rust | 20 | behind, 1.26×, p 3.4e-8 | behind, 1.26×, p 3.4e-8 | behind, 4.48× | behind, 21.13× |
+| histogram | c-wasm | 20 | ahead, 0.74×, p 3.4e-8 | ahead, 0.74×, p 3.4e-8 | level, 1.00× | ahead, 0.09× |
+| histogram | cpp-wasm | 20 | ahead, 0.73×, p 3.4e-8 | ahead, 0.73×, p 3.4e-8 | level, 1.00× | ahead, 0.09× |
+| histogram | rust-wasm | 20 | ahead, 0.80×, p 3.4e-8 | ahead, 0.80×, p 3.4e-8 | level, 0.99× | ahead, 0.03× |
+| histogram | c | 20 | behind, 1.09×, p 8.0e-5 | behind, 1.09×, p 8.0e-5 | behind, 5.16× | behind, 435.75× |
+| histogram | cpp | 20 | behind, 1.09×, p 9.6e-8 | behind, 1.09×, p 9.6e-8 | behind, 5.16× | behind, 435.75× |
+| histogram | rust | 20 | behind, 1.09×, p 3.3e-6 | behind, 1.09×, p 3.3e-6 | behind, 4.47× | behind, 21.17× |
+| crc32c | c-wasm | 20 | ahead, 0.76×, p 3.4e-8 | ahead, 0.76×, p 3.4e-8 | level, 1.01× | ahead, 0.08× |
+| crc32c | cpp-wasm | 20 | ahead, 0.77×, p 3.4e-8 | ahead, 0.77×, p 3.4e-8 | level, 1.00× | ahead, 0.08× |
+| crc32c | rust-wasm | 20 | ahead, 0.76×, p 3.4e-8 | ahead, 0.76×, p 3.4e-8 | level, 0.97× | ahead, 0.04× |
+| crc32c | c | 20 | behind, 2.75×, p 3.4e-8 | behind, 2.73×, p 3.4e-8 | behind, 5.17× | behind, 435.75× |
+| crc32c | cpp | 20 | behind, 2.74×, p 3.4e-8 | behind, 2.73×, p 3.4e-8 | behind, 5.17× | behind, 435.75× |
+| crc32c | rust | 20 | behind, 2.81×, p 3.4e-8 | behind, 2.80×, p 3.4e-8 | behind, 4.51× | behind, 21.71× |
+| sort | c-wasm | 20 | ahead, 0.20×, p 3.4e-8 | ahead, 0.20×, p 3.4e-8 | level, 1.00× | ahead, 0.27× |
+| sort | cpp-wasm | 20 | ahead, 0.55×, p 3.4e-8 | ahead, 0.55×, p 3.4e-8 | ahead, 0.91× | ahead, 0.11× |
+| sort | rust-wasm | 20 | ahead, 0.59×, p 3.4e-8 | ahead, 0.59×, p 3.4e-8 | ahead, 0.91× | ahead, 0.07× |
+| sort | c | 20 | ahead, 0.60×, p 3.4e-8 | ahead, 0.60×, p 3.4e-8 | ahead, 0.89× | behind, 435.91× |
+| sort | cpp | 20 | ahead, 0.69×, p 3.4e-8 | ahead, 0.69×, p 3.4e-8 | ahead, 0.93× | behind, 338.00× |
+| sort | rust | 20 | behind, 1.08×, p 3.4e-8 | behind, 1.08×, p 3.4e-8 | level, 1.01× | behind, 21.17× |
+| tally | c-wasm | 20 | ahead, 0.36×, p 3.4e-8 | ahead, 0.36×, p 3.4e-8 | level, 1.02× | ahead, 0.20× |
+| tally | cpp-wasm | 20 | ahead, 0.35×, p 3.4e-8 | ahead, 0.35×, p 3.4e-8 | level, 1.01× | ahead, 0.12× |
+| tally | rust-wasm | 20 | ahead, 0.29×, p 3.4e-8 | ahead, 0.29×, p 3.4e-8 | level, 1.04× | ahead, 0.08× |
+| tally | c | 20 | ahead, 0.42×, p 3.4e-8 | ahead, 0.42×, p 3.4e-8 | behind, 4.09× | behind, 435.95× |
+| tally | cpp | 20 | ahead, 0.44×, p 3.4e-8 | ahead, 0.44×, p 3.4e-8 | behind, 2.01× | behind, 339.78× |
+| tally | rust | 20 | ahead, 0.40×, p 3.4e-8 | ahead, 0.40×, p 3.4e-8 | behind, 4.21× | behind, 20.60× |
+| server | c-wasm | 145 | level, 1.00×, p 0.219 | level, 0.97×, p 1.1e-35 | level, 0.99× | ahead, 0.12× |
+| server | cpp-wasm | 145 | level, 1.00×, p 0.064 | level, 0.97×, p 1.7e-35 | level, 0.99× | ahead, 0.06× |
+| server | rust-wasm | 145 | level, 1.00×, p 0.008 | level, 0.98×, p 8.6e-36 | level, 0.97× | ahead, 0.03× |
+| server | c | 20 | behind, 1.05×, p 3.4e-8 | level, 1.05×, p 3.4e-8 | behind, 7.50× | behind, 435.77× |
+| server | cpp | 20 | behind, 1.06×, p 3.4e-8 | behind, 1.06×, p 3.4e-8 | behind, 2.60× | behind, 432.90× |
+| server | rust | 20 | ahead, 0.93×, p 3.4e-8 | behind, 1.81×, p 3.4e-8 | behind, 3.40× | behind, 19.73× |
+| files | c-wasm | 20 | ahead, 0.95×, p 1.6e-5 | ahead, 0.95×, p 1.6e-5 | level, 0.99× | ahead, 0.05× |
+| files | cpp-wasm | 20 | level, 0.95×, p 5.5e-6 | level, 0.95×, p 5.5e-6 | level, 0.99× | ahead, 0.05× |
+| files | rust-wasm | 20 | ahead, 0.94×, p 4.0e-7 | ahead, 0.94×, p 4.0e-7 | level, 0.98× | ahead, 0.03× |
+| files | c | 20 | behind, 2.47×, p 3.4e-8 | behind, 2.47×, p 3.4e-8 | behind, 5.44× | behind, 435.76× |
+| files | cpp | 20 | behind, 2.48×, p 3.4e-8 | behind, 2.47×, p 3.4e-8 | behind, 5.24× | behind, 435.76× |
+| files | rust | 20 | behind, 3.29×, p 3.4e-8 | behind, 3.28×, p 3.4e-8 | behind, 4.56× | behind, 21.24× |
+| readings | c-wasm | 20 | ahead, 0.85×, p 3.4e-8 | ahead, 0.85×, p 3.4e-8 | level, 0.99× | ahead, 0.04× |
+| readings | cpp-wasm | 20 | ahead, 0.95×, p 4.6e-7 | ahead, 0.95×, p 4.6e-7 | level, 0.99× | ahead, 0.04× |
+| readings | rust-wasm | 20 | ahead, 0.85×, p 3.4e-8 | ahead, 0.85×, p 3.4e-8 | level, 0.96× | ahead, 0.02× |
+| readings | c | 20 | behind, 3.15×, p 3.4e-8 | behind, 3.14×, p 3.4e-8 | behind, 5.10× | behind, 435.72× |
+| readings | cpp | 20 | behind, 2.87×, p 3.4e-8 | behind, 2.86×, p 3.4e-8 | behind, 2.17× | behind, 435.72× |
+| readings | rust | 20 | behind, 3.13×, p 3.4e-8 | behind, 3.12×, p 3.4e-8 | behind, 4.77× | behind, 21.16× |
 
 ## empty
 
@@ -188,10 +169,10 @@ Starts and exits with code 0: all of it is starting and ending a process, which 
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 40 | 20 | 20 | 40 | 20 | 20 | 20 |
-| CPU time | 1.33 ms | 1.27 ms | 1.25 ms | 1.49 ms | 516 µs | 508 µs | 719 µs |
-| wall time | 1.42 ms | 1.36 ms | 1.34 ms | 1.58 ms | 596 µs | 588 µs | 806 µs |
-| peak memory | 5.50 MiB | 5.41 MiB | 5.41 MiB | 5.51 MiB | 1.22 MiB | 1.16 MiB | 1.72 MiB |
+| counted runs | 40 | 40 | 40 | 20 | 20 | 20 | 20 |
+| CPU time | 1.40 ms | 1.24 ms | 1.25 ms | 1.56 ms | 522 µs | 526 µs | 742 µs |
+| wall time | 1.49 ms | 1.33 ms | 1.34 ms | 1.64 ms | 607 µs | 608 µs | 825 µs |
+| peak memory | 5.56 MiB | 5.53 MiB | 5.56 MiB | 5.88 MiB | 1.22 MiB | 1.22 MiB | 1.70 MiB |
 | size | 319 B | 357 B | 357 B | 33.8 KiB | 14.0 KiB | 14.0 KiB | 278 KiB |
 
 Its rounds took 1 seconds.
@@ -217,9 +198,9 @@ Parses two whole numbers from its arguments and prints their sum: almost all of 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
 | counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
-| CPU time | 1.24 ms | 1.45 ms | 1.44 ms | 1.65 ms | 548 µs | 534 µs | 713 µs |
-| wall time | 1.32 ms | 1.55 ms | 1.55 ms | 1.74 ms | 631 µs | 615 µs | 797 µs |
-| peak memory | 5.50 MiB | 5.48 MiB | 5.56 MiB | 5.63 MiB | 1.60 MiB | 1.48 MiB | 1.72 MiB |
+| CPU time | 1.30 ms | 1.67 ms | 1.64 ms | 1.88 ms | 578 µs | 568 µs | 750 µs |
+| wall time | 1.39 ms | 1.76 ms | 1.74 ms | 1.97 ms | 662 µs | 658 µs | 837 µs |
+| peak memory | 5.52 MiB | 5.75 MiB | 5.76 MiB | 5.75 MiB | 1.60 MiB | 1.51 MiB | 1.72 MiB |
 | size | 1.22 KiB | 30.2 KiB | 29.0 KiB | 54.5 KiB | 14.1 KiB | 14.1 KiB | 286 KiB |
 
 Its rounds took 1 seconds.
@@ -244,10 +225,10 @@ Prints the hypotenuse of two decimal sides from its arguments, rounded to three 
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 80 | 40 | 80 | 20 | 20 | 20 | 20 |
-| CPU time | 1.26 ms | 1.42 ms | 1.41 ms | 1.69 ms | 620 µs | 644 µs | 715 µs |
-| wall time | 1.35 ms | 1.52 ms | 1.52 ms | 1.80 ms | 716 µs | 726 µs | 803 µs |
-| peak memory | 5.50 MiB | 5.54 MiB | 5.56 MiB | 5.61 MiB | 1.89 MiB | 1.87 MiB | 1.71 MiB |
+| counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
+| CPU time | 1.33 ms | 1.66 ms | 1.66 ms | 1.89 ms | 655 µs | 665 µs | 750 µs |
+| wall time | 1.43 ms | 1.75 ms | 1.75 ms | 1.98 ms | 738 µs | 746 µs | 836 µs |
+| peak memory | 5.60 MiB | 5.70 MiB | 5.75 MiB | 5.74 MiB | 1.82 MiB | 1.87 MiB | 1.72 MiB |
 | size | 1.52 KiB | 28.4 KiB | 28.9 KiB | 56.3 KiB | 14.1 KiB | 14.1 KiB | 289 KiB |
 
 Its rounds took 1 seconds.
@@ -272,13 +253,13 @@ Copies a 1 MiB text file to another with its ASCII letters in capitals: a file o
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 2000 | 2000 | 2000 | 160 | 20 | 20 | 20 |
-| CPU time | 2.83 ms | 2.86 ms | 2.86 ms | 3.09 ms | 1.57 ms | 1.57 ms | 2.08 ms |
-| wall time | 3.08 ms | 3.10 ms | 3.12 ms | 3.34 ms | 1.71 ms | 1.74 ms | 2.25 ms |
-| peak memory | 7.66 MiB | 7.78 MiB | 7.78 MiB | 7.76 MiB | 2.35 MiB | 2.35 MiB | 2.70 MiB |
+| counted runs | 80 | 40 | 80 | 40 | 20 | 20 | 20 |
+| CPU time | 2.85 ms | 3.05 ms | 2.97 ms | 3.20 ms | 1.58 ms | 1.58 ms | 1.78 ms |
+| wall time | 3.06 ms | 3.23 ms | 3.23 ms | 3.40 ms | 1.72 ms | 1.73 ms | 1.94 ms |
+| peak memory | 7.90 MiB | 7.98 MiB | 7.94 MiB | 8.06 MiB | 2.35 MiB | 2.35 MiB | 2.71 MiB |
 | size | 1.93 KiB | 33.4 KiB | 33.4 KiB | 59.0 KiB | 14.1 KiB | 14.1 KiB | 286 KiB |
 
-Its rounds took 43 seconds.
+Its rounds took 2 seconds.
 
 - lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, examples/upcase
 
@@ -300,13 +281,13 @@ Copies 64 MiB of standard input to standard output with its ASCII letters in cap
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 160 | 20 | 20 | 160 | 20 | 20 | 20 |
-| CPU time | 10.3 ms | 33.3 ms | 33.3 ms | 11.0 ms | 6.85 ms | 6.86 ms | 7.11 ms |
-| wall time | 10.5 ms | 33.8 ms | 33.4 ms | 11.1 ms | 6.93 ms | 6.95 ms | 7.21 ms |
-| peak memory | 7.93 MiB | 8.00 MiB | 8.01 MiB | 8.01 MiB | 1.35 MiB | 1.29 MiB | 1.83 MiB |
+| counted runs | 40 | 40 | 20 | 40 | 20 | 20 | 20 |
+| CPU time | 12.4 ms | 13.5 ms | 35.5 ms | 13.6 ms | 8.28 ms | 8.29 ms | 7.71 ms |
+| wall time | 12.5 ms | 13.6 ms | 35.6 ms | 13.9 ms | 8.37 ms | 8.39 ms | 7.81 ms |
+| peak memory | 8.11 MiB | 8.11 MiB | 8.13 MiB | 8.34 MiB | 1.31 MiB | 1.29 MiB | 1.84 MiB |
 | size | 1.20 KiB | 912 B | 929 B | 35.6 KiB | 14.1 KiB | 14.1 KiB | 281 KiB |
 
-Its rounds took 8 seconds.
+Its rounds took 5 seconds.
 
 - lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/upcase-stdin
 
@@ -328,13 +309,13 @@ Reads 1 MiB of standard input whole, then prints it with its ASCII letters in ca
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 320 | 160 | 160 | 320 | 20 | 20 | 20 |
-| CPU time | 2.19 ms | 2.10 ms | 2.11 ms | 2.32 ms | 1.18 ms | 1.17 ms | 1.71 ms |
-| wall time | 2.39 ms | 2.29 ms | 2.26 ms | 2.52 ms | 1.26 ms | 1.27 ms | 1.81 ms |
-| peak memory | 6.38 MiB | 6.37 MiB | 6.40 MiB | 6.69 MiB | 2.22 MiB | 2.22 MiB | 2.53 MiB |
+| counted runs | 2000 | 2000 | 2000 | 40 | 20 | 20 | 20 |
+| CPU time | 2.26 ms | 2.28 ms | 2.28 ms | 2.53 ms | 1.20 ms | 1.19 ms | 1.42 ms |
+| wall time | 2.41 ms | 2.45 ms | 2.45 ms | 2.72 ms | 1.28 ms | 1.28 ms | 1.52 ms |
+| peak memory | 6.98 MiB | 7.01 MiB | 7.01 MiB | 7.15 MiB | 2.19 MiB | 2.22 MiB | 2.59 MiB |
 | size | 1.24 KiB | 3.07 KiB | 3.09 KiB | 40.5 KiB | 14.1 KiB | 14.1 KiB | 284 KiB |
 
-Its rounds took 6 seconds.
+Its rounds took 38 seconds.
 
 - lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/shout
 
@@ -357,12 +338,12 @@ Counts the lines and words of 64 MiB of standard input, as `wc -lw` does. lengua
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
 | counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
-| CPU time | 20.3 ms | 23.7 ms | 198 ms | 24.3 ms | 14.3 ms | 148 ms | 16.7 ms |
-| wall time | 20.4 ms | 23.8 ms | 198 ms | 24.4 ms | 14.5 ms | 148 ms | 16.8 ms |
-| peak memory | 8.12 MiB | 8.09 MiB | 8.08 MiB | 8.23 MiB | 1.66 MiB | 1.66 MiB | 1.84 MiB |
+| CPU time | 22.7 ms | 25.1 ms | 227 ms | 26.4 ms | 16.1 ms | 168 ms | 18.0 ms |
+| wall time | 22.8 ms | 25.2 ms | 227 ms | 26.5 ms | 16.2 ms | 168 ms | 18.1 ms |
+| peak memory | 8.27 MiB | 8.26 MiB | 8.25 MiB | 8.37 MiB | 1.66 MiB | 1.63 MiB | 1.85 MiB |
 | size | 1.91 KiB | 18.4 KiB | 17.9 KiB | 53.9 KiB | 14.1 KiB | 14.1 KiB | 291 KiB |
 
-Its rounds took 11 seconds.
+Its rounds took 12 seconds.
 
 - lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, examples/count
 
@@ -385,9 +366,9 @@ Counts each byte value of 64 MiB of standard input. Every version counts in four
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
 | counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
-| CPU time | 32.9 ms | 46.4 ms | 45.9 ms | 42.2 ms | 28.6 ms | 28.7 ms | 27.9 ms |
-| wall time | 33.0 ms | 46.6 ms | 46.1 ms | 42.7 ms | 28.8 ms | 28.8 ms | 28.0 ms |
-| peak memory | 8.12 MiB | 8.10 MiB | 8.12 MiB | 8.25 MiB | 1.60 MiB | 1.60 MiB | 1.83 MiB |
+| CPU time | 34.2 ms | 46.3 ms | 47.1 ms | 42.6 ms | 31.3 ms | 31.2 ms | 31.4 ms |
+| wall time | 34.3 ms | 46.5 ms | 47.2 ms | 42.7 ms | 31.4 ms | 31.3 ms | 31.5 ms |
+| peak memory | 8.26 MiB | 8.22 MiB | 8.25 MiB | 8.37 MiB | 1.60 MiB | 1.60 MiB | 1.85 MiB |
 | size | 1.58 KiB | 18.1 KiB | 18.1 KiB | 55.5 KiB | 14.1 KiB | 14.1 KiB | 291 KiB |
 
 Its rounds took 7 seconds.
@@ -413,9 +394,9 @@ The CRC-32C of 64 MiB of standard input. Natively, C, C++ and Rust use the CPU's
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
 | counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
-| CPU time | 38.0 ms | 47.7 ms | 47.8 ms | 48.1 ms | 13.0 ms | 13.0 ms | 13.2 ms |
-| wall time | 38.1 ms | 47.8 ms | 48.0 ms | 48.3 ms | 13.1 ms | 13.1 ms | 13.3 ms |
-| peak memory | 8.13 MiB | 8.12 MiB | 8.09 MiB | 8.25 MiB | 1.60 MiB | 1.60 MiB | 1.84 MiB |
+| CPU time | 41.5 ms | 54.8 ms | 54.0 ms | 54.9 ms | 15.1 ms | 15.1 ms | 14.8 ms |
+| wall time | 41.6 ms | 54.9 ms | 54.2 ms | 55.0 ms | 15.2 ms | 15.2 ms | 14.9 ms |
+| peak memory | 8.28 MiB | 8.24 MiB | 8.28 MiB | 8.54 MiB | 1.60 MiB | 1.60 MiB | 1.84 MiB |
 | size | 1.61 KiB | 19.1 KiB | 19.1 KiB | 39.6 KiB | 14.1 KiB | 14.1 KiB | 284 KiB |
 
 Its rounds took 6 seconds.
@@ -441,12 +422,12 @@ Sorts the lines of 64 MiB of standard input in byte order, as `LC_ALL=C sort` do
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
 | counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
-| CPU time | 270 ms | 1.30 s | 457 ms | 423 ms | 428 ms | 371 ms | 258 ms |
-| wall time | 270 ms | 1.30 s | 457 ms | 423 ms | 428 ms | 371 ms | 258 ms |
-| peak memory | 77.6 MiB | 77.6 MiB | 85.7 MiB | 85.6 MiB | 87.1 MiB | 83.2 MiB | 76.7 MiB |
+| CPU time | 264 ms | 1.31 s | 477 ms | 447 ms | 442 ms | 380 ms | 244 ms |
+| wall time | 264 ms | 1.31 s | 477 ms | 447 ms | 442 ms | 380 ms | 244 ms |
+| peak memory | 77.7 MiB | 77.8 MiB | 85.8 MiB | 85.8 MiB | 87.0 MiB | 83.2 MiB | 76.6 MiB |
 | size | 3.84 KiB | 14.4 KiB | 33.6 KiB | 53.3 KiB | 14.1 KiB | 18.2 KiB | 291 KiB |
 
-Its rounds took 82 seconds.
+Its rounds took 84 seconds.
 
 - lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/sort-large
 
@@ -469,12 +450,12 @@ Counts each different word of 64 MiB of standard input, 4,096 different words fr
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
 | counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
-| CPU time | 135 ms | 340 ms | 337 ms | 424 ms | 284 ms | 268 ms | 295 ms |
-| wall time | 136 ms | 340 ms | 338 ms | 425 ms | 284 ms | 268 ms | 295 ms |
-| peak memory | 8.99 MiB | 8.74 MiB | 8.87 MiB | 8.60 MiB | 2.23 MiB | 4.54 MiB | 2.18 MiB |
+| CPU time | 127 ms | 357 ms | 360 ms | 440 ms | 304 ms | 291 ms | 318 ms |
+| wall time | 127 ms | 357 ms | 361 ms | 440 ms | 305 ms | 291 ms | 318 ms |
+| peak memory | 9.11 MiB | 8.97 MiB | 9.03 MiB | 8.75 MiB | 2.23 MiB | 4.54 MiB | 2.16 MiB |
 | size | 4.38 KiB | 21.6 KiB | 37.5 KiB | 55.0 KiB | 14.1 KiB | 18.1 KiB | 299 KiB |
 
-Its rounds took 49 seconds.
+Its rounds took 51 seconds.
 
 - lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/tally
 
@@ -496,13 +477,13 @@ A server: 64 clients at once each send 1,000 lines of 64 bytes, one at a time, a
 
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
-| counted runs | 160 | 160 | 40 | 80 | 20 | 20 | 20 |
-| CPU time | 928 ms | 931 ms | 934 ms | 932 ms | 865 ms | 867 ms | 964 ms |
-| wall time | 930 ms | 1.01 s | 1.13 s | 991 ms | 871 ms | 871 ms | 495 ms |
-| peak memory | 8.07 MiB | 8.01 MiB | 8.13 MiB | 8.25 MiB | 1.13 MiB | 3.16 MiB | 2.48 MiB |
+| counted runs | 145 | 145 | 145 | 145 | 20 | 20 | 20 |
+| CPU time | 861 ms | 861 ms | 862 ms | 863 ms | 817 ms | 809 ms | 926 ms |
+| wall time | 862 ms | 885 ms | 886 ms | 883 ms | 821 ms | 811 ms | 475 ms |
+| peak memory | 8.18 MiB | 8.29 MiB | 8.30 MiB | 8.41 MiB | 1.10 MiB | 3.16 MiB | 2.42 MiB |
 | size | 1.82 KiB | 15.7 KiB | 31.1 KiB | 54.0 KiB | 14.1 KiB | 14.2 KiB | 312 KiB |
 
-Its rounds took 545 seconds.
+Its rounds took 621 seconds.
 
 - lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/shout-server
 
@@ -525,12 +506,12 @@ Reads each of the 4,096 small files of its folder, of 1 to 4,096 bytes, to its e
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
 | counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
-| CPU time | 62.8 ms | 68.6 ms | 68.8 ms | 69.7 ms | 24.4 ms | 24.4 ms | 19.4 ms |
-| wall time | 62.9 ms | 68.7 ms | 68.9 ms | 69.9 ms | 24.5 ms | 24.5 ms | 19.5 ms |
-| peak memory | 8.51 MiB | 8.50 MiB | 8.48 MiB | 8.71 MiB | 1.60 MiB | 1.66 MiB | 1.96 MiB |
+| CPU time | 72.8 ms | 76.8 ms | 76.4 ms | 77.5 ms | 29.4 ms | 29.4 ms | 22.1 ms |
+| wall time | 72.9 ms | 76.9 ms | 76.6 ms | 77.6 ms | 29.5 ms | 29.5 ms | 22.2 ms |
+| peak memory | 8.72 MiB | 8.80 MiB | 8.85 MiB | 8.92 MiB | 1.60 MiB | 1.66 MiB | 1.91 MiB |
 | size | 1.71 KiB | 37.7 KiB | 37.7 KiB | 62.1 KiB | 14.1 KiB | 14.1 KiB | 290 KiB |
 
-Its rounds took 8 seconds.
+Its rounds took 10 seconds.
 
 - lengua: lengua-run of lengua 0.2.0, wasmtime 50.0.1, tests/fixtures/files
 
@@ -553,9 +534,9 @@ Reads the clock that only goes forward a million times. lengua's program: tests/
 | | lengua | c-wasm | cpp-wasm | rust-wasm | c | cpp | rust |
 |---|---|---|---|---|---|---|---|
 | counted runs | 20 | 20 | 20 | 20 | 20 | 20 | 20 |
-| CPU time | 101 ms | 109 ms | 107 ms | 108 ms | 28.8 ms | 31.4 ms | 29.2 ms |
-| wall time | 101 ms | 109 ms | 107 ms | 108 ms | 28.9 ms | 31.5 ms | 29.3 ms |
-| peak memory | 7.99 MiB | 8.10 MiB | 8.13 MiB | 8.23 MiB | 1.60 MiB | 3.76 MiB | 1.74 MiB |
+| CPU time | 96.5 ms | 113 ms | 102 ms | 114 ms | 30.7 ms | 33.6 ms | 30.9 ms |
+| wall time | 96.7 ms | 113 ms | 102 ms | 114 ms | 30.8 ms | 33.8 ms | 31.0 ms |
+| peak memory | 8.18 MiB | 8.30 MiB | 8.29 MiB | 8.51 MiB | 1.60 MiB | 3.76 MiB | 1.71 MiB |
 | size | 1.21 KiB | 30.3 KiB | 28.8 KiB | 59.9 KiB | 14.1 KiB | 14.1 KiB | 291 KiB |
 
 Its rounds took 13 seconds.
@@ -580,19 +561,68 @@ After the gate's rounds, each workload's lengua program ran against lengua-modul
 
 | workload | runs | CPU time | wall time | peak memory |
 |---|---|---|---|---|
-| empty | 160, 160 in 1 s | 1.31 ms against 1.22 ms: +93.0 µs (+80.0 µs to +104 µs) | 1.40 ms against 1.31 ms: +95.5 µs (+82.4 µs to +109 µs) | 5.50 MiB against 5.41 MiB: +116 KiB (+96.0 KiB to +136 KiB) |
-| add | 160, 160 in 1 s | 1.23 ms against 1.12 ms: +104 µs (+94.0 µs to +117 µs) | 1.32 ms against 1.21 ms: +107 µs (+94.0 µs to +120 µs) | 5.51 MiB against 5.39 MiB: +120 KiB (+100 KiB to +140 KiB) |
-| hypotenuse | 160, 160 in 1 s | 1.24 ms against 1.12 ms: +120 µs (+112 µs to +129 µs) | 1.34 ms against 1.21 ms: +120 µs (+110 µs to +130 µs) | 5.51 MiB against 5.43 MiB: +96.0 KiB (+76.0 KiB to +120 KiB) |
-| upcase | 160, 160 in 2 s | 2.80 ms against 2.78 ms: +28.0 µs (-34.0 µs to +79.0 µs) | 3.08 ms against 3.14 ms: +49.1 µs (-80.3 µs to +136 µs) | 7.70 MiB against 7.69 MiB: +4.00 KiB (-28.0 KiB to +32.0 KiB) |
-| upcase-stdin | 160, 160 in 5 s | 10.6 ms against 9.99 ms: +227 µs (+137 µs to +363 µs) | 10.8 ms against 10.1 ms: +234 µs (+141 µs to +372 µs) | 7.94 MiB against 7.93 MiB: +12.0 KiB (-4.00 KiB to +28.0 KiB) |
-| shout | 160, 160 in 2 s | 2.20 ms against 2.07 ms: +124 µs (+89.0 µs to +157 µs) | 2.36 ms against 2.21 ms: +131 µs (+70.7 µs to +192 µs) | 6.39 MiB against 6.31 MiB: +92.0 KiB (+52.0 KiB to +128 KiB) |
-| wc | 160, 160 in 8 s | 20.1 ms against 19.8 ms: +295 µs (+189 µs to +408 µs) | 20.3 ms against 19.9 ms: +320 µs (+209 µs to +442 µs) | 8.11 MiB against 8.12 MiB: -16.0 KiB (-32.0 KiB to -4.00 KiB) |
-| histogram | 160, 160 in 12 s | 33.3 ms against 32.9 ms: +194 µs (-79.0 µs to +481 µs) | 33.5 ms against 33.1 ms: +216 µs (-57.7 µs to +508 µs) | 8.12 MiB against 8.00 MiB: +124 KiB (+112 KiB to +136 KiB) |
-| crc32c | 160, 160 in 13 s | 37.7 ms against 37.7 ms: +27.0 µs (-268 µs to +305 µs) | 37.8 ms against 37.9 ms: +35.7 µs (-259 µs to +316 µs) | 8.12 MiB against 8.11 MiB: +8.00 KiB (-4.00 KiB to +20.0 KiB) |
-| sort | 110, 110 in 60 s | 270 ms against 270 ms: +702 µs (-704 µs to +2.17 ms) | 271 ms against 270 ms: +706 µs (-706 µs to +2.17 ms) | 77.6 MiB against 77.6 MiB: -8.00 KiB (-32.0 KiB to +12.0 KiB) |
-| tally | 160, 160 in 45 s | 135 ms against 135 ms: +159 µs (-310 µs to +596 µs) | 135 ms against 135 ms: +149 µs (-324 µs to +587 µs) | 8.99 MiB against 8.86 MiB: +136 KiB (+124 KiB to +148 KiB) |
-| server | 31, 31 in 61 s | 928 ms against 924 ms: +2.07 ms (-2.57 ms to +5.75 ms) | 930 ms against 927 ms: +1.27 ms (-3.34 ms to +5.45 ms) | 8.08 MiB against 8.05 MiB: +0 B (-48.0 KiB to +60.0 KiB) |
-| files | 160, 160 in 22 s | 62.0 ms against 64.5 ms: -2.47 ms (-2.80 ms to -2.13 ms) | 62.2 ms against 64.6 ms: -2.45 ms (-2.79 ms to -2.10 ms) | 8.50 MiB against 8.50 MiB: -4.00 KiB (-20.0 KiB to +4.00 KiB) |
-| readings | 160, 160 in 34 s | 101 ms against 101 ms: +171 µs (-43.0 µs to +375 µs) | 101 ms against 101 ms: +175 µs (-40.5 µs to +381 µs) | 8.00 MiB against 7.99 MiB: +8.00 KiB (-4.00 KiB to +20.0 KiB) |
+| empty | 160, 160 in 4 s | 1.40 ms against 1.30 ms: +105 µs (+97.0 µs to +113 µs) | 1.50 ms against 1.39 ms: +105 µs (+96.2 µs to +114 µs) | 5.55 MiB against 5.47 MiB: +88.0 KiB (+64.0 KiB to +108 KiB) |
+| add | 160, 160 in 4 s | 1.29 ms against 1.18 ms: +112 µs (+103 µs to +123 µs) | 1.38 ms against 1.27 ms: +115 µs (+105 µs to +125 µs) | 5.59 MiB against 5.48 MiB: +120 KiB (+92.0 KiB to +148 KiB) |
+| hypotenuse | 160, 160 in 4 s | 1.32 ms against 1.19 ms: +134 µs (+125 µs to +142 µs) | 1.41 ms against 1.28 ms: +134 µs (+125 µs to +143 µs) | 5.59 MiB against 5.48 MiB: +104 KiB (+80.0 KiB to +136 KiB) |
+| upcase | 160, 160 in 5 s | 2.86 ms against 2.77 ms: +125 µs (+70.0 µs to +173 µs) | 3.07 ms against 2.96 ms: +118 µs (+33.8 µs to +192 µs) | 7.98 MiB against 7.92 MiB: +88.0 KiB (+4.00 KiB to +180 KiB) |
+| upcase-stdin | 160, 160 in 17 s | 12.3 ms against 12.0 ms: +171 µs (+74.0 µs to +298 µs) | 12.4 ms against 12.1 ms: +172 µs (+60.3 µs to +306 µs) | 8.10 MiB against 8.11 MiB: +0 B (-16.0 KiB to +24.0 KiB) |
+| shout | 160, 160 in 5 s | 2.28 ms against 2.13 ms: +134 µs (+108 µs to +163 µs) | 2.43 ms against 2.30 ms: +158 µs (+102 µs to +271 µs) | 7.02 MiB against 7.01 MiB: +12.0 KiB (-24.0 KiB to +52.0 KiB) |
+| wc | 160, 160 in 55 s | 22.6 ms against 22.5 ms: +140 µs (+48.0 µs to +222 µs) | 22.7 ms against 22.6 ms: +149 µs (+58.7 µs to +237 µs) | 8.28 MiB against 8.26 MiB: +8.00 KiB (-4.00 KiB to +24.0 KiB) |
+| histogram | 160, 160 in 36 s | 34.5 ms against 34.1 ms: +164 µs (-118 µs to +460 µs) | 34.6 ms against 34.3 ms: +177 µs (-114 µs to +482 µs) | 8.24 MiB against 8.14 MiB: +104 KiB (+88.0 KiB to +120 KiB) |
+| crc32c | 160, 160 in 43 s | 40.7 ms against 40.5 ms: +240 µs (+11.0 µs to +517 µs) | 40.9 ms against 40.6 ms: +252 µs (+15.5 µs to +540 µs) | 8.25 MiB against 8.26 MiB: -8.00 KiB (-24.0 KiB to +0 B) |
+| sort | 22, 22 in 61 s | 263 ms against 261 ms: +1.96 ms (+136 µs to +3.61 ms) | 264 ms against 261 ms: +1.89 ms (+5.60 µs to +3.54 ms) | 77.7 MiB against 77.7 MiB: +8.00 KiB (-52.0 KiB to +64.0 KiB) |
+| tally | 42, 42 in 61 s | 128 ms against 127 ms: +428 µs (-363 µs to +1.19 ms) | 128 ms against 127 ms: +434 µs (-357 µs to +1.18 ms) | 9.12 MiB against 9.02 MiB: +112 KiB (+76.0 KiB to +136 KiB) |
+| server | 20, 20 in 95 s | 858 ms against 855 ms: +3.22 ms (-3.71 ms to +9.82 ms) | 863 ms against 856 ms: +4.90 ms (-2.26 ms to +10.6 ms) | 8.17 MiB against 8.24 MiB: -44.0 KiB (-120 KiB to +40.0 KiB) |
+| files | 153, 153 in 60 s | 72.4 ms against 70.5 ms: +2.13 ms (+1.76 ms to +2.55 ms) | 72.6 ms against 70.7 ms: +2.13 ms (+1.77 ms to +2.55 ms) | 8.72 MiB against 8.69 MiB: +16.0 KiB (+4.00 KiB to +32.0 KiB) |
+| readings | 110, 110 in 60 s | 96.5 ms against 96.7 ms: -70.0 µs (-339 µs to +200 µs) | 96.7 ms against 96.9 ms: -59.4 µs (-334 µs to +215 µs) | 8.17 MiB against 8.16 MiB: +12.0 KiB (+0 B to +28.0 KiB) |
 
 The runs are lengua's and lengua-module's counted runs, in that order, and how long their counted rounds took.
+
+## The other modules without lengua's checks
+
+In the gate's rows, C's, C++'s and Rust's modules run as lengua's program does, and as any module lengua runs for a user does: each run reads lengua.lock and holds it to the user's key, reads and hashes the idea and the module, and takes what the module may reach from the idea. Here the same modules ran with none of that, by the words of lengua's idea alone, in the rounds of the section above, beside lengua's program, which made its checks. Each cell gives the module's median, then lengua's median over it: above 1, lengua took that many times as much. No verdict is drawn from these, and the gate doesn't read them.
+
+| workload | against, unchecked | runs | CPU time | wall time | peak memory |
+|---|---|---|---|---|---|
+| empty | c-wasm | 160 | 1.17 ms, 1.20× | 1.26 ms, 1.19× | 5.48 MiB, 1.01× |
+| empty | cpp-wasm | 160 | 1.17 ms, 1.19× | 1.26 ms, 1.19× | 5.48 MiB, 1.01× |
+| empty | rust-wasm | 160 | 1.45 ms, 0.96× | 1.54 ms, 0.97× | 5.58 MiB, 0.99× |
+| add | c-wasm | 160 | 1.51 ms, 0.85× | 1.61 ms, 0.86× | 5.62 MiB, 0.99× |
+| add | cpp-wasm | 160 | 1.50 ms, 0.86× | 1.59 ms, 0.86× | 5.62 MiB, 0.99× |
+| add | rust-wasm | 160 | 1.69 ms, 0.76× | 1.79 ms, 0.77× | 5.67 MiB, 0.99× |
+| hypotenuse | c-wasm | 160 | 1.49 ms, 0.89× | 1.59 ms, 0.89× | 5.62 MiB, 0.99× |
+| hypotenuse | cpp-wasm | 160 | 1.49 ms, 0.89× | 1.58 ms, 0.89× | 5.61 MiB, 1.00× |
+| hypotenuse | rust-wasm | 160 | 1.71 ms, 0.77× | 1.80 ms, 0.78× | 5.65 MiB, 0.99× |
+| upcase | c-wasm | 160 | 2.91 ms, 0.98× | 3.13 ms, 0.98× | 8.02 MiB, 0.99× |
+| upcase | cpp-wasm | 160 | 2.87 ms, 1.00× | 3.13 ms, 0.98× | 7.94 MiB, 1.01× |
+| upcase | rust-wasm | 160 | 3.10 ms, 0.92× | 3.34 ms, 0.92× | 8.04 MiB, 0.99× |
+| upcase-stdin | c-wasm | 160 | 13.3 ms, 0.92× | 13.5 ms, 0.92× | 8.11 MiB, 1.00× |
+| upcase-stdin | cpp-wasm | 160 | 35.3 ms, 0.35× | 35.5 ms, 0.35× | 8.13 MiB, 1.00× |
+| upcase-stdin | rust-wasm | 160 | 13.0 ms, 0.94× | 13.1 ms, 0.95× | 8.33 MiB, 0.97× |
+| shout | c-wasm | 160 | 2.17 ms, 1.05× | 2.35 ms, 1.03× | 7.04 MiB, 1.00× |
+| shout | cpp-wasm | 160 | 2.16 ms, 1.05× | 2.36 ms, 1.03× | 7.02 MiB, 1.00× |
+| shout | rust-wasm | 160 | 2.40 ms, 0.95× | 2.58 ms, 0.94× | 7.30 MiB, 0.96× |
+| wc | c-wasm | 160 | 25.1 ms, 0.90× | 25.3 ms, 0.90× | 8.26 MiB, 1.00× |
+| wc | cpp-wasm | 160 | 227 ms, 0.10× | 227 ms, 0.10× | 8.26 MiB, 1.00× |
+| wc | rust-wasm | 160 | 25.4 ms, 0.89× | 25.6 ms, 0.89× | 8.39 MiB, 0.99× |
+| histogram | c-wasm | 160 | 46.4 ms, 0.74× | 46.6 ms, 0.74× | 8.26 MiB, 1.00× |
+| histogram | cpp-wasm | 160 | 46.2 ms, 0.75× | 46.5 ms, 0.75× | 8.27 MiB, 1.00× |
+| histogram | rust-wasm | 160 | 42.8 ms, 0.81× | 43.0 ms, 0.81× | 8.38 MiB, 0.98× |
+| crc32c | c-wasm | 160 | 54.4 ms, 0.75× | 54.5 ms, 0.75× | 8.27 MiB, 1.00× |
+| crc32c | cpp-wasm | 160 | 53.8 ms, 0.76× | 53.9 ms, 0.76× | 8.27 MiB, 1.00× |
+| crc32c | rust-wasm | 160 | 54.8 ms, 0.74× | 55.0 ms, 0.74× | 8.38 MiB, 0.98× |
+| sort | c-wasm | 22 | 1.31 s, 0.20× | 1.31 s, 0.20× | 77.7 MiB, 1.00× |
+| sort | cpp-wasm | 22 | 475 ms, 0.55× | 475 ms, 0.55× | 85.9 MiB, 0.90× |
+| sort | rust-wasm | 22 | 444 ms, 0.59× | 444 ms, 0.59× | 85.7 MiB, 0.91× |
+| tally | c-wasm | 42 | 356 ms, 0.36× | 356 ms, 0.36× | 8.89 MiB, 1.03× |
+| tally | cpp-wasm | 42 | 364 ms, 0.35× | 364 ms, 0.35× | 8.99 MiB, 1.01× |
+| tally | rust-wasm | 42 | 441 ms, 0.29× | 441 ms, 0.29× | 8.75 MiB, 1.04× |
+| server | c-wasm | 20 | 858 ms, 1.00× | 887 ms, 0.97× | 8.21 MiB, 0.99× |
+| server | cpp-wasm | 20 | 860 ms, 1.00× | 902 ms, 0.96× | 8.28 MiB, 0.99× |
+| server | rust-wasm | 20 | 860 ms, 1.00× | 881 ms, 0.98× | 8.38 MiB, 0.97× |
+| files | c-wasm | 153 | 76.5 ms, 0.95× | 76.7 ms, 0.95× | 8.69 MiB, 1.00× |
+| files | cpp-wasm | 153 | 76.8 ms, 0.94× | 77.0 ms, 0.94× | 8.69 MiB, 1.00× |
+| files | rust-wasm | 153 | 75.8 ms, 0.96× | 75.9 ms, 0.96× | 8.90 MiB, 0.98× |
+| readings | c-wasm | 110 | 114 ms, 0.85× | 114 ms, 0.85× | 8.29 MiB, 0.99× |
+| readings | cpp-wasm | 110 | 102 ms, 0.95× | 102 ms, 0.95× | 8.26 MiB, 0.99× |
+| readings | rust-wasm | 110 | 114 ms, 0.85× | 114 ms, 0.85× | 8.40 MiB, 0.97× |
