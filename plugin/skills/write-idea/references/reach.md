@@ -1,10 +1,11 @@
-# What a program reaches by itself: files the user names, programs, the terminal
+# What a program reaches by itself: files the user names, programs, the terminal, more cores
 
 Most programs need no line of this page. A program that works on files in the folder it runs in
 says `- Uses: files`, and that is the least it can have, so choose it whenever the user's files
 are in one folder. This page is for the three things `- Uses:` doesn't give: a file or folder
 anywhere, which the user names when the program runs; another program of the computer; and the
-terminal's mode and size. Each is a grant the idea states. lengua checks the lines, tells the
+terminal's mode and size; and, at its end, for work split into pieces that run on more cores.
+Each is a grant the idea states. lengua checks the lines, tells the
 user what they grant before the program runs (`check`'s and `run`'s `may_reach`, and a shell's
 run on standard error), and holds every call the program makes to them. Tell the user each grant
 in your final report, in plain words.
@@ -104,3 +105,45 @@ ends. Ctrl-C still ends the program.
   programs go on and read their input as it comes.
 
 The compile skill's `terminal-template-wat-idea.md` is a whole idea that uses the terminal.
+
+## Work split into pieces that run at once
+
+By default a program is one run on one core. When the user's work is large and can be done a
+part at a time, such as a count or a sum over a large input, grant a split, on one line:
+
+```markdown
+- Uses: standard input
+- Splits: its work into up to 8 pieces, each of up to 1048576 bytes, each gives back 32 bytes
+```
+
+The line says how many pieces at most (2 to 64), how many bytes a piece gets at most, and how
+many bytes each piece gives back (1 to 65536). A piece is one more run of the same program: it
+gets its share of the bytes as its standard input, and what it prints is its answer to the
+program. It reaches nothing else. The pieces run at the same time when the computer has more
+than one core, and the result is the same on every computer.
+
+- **Name `standard input` under `- Uses:`**, also when the whole program reads a file: a piece
+  reads its bytes there.
+- **Name no secret.** `check` refuses an idea with a `- Splits:` line and a `- Secret:` line.
+- **Say in Purpose what a piece does and what the program does with the answers**, in plain
+  words: the piece counts its share, and the program adds the counts.
+- **Don't promise the user more speed.** Each piece costs a start and two copies of its bytes:
+  measured, a byte count split in eight was slower than on one core on two of five systems, so
+  grant a split only for work that is heavy for each byte, in megabytes. Tell the user what it buys only
+  after `check`'s performance line, or a run, has shown it.
+- **Test a piece as a program.** A behavior with the step `the program is a piece` runs the
+  program as a piece: standard input is the piece's share, and it prints its answer.
+
+```markdown
+## B5: Counts the bytes of its share as a piece
+- Given standard input that contains `a\nb\n`
+- And the program is a piece
+- When the program runs
+- Then it prints `2` and a newline
+- And it exits with code `0`
+```
+
+`check` proves a behavior of a piece where it can, as it proves any program that reads standard
+input. A behavior of the whole program is tested, not proven: each of its tests runs twice,
+with the pieces at once and with the pieces one at a time, the last first, and both runs must
+pass.

@@ -23,6 +23,9 @@ pub enum Input {
         at: usize,
         /// The lengths of the pieces still to come after the current one.
         pieces: VecDeque<usize>,
+        /// The most bytes one read gives: what one pipe write holds, or for a piece of split
+        /// work, which reads its share from lengua's memory and no pipe, any number.
+        most: usize,
         /// What's left of the current piece.
         piece: usize,
     },
@@ -54,6 +57,21 @@ impl Input {
             bytes,
             at: 0,
             pieces,
+            most: PIPE_WRITE,
+            piece,
+        }
+    }
+
+    /// A piece's share of the bytes its program split, all there at once: a read gives as
+    /// much as its buffer holds, since no pipe carries them.
+    #[must_use]
+    pub fn share(bytes: Vec<u8>) -> Self {
+        let piece = bytes.len();
+        Self::Given {
+            bytes,
+            at: 0,
+            pieces: VecDeque::new(),
+            most: usize::MAX,
             piece,
         }
     }
@@ -69,16 +87,13 @@ impl Input {
                 bytes,
                 at,
                 pieces,
+                most,
                 piece,
             } => {
                 if *piece == 0 {
                     *piece = pieces.pop_front().unwrap_or(bytes.len() - *at);
                 }
-                let count = buffer
-                    .len()
-                    .min(*piece)
-                    .min(PIPE_WRITE)
-                    .min(bytes.len() - *at);
+                let count = buffer.len().min(*piece).min(*most).min(bytes.len() - *at);
                 buffer[..count].copy_from_slice(&bytes[*at..*at + count]);
                 *at += count;
                 *piece -= count;

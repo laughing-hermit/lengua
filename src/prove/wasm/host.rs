@@ -308,6 +308,30 @@ pub(super) fn call(
         state.core.stack.push(refused);
         return Ok(Step::Next);
     }
+    // Work split into pieces: a run that is a piece is a run as any other, on its share of the
+    // bytes, which the block's own world gives it, and the model follows it. The pieces of a
+    // call that splits are runs of their own, which the model doesn't follow.
+    if function.name == "piece" {
+        let answer = if module.policy.piece {
+            errno::SUCCESS
+        } else {
+            errno::NOENT
+        };
+        let answered = pool.bv(32, u128::from(answer));
+        state.core.stack.push(answered);
+        return Ok(Step::Next);
+    }
+    if function.name == "split" {
+        if module.policy.piece {
+            let refused = pool.bv(32, u128::from(errno::NOTCAPABLE));
+            state.core.stack.push(refused);
+            return Ok(Step::Next);
+        }
+        return Err(unsupported(
+            "work it splits into pieces, each a run of its own, which the model doesn't follow: \
+             the program is tested, not proven, where it splits",
+        ));
+    }
     let State { core, world } = state;
     let mut host = Call {
         module,
@@ -889,7 +913,13 @@ impl Call<'_> {
         } else {
             self.world.stderr.len()
         };
-        let most = crate::runner::Limits::default().max_output;
+        // A piece's answer is held to the bytes its idea's line gives back.
+        let most = match self.module.policy.reach.get().split {
+            Some(grant) if self.module.policy.piece && stream == 1 => {
+                usize::try_from(grant.back).unwrap_or(usize::MAX)
+            }
+            _ => crate::runner::Limits::default().max_output,
+        };
         if held.saturating_add(usize::try_from(length).unwrap_or(usize::MAX)) > most {
             return Err(Fail::End(unsupported(
                 "output past a test's limit for a stream, which the model doesn't follow",

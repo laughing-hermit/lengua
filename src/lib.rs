@@ -35,6 +35,7 @@ pub mod reach;
 pub mod runner;
 pub mod server;
 pub mod skiplog;
+pub mod split;
 pub mod starts;
 pub mod state;
 pub mod ste;

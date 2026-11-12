@@ -574,6 +574,8 @@ struct Test<'a> {
     client: &'a [Exchange],
     clients_at_once: bool,
     stdout_closed: bool,
+    /// Whether the run is a piece of the program's split work.
+    piece: bool,
     serves: bool,
 }
 
@@ -597,6 +599,7 @@ impl<'a> Test<'a> {
             client: &example.client,
             clients_at_once: example.clients_at_once,
             stdout_closed: example.stdout_closed,
+            piece: example.piece,
             serves: example.serves,
         }
     }
@@ -620,6 +623,7 @@ impl<'a> Test<'a> {
             client: &case.client,
             clients_at_once: case.clients_at_once,
             stdout_closed: case.stdout_closed,
+            piece: case.piece,
             serves: case.serves,
         }
     }
@@ -635,6 +639,9 @@ const MAX_ANSWER: u64 = 8 * 1024 * 1024;
 /// what went wrong, if anything. `delivery` cuts what the test's server and client send into
 /// pieces, as a network may deliver them.
 ///
+/// A run that split its work runs again with its pieces one at a time, the last first, and
+/// must pass the same.
+///
 /// A run that listed a folder runs again with each listing turned round: no system promises an
 /// order, each file system has its own, so a result that changes with the order is wrong on
 /// some system, and the test fails.
@@ -647,14 +654,22 @@ async fn check_one(
 ) -> io::Result<(Run, Option<String>)> {
     let (run, mut problem) =
         check_one_way(target, test, network, delivery, assertions, false).await?;
-    if problem.is_none() && run.listed {
+    if problem.is_none() && (run.listed || run.split) {
         let (_, turned) = check_one_way(target, test, network, delivery, assertions, true).await?;
         if let Some(turned) = turned {
-            problem = Some(format!(
-                "with its folder's entries listed the other way round, {turned}: each file \
-                 system lists a folder in an order of its own, so a result must not depend on \
-                 it; sort the entries first"
-            ));
+            problem = Some(if run.listed {
+                format!(
+                    "with its folder's entries listed the other way round, {turned}: each file \
+                     system lists a folder in an order of its own, so a result must not depend \
+                     on it; sort the entries first"
+                )
+            } else {
+                format!(
+                    "with the pieces of its split work run one at a time, the last first, \
+                     {turned}: a result must be the same however many pieces run at once and \
+                     whichever ends first"
+                )
+            });
         }
     }
     Ok((run, problem))
@@ -712,6 +727,12 @@ async fn check_one_way(
             delivery,
             Delivery::Pieces | Delivery::FirstTwo | Delivery::LastTwo
         );
+    // A test of a piece runs as a call that splits runs one: with what a piece may reach.
+    let policy = if test.piece {
+        target.policy.for_a_piece()
+    } else {
+        target.policy
+    };
     let now = crate::expect::now();
     let spec = crate::wasm::Spec {
         stdin_pieces: &stdin_pieces,
@@ -726,7 +747,7 @@ async fn check_one_way(
         programs: &network.programs,
         reversed,
         stdout_closed: test.stdout_closed,
-        ..crate::wasm::Spec::new(&args, stdin.as_bytes(), target.policy)
+        ..crate::wasm::Spec::new(&args, stdin.as_bytes(), policy)
     };
     let mut started = target
         .pool
@@ -1601,6 +1622,7 @@ mod tests {
             random_asked: None,
             connections: Vec::new(),
             listed: false,
+            split: false,
         }
     }
 

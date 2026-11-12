@@ -107,7 +107,9 @@ x86-64 stays dropped (the owner: Apple makes no Intel Macs).
   other four runners; it was faster only on tally, and on sort on Windows on x86-64. Its peak
   memory was 0.98 to 19.33 times the best native build's, below it on one row (sort on macOS on
   ARM64). That gap is published, not hidden ([docs/benchmarks](docs/benchmarks/README.md)).
-- Programs lengua can't express yet: threads and GUIs. W18 gave connections a program opens on
+- Programs lengua can't express yet: threads that share memory, and GUIs. W20 gave work split
+  into pieces that run at once, which is safe and the same everywhere and, measured, not yet
+  faster ("W20: work split into pieces", below). W18 gave connections a program opens on
   its own, UDP, files anywhere the user names, programs to start and the terminal; a started
   program that works in the user's folder is still out ("W18's second part", below).
 - A few workloads: tally, sort and histogram, where lengua's own programs are slower; W12c is on
@@ -728,6 +730,116 @@ Still open from it, for the owner:
     are refused by their shape, which a test checks.
   - A started lengua program.
 
+### W20: work split into pieces (2026-11-11)
+
+On the branch `wip/threads`, not merged: the owner lands it. DESIGN.md ("The host", Work split
+into pieces) has the design as built, and docs/reviews/threads-2026-11-11.md the threat cases
+with the test that holds each.
+
+What was built:
+1. **The grant**: `- Splits: its work into up to 8 pieces, each of up to 1048576 bytes, each
+   gives back 8192 bytes` (`src/split.rs`, read by `src/idea.rs`): 2 to 64 pieces, 1 byte to
+   1 GiB a piece, 1 to 65,536 bytes back. Such an idea names `standard input` and no secret.
+2. **The calls**, in `lengua_split_1`: `split(input, input_len, pieces, output, output_len)`
+   and `piece()` (`src/wasm/wasi.rs`, `src/wasm/host/split.rs`). A piece is a run of the same
+   module from `_start` in a store of its own, on a thread of lengua's; its share of the bytes
+   is its standard input, what it prints its answer; it reaches nothing else and can't split.
+3. **The rules** (`src/checker/wasm/split.rs`, with rule 3): no import without the line; the
+   number of pieces a named constant the line covers; `piece` imported where `split` is; the
+   memory, times the line's pieces and one more, at most 16,384 pages.
+4. **The same result everywhere**: the cut is arithmetic, the answers are written in the
+   pieces' order, and a run ends as the first piece in that order that didn't end well. A
+   test's second run takes the pieces one at a time, the last first (`src/testrun.rs`).
+5. **A piece as a program**: the step `the program is a piece` runs a test as a piece, and
+   the prover proves such a test on a model in which `piece()` answers 0
+   (`src/prove/wasm/host.rs`). The whole program's tests are tested, not proven: the model
+   stops at `split`.
+6. **Both runners**: the `run` tool, `lengua-mcp run` and lengua-run run the pieces with the
+   same code (`src/wasm/runner.rs`, `execute_until`).
+7. **An example**, `examples/histogram-split`: the byte counts of standard input, 8 MiB at a
+   time, each split into eight pieces, with tests of the whole program and of a piece.
+
+What the runs show:
+- **The example goes from its idea to done** (43136507348, Linux on x86-64): every rule, every
+  test, each test of the whole program twice, with its pieces at once and one at a time. Its
+  proofs: B1, B2 and B4, of the whole program, "tested, not proven: work it splits into
+  pieces"; B5, of a piece, proven for the empty text alone (below).
+- **The tests bite**: on a commit that takes the defences out (3729579, on a branch since
+  deleted, never on main), 7 of the 8 tests of tests/wasm_split.rs fail (43148079519). The
+  eighth, a run from a shell, holds nothing the commit took out. One defence can't be taken
+  out to see its test fail: a piece's own memory, which is how the engine makes a store.
+- **Measured, the split does not pay for the example's work** (43148133679 at 92dec35, and
+  43141059631 at 55443fd, each on all five; ROADMAP.md, W20, has the table). On 64 MiB by
+  lengua-run, a piece for each core against the one-core program: 45.8 ms against 29.4 on
+  Linux on x86-64, 39.6 against 37.7 on Linux on ARM64, 36.5 against 33.8 on macOS on ARM64,
+  102.8 against 66.7 on Windows on x86-64, and 60.8 against 71.4 on Windows on ARM64, the one
+  runner where it is ahead. Against itself with one piece at a time it is 1.4 to 1.9 times as
+  fast. A piece's cost before it works, two copies of its bytes into new pages and a thread
+  and a store started for each call, is more than this count's own time. So the mechanism is
+  built, safe and the same everywhere, and its speed is not shown: the gap W20 was to close
+  is still open.
+
+The decisions, each made without asking, as the brief said:
+- **Separate runs, not shared memory.** WebAssembly's threads would have needed a rule that
+  shows each part writes what no other reads, the engine's threads feature (a setting compiled
+  code depends on), and a prover that follows interleavings. With a memory for each piece the
+  absence of a data race needs no rule, every rule and proof holds for a piece as for a
+  program, and the code is one on all five runners. The cost, copies of the bytes, is
+  measured below.
+- **A piece is a run from `_start`, told apart by `piece()`**, not a second exported function:
+  the rules, the secret rule, the stack rule and the prover all start at `_start`, and stay as
+  they were.
+- **A piece's input is its standard input and its answer its standard output**, so a piece is
+  the program the test format and the prover already know.
+- **The line is `- Splits:`, and its units are pieces**: `- Threads:` stays refused, since a
+  program still has no threads, and "parts" are what `- Builds on:` names.
+- **No secret in a program that splits**, refused at the idea: the simplest thing to state.
+- **The number of pieces is a named constant**, so `check` holds it to the line before a run.
+- **`LENGUA_PIECES_AT_ONCE`** sets how many pieces run at once (1 to 64), for measurements and
+  tests. It changes the time alone.
+
+What it leaves, for the owner:
+- **The proof of the example's piece reaches no text.** `check` proves B5 of
+  examples/histogram-split "for every input with text up to 0 of 1048576 bytes" (run
+  43136507348): the model follows a piece's run, but not the histogram's table, "an access
+  whose place the input chooses among more than 256 places". The mechanism proves a piece as
+  a program; this piece's work is of a kind the prover doesn't follow. A piece that counts in
+  locals, as tests/fixtures/vowels does, is the next example to try.
+- **The join is tested, not proven**: the model stops at `split`. To prove the whole program
+  it would run each piece's model and join them.
+- **Pieces of the program itself only**: no other program as a piece, no arguments, files or
+  clock for a piece, no piece that splits, no pieces that talk while they run.
+- **A run from a shell stops no piece**: its engine has no epochs, as it has no deadline. A
+  piece that started runs to its end after another failed.
+- **Threads are started for each call** and each piece's bytes are copied twice. A pool of
+  threads kept through a run, and input handed over without a copy, would cut the cost of a
+  call.
+- **No workload in the benchmark's gate**, and no C, C++ or Rust native build with threads
+  beside it: the gate's rows and KNOWN_BEHIND are another branch's work in flight
+  (`wip/gate-same-way`), so the measurement is a test of lengua-run's
+  (`split_work_is_measured`), lengua against lengua.
+- **No template in the compile skill**: host.md shows the calls, and names the example.
+- **Never run on a runner**: a program that splits through the `run` tool of the MCP server
+  (the tests run it through the pool the tool uses, in the configuration the tool uses, and
+  through `check`'s own tests); more than 8 pieces at once, and a computer with more than 4
+  cores; a piece stopped by lengua's stop of a background server; the goldens with the new
+  example (`mode=golden` was not dispatched); the bench.
+
+Where the work left the brief: the design (b381dfe) and the review were written with the code,
+by its author, not before it; and the example was to be one where the split pays, which the
+measurements don't show.
+
+The runs: the suite, green on all five runners at 6790d4c, the branch with main's W21 merged in
+(43160037821); before the merge, at 92dec35, green on four and failed on Windows on ARM64 by
+`two_checks_at_once_leave_a_consistent_index` alone, the race in tests/graph.rs noted under
+W19 (43148136973), and green on Linux on x86-64 at 55443fd (43141098911); the example from its
+idea to done (43136507348); the tests of tests/wasm_split.rs and of lengua-run alone
+(43136504390); the defences taken out (43148079519, at 3729579, kept as the tag
+`archive/threads-bite`); the measurements (43141059631, 43148133679; in the first, macOS's job
+failed after its tests, where GitHub didn't take its log); and the first compile, which
+found a test's missing field (43134989066). The commit that writes this paragraph changes
+documents alone.
+
 ### What the permission checks refused
 
 Claude Code's permission checks refused these actions. Each refusal was taken as given, with
@@ -866,7 +978,8 @@ Each can be reversed.
   listener, 5 on the connections lengua made. Files live in the working folder, as before.
 - **The clock is rounded to a microsecond**, after OpenAI's 2026 report of agents signalling to
   each other through the CPU cache's timing.
-- **No threads** until WebAssembly's threads are standard: an idea with `- Threads:` is refused.
+- **No threads** in a program: an idea with `- Threads:` is refused. Since W20 a program uses
+  more cores through a `- Splits:` line, whose pieces share no memory.
   Core WebAssembly has no fused multiply-add either. The test format keeps `fma(a, b, c)`, which
   check accepts and the prover follows, and the write-idea skill tells the agent not to use it,
   as a program would have to compute it in software (2026-11-10: this line said `fma` is refused,
@@ -1382,9 +1495,10 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
       x86-64 (42975969779), with one of two records in log.md. Found and fixed on 2026-11-11:
       the race was in the product, in a bundle's first write ("Two checks at once in a new
       bundle", above).
-- **W20. Parallelism.** WebAssembly's threads (shared memory and atomics), as structured
-  fork-join alone. The rules show that a program has no data race, so its results stay the same
-  on every run, which free threads in C, C++ and Rust can't promise.
+- **W20. Parallelism.** *Built on `wip/threads`, not merged.* Work split into pieces that run at
+  once, each a run of the same module with a memory of its own, in place of WebAssembly's
+  threads: no rule has to show the absence of a data race, and a result is the same on every
+  run. Measured, it doesn't pay for the example's work yet ("W20: work split into pieces").
 - **W21. A library of proven parts.** A shared, proven standard set (sorting, hash tables, JSON,
   HTTP, compression, dates) that programs build on with `- Builds on:`. The agent assembles
   programs from verified pieces instead of writing everything new, which makes them faster to
@@ -1679,8 +1793,9 @@ this file at the tag `native-final`.
   it runs; a TCP listener and a UDP port in one program; a limit on how many connections a
   program opens in all, or a second; and the public suffixes, so that `any subdomain of co.uk`
   is still taken.
-- **Threads**, until WebAssembly's threads are standard and Wasmtime runs them. Planned as W20,
-  as structured fork-join that the rules show free of data races.
+- **Threads that share memory.** W20 gave pieces that share none; what would bring shared
+  memory in is WebAssembly's threads as a standard, a rule that shows each thread writes what
+  no other reads, and a prover that follows them.
 - **An OS sandbox around the engine** as a second wall: Linux's seccomp and Landlock from the
   native lengua, and each other system's own. It would bring back per-OS work.
 - **Native kernels**: assembly a WebAssembly program calls for its busiest loops, for speed. Only

@@ -22,8 +22,9 @@ templates' plain forms.
 | `program-template.wat` | `program-template-wat-idea.md` | Two programs started with `program_run`: each one's output, its exit code, and what the program does when the computer has no such program |
 | `terminal-template.wat` | `terminal-template-wat-idea.md` | A key read with the terminal raw, `term_raw`, and put back; with no terminal, the first byte of the input |
 
-Start from the template closest to the idea, and keep its shape. A program that needs threads
-has none, since a WebAssembly program has no threads.
+Start from the template closest to the idea, and keep its shape. A program that uses more cores
+splits its work into pieces ([the host](host.md)); one that needs threads that share memory
+has no form, since a lengua program has no threads.
 
 ## The module's layout
 

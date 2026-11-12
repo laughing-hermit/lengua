@@ -19,6 +19,7 @@ pub mod memory;
 pub mod model;
 pub mod rules;
 pub mod secret;
+pub mod split;
 pub mod structure;
 
 #[cfg(test)]
@@ -226,6 +227,7 @@ pub fn check(text: &str, built: &Built, context: &Context<'_>) -> Report {
     };
     structure::check(&module, built, &policy, &mut violations);
     let flows = flow::analyze(&module, &policy, &mut violations);
+    split::check(&module, &flows, &policy, &mut violations);
     let analysis = memory::analyze(&module, &flows);
     let lends = lends(&module, &analysis);
     memory::check(&module, &flows, &analysis, &mut violations, &mut facts);

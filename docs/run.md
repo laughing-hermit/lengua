@@ -127,7 +127,13 @@ Only what its idea's `- Uses:`, `- Network:`, `- Files:` and `- Runs:` lines nam
   system's temporary folder;
 - the terminal's mode and size, with `the terminal`: keys as they're pressed, with no echo.
   lengua puts the terminal back as it was when the program ends, by its exit, a trap, or a
-  signal that ends `lengua-mcp` (Ctrl-C, which still ends the program, among them).
+  signal that ends `lengua-mcp` (Ctrl-C, which still ends the program, among them);
+- more cores, with a `- Splits:` line: the program splits its work into the pieces the line
+  bounds, each a run of the same program with a memory of its own, its share of the bytes as
+  its standard input, and nothing else of what the idea grants. The pieces run at once, one
+  for each core the computer gives the process, and the result is the same on every computer
+  and on every run. `LENGUA_PIECES_AT_ONCE`, 1 to 64, sets how many run at once instead, which
+  changes the time and nothing else. A piece that fails ends the run as it failed.
 
 ## Limits and exit codes
 

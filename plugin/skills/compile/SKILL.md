@@ -37,8 +37,9 @@ alone, by the steps below: `check` refuses any other code file and says what to 
    main.wat may use: WebAssembly 1.0 with sign-extension, saturating-float-to-int, multi-value,
    bulk-memory and simd, and no tables or references. The same main.wat runs on every computer:
    the machine line says how fast vector code will be here, never what the program does. A
-   WebAssembly program is one thread, so `check` refuses an Attested Computation with a
-   `- Threads:` line.
+   program has no threads of its own, so `check` refuses an Attested Computation with a
+   `- Threads:` line; an idea with a `- Splits:` line uses more cores through pieces
+   ([the host](references/host.md), Work split into pieces).
 2. **Pick the template that fits**, and keep its shape. Each is a complete program that passes
    every rule and every test of its idea:
 
@@ -54,7 +55,10 @@ alone, by the steps below: `check` refuses any other code file and says what to 
    | [the two programs](assets/program-template.wat) | [idea](assets/program-template-wat-idea.md) | Programs started with `program_run`: a command, its output, its exit code, and a program the computer does not have |
    | [the key](assets/terminal-template.wat) | [idea](assets/terminal-template-wat-idea.md) | The terminal: keys as they are pressed with `term_raw`, put back, and the same program with no terminal |
 
-   A program that needs threads has no WebAssembly form: tell the user so rather than promise
+   No template splits its work yet: for an idea with a `- Splits:` line, start from the
+   streaming filter and follow [the host](references/host.md), Work split into pieces. A
+   program that needs threads that share memory has no form in lengua: tell the user so rather
+   than promise
    one.
 3. **Plan the functions** before you write them: at most 180 operators each (rule 4), and at
    least two assertions per function on average. `$main`, exported as `_start`, checks the inputs

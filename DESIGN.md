@@ -110,8 +110,11 @@ key, OKF's `tags`, `sources`, `generated` and `verified` among them, is kept and
   - `- Secret:` the inputs whose values must not decide how it runs: standard input, a named file,
     an environment variable or an argument.
   - `- Builds on:` links to the idea.md of each part it takes functions from.
-  - `- Threads:` still parses, so that `check` can refuse it: a WebAssembly program runs as one
-    thread.
+  - `- Splits:` the work it may split into pieces that run at once, each a run of the program
+    itself: how many pieces at most (2 to 64), how many bytes a piece gets at most, and how many
+    bytes each gives back (1 to 65,536). One line (the host, below).
+  - `- Threads:` still parses, so that `check` can refuse it: a program has no threads of its
+    own, and uses more cores through `- Splits:`.
 
 - `# Contract`, for a part: each function the idea offers to the programs that build on it,
   with what it reads and writes through the addresses it is lent ([Parts](#parts)). The idea
@@ -298,7 +301,8 @@ and don't overlap.
 - M1, owners: every address comes from a region or a pointer a caller lent, never a plain number.
 - M2, bounds: every access stays inside its owner; a computed one is rule 9's.
 - M3, lifetimes; M5, initialization; M7, races: these hold by construction (locals can't be
-  addressed and nothing is freed; memory and locals start at zero; there are no threads), and the
+  addressed and nothing is freed; memory and locals start at zero; a program has no threads, and
+  the pieces it splits its work into share no memory with it or with each other), and the
   checker never reports them.
 - M4, exclusive writes: a buffer a call writes overlaps no other buffer of the same call, as far
   as the rules can tell them apart.
@@ -427,7 +431,8 @@ failures are reported, and all the tests must end within 90 seconds. Each test r
 A test gives its input as the program would meet it. Odd-numbered generated runs get standard
 input, and what a test's server or client sends, in three pieces: the first byte, up to the
 middle, and the rest, with 2 ms between them. A run that listed a folder runs again with every
-listing turned round, and a different result fails, with advice to sort. Each run is compared on
+listing turned round, and a different result fails, with advice to sort; a run that split its
+work runs again with its pieces one at a time, the last first. Each run is compared on
 standard output and error (exactly, or by a rule's pattern), the exit code, and the working
 folder, which must hold the expected files and nothing else. An exit of 134 is read back as
 "assertion N failed at main.wat:LINE".
@@ -438,7 +443,8 @@ same on every system, and its time on the clock.
 
 ## The prover
 
-`check` proves each generated test on a model of the built module (`src/prove/`). A block's line
+`check` proves each generated test on a model of the built module (`src/prove/`), a test of a
+piece of split work on a model of a piece's run. A block's line
 says one of three things:
 - proven for every input in range, or for every input with text up to B of the idea's O bytes,
   with how many input combinations and paths it took, and whether two solvers confirmed each
@@ -485,7 +491,9 @@ base proves every input of up to a buffer-full. At the head, what a time round c
 value, a count is anything it can have grown to, and a value that stays in a range by its own
 terms, as a byte carried from one buffer-full to the next does, is any value in that range. A
 program that reads with `fd_read` itself, reads in several places, waits on `poll_oneoff` or is
-on the network is proven by length only.
+on the network is proven by length only. So is a program that splits its work when it reads in
+the whole program's loop and in the piece's: one that reads in one loop for both is proven by
+induction as a piece.
 
 The base takes each final piece of up to a buffer-full: in one shape for a buffer of up to 256
 bytes, else one length at a time. So the buffer's size decides whether the proof for every
@@ -513,7 +521,8 @@ the engine's canonical NaNs, and SIMD128's loads, stores, lane moves, bitwise op
 lane arithmetic, comparisons, shifts and shuffles; and each WASI function as lengua's host gives
 it, with the test's files, network, clock and random bytes. Each trap is placed on main.wat's line.
 
-It refuses, as "tested, not proven": tables, element segments and a start function; recursion, and
+It refuses, as "tested, not proven": a call that splits the program's work into pieces, whose
+runs it doesn't follow; tables, element segments and a start function; recursion, and
 calls that may take more than 262,144 bytes of stack; SIMD128's float lanes' arithmetic, its
 narrowing, widening and pairwise forms and its lane loads; the trapping float-to-int conversions;
 a number or a name the input chooses in a host call; a server's wait on `poll_oneoff` for its
@@ -583,12 +592,14 @@ All 46 functions of preview 1 are linked, so a toolchain's module links whatever
 are given. 16 answer `NOSYS`: `fd_advise`, `fd_allocate`, `fd_datasync`, `fd_fdstat_set_flags`,
 `fd_fdstat_set_rights`, `fd_filestat_set_size`, `fd_filestat_set_times`, `fd_pread`, `fd_pwrite`,
 `fd_renumber`, `fd_sync`, `path_filestat_set_times`, `path_link`, `path_readlink`, `path_symlink`
-and `proc_raise`. Besides WASI's, lengua gives thirteen functions of its own, each in a module of
-its own name, for what a program reaches by itself while it runs (below): seven in
+and `proc_raise`. Besides WASI's, lengua gives fifteen functions of its own, each in a module of
+its own name, for what a program reaches by itself while it runs (below), and two for work it
+splits into pieces: seven in
 `lengua_net_1` for the network, two in `lengua_fs_1` for the files its arguments name, one in
 `lengua_run_1` to start a program, and three in `lengua_term_1` for the terminal. Every error,
 of WASI's functions and of lengua's own, is one of a closed set of 24 of WASI's numbers, and an
-error outside a function's own list becomes `IO`.
+error outside a function's own list becomes `IO`. The two for split work are in
+`lengua_split_1`.
 
 Each call checks the idea first: one the idea doesn't allow answers before any of its buffers is
 looked at. An allowed call checks every buffer it borrows against the program's memory, then does
@@ -813,6 +824,84 @@ command no step gives isn't there (`NOENT`). The prover refuses a module that im
 of lengua's own modules, as it does for the network: the model's files are the working folder's,
 it has no other program, and its input is the test's bytes, so such a program is tested, not
 proven. `check`'s reply and `run`'s (`may_reach`) say each grant in words, the terminal's too.
+
+Work split into pieces (W20, `src/split.rs`, `src/wasm/host/split.rs`): by default a program is
+one run on one core. A `- Splits:` line lets it split its work into pieces that run at once:
+`- Splits: its work into up to 8 pieces, each of up to 1048576 bytes, each gives back 8192
+bytes`. The program calls two functions of `lengua_split_1`:
+
+| Function | What it does |
+|---|---|
+| `split(input, input_len, pieces, output, output_len)` | cuts the `input_len` bytes at `input` into `pieces` pieces, runs each, waits for all, and writes each piece's answer at the start of its `output_len / pieces` bytes of `output`, in the pieces' order, with zeros after it |
+| `piece()` | answers 0 in a run that is a piece, and `NOENT` in the run that is the whole program |
+
+A piece is a run of the same module from `_start`, in a store of the engine's own: its own
+memory, as the module declares it, its own globals and its own stack. Its standard input is its
+share of the bytes, what it prints is its answer, and it reaches nothing else: not what the
+idea grants the program (files, the clock, random bytes, the network, programs, the terminal),
+and not `split`, which answers `NOTCAPABLE` in a piece. So `_start` asks `piece()` first, and a
+piece is an ordinary program that reads standard input and prints.
+
+Two designs were weighed. WebAssembly's threads proposal shares one memory between threads, with
+atomics; it needs a rule that shows each thread writes only what no other reads or writes, the
+engine's threads feature on, which changes what compiled code depends on, and a prover that
+follows interleavings. Separate runs share nothing: no rule has to show the absence of a data
+race, since no byte of a piece's memory is another piece's or the program's; every rule and
+every proof holds for a piece as for any program, since a piece is one; the engine's settings
+don't change; and the code is the same on all five runners. The cost is two copies of each
+piece's bytes, one into lengua's memory and one into the piece's as it reads them, and one of
+its answer. lengua has the second design. Measured, that cost is more than the work of the one
+example: on 64 MiB its byte count with a piece for each core is 1.4 to 1.9 times as fast as
+with one piece at a time, and against the same count on one core it is slower on two runners,
+level on two and faster on one (ROADMAP.md, W20, has the table and why).
+
+What a call gives depends on its bytes and its numbers alone:
+- the cut is arithmetic: piece `k` of `n` holds the bytes from `floor(k × len / n)` to
+  `floor((k + 1) × len / n)`, so the pieces follow each other and differ by a byte at most;
+- a piece gets no clock, no random bytes, no argument and no variable, and starts from the
+  module's first memory, so it gives the same answer for the same bytes;
+- the answers are written in the pieces' order, whichever piece ended first, and only when
+  every piece exited with code 0;
+- where a piece doesn't exit with code 0 (an exit code, a trap, a failed assertion, its time,
+  an answer past its room), the run ends as the first such piece in the pieces' order ended,
+  with what that piece wrote to standard error, and nothing is written;
+- how many pieces run at once, one for each core the computer gives the process, or what
+  `LENGUA_PIECES_AT_ONCE` says (1 to 64), changes the time alone.
+
+The limits, which the idea's line and the rules give:
+- a call splits into 1 to the line's pieces, never more than 64, each no longer than the
+  line's bytes, with room for exactly the line's bytes back from each; any other call answers
+  `INVAL`, and a call without the line `NOTCAPABLE`;
+- `check` refuses a main.wat that imports either function without the line (rule 3), one
+  whose call gives its number of pieces other than as a named constant the line covers, one
+  that splits and never asks `piece()`, and one whose memory, times the line's pieces and one
+  more for the program, is past 16,384 pages: a program and its pieces together hold at most
+  1 GiB (`src/checker/wasm/split.rs`);
+- a piece can't split, so the pieces of a run are never more than the line's at once, each on
+  a thread of lengua's with a stack of 4 MiB;
+- the run's deadline is its pieces': in a test and in the `run` tool the engine's epochs stop
+  a piece at it, and stop a piece that still runs once a piece before it in the order didn't
+  end well. A run from a shell has no deadline and its engine stops nothing: there a piece
+  that started runs to its end, and pieces not yet started aren't;
+- a piece's answer is held to the line's bytes, and what it writes to standard error to 64
+  KiB; past either the piece is stopped, and the run ends so.
+
+An idea with a `- Splits:` line names `standard input` in its `- Uses:` line, since a piece
+reads its bytes there, and names no secret: the pieces run at once, beside each other, and
+lengua doesn't show that a secret in one changes nothing another can time, so `check` refuses
+an idea with both lines. No secret crosses into a piece, since such a program has none.
+
+A test runs a program that split its work a second time with its pieces one at a time, the
+last first, as it runs one that listed a folder with the listing turned round, and both runs
+must pass. A step, `the program is a piece`, makes a test's run a piece: with a piece's reach,
+and its output held to the line's bytes. So an idea tests its pieces as programs, and the
+prover proves such a test as any other, on a model in which `piece()` answers 0, as far as it
+follows the piece's work: of the example's piece, a histogram in tables, it proves the empty text
+alone. A test of the
+whole program is tested, not proven: the model stops at `split`, since it doesn't follow the
+pieces' runs. What a piece executes counts in a test's cost with the program's own operations.
+`check`'s reply and `run`'s (`may_reach`) say the grant in words, and a run from a shell says it
+on standard error before the program starts.
 
 The clock: both clocks are rounded down to a microsecond (`src/wasm/host/clock.rs`). In a test the
 clock and the random bytes may come from the test; otherwise random bytes come from the system.
@@ -1154,7 +1243,7 @@ listed below.
 
 - **A program that reaches more than its idea grants.** The checker refuses an import from outside
   WASI preview 1 and lengua's own modules (`lengua_net_1`, `lengua_fs_1`, `lengua_run_1`,
-  `lengua_term_1`), one lengua doesn't give, one the idea doesn't
+  `lengua_term_1`, `lengua_split_1`), one lengua doesn't give, one the idea doesn't
   allow, or one with another type.
   The host checks every call against the idea's lines, and every buffer a call borrows against the
   program's memory. Every path is resolved beneath the working folder by `cap-std`, and no
@@ -1217,6 +1306,15 @@ listed below.
   compiler returned in that call. So a file put in the data folder by someone without the key
   is never handed to the engine: not other bytes, not another program's compiled module, and
   not the right one with a byte changed. Such a run reads no cache of compiled modules.
+- **Work split into pieces that goes past its grant, or gives another result on another
+  computer.** A piece is a run of its own with memory of its own, so no piece reads or writes
+  what another or the program holds; it reaches standard input and its output alone; it can't
+  split, so a run never has more pieces at once than its idea's line grants, nor more memory
+  with them than 1 GiB; a call outside the line is refused; the run's deadline stops its
+  pieces where the engine can stop a program; and the answers come in the pieces' order, the
+  run ending as the first piece in that order that didn't end well, so the cores and the order
+  the pieces end in change nothing but the time. A program that splits names no secret. The
+  threat cases and their tests are in docs/reviews/threads-2026-11-11.md.
 - **A secret that reaches timing within main.wat.** For an idea with a `- Secret:` line, the secret
   rule refuses a branch, an address, a length, a loop's count, a division or a float operation
   that depends on a secret, in main.wat; and in the machine code the engine made on this CPU for
@@ -1262,8 +1360,11 @@ listed below.
 ### Out of scope
 
 Programs that need these can't be written in lengua yet, and the host has no way to give them:
-- threads, until WebAssembly's threads are standard: W20 plans structured fork-join that the rules
-  show free of data races;
+- threads that share memory: a program uses more cores through pieces that share none (the
+  host, above). What that leaves out: pieces of another program than itself, a piece with
+  arguments or files of its own, a piece that splits, work whose parts must talk while they
+  run, a proof of the step that joins the answers, which is tested, and a secret in a program
+  that splits;
 - for a started program: a current folder other than an empty one of lengua's, so a tool
   that works on the user's folder (`git status`) can't be started usefully yet; an
   environment variable; its standard error; more than one at a time, or one that goes on

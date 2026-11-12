@@ -207,7 +207,8 @@ Within lengua, for a program at `done`:
   calls, or `check` refuses the program. The part is checked on this computer, states what
   each function reaches through the addresses it is lent, and the memory rules hold every call
   to that. lengua.lock records the parts with their hashes, and no run starts once a part changed.
-- **The same bits on every computer.** NaNs are made canonical, there are no threads, and relaxed
+- **The same bits on every computer.** NaNs are made canonical, a program has no threads (the
+  pieces it splits its work into share no memory, and their answers come in a fixed order), and relaxed
   SIMD, whose results differ between computers, is off.
 - **Every proof says what it covers.** With both solvers installed, as the archive ships them, a
   solver's "no counterexample" counts only when z3 and cvc5 both give it. Questions about floats
@@ -253,11 +254,12 @@ What it doesn't promise:
 - **No security product.** The examples show algorithms, such as AES-128 and SHA-256. They
   aren't built to resist an attacker, and lengua isn't presented as covering security because
   of them.
-- **Not every kind of program yet.** No threads and no GUIs. W18 has given the network chosen
+- **Not every kind of program yet.** No threads that share memory and no GUIs. W18 has given the network chosen
   at run time, DNS and UDP, files anywhere the user names, starting named programs, and the
   terminal's mode and size, each as a grant the idea states. A program that uses one of
   those grants is tested, not proven; a started program runs in an empty folder of its own,
-  so it can't work on the user's folder yet. W20 plans threads; GUIs aren't planned.
+  so it can't work on the user's folder yet. W20 gave work split into pieces that run at once,
+  each a run of the same program with memory of its own; GUIs aren't planned.
 
 ## Against C, C++ and Rust
 
@@ -380,7 +382,7 @@ with rows the list can't take back is the owner's ([todo.md](todo.md)).
 - `crates/lengua-os/`: the one crate allowed unsafe code, each call in a safe function.
 - `plugin/`: the plugin as it ships: its manifests, the two skills with their references and
   templates, its [README](plugin/README.md) and licence.
-- `examples/`: 26 programs, each a folder of `idea.md` and `main.wat`. Five are the library's
+- `examples/`: 27 programs, each a folder of `idea.md` and `main.wat`. Five are the library's
   parts, `decimal`, `lines`, `crc32`, `bytes` and `sort64`, the same files the compile skill
   ships in its `assets/parts`, and `sum` and `checksums` are built on them.
 - `tests/`: the suite, the 29 programs of `tests/fixtures`, the host's 109 cases in
@@ -450,8 +452,9 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
   sealed with your key. On Linux on x86-64 the empty program went from 2.20 ms and 11.4 MiB to
   1.33 ms and 5.50 MiB ([ROADMAP.md](ROADMAP.md)). Step 2 is an optional native build of
   the proven `main.wat` through wasm2c.
-- **W20, parallelism:** WebAssembly's threads, as structured fork-join that the rules show free
-  of data races.
+- **W20, parallelism:** built on a branch: a program splits its work into pieces that run at
+  once and share no memory, so the result is the same on every computer. Measured on the
+  example, it is not faster than one core yet ([ROADMAP.md](ROADMAP.md)).
 - **W21, a library of proven parts** that programs build on with `- Builds on:`. Built: the
   mechanism (a part's contract, the copy `check` holds to the part, the lock's record) and five
   parts, `decimal`, `lines`, `crc32`, `bytes` and `sort64`, with two programs on them. Left:
