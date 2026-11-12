@@ -780,8 +780,7 @@ async fn a_contract_s_formula_carries_into_the_program_built_on_the_part() {
         stated
             .iter()
             .any(|line| line.starts_with("gives $crc32_update: ")
-                && line
-                    .contains("proven of the function alone, for every argument in its ranges")),
+                && line.contains("proven of the function alone, for every argument in its ranges")),
         "{part}"
     );
     // The program built on it: the formula proven of its own copy, and its proofs.
@@ -792,11 +791,11 @@ async fn a_contract_s_formula_carries_into_the_program_built_on_the_part() {
         println!("CARRY the formula used: parts: {line}");
     }
     assert!(
-        built_on
-            .iter()
-            .any(|line| line.starts_with("contract $crc32_update, from crc32: ")
+        built_on.iter().any(
+            |line| line.starts_with("contract $crc32_update, from crc32: ")
                 && line.contains("proven of the function as this program holds it")
-                && line.contains("in place of the function's body")),
+                && line.contains("in place of the function's body")
+        ),
         "{done}"
     );
     let proofs = lines(&done, "proofs");

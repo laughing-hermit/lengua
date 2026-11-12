@@ -189,11 +189,7 @@ impl World {
             .client
             .get(client)
             .map_or(0, |them| them.pieces.len());
-        if let Some(peer) = self
-            .peers
-            .as_mut()
-            .and_then(|peers| peers.get_mut(client))
-        {
+        if let Some(peer) = self.peers.as_mut().and_then(|peers| peers.get_mut(client)) {
             if peer.steps <= pieces {
                 peer.steps += 1;
             } else {
@@ -238,7 +234,11 @@ impl World {
         if self.peers.is_some() {
             return Ok(());
         }
-        if self.connections.iter().any(|connection| connection.accepted) {
+        if self
+            .connections
+            .iter()
+            .any(|connection| connection.accepted)
+        {
             return Err(unsupported(
                 "a wait on poll_oneoff over connections taken before the program first waited",
             ));
@@ -336,7 +336,11 @@ impl World {
         key.push(self.path.len() as u64);
         key.extend(self.path.iter().map(term));
         key.push(self.obligations.len() as u64);
-        key.extend(self.obligations.iter().map(|(condition, _)| term(condition)));
+        key.extend(
+            self.obligations
+                .iter()
+                .map(|(condition, _)| term(condition)),
+        );
         key.push(self.connections.len() as u64);
         for connection in &self.connections {
             key.extend([
