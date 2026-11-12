@@ -11,13 +11,15 @@
 //!   ([`crate::state::tested_module`]);
 //! - `tested/<builder>/<sha256>.shell.cwasm`, that module compiled for this computer ahead of
 //!   its runs, with the seal of the user's key, which a run from a shell loads once the seal
-//!   holds ([`crate::state::compiled_module`]);
+//!   holds ([`crate::state::compiled_module`]); and `tested/<builder>/<sha256>.run.cwasm`, the
+//!   same for the `run` tool, whose engine can stop a program, which the tool's worker loads
+//!   once the seal holds ([`crate::state::compiled_for`]);
 //! - `wrong/<idea's hash>-<module's hash>`, what a proof found wrong about a module of an idea,
 //!   which keeps `run` from running it whatever lock its folder holds
 //!   ([`crate::state::wrong_record`]);
-//! - `cache/`, the compiled modules of the engine that compiles, which the tests' workers and
-//!   the `run` tool use and no run from a shell reads, unless the agent's harness gives the
-//!   plugin a data folder of its own ([`crate::wasm::engine::cache_folder`]);
+//! - no `cache/`: lengua's engines have no cache of compiled modules, and a folder of that name
+//!   that an older lengua left there, or in the folder the agent's harness gives the plugin, is
+//!   read by nothing and may be deleted;
 //! - `graph/<sha256>.lock`, which keeps lengua's processes from writing one bundle's index.md and
 //!   log.md at once ([`DataDir::graph_lock`]).
 
@@ -102,7 +104,7 @@ impl DataDir {
     }
 
     /// Makes the folder the user's alone, mode 0700 on Linux and macOS, where it is there with
-    /// another mode: as when the engine's cache made it first, under the user's umask, or
+    /// another mode: as when something else made it first, under the user's umask, or
     /// something changed it since. The server does this as it starts and a run from a shell
     /// before it reads the key, so the folder isn't open to others until the key is next made
     /// or loaded for a record. A folder that isn't there yet is left to whatever makes it, the

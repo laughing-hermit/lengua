@@ -514,7 +514,7 @@ fn code_with_no_operator_is_held_in_a_function_that_computes_with_a_secret() {
 /// stretch of each function, with the operator's offset the address map gives it, whether that
 /// operator is one of `taken`, and its bytes.
 fn dump(wasm: &[u8], taken: &[Taken]) -> String {
-    let engine = engine::engine(Setup::Shell, None).expect("the engine");
+    let engine = engine::engine(Setup::Shell).expect("the engine");
     let code = Code::of(&engine, wasm).expect("the module compiles");
     let mut lines = Vec::new();
     for &(start, length) in &code.functions {

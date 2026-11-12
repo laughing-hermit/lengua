@@ -14,6 +14,7 @@ use sha2::Sha256;
 
 use crate::data_dir::DataDir;
 use crate::hash::{Sha256Hex, hex};
+use crate::wasm::engine::Setup;
 
 /// The lock's file name inside a program folder.
 pub const LOCK_FILE: &str = "lengua.lock";
@@ -1151,10 +1152,12 @@ impl Key {
         }
     }
 
-    /// What a sealed module compiled for a run from a shell is said to be: the module whose
-    /// SHA-256 is `module`, which is what the seal binds its compiled code to.
-    fn sealed_as(module: &Sha256Hex) -> String {
-        format!("shell sha256:{module}")
+    /// What a sealed module compiled for `setup` is said to be: the engine's configuration it
+    /// was compiled for, by the name of its file ([`crate::state::compiled_for`]), and the
+    /// module whose SHA-256 is `module`, which is what the seal binds its compiled code to. So
+    /// a module sealed for one configuration carries no seal for another.
+    fn sealed_as(setup: Setup, module: &Sha256Hex) -> String {
+        format!("{} sha256:{module}", setup.file_word())
     }
 
     /// Compiles `wasm`, which must be the module whose SHA-256 is `module`, with `engine`, the
@@ -1172,17 +1175,34 @@ impl Key {
         module: &Sha256Hex,
         wasm: &[u8],
     ) -> Result<Vec<u8>, String> {
+        self.compile_sealed_for(Setup::Shell, engine, module, wasm)
+    }
+
+    /// [`Self::compile_sealed`] for `setup`, the configuration `engine` compiles for: a run
+    /// from a shell's, or the `run` tool's, whose worker loads the bytes in place of compiling.
+    ///
+    /// # Errors
+    ///
+    /// When `wasm` isn't that module, the engine doesn't compile it, or this build has no
+    /// compiler.
+    pub fn compile_sealed_for(
+        &self,
+        setup: Setup,
+        engine: &wasmtime::Engine,
+        module: &Sha256Hex,
+        wasm: &[u8],
+    ) -> Result<Vec<u8>, String> {
         if Sha256Hex::of(wasm) != *module {
             return Err(format!("the module to compile isn't sha256:{module}"));
         }
         #[cfg(feature = "compiler")]
         {
-            let about = Self::sealed_as(module);
+            let about = Self::sealed_as(setup, module);
             lengua_os::compile_sealed(engine, &self.0, about.as_bytes(), wasm)
         }
         #[cfg(not(feature = "compiler"))]
         {
-            let _ = engine;
+            let _ = (setup, engine);
             Err("this lengua only runs modules compiled before, and has no compiler".to_owned())
         }
     }
@@ -1201,7 +1221,23 @@ impl Key {
         module: &Sha256Hex,
         sealed: &[u8],
     ) -> Result<wasmtime::Module, lengua_os::Unsealed> {
-        let about = Self::sealed_as(module);
+        self.load_sealed_for(Setup::Shell, engine, module, sealed)
+    }
+
+    /// [`Self::load_sealed`] for `setup`, the configuration of `engine`: the bytes must carry
+    /// this key's seal as that module compiled for that configuration.
+    ///
+    /// # Errors
+    ///
+    /// When the bytes don't carry that seal, or the engine doesn't take the module.
+    pub fn load_sealed_for(
+        &self,
+        setup: Setup,
+        engine: &wasmtime::Engine,
+        module: &Sha256Hex,
+        sealed: &[u8],
+    ) -> Result<wasmtime::Module, lengua_os::Unsealed> {
+        let about = Self::sealed_as(setup, module);
         lengua_os::load_sealed(engine, &self.0, about.as_bytes(), sealed)
     }
 
@@ -1239,8 +1275,8 @@ fn unhex(text: &str) -> Option<Vec<u8>> {
 }
 
 /// Makes the folder `path`, with its parents, readable only by this user where the system
-/// says who may read a folder; one that is there already with another mode, as when the engine's
-/// cache made it first, is given that mode.
+/// says who may read a folder; one that is there already with another mode, as when something
+/// else made it first, is given that mode.
 #[cfg(unix)]
 pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
@@ -1964,8 +2000,8 @@ mod tests {
         }
     }
 
-    /// A data folder that something else made first, with another mode, as the engine's cache
-    /// makes it before the first record, is made the user's alone when the key goes in.
+    /// A data folder that something else made first, with another mode, as an older lengua's
+    /// cache did before the first record, is made the user's alone when the key goes in.
     #[cfg(unix)]
     #[test]
     fn a_data_folder_made_with_another_mode_is_made_private() {

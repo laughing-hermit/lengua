@@ -199,7 +199,7 @@ mod tests {
                 back: Arc::clone(&back),
             }));
         }
-        let engine = engine::engine(Setup::Test, None).expect("the engine");
+        let engine = engine::engine(Setup::Test).expect("the engine");
         let linker = linker(&engine).expect("the host");
         let built = crate::wasm::text::build(&text).unwrap_or_else(|problem| panic!("{problem}"));
         let module = wasmtime::Module::from_binary(&engine, &built.wasm).expect("it compiles");

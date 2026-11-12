@@ -716,15 +716,15 @@ impl On {
 
 /// Runs the module `wasm` here, attached to this process's own streams, as `lengua-mcp run` does
 /// from a shell, on a thread of its own, compiled by the engine that compiles for a run from a
-/// shell, with compiled modules kept in `cache`: how it ended. It is [`run_once_checked`] with
+/// shell: how it ended. It is [`run_once_checked`] with
 /// nothing to check, and with no compiled module kept under the user's key.
 ///
 /// # Errors
 ///
 /// When the module can't be compiled or given what it asks, or this process can't hold the files
 /// it may.
-pub fn run_here(wasm: &[u8], here: &Here<'_>, cache: Option<&Path>) -> io::Result<End> {
-    let engine = crate::wasm::engine::engine(Setup::Shell, cache).map_err(io::Error::other)?;
+pub fn run_here(wasm: &[u8], here: &Here<'_>) -> io::Result<End> {
+    let engine = crate::wasm::engine::engine(Setup::Shell).map_err(io::Error::other)?;
     let module = crate::wasm::engine::compile(&engine, wasm).map_err(io::Error::other)?;
     run_once_checked(On::Own, || {
         Ok::<_, String>(Given {
@@ -974,7 +974,7 @@ mod tests {
                     module,
                 },
             };
-            run_here(&built.wasm, &here, None).expect("it runs")
+            run_here(&built.wasm, &here).expect("it runs")
         };
         let module = Sha256Hex::of(&built.wasm);
         assert_eq!(ended(&module), End::Trapped(Trap::Unreachable, Some(4)));
@@ -993,7 +993,7 @@ mod tests {
     #[test]
     fn a_run_runs_only_once_its_checks_pass() {
         let built = crate::wasm::text::build(EXITS).expect("it builds");
-        let engine = crate::wasm::engine::engine(Setup::Shell, None).expect("the engine");
+        let engine = crate::wasm::engine::engine(Setup::Shell).expect("the engine");
         let module = crate::wasm::engine::compile(&engine, &built.wasm).expect("it compiles");
         let folder = tempfile::tempdir().expect("a folder");
         let args: Vec<String> = Vec::new();
@@ -1025,7 +1025,7 @@ mod tests {
             });
             assert!(matches!(ran, Ok(Ok(End::Exited(3)))), "{on:?}: {ran:?}");
         }
-        let again = run_here(&built.wasm, &here, None);
+        let again = run_here(&built.wasm, &here);
         assert!(matches!(again, Ok(End::Exited(3))), "{again:?}");
     }
 }

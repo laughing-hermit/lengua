@@ -533,7 +533,7 @@ async fn a_shell_loads_a_compiled_module_only_under_the_user_s_key() {
     let loads = |bytes: &[u8]| key.load_sealed(&runner, &hash, bytes).is_ok();
     assert!(loads(&sealed), "check's compiled module doesn't load");
 
-    let compiler = engine::engine(Setup::Shell, None).expect("the engine that compiles");
+    let compiler = engine::engine(Setup::Shell).expect("the engine that compiles");
     let other = lengua::wasm::text::build(OTHER).expect("it builds").wasm;
     let six = key
         .compile_sealed(&compiler, &Sha256Hex::of(&other), &other)
@@ -602,6 +602,109 @@ async fn a_shell_loads_a_compiled_module_only_under_the_user_s_key() {
         );
         assert_eq!(sum.status.code(), Some(0), "{sum:?}");
     }
+    session.service.cancel().await.expect("close the session");
+}
+
+/// The `run` tool loads the compiled module check kept for it, and only under the user's key, as
+/// the module its lock records, compiled for the tool's own configuration of the engine. check
+/// compiles add for the `run` tool too and seals what the engine made. That the tool's worker
+/// loads that file, and compiles nothing, shows with a file only the key's holder can make: a
+/// program that prints 6, sealed with the user's own key as add's module for the `run` tool,
+/// runs in add's place. In the file's place, the same program sealed as itself, add's compiled
+/// form for a run from a shell, add's own with one byte changed, add's own compiled by another
+/// key, bytes no engine made, nothing, and no file are each left unloaded: `run` gives add's
+/// sum, from the module check tested, compiled again in the worker, and puts add's own compiled
+/// form back. Nothing makes a folder for a cache of compiled modules in the data folder: no
+/// engine of lengua's has one.
+#[tokio::test]
+async fn the_run_tool_loads_a_compiled_module_only_under_the_user_s_key() {
+    use lengua::wasm::engine::{self, Setup};
+    let session = Session::start(Protocol::Discover).await;
+    let program = add(&session).await;
+    let done = session.settle(&program).await;
+    assert_eq!(done["state"], "done", "{done}");
+    let module = lengua::wasm::text::build(CODE)
+        .expect("main.wat builds")
+        .wasm;
+    let hash = Sha256Hex::of(&module);
+    let builder = lengua::wasm::text::BUILDER;
+    let file = lengua::state::compiled_for(session.data_dir.path(), builder, &hash, Setup::Run);
+    let sealed = std::fs::read(&file).expect("check compiled the module ahead of the tool's runs");
+    let key = signing_key(&session);
+    let compiler = engine::engine(Setup::Run).expect("the engine that compiles");
+    let loads = |bytes: &[u8]| {
+        key.load_sealed_for(Setup::Run, &compiler, &hash, bytes)
+            .is_ok()
+    };
+    assert!(loads(&sealed), "check's compiled module doesn't load");
+    let cache = session.data_dir.path().join("cache");
+    assert!(!cache.exists(), "check made {}", cache.display());
+
+    // What the tool's worker runs is the file: one that carries the seal runs as it is.
+    let other = lengua::wasm::text::build(OTHER).expect("it builds").wasm;
+    let key_bytes: [u8; 32] = std::fs::read(session.data_dir.path().join("key"))
+        .expect("the signing key")
+        .try_into()
+        .expect("32 bytes");
+    let as_add = format!("run sha256:{hash}");
+    let six_as_add = lengua_os::compile_sealed(&compiler, &key_bytes, as_add.as_bytes(), &other)
+        .expect("it compiles");
+    assert!(loads(&six_as_add), "the seal of add's module for the tool");
+    std::fs::write(&file, &six_as_add).expect("plant it");
+    let six = session
+        .call_ok("run", with_args(&program, &["2", "3"]))
+        .await;
+    assert_eq!(six["stdout"], "6\n", "the tool compiled add again: {six}");
+    assert_eq!(
+        std::fs::read(&file).ok().as_ref(),
+        Some(&six_as_add),
+        "a run that loaded its module wrote it again"
+    );
+
+    let six = key
+        .compile_sealed_for(Setup::Run, &compiler, &Sha256Hex::of(&other), &other)
+        .expect("it compiles");
+    let for_a_shell = std::fs::read(compiled(&session, &module))
+        .expect("check compiled the module ahead of a shell's runs");
+    let mut changed = sealed.clone();
+    let middle = changed.len() / 2;
+    changed[middle] ^= 1;
+    let stranger = lengua::lock::Key::from_bytes([9; 32]);
+    let theirs = stranger
+        .compile_sealed_for(Setup::Run, &compiler, &hash, &module)
+        .expect("it compiles");
+    let planted: [(&str, Option<Vec<u8>>); 7] = [
+        ("another module, under the user's key as itself", Some(six)),
+        ("add's compiled module for a shell", Some(for_a_shell)),
+        ("add's own compiled module with a byte changed", Some(changed)),
+        ("add's module under another key", Some(theirs)),
+        (
+            "bytes no engine made",
+            Some(b"not a compiled module".to_vec()),
+        ),
+        ("nothing", Some(Vec::new())),
+        ("no file", None),
+    ];
+    for (what, bytes) in &planted {
+        match bytes {
+            Some(bytes) => {
+                assert!(!loads(bytes), "{what} loads as add's module");
+                std::fs::write(&file, bytes).expect("plant it");
+            }
+            None => std::fs::remove_file(&file).expect("remove it"),
+        }
+        let sum = session
+            .call_ok("run", with_args(&program, &["2", "3"]))
+            .await;
+        assert_eq!(sum["stdout"], "5\n", "{what}: {sum}");
+        assert_eq!(sum["exit_code"], 0, "{what}: {sum}");
+        let now = std::fs::read(&file).unwrap_or_default();
+        assert!(
+            loads(&now),
+            "{what}: the run didn't put add's compiled module back"
+        );
+    }
+    assert!(!cache.exists(), "a run made {}", cache.display());
     session.service.cancel().await.expect("close the session");
 }
 
