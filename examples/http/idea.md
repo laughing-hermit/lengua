@@ -25,8 +25,9 @@ empty when the request has no Host field. The program ignores the bytes after th
 - A method has 1 to 16 capital letters.
 - A target starts with a slash and has only visible characters. The path is the target up to
   its first question mark.
-- The program decodes each percent sign and its two hexadecimal digits. A decoded path has only
-  characters that print, and at most `1024` bytes.
+- The program decodes each percent sign and its two hexadecimal digits. A decoded path has no
+  control character, and at most `1024` bytes. A byte from 128 up is a part of the path, so a
+  path can have text in UTF-8.
 - Each header field is a name, a colon and a value, on a line that ends with a carriage return
   and a newline. The program compares names without regard to capital letters.
 - The tests give paths of `0` to `100` characters and hosts of `1` to `40` characters. They give
@@ -87,7 +88,7 @@ The second row has few texts, so that a proof can cover all of them.
 
 | request | runs |
 |---|---|
-| `choice("GET hello HTTP/1.1\r\n\r\n", "get / HTTP/1.1\r\n\r\n", "GET / HTTP/1.1\r\n", "GET  / HTTP/1.1\r\n\r\n", "GET / HTTP/1.1 \r\n\r\n", "GET /a b HTTP/1.1\r\n\r\n", "GET / FTP/1.1\r\n\r\n", "GET /%zz HTTP/1.1\r\n\r\n", "GET /%4 HTTP/1.1\r\n\r\n", "GET /%00 HTTP/1.1\r\n\r\n", "GET /%e9 HTTP/1.1\r\n\r\n", "GET / HTTP/1.1\r\nNo colon\r\n\r\n", "GET / HTTP/1.1\r\n: empty\r\n\r\n", "GET / HTTP/1.1\r\n folded: x\r\n\r\n", "GET / HTTP/1.1\r\nA: b\nC: d\r\n\r\n", "", "\r\n\r\n", "ABCDEFGHIJKLMNOPQ / HTTP/1.1\r\n\r\n", "GET /\t HTTP/1.1\r\n\r\n", "GET /\r\n\r\n")` | 60 |
+| `choice("GET hello HTTP/1.1\r\n\r\n", "get / HTTP/1.1\r\n\r\n", "GET / HTTP/1.1\r\n", "GET  / HTTP/1.1\r\n\r\n", "GET / HTTP/1.1 \r\n\r\n", "GET /a b HTTP/1.1\r\n\r\n", "GET / FTP/1.1\r\n\r\n", "GET /%zz HTTP/1.1\r\n\r\n", "GET /%4 HTTP/1.1\r\n\r\n", "GET /%00 HTTP/1.1\r\n\r\n", "GET /%7f HTTP/1.1\r\n\r\n", "GET /a%1fb HTTP/1.1\r\n\r\n", "GET / HTTP/1.1\r\nNo colon\r\n\r\n", "GET / HTTP/1.1\r\n: empty\r\n\r\n", "GET / HTTP/1.1\r\n folded: x\r\n\r\n", "GET / HTTP/1.1\r\nA: b\nC: d\r\n\r\n", "", "\r\n\r\n", "ABCDEFGHIJKLMNOPQ / HTTP/1.1\r\n\r\n", "GET /\t HTTP/1.1\r\n\r\n", "GET /\r\n\r\n")` | 60 |
 
 ## B4: Rejects a path of more than 1024 bytes
 - Given standard input that contains `GET /` then `a` `1024` times then ` HTTP/1.1\r\n\r\n`
@@ -153,7 +154,23 @@ The second row has few texts, so that a proof can cover all of them.
 |---|---|
 | `string(4097, 5000, "GET/ a\r\n")` | 20 |
 
-## B8: Exits with code 4 when it cannot write its output
+## B8: Takes a path that has text in UTF-8
+- Given standard input that contains `GET /abc%c3%a9xyz%e2%82%ac HTTP/1.1\r\n\r\n`
+- When the program runs
+- Then it prints `GET /abcéxyz€\n\n`
+- And it exits with code `0`
+
+### For any path around the two characters
+- Given standard input that contains `GET /{a}%c3%a9{b}%e2%82%ac HTTP/1.1\r\n\r\n`
+- When the program runs
+- Then it prints `GET /{a}é{b}€\n\n`
+- And it exits with code `0`
+
+| a | b | runs |
+|---|---|---|
+| `string(0, 40, "abcxyz019._-")` | `string(0, 40, "abcxyz019._-")` | 20 |
+
+## B9: Exits with code 4 when it cannot write its output
 - Given standard input that contains `GET / HTTP/1.1\r\n\r\n`
 - And standard output is closed
 - When the program runs
