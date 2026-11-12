@@ -1366,12 +1366,34 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
     text database), and records what breaks first: the agent's own hold of the code, `check`'s
     time, the proofs, or the rules. What breaks gets its fix: ideas in parts that build on each
     other, modules checked alone and linked, proofs kept for the parts that didn't change.
+    - **Moved to the front, as the test the direction rests on (the owner, 2026-11-12: "yes
+      reorder todo.md").** The owner asked whether WebAssembly is worth it or lengua should be
+      redone in Rust. The answer given: WebAssembly is what makes the grants enforceable and
+      the proofs possible, and the open risk is size, not WebAssembly. So W22 runs next, once
+      W21's parts are on main (it builds on them), before W23, W24 and anything left of W19 to
+      W21, and it is a test before it is a feature: one real program of several thousand lines
+      (a small HTTP server with routes is the first candidate), written by the agent from an
+      idea, checked, tested and run on all five systems.
+    - **What decides.** It passes if the agent builds it and can then change it (a new
+      feature, a bug fix) with `check` still green, in a time and at a cost that are recorded.
+      If it fails, the record says what broke first, and the next step is chosen from that:
+      ideas in parts, modules linked by `check`, or a higher-level text that compiles to
+      WebAssembly under the same host, grants and prover. Rust in place of WebAssembly is not
+      among them: it gives up the grants and the proofs.
   - **W23. Working with other code.** A lengua program can't call a C or Rust library, and no
     other program can call it but as a command. W23 gives both ways, each declared in the idea:
     a lengua program as a library other languages call (its module with a stated interface, and
     a native build of it through W19 where the caller needs one), and a named outside
     WebAssembly module a lengua program calls, held to the grants the idea gives it and marked
     "trusted, not proven" in the reply.
+    - **One part moved up, beside W22 (the owner, 2026-11-12: "yes move that up").** A
+      WebAssembly module that a compiler made from Rust, C or another language, run as the
+      program itself under an idea's grants: the idea states what it does, its tests and its
+      grants; the module is not held to the rules for main.wat and nothing of it is proven, so
+      every reply and every run says "trusted, not proven"; the host holds it to the grants
+      exactly as it holds a module of lengua's own. The reason: what is useful to the most
+      people today is a safe way to run code an agent wrote, in any language, and the host
+      with its grants gives that already. The rest of W23 keeps its place.
   - **W24. Tools.** `check`'s reply is the only tool there is. W24 adds what a programmer
     expects: a run that stops at a line of main.wat and shows its values (through the `run`
     tool, for the agent), a profile of where a run's time goes by function and line, and a trace
