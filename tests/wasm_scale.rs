@@ -249,7 +249,12 @@ fn the_web_server_s_texts_are_named_and_their_numbers_hold() {
     let grown = code.replacen(short, long, 1);
     let report = httpd(&grown);
     let table = &report.texts;
-    assert_eq!((table.right, table.wrong), (10, 45), "{:#?}", report.lines());
+    assert_eq!(
+        (table.right, table.wrong),
+        (10, 45),
+        "{:#?}",
+        report.lines()
+    );
     let lines = table.lines();
     assert_eq!(lines.len(), 56, "{lines:#?}");
     assert!(

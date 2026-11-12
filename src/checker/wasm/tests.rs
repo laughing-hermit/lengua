@@ -2877,8 +2877,11 @@ fn a_marker_of_named_data_that_names_nothing_is_reported() {
 fn named_texts_of_two_segments_that_overlap_are_reported() {
     let usage = "(data (i32.const 1024) \"usage: negate <n>\\0a\")";
     let nan = "(data (i32.const 1056) \"error: not a number\\0a\")";
-    let apart = with(usage, &format!("{usage}  ;; text: usage"))
-        .replacen(nan, &format!("{nan}  ;; text: nan"), 1);
+    let apart = with(usage, &format!("{usage}  ;; text: usage")).replacen(
+        nan,
+        &format!("{nan}  ;; text: nan"),
+        1,
+    );
     let report = check_text(&apart);
     assert_eq!(constants(&report), Vec::<String>::new());
     assert_eq!(report.texts.texts.len(), 2);
