@@ -1288,6 +1288,21 @@ impl Key {
         }
     }
 
+    /// For a test: `wasm` compiled for `setup` and sealed as the module `module`, which it need
+    /// not be. It stands for a compiled form under the user's seal whose code is not what this
+    /// lengua compiles the module to, as one that another build of lengua kept.
+    #[cfg(all(test, feature = "compiler"))]
+    pub(crate) fn compile_sealed_as(
+        &self,
+        setup: Setup,
+        engine: &wasmtime::Engine,
+        module: &Sha256Hex,
+        wasm: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        let about = Self::sealed_as(setup, module);
+        lengua_os::compile_sealed(engine, &self.0, about.as_bytes(), wasm)
+    }
+
     /// Loads into `engine`, the engine that only runs, the compiled module `sealed` holds, when
     /// it carries this key's seal as the module whose SHA-256 is `module`
     /// ([`lengua_os::load_sealed`]): compiled by this user's lengua from those very bytes, and

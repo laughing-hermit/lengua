@@ -2358,6 +2358,7 @@ mod tests {
     /// here secret-equal with its xor of the secret bytes made a division, the tool refuses
     /// the run for the division, though the module's own code, compiled again, still passes:
     /// before, the tool read that compile and ran the kept code unread.
+    #[cfg(feature = "compiler")]
     #[test]
     fn the_run_tool_reads_the_compiled_form_its_worker_loads() {
         let idea_text = include_str!("../../examples/secret-equal/idea.md");
@@ -2394,7 +2395,7 @@ mod tests {
         let engine = engine::engine(setup).expect("the engine");
         let sealed = ready
             .key
-            .compile_sealed_for(setup, &engine, &ready.module, &other.wasm)
+            .compile_sealed_as(setup, &engine, &ready.module, &other.wasm)
             .expect("it compiles");
         std::fs::write(&path, sealed).expect("kept in its place");
         let refused = kept_keeps_secrets(&data_dir, &folder, &ready, &built)

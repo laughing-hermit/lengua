@@ -44,7 +44,10 @@ fn finding_of(problem: String) -> Finding {
     let placed = problem
         .strip_prefix("line ")
         .and_then(|rest| rest.split_once(": "))
-        .and_then(|(number, message)| Some((number.parse().ok()?, message.to_owned())));
+        .and_then(|(number, message)| {
+            let line = number.parse::<usize>().ok()?;
+            Some((line, message.to_owned()))
+        });
     match placed {
         Some((line, message)) => Finding {
             line: Some(line),
