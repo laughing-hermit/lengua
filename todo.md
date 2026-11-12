@@ -1160,6 +1160,20 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
     text database), and records what breaks first: the agent's own hold of the code, `check`'s
     time, the proofs, or the rules. What breaks gets its fix: ideas in parts that build on each
     other, modules checked alone and linked, proofs kept for the parts that didn't change.
+    - **Moved to the front, as the test the direction rests on (the owner, 2026-11-12: "yes
+      reorder todo.md").** The owner asked whether WebAssembly is worth it or lengua should be
+      redone in Rust. The answer given: WebAssembly is what makes the grants enforceable and
+      the proofs possible, and the open risk is size, not WebAssembly. So W22 runs next, once
+      W21's parts are on main (it builds on them), before W23, W24 and anything left of W19 to
+      W21, and it is a test before it is a feature: one real program of several thousand lines
+      (a small HTTP server with routes is the first candidate), written by the agent from an
+      idea, checked, tested and run on all five systems.
+    - **What decides.** It passes if the agent builds it and can then change it (a new
+      feature, a bug fix) with `check` still green, in a time and at a cost that are recorded.
+      If it fails, the record says what broke first, and the next step is chosen from that:
+      ideas in parts, modules linked by `check`, or a higher-level text that compiles to
+      WebAssembly under the same host, grants and prover. Rust in place of WebAssembly is not
+      among them: it gives up the grants and the proofs.
   - **W23. Working with other code.** A lengua program can't call a C or Rust library, and no
     other program can call it but as a command. W23 gives both ways, each declared in the idea:
     a lengua program as a library other languages call (its module with a stated interface, and

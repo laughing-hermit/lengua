@@ -533,7 +533,11 @@ language. Not have stuff missing"). Every program so far is a few hundred lines 
 builds one of several thousand from an idea, and records what breaks first: the agent's hold of
 the code, `check`'s time, the proofs, or the rules. What breaks gets its fix: ideas in parts that
 build on each other, modules checked alone and linked, proofs kept for parts that didn't change.
-*Not started.*
+
+Moved to the front on 2026-11-12, by the owner's word: it runs next, once W21's parts are on main,
+before W23 and W24, as the test the direction rests on. It passes if the agent builds one real
+program of that size and can then change it with `check` still green; if it fails, what broke
+first chooses the next step (todo.md). *Not started.*
 
 ## W23. Working with other code
 
