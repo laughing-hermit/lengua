@@ -999,6 +999,105 @@ idea: a sentence of 30 words, 43173745273, and a range without its example, 4317
 goldens (43188485844); and the first two runs, which a lint stopped (43173164260,
 43173168343). The commit that writes this paragraph changes documents alone.
 
+### W24: the tools of a run (2026-11-12)
+
+On the branch `wip/tools`, for the owner to land. DESIGN.md ("The tools of a run") has the design
+as built, docs/run.md the reports, and the compile skill's page ("Finding what a run does") what
+an agent is told. The tests are `tests/tools.rs` and the unit tests of `src/wasm/tools.rs`.
+
+What was built, in the order asked:
+1. **A trace** of every call the program made to the host: `run`'s `trace`, and `--trace` for
+   `lengua-mcp run` and lengua-run. A line is the function, the numbers the program passed and
+   the host's answer. It keeps the first 512 calls and counts the rest.
+2. **A profile** by function and line of main.wat: `run`'s `profile`, and `--profile`. One
+   sample about each millisecond, taken with Wasmtime's own backtrace
+   (`WasmBacktrace::force_capture`) where the engine already looks at its clock.
+3. **A stop** at a line or at a function's start: `run`'s `stop_at` and `show_memory`, and
+   `--stop-at` and `--show-memory`. It shows the function's locals by name, the globals the
+   program changes and up to 1,024 bytes of memory.
+4. **A first cut of a language server**: `lengua-mcp lsp`, over standard input and output
+   (`src/lsp.rs`). When an editor opens, changes, saves or closes a folder's idea.md or
+   main.wat, it publishes the findings of both, each on its line: the idea's format and
+   tests, main.wat's build and its rules. Nothing more: no test, no proof, no lock, no part,
+   no completion, no hover.
+
+Decisions, each for the owner to reverse:
+- **A secret idea's trace has names and answers, and no numbers.** The choice was that or a
+  refusal. The secret rule proves that no secret decides a branch, an address or a loop's count.
+  It does not prove that a program never hands a secret to the host as a number: an exit code, a
+  length, a descriptor. So no number the program passed is kept, the exit code included, and the
+  note in the reply says why. A refusal would be safer still and would take the tool from the
+  programs that are hardest to read. The host's answers are kept: the host makes them.
+- **A secret idea gets no stop**, since a stop shows locals and memory. **It gets a profile**,
+  which shows no value.
+- **A stop is a copy of main.wat with the stop written in**, not a stop in the checked module.
+  Wasmtime 50.0.1 stops a program at a deadline, at a count of operations or at a trap, and
+  reads a stopped program's exports, not its locals. Its guest-debug interface was not used:
+  it would change the engine's configuration, which a compiled module is held to, and the code
+  the secret rule reads, and nothing of it could be tried on this computer. The copy keeps each
+  local in a new global and traps; lengua reads the globals once the run has ended. No host
+  function, no import and no `unsafe` was added. The copy is never stamped, kept or sealed, and
+  every report of a stop says that `check` never tested it.
+- **What is not there in the stop:** a step to the next line; a second stop in one run; a stop
+  on a condition; a changed value; the operand stack; constant globals (their values are in
+  main.wat); locals that are references; a stop inside lengua's library functions; and a stop
+  in a piece of split work or in an outside module.
+- **A stop is "before the first instruction written on the line".** An instruction written
+  before its operands, as `(local.set $x (…))`, stops before the operands run.
+- **A run that reached its stop exits with 0 from a shell**, and the `run` tool's `exit_code` is
+  empty and `ended` says `stopped at line …`. The copy's trap is not reported as a trap.
+- **Splitting programs:** a trace and a profile are of the program itself, and a stop is
+  refused. The pieces run at once in the same linker; their calls are left out so that a trace
+  stays one program's calls in order.
+- **Outside modules:** a trace and a profile are given, and a stop is refused, since there is no
+  main.wat to write it into.
+- **A server gets no tool from the `run` tool**, which leaves it serving in the background: the
+  tools report once a run has ended. From a shell a report is said when the program ends, so a
+  run that a signal stops, as a server's is, says none.
+- **lengua-run traces by itself and leaves a profile and a stop to lengua-mcp**, as it leaves
+  what else takes the compiler: a new `NotRun::Tool`.
+- **A profile from a shell compiles the module again for that run**, for the engine whose
+  clock moves, and keeps nothing. For a secret idea, that compiled code is the code read
+  before the run.
+- **The language server shows what the two texts say, and never says a folder is checked.**
+  It calls the functions `check` calls for the idea's format and tests, the build and the
+  rules, and it leaves out what takes a run, a solver, the lock or another folder: the tests,
+  the proofs, the lock's state and the parts a program builds on. A diagnostic covers its
+  whole line, since lengua's findings name a line and no column. Every finding is an error.
+  It was written while the first runs of steps 1 to 3 were on the runner, and kept once they
+  were green.
+- **The trace's size is fixed at 512 calls** and the profile's tick at 1 ms. Neither is a
+  parameter.
+- **An i32 the program passed is written without a sign**, as an address or a length is.
+
+What a run that asks for no tool pays: nothing for the trace (its linker is the one it always
+had); one test of an empty field after the run for the stop; and for the profile, in a run with
+a deadline, one test of an empty field each time the engine's clock has moved, every 10 ms. No
+bench was run for this: see below.
+
+- **Never run on a runner**:
+  - The bench, so "no cost when off" rests on the code as read, not on a measurement.
+  - A trace of more than 512 calls through the `run` tool (a unit test fills the trace).
+  - A trace or a profile of a server from a shell.
+  - A profile of a main.wat program that runs long enough to be sampled: the suite's sampled
+    program is an outside module, and add's profile is checked for its form only. That a
+    sample's function is named by main.wat's `$name` is a unit test.
+  - A profile from a shell of an idea that names a secret.
+  - A stop at a line of a function with a `v128` local, a float local or more than 1,024
+    locals; a stop in a module written without `(module …)`; and a main.wat that already uses
+    a name that starts `lengua_stop_`.
+  - Any editor with `lengua-mcp lsp`: its tests speak the protocol to it as an editor would,
+    in the test and through its standard input, and no editor did.
+  - On Windows, a profile's tick is the system timer's, which may be coarser than 1 ms: the
+    report says about how far apart samples are meant to be, not how far they were.
+  - The agent's own use: no agent followed the skill's new page in an interactive session.
+
+Runs, all on `wip/tools`: 43228046587 (at b411f2a on Linux on x86-64: clippy passes for the three
+tools; the run was then replaced by the next compile run); 43230047911 (at bacf6a5 on Linux on
+x86-64: `tests/tools.rs`, 6 of 6, and the unit tests of the tools, green, the first time they
+ran); 43230111360 (at a0e4961 on Linux on x86-64: the language server compiles under clippy; its
+format job's layout is applied at 6860c47). The later runs are in the table below.
+
 ### What the permission checks refused
 
 Claude Code's permission checks refused these actions. Each refusal was taken as given, with
@@ -1782,11 +1881,13 @@ W16, in this order. Each lands on main the same way, and at their end, too, only
       with its grants gives that already. The rest of W23 keeps its place.
     - **Built, and on main since 3fd8a3a (2026-11-12):** "W23's first part: an
       outside module", above, says what was built, what is refused and what was never run.
-  - **W24. Tools.** `check`'s reply is the only tool there is. W24 adds what a programmer
+  - **W24. Tools.** `check`'s reply was the only tool there was. W24 adds what a programmer
     expects: a run that stops at a line of main.wat and shows its values (through the `run`
     tool, for the agent), a profile of where a run's time goes by function and line, and a trace
     of what a run asked the host for. Each is a tool call or a flag, with no new program to
     install.
+    - **Built (2026-11-12), on `wip/tools`:** "W24: the tools of a run", above, says what
+      was built, what is refused, each decision and what was never run.
 
 Runs, as they land:
 
@@ -1821,6 +1922,7 @@ Runs, as they land:
 | The gate's margin (the owner's decision, 2026-11-11) | On the branch `wip/gate-margin`: 42962012528 (the gate's unit tests on Linux on x86-64 at f87c47c, green, with clippy; the format job's layout applied at b4eb385); 42964220148 (format, the suite on Linux on x86-64 and the gate job at cd54e79, green); 42964232679 (the bench on all five runners at cd54e79, against the list from before the margin: the gate failed on each; 139 rows KNOWN_BEHIND named are level or ahead, 127 and 12, taken out, which leaves 898; 6 rows behind by more than the margin that it doesn't name, 1 on Linux on x86-64, 2 on Linux on ARM64, 2 on macOS on ARM64 and 1 on Windows on x86-64; no build failed, every native C++ version built with `-std=gnu++17`). The reports are in [docs/benchmarks](docs/benchmarks/README.md). No run has measured the new list yet |
 | W9 | 42356699038 (the WebAssembly templates, wasm.md and write-idea's Attested Computation, at 50a546f); 42367496557 (all 29 programs in WebAssembly from the request to done, at b761dd3); 42373720077 (the compile skill for main.wat, [PARITY.md](docs/history/PARITY.md) and 0.2.0); each with format, the suite on all five runners and the gate, green |
 | W23, its first part: an outside module (on main since 3fd8a3a) | 43158638831 (at e6d96e5 on Linux on x86-64: tests/outside.rs for the first time, 13 of 14 passing, with rustc's and clang's modules built by the outside-wasm job; the one failure was the count idea's own generated range, fixed at 7312377); 43158958049 (the library's tests of the idea's lines, the state and `check`'s reading, green); 43161754287 and 43161756923 (the defences out at 5260953, tag `archive/wip/outside-off`: 9 of tests/outside.rs's 14 tests and 4 of the library's fail); 43161759761 (at 7312377, with main's W21 merged in: format, the suite on all five runners, green but for `two_checks_at_once_leave_a_consistent_index` on Windows on ARM64, the known race in log.md); 43172439582 (at 3fd8a3a, with main's W20 merged in too: format, the outside-wasm job, the suite on all five runners and the gate, all green; the landing on main rests on it) |
+| W24, the tools of a run (on `wip/tools`) | W24RUNS |
 
 ## Superseded by the pivot
 
@@ -2203,3 +2305,8 @@ none changed a result, and each is recorded here for the owner:
   now names `/site/`. They hold no secret (public packages and a build of the public site), but
   they stay in main's history, about 100 MB, since taking them out of history needs a force-push,
   which is the owner's to decide.
+- W24's builder (2026-11-12) twice had two polling loops on one CI run for a few minutes, where
+  the rule is one, and stopped the second each time. It wrote the language server while the
+  first runs of the three tools were on the runner, where its brief said to start it only once
+  they were green; it was kept after they were. It handed back once before its runs had ended,
+  on a prompt it took for the coordinator's, and went on when told to.
