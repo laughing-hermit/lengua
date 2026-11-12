@@ -20,6 +20,11 @@ The program itself reads one request from standard input. It prints the method, 
 the path on one line, and the value of the Host field on the next line. The second line is
 empty when the request has no Host field. The program ignores the bytes after the blank line.
 
+When the request has a Range field, the program prints a third line: the word `range` and the
+two numbers of the range. It prints a hyphen in place of a number that the range does not
+have. It prints a question mark when the field is not one range of bytes. The tests give
+numbers from `0` to `999999`.
+
 - The head has at most `4096` bytes. Input of `4097` to `5000` bytes is too long.
 - The request line is a method, a space, a target, a space and the version, 1.0 or 1.1.
 - A method has 1 to 16 capital letters.
@@ -186,8 +191,73 @@ The second row has few texts, so that a proof can cover all of them.
 |---|---|
 | `string(0, 100, "abcxyz0189/._-~")` | 20 |
 
+## B10: Prints the range of bytes that a Range field asks for
+- Given standard input that contains `GET / HTTP/1.1\r\nRange: bytes=5-9\r\n\r\n`
+- When the program runs
+- Then it prints `GET /\n\nrange 5 9\n`
+- And it exits with code `0`
+
+### For any two numbers
+- Given standard input that contains `GET / HTTP/1.1\r\nRange: bytes={a}-{b}\r\n\r\n`
+- When the program runs
+- Then it prints `GET /\n\nrange {a} {b}\n`
+- And it exits with code `0`
+
+| a | b | runs |
+|---|---|---|
+| `int(0, 999999)` | `int(0, 999999)` | 40 |
+
+## B11: Prints a hyphen when a range has no last byte
+- Given standard input that contains `GET / HTTP/1.1\r\nrange: bytes=5-\r\n\r\n`
+- When the program runs
+- Then it prints `GET /\n\nrange 5 -\n`
+- And it exits with code `0`
+
+### For any first byte
+- Given standard input that contains `GET / HTTP/1.1\r\nrange: bytes={a}-\r\n\r\n`
+- When the program runs
+- Then it prints `GET /\n\nrange {a} -\n`
+- And it exits with code `0`
+
+| a | runs |
+|---|---|
+| `int(0, 999999)` | 40 |
+
+## B12: Prints a hyphen when a range has no first byte
+- Given standard input that contains `GET / HTTP/1.1\r\nRange: bytes=-5\r\n\r\n`
+- When the program runs
+- Then it prints `GET /\n\nrange - 5\n`
+- And it exits with code `0`
+
+### For any count of bytes
+- Given standard input that contains `GET / HTTP/1.1\r\nRange: bytes=-{b}\r\n\r\n`
+- When the program runs
+- Then it prints `GET /\n\nrange - {b}\n`
+- And it exits with code `0`
+
+| b | runs |
+|---|---|
+| `int(0, 999999)` | 40 |
+
+## B13: Prints a question mark for a Range field that is not one range of bytes
+- Given standard input that contains `GET / HTTP/1.1\r\nRange: bytes=0-4,10-14\r\n\r\n`
+- When the program runs
+- Then it prints `GET /\n\nrange ?\n`
+- And it exits with code `0`
+
+### For any such field
+- Given standard input that contains `GET /{path} HTTP/1.1\r\nRange: {value}\r\n\r\n`
+- When the program runs
+- Then it prints `GET /{path}\n\nrange ?\n`
+- And it exits with code `0`
+
+| path | value | runs |
+|---|---|---|
+| `string(0, 100, "abcdefghijklmnopqrstuvwxyz0189/._-~")` | `choice("bytes=0-4,10-14", "lines=1-2", "bytes=a-b", "bytes=", "bytes=-", "bytes=5", "bytes=1-2x", "bytes=1234567890123456789-", "bytes=1-1234567890123456789", "bytes 1-2", "BYTES=1-2", "")` | 40 |
+
 # Constraints
 - Uses: standard input
+- Builds on: [decimal](../decimal/idea.md)
 
 # Contract
 A program that builds on this part names it on the `- Builds on:` line of its idea. It copies
@@ -227,3 +297,12 @@ In each function, `$text` is the head and `$length` its length, at most 4096 byt
   `$text`, `$from`, `$end` and `$into`. It decodes the path of the target from place `$from`
   to place `$end`, writes it at `$into` and gives its length. It gives -1 for a path that is
   not valid or has more than 1024 bytes.
+- `$http_number`: reads 4096 bytes at `$text`. Its arguments are `$text`, `$from` and `$end`.
+  It gives, as 64 bits, the number that the digits from place `$from` to place `$end` write.
+  It gives -1 when there is no byte there, and -2 when a byte is not a digit or there are more
+  than 18 digits.
+- `$http_range`: reads 4096 bytes at `$text`; writes 16 bytes at `$into`. Its arguments are
+  `$text`, `$from`, `$end` and `$into`. It reads the value of a Range field from place `$from`
+  to place `$end`: `bytes=`, digits, a hyphen and digits. It gives 1 and writes the two
+  numbers, each as 64 bits, with -1 for digits that are not there. It gives 0 for any other
+  value.

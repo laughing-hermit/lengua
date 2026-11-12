@@ -7,8 +7,8 @@
 ;; in one go, and its connection closed.
 ;;
 ;; It is built on four parts, whose functions stand at the end, each under its `;; from:` line:
-;; http reads the head of a request, json checks a value and makes it short, decimal reads and
-;; writes numbers, and crc32 computes the ETag.
+;; http reads the head of a request, json checks a value and makes it short, decimal writes
+;; numbers, and crc32 computes the ETag.
 (module
   (import "wasi_snapshot_preview1" "poll_oneoff"
     (func $poll_oneoff (param i32 i32 i32 i32) (result i32)))
@@ -105,8 +105,6 @@
   ;; least a digit and a hyphen.
   (global $TAG_MIN i32 (i32.const 3))
   (global $TAG_MAX i32 (i32.const 12))
-  (global $RANGE_MIN i32 (i32.const 8))
-  (global $RANGE_PREFIX i32 (i32.const 6))
   ;; The longest end of a file's name that names a type, and its point.
   (global $TYPE_ROOM i32 (i32.const 9))
   (global $BYTE_BITS i64 (i64.const 8))
@@ -140,11 +138,9 @@
   (global $HEAD i32 (i32.const 4))
   (global $HEAD_LENGTH i32 (i32.const 4))
   ;; What content_length gives when the request has no such field, and for one that is no
-  ;; number. What digits gives for no digits, and for text that is no number.
+  ;; number.
   (global $LENGTH_NONE i32 (i32.const -1))
   (global $LENGTH_BAD i32 (i32.const -2))
-  (global $DIGITS_NONE i64 (i64.const -1))
-  (global $DIGITS_BAD i64 (i64.const -2))
   ;; What file_read gives for what is no file, and for a file it cannot hold; list_read for a
   ;; folder it cannot list; store_load for a store that is not in its form.
   (global $NOT_A_FILE i32 (i32.const -1))
@@ -167,8 +163,6 @@
   (global $WORD_DELE i32 (i32.const 0x454c4544))
   (global $WORD_TE i32 (i32.const 0x4554))
   (global $WORD_HEAD i32 (i32.const 0x44414548))
-  (global $WORD_BYTE i32 (i32.const 0x65747962))
-  (global $WORD_S_EQUALS i32 (i32.const 0x3d73))
   (global $WORD_STORE_START i32 (i32.const 0x0a7b))
   (global $WORD_STORE_END i32 (i32.const 0x0a7d))
   (global $WORD_EMPTY_STORE i32 (i32.const 0x0a7d0a7b))
@@ -326,6 +320,20 @@
   (global $HTTP_CASE_BIT i32 (i32.const 32))
   (global $HTTP_TEN i32 (i32.const 10))
   (global $HTTP_HEX_SHIFT i32 (i32.const 4))
+  ;; The most digits a number has; ten, as 64 bits; and what $http_number gives for no digits
+  ;; and for text that is no number.
+  (global $HTTP_DIGITS i32 (i32.const 18))
+  (global $HTTP_TEN_64 i64 (i64.const 10))
+  (global $HTTP_NO_NUMBER i64 (i64.const -1))
+  (global $HTTP_BAD_NUMBER i64 (i64.const -2))
+  ;; The value of a Range field: bytes=, as the bytes two loads give, the first lowest, and
+  ;; its length; the least a value has; the last place where one may start; and the hyphen.
+  (global $HTTP_WORD_BYTE i32 (i32.const 0x65747962))
+  (global $HTTP_WORD_S_EQUALS i32 (i32.const 0x3d73))
+  (global $HTTP_RANGE_PREFIX i32 (i32.const 6))
+  (global $HTTP_RANGE_MIN i32 (i32.const 8))
+  (global $HTTP_LAST_RANGE i32 (i32.const 4088))
+  (global $HTTP_HYPHEN i32 (i32.const 45))
 
   ;; The part's constants, which its functions read. A program that takes a function defines
   ;; each constant the function reads as it is here.
@@ -401,20 +409,13 @@
 
   ;; The part's constants, which its two functions read. A program that takes a function
   ;; defines each constant the function reads as it is here.
-  ;; What $decimal_parse gives.
-  (global $DECIMAL_OK i32 (i32.const 0))
-  (global $DECIMAL_INVALID i32 (i32.const 28))
   ;; The most bytes a number's text has, a minus sign and 19 digits, and the most digits.
   (global $DECIMAL_TEXT i32 (i32.const 20))
   (global $DECIMAL_DIGITS i32 (i32.const 19))
-  ;; The largest magnitude, and the largest that still takes one more digit.
-  (global $DECIMAL_MAX i64 (i64.const 9223372036854775807))
-  (global $DECIMAL_MAX_TENTH i64 (i64.const 922337203685477580))
   (global $DECIMAL_TEN i64 (i64.const 10))
   ;; Characters: the minus sign, the digit 0, and how far the digit 9 is from it.
   (global $DECIMAL_MINUS i32 (i32.const 45))
   (global $DECIMAL_ZERO i32 (i32.const 48))
-  (global $DECIMAL_NINE i32 (i32.const 9))
 
   ;; The part's constants, which its function reads. A program that takes the function defines
   ;; each of them as it is here.
@@ -528,9 +529,6 @@
   ;; What $http_header writes: where a field's value starts and its length.
   (global $field i32 (i32.const 3184))  ;; shared: each function that looks for a field reads its place here
   (global $field.size i32 (i32.const 8))
-  ;; The number $decimal_parse writes.
-  (global $number i32 (i32.const 3200))
-  (global $number.size i32 (i32.const 8))
   ;; What examine found: the head's length, the body's length, whether the request has a
   ;; Content-Length field, and whether its request line could be read, 4 bytes each.
   (global $sizes i32 (i32.const 3216))  ;; shared: examine writes them, the routes and log read them
@@ -539,9 +537,9 @@
   ;; no body, as a HEAD asks; and where the answer's head ends in $out. 4 bytes each.
   (global $logged i32 (i32.const 3232))  ;; shared: head_start, head_end and route write them, send and log read them
   (global $logged.size i32 (i32.const 16))
-  ;; A part of a file: range_read's first and last byte, 8 bytes each, then range_of's first
+  ;; A part of a file: the first and last byte $http_range reads, 8 bytes each, then the first
   ;; byte and count, 4 bytes each.
-  (global $span i32 (i32.const 3248))  ;; shared: range_read and range_of write it, send_file reads it
+  (global $span i32 (i32.const 3248))  ;; shared: range_of has it written and writes it, send_file reads it
   (global $span.size i32 (i32.const 16))
   ;; What fd_filestat_get writes: the kind at 16 and the size at 32.
   (global $stat i32 (i32.const 3264))
@@ -896,35 +894,12 @@
       (local.set $status (global.get $WHOLE)))
     (local.get $status))
 
-  ;; Gives the number that the $length bytes at place $start of the request write in decimal
-  ;; digits, DIGITS_NONE when $length is 0, and DIGITS_BAD for any other text, or a number of
-  ;; more than DECIMAL_DIGITS digits.
-  (func $digits (param $start i32) (param $length i32) (result i64)
-    (local $err i32)
-    (local $value i64)
-    (local.set $value (global.get $DIGITS_NONE))
-    (block $done
-      (br_if $done (i32.eqz (local.get $length)))
-      (local.set $value (global.get $DIGITS_BAD))
-      (br_if $done (i32.gt_u (local.get $length) (global.get $DECIMAL_DIGITS)))
-      (br_if $done (i32.ge_u (local.get $start) (global.get $HTTP_HEAD)))
-      ;; $decimal_parse takes a minus sign, and a number here has none.
-      (br_if $done
-        (i32.eq (i32.load8_u (i32.add (global.get $request) (local.get $start)))
-          (global.get $DECIMAL_MINUS)))
-      (local.set $err
-        (call $decimal_parse (i32.add (global.get $request) (local.get $start))
-          (local.get $length) (global.get $number)))
-      (br_if $done (local.get $err))
-      (local.set $value (i64.load (global.get $number)))
-      (if (i64.lt_s (local.get $value) (i64.const 0))
-        (then (call $assert_fail (i32.const 23)) unreachable)))
-    (local.get $value))
-
   ;; Gives the length that the Content-Length field of the head of $head bytes states:
   ;; LENGTH_NONE when the head has no such field, LENGTH_BAD when its value is no number, and
   ;; BODY_TOO_LARGE for every number above BODY_MAX.
   (func $content_length (param $head i32) (result i32)
+    (local $start i32)
+    (local $end i32)
     (local $n i64)
     (local $result i32)
     (if (i32.gt_u (local.get $head) (global.get $HTTP_HEAD))
@@ -937,8 +912,12 @@
             (i32.add (global.get $names) (global.get $N_LENGTH)) (global.get $N_LENGTH_LENGTH)
             (global.get $field))))
       (local.set $result (global.get $LENGTH_BAD))
+      (local.set $start (i32.load (global.get $field)))
+      (local.set $end (i32.add (local.get $start) (i32.load offset=4 (global.get $field))))
+      (br_if $done (i32.gt_u (local.get $end) (local.get $head)))
+      (br_if $done (i32.gt_u (local.get $start) (local.get $end)))
       (local.set $n
-        (call $digits (i32.load (global.get $field)) (i32.load offset=4 (global.get $field))))
+        (call $http_number (global.get $request) (local.get $start) (local.get $end)))
       (br_if $done (i64.lt_s (local.get $n) (i64.const 0)))
       (local.set $result (global.get $BODY_TOO_LARGE))
       (br_if $done (i64.gt_u (local.get $n) (global.get $BODY_MAX_64)))
@@ -1510,8 +1489,8 @@
           (global.get $QUOTE)))
       (local.set $same
         (i64.eq
-          (call $digits (i32.add (local.get $start) (i32.const 1))
-            (i32.sub (local.get $length) (global.get $PAIR)))
+          (call $http_number (global.get $request) (i32.add (local.get $start) (i32.const 1))
+            (local.get $last))
           (i64.extend_i32_u (local.get $crc)))))
     (local.get $same))
 
@@ -1533,62 +1512,6 @@
       (then (call $assert_fail (i32.const 64)) unreachable))
     (call $send (local.get $fd) (local.get $at)))
 
-  ;; Reads the request's Range field when it is bytes= and one range: digits, a hyphen and
-  ;; digits, where either run of digits may be empty. Writes the two numbers to $span, 8 bytes
-  ;; each, DIGITS_NONE for an empty run, and gives 1. Gives 0 for no such field, and for a
-  ;; field that is anything else, which the server doesn't follow.
-  (func $range_read (result i32)
-    (local $head i32)
-    (local $start i32)
-    (local $end i32)
-    (local $dash i32)
-    (local $first i64)
-    (local $last i64)
-    (local $read i32)
-    (local.set $head (i32.load (global.get $sizes)))
-    (if (i32.gt_u (local.get $head) (global.get $HTTP_HEAD))
-      (then (call $assert_fail (i32.const 65)) unreachable))
-    (block $done
-      (br_if $done
-        (i32.eqz
-          (call $http_header (global.get $request) (local.get $head)
-            (i32.add (global.get $names) (global.get $N_RANGE)) (global.get $N_RANGE_LENGTH)
-            (global.get $field))))
-      (local.set $start (i32.load (global.get $field)))
-      (local.set $end (i32.load offset=4 (global.get $field)))
-      (br_if $done (i32.ge_u (local.get $start) (global.get $HTTP_HEAD)))
-      (br_if $done (i32.lt_u (local.get $end) (global.get $RANGE_MIN)))
-      (br_if $done (i32.gt_u (local.get $end) (global.get $HTTP_HEAD)))
-      (br_if $done
-        (i32.ne (i32.load (i32.add (global.get $request) (local.get $start)))
-          (global.get $WORD_BYTE)))
-      (br_if $done
-        (i32.ne (i32.load16_u offset=4 (i32.add (global.get $request) (local.get $start)))
-          (global.get $WORD_S_EQUALS)))
-      ;; From the value's length to its end, and its start to after bytes=.
-      (local.set $end (i32.add (local.get $start) (local.get $end)))
-      (local.set $start (i32.add (local.get $start) (global.get $RANGE_PREFIX)))
-      (br_if $done (i32.gt_u (local.get $end) (local.get $head)))
-      (local.set $dash
-        (call $http_span_end (global.get $request) (local.get $start) (local.get $end)
-          (global.get $ZERO) (global.get $NINE)))
-      (br_if $done
-        (i32.ne (call $http_at (global.get $request) (local.get $dash) (local.get $end))
-          (global.get $HYPHEN)))
-      (if (i32.lt_u (local.get $dash) (local.get $start))
-        (then (call $assert_fail (i32.const 66)) unreachable))
-      (local.set $first
-        (call $digits (local.get $start) (i32.sub (local.get $dash) (local.get $start))))
-      (local.set $last
-        (call $digits (i32.add (local.get $dash) (i32.const 1))
-          (i32.sub (i32.sub (local.get $end) (local.get $dash)) (i32.const 1))))
-      (br_if $done (i64.eq (local.get $first) (global.get $DIGITS_BAD)))
-      (br_if $done (i64.eq (local.get $last) (global.get $DIGITS_BAD)))
-      (i64.store (global.get $span) (local.get $first))
-      (i64.store offset=8 (global.get $span) (local.get $last))
-      (local.set $read (i32.const 1)))
-    (local.get $read))
-
   ;; Says which bytes of a file of $size bytes the request asks for: RANGE_WHOLE for all of
   ;; it, RANGE_NONE when its Range field names no byte of the file, and RANGE_PART for a part,
   ;; whose first byte and count it writes to $span, 4 bytes each.
@@ -1597,18 +1520,37 @@
     (local $first i64)
     (local $last i64)
     (local $kind i32)
+    (local $head i32)
+    (local $start i32)
+    (local $end i32)
     (if (i32.gt_u (local.get $size) (global.get $FILE_MAX))
       (then (call $assert_fail (i32.const 67)) unreachable))
+    (local.set $head (i32.load (global.get $sizes)))
+    (if (i32.gt_u (local.get $head) (global.get $HTTP_HEAD))
+      (then (call $assert_fail (i32.const 65)) unreachable))
     (local.set $total (i64.extend_i32_u (local.get $size)))
     (local.set $kind (global.get $RANGE_WHOLE))
     (block $done
-      (br_if $done (i32.eqz (call $range_read)))
+      ;; The Range field, when it is one range of bytes: its two numbers go to $span.
+      (br_if $done
+        (i32.eqz
+          (call $http_header (global.get $request) (local.get $head)
+            (i32.add (global.get $names) (global.get $N_RANGE)) (global.get $N_RANGE_LENGTH)
+            (global.get $field))))
+      (local.set $start (i32.load (global.get $field)))
+      (local.set $end (i32.add (local.get $start) (i32.load offset=4 (global.get $field))))
+      (br_if $done (i32.gt_u (local.get $end) (local.get $head)))
+      (br_if $done (i32.gt_u (local.get $start) (local.get $end)))
+      (br_if $done
+        (i32.eqz
+          (call $http_range (global.get $request) (local.get $start) (local.get $end)
+            (global.get $span))))
       (local.set $first (i64.load (global.get $span)))
       (local.set $last (i64.load offset=8 (global.get $span)))
-      (if (i64.eq (local.get $first) (global.get $DIGITS_NONE))
+      (if (i64.eq (local.get $first) (global.get $HTTP_NO_NUMBER))
         (then
           ;; The last $last bytes of the file. A hyphen alone is no range.
-          (br_if $done (i64.eq (local.get $last) (global.get $DIGITS_NONE)))
+          (br_if $done (i64.eq (local.get $last) (global.get $HTTP_NO_NUMBER)))
           (local.set $kind (global.get $RANGE_NONE))
           (br_if $done (i64.eqz (local.get $last)))
           (br_if $done (i64.eqz (local.get $total)))
@@ -1622,7 +1564,7 @@
           (br_if $done (i64.ge_u (local.get $first) (local.get $total)))
           (local.set $kind (global.get $RANGE_WHOLE))
           (if
-            (i32.or (i64.eq (local.get $last) (global.get $DIGITS_NONE))
+            (i32.or (i64.eq (local.get $last) (global.get $HTTP_NO_NUMBER))
               (i64.ge_u (local.get $last) (local.get $total)))
             (then (local.set $last (i64.sub (local.get $total) (i64.const 1)))))
           ;; A range that ends before it starts is not followed.
@@ -3099,6 +3041,93 @@
       (local.set $result (local.get $o)))
     (local.get $result))
 
+  ;; Gives the number that the bytes from place $from to place $end of the text at $text write
+  ;; in decimal digits. Gives HTTP_NO_NUMBER when $from is $end, and HTTP_BAD_NUMBER when a
+  ;; byte is no digit or there are more than HTTP_DIGITS of them. $from is at most $end, and
+  ;; $end at most HTTP_HEAD.
+  ;; from: ../http
+  (func $http_number (param $text i32) (param $from i32) (param $end i32) (result i64)
+    (local $i i32)
+    (local $c i32)
+    (local $value i64)
+    (local $result i64)
+    (local $left i32)
+    (if (i32.gt_u (local.get $end) (global.get $HTTP_HEAD))
+      (then (call $assert_fail (i32.const 783)) unreachable))
+    (if (i32.gt_u (local.get $from) (local.get $end))
+      (then (call $assert_fail (i32.const 784)) unreachable))
+    (local.set $result (global.get $HTTP_NO_NUMBER))
+    (local.set $i (local.get $from))
+    (block $done
+      (br_if $done (i32.eq (local.get $from) (local.get $end)))
+      (local.set $result (global.get $HTTP_BAD_NUMBER))
+      (br_if $done
+        (i32.gt_u (i32.sub (local.get $end) (local.get $from)) (global.get $HTTP_DIGITS)))
+      (block $read
+        (local.set $left (global.get $HTTP_DIGITS))
+        (loop $digit  ;; bound: 18
+          (br_if $read (i32.ge_u (local.get $i) (local.get $end)))
+          ;; Below '0' wraps to a large number, so one unsigned test catches both sides.
+          (local.set $c
+            (i32.sub (call $http_at (local.get $text) (local.get $i) (local.get $end))
+              (global.get $HTTP_ZERO)))
+          (br_if $done (i32.gt_u (local.get $c) (global.get $HTTP_NINE)))
+          (local.set $value
+            (i64.add (i64.mul (local.get $value) (global.get $HTTP_TEN_64))
+              (i64.extend_i32_u (local.get $c))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (local.set $left (i32.sub (local.get $left) (i32.const 1)))
+          (br_if $digit (local.get $left))))
+      (local.set $result (local.get $value)))
+    (local.get $result))
+
+  ;; Reads the value of a Range field in the bytes from place $from to place $end of the text
+  ;; at $text, when it is bytes= and one range: digits, a hyphen and digits, where either run
+  ;; of digits may be empty. Writes the two numbers at $into, 8 bytes each, HTTP_NO_NUMBER for
+  ;; an empty run, and gives 1. Gives 0, and writes nothing, for any other value. $from is at
+  ;; most $end, and $end at most HTTP_HEAD.
+  ;; from: ../http
+  (func $http_range (param $text i32) (param $from i32) (param $end i32) (param $into i32)
+    (result i32)
+    (local $dash i32)
+    (local $first i64)
+    (local $last i64)
+    (local $read i32)
+    (if (i32.gt_u (local.get $end) (global.get $HTTP_HEAD))
+      (then (call $assert_fail (i32.const 785)) unreachable))
+    (if (i32.gt_u (local.get $from) (local.get $end))
+      (then (call $assert_fail (i32.const 786)) unreachable))
+    (block $done
+      ;; bytes= and at least a digit and a hyphen, inside the text.
+      (br_if $done
+        (i32.lt_u (i32.sub (local.get $end) (local.get $from)) (global.get $HTTP_RANGE_MIN)))
+      (br_if $done (i32.gt_u (local.get $from) (global.get $HTTP_LAST_RANGE)))
+      (br_if $done
+        (i32.ne (i32.load (i32.add (local.get $text) (local.get $from)))
+          (global.get $HTTP_WORD_BYTE)))
+      (br_if $done
+        (i32.ne (i32.load16_u offset=4 (i32.add (local.get $text) (local.get $from)))
+          (global.get $HTTP_WORD_S_EQUALS)))
+      (local.set $from (i32.add (local.get $from) (global.get $HTTP_RANGE_PREFIX)))
+      (local.set $dash
+        (call $http_span_end (local.get $text) (local.get $from) (local.get $end)
+          (global.get $HTTP_ZERO) (global.get $HTTP_NINE)))
+      (br_if $done
+        (i32.ne (call $http_at (local.get $text) (local.get $dash) (local.get $end))
+          (global.get $HTTP_HYPHEN)))
+      (if (i32.lt_u (local.get $dash) (local.get $from))
+        (then (call $assert_fail (i32.const 787)) unreachable))
+      (local.set $first (call $http_number (local.get $text) (local.get $from) (local.get $dash)))
+      (local.set $last
+        (call $http_number (local.get $text) (i32.add (local.get $dash) (i32.const 1))
+          (local.get $end)))
+      (br_if $done (i64.eq (local.get $first) (global.get $HTTP_BAD_NUMBER)))
+      (br_if $done (i64.eq (local.get $last) (global.get $HTTP_BAD_NUMBER)))
+      (i64.store (local.get $into) (local.get $first))
+      (i64.store offset=8 (local.get $into) (local.get $last))
+      (local.set $read (i32.const 1)))
+    (local.get $read))
+
   ;; Checks that the first $length bytes at $text are one JSON value, with only spaces, tabs
   ;; and line ends around its tokens, and writes the value at $into with none of those. Gives
   ;; how many bytes it wrote, at least 1 and never more than $length, or JSON_BAD when the text
@@ -3515,57 +3544,6 @@
     (if (i32.gt_u (local.get $end) (local.get $length))
       (then (call $assert_fail (i32.const 877)) unreachable))
     (local.get $end))
-
-  ;; Reads the whole number that the first $length bytes at $at write in decimal: an optional
-  ;; minus sign, then 1 to DECIMAL_DIGITS digits, and nothing else. Writes it at $into, 8 bytes,
-  ;; and gives DECIMAL_OK; or gives DECIMAL_INVALID, and writes nothing, when the text isn't a
-  ;; number from -9223372036854775807 to 9223372036854775807. Its caller lends $at with room for
-  ;; DECIMAL_TEXT bytes, whatever $length is.
-  ;; from: ../decimal
-  (func $decimal_parse (param $at i32) (param $length i32) (param $into i32) (result i32)  ;; returns: result
-    (local $i i32)
-    (local $c i32)
-    (local $start i32)
-    (local $left i32)
-    (local $n i64)
-    (local $status i32)
-    (local.set $status (global.get $DECIMAL_INVALID))
-    (block $invalid
-      (br_if $invalid (i32.eqz (local.get $length)))
-      (br_if $invalid (i32.gt_u (local.get $length) (global.get $DECIMAL_TEXT)))
-      (if (i32.eq (i32.load8_u (local.get $at)) (global.get $DECIMAL_MINUS))
-        (then (local.set $i (i32.add (local.get $i) (i32.const 1)))))
-      ;; Where the digits start: 1 after a minus sign, else 0.
-      (local.set $start (local.get $i))
-      ;; A sign alone is no number, and a number has at most DECIMAL_DIGITS digits.
-      (br_if $invalid (i32.ge_u (local.get $i) (local.get $length)))
-      (br_if $invalid
-        (i32.gt_u (i32.sub (local.get $length) (local.get $i)) (global.get $DECIMAL_DIGITS)))
-      (block $end
-        (local.set $left (global.get $DECIMAL_DIGITS))
-        (loop $digit  ;; bound: 19
-          (br_if $end (i32.ge_u (local.get $i) (local.get $length)))
-          (if (i32.ge_u (local.get $i) (global.get $DECIMAL_TEXT))
-            (then (call $assert_fail (i32.const 801)) unreachable))
-          ;; Below '0' wraps to a large number, so one unsigned test catches both sides.
-          (local.set $c
-            (i32.sub (i32.load8_u (i32.add (local.get $at) (local.get $i)))
-              (global.get $DECIMAL_ZERO)))
-          (br_if $invalid (i32.gt_u (local.get $c) (global.get $DECIMAL_NINE)))
-          (br_if $invalid (i64.gt_u (local.get $n) (global.get $DECIMAL_MAX_TENTH)))
-          (local.set $n (i64.mul (local.get $n) (global.get $DECIMAL_TEN)))
-          (br_if $invalid
-            (i64.gt_u (local.get $n)
-              (i64.sub (global.get $DECIMAL_MAX) (i64.extend_i32_u (local.get $c)))))
-          (local.set $n (i64.add (local.get $n) (i64.extend_i32_u (local.get $c))))
-          (local.set $i (i32.add (local.get $i) (i32.const 1)))
-          (local.set $left (i32.sub (local.get $left) (i32.const 1)))
-          (br_if $digit (local.get $left))))
-      (if (local.get $start)
-        (then (local.set $n (i64.sub (i64.const 0) (local.get $n)))))
-      (i64.store (local.get $into) (local.get $n))
-      (local.set $status (global.get $DECIMAL_OK)))
-    (local.get $status))
 
   ;; Writes $value in decimal at $into: a minus sign when it is negative, then its digits, with
   ;; no zero at the start but for 0 itself; at most DECIMAL_TEXT bytes. Gives how many bytes it
