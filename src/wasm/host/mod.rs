@@ -23,6 +23,7 @@ pub mod split;
 pub mod start;
 pub mod stdio;
 pub mod term;
+pub mod trace;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -392,6 +393,8 @@ pub struct Host {
     pub limits: limits::Limits,
     /// What it tells lengua.
     pub notes: Notes,
+    /// What the run's tools hold: nothing, for a run that asked for none.
+    pub probe: crate::wasm::tools::Probe,
     /// Whether a sleep ends at once.
     pub instant_sleeps: bool,
     /// A test's own internet, in place of the real one, for what it opens itself.
@@ -475,6 +478,7 @@ impl Host {
             clock: clock::Clock::new(clock),
             random: random::Random::new(random),
             limits,
+            probe: crate::wasm::tools::Probe::default(),
             notes: Notes {
                 events,
                 ..Notes::default()
@@ -536,6 +540,7 @@ pub fn linker(engine: &Engine) -> Result<Linker<Host>, String> {
     let mut defining = Defining {
         linker: &mut linker,
         wanted: None,
+        trace: None,
     };
     define(&mut defining).map_err(|error| format!("lengua's host couldn't be set up: {error}"))?;
     Ok(linker)
@@ -561,6 +566,32 @@ pub fn linker_for(module: &wasmtime::Module) -> Result<Linker<Host>, String> {
     let mut defining = Defining {
         linker: &mut linker,
         wanted: Some(wanted.as_slice()),
+        trace: None,
+    };
+    define(&mut defining).map_err(|error| format!("lengua's host couldn't be set up: {error}"))?;
+    Ok(linker)
+}
+
+/// The linker with lengua's host for `module` alone, as [`linker_for`] makes it, for a run that
+/// asked for a trace: each function writes its call into `trace`, then answers as it always
+/// does ([`trace`]).
+///
+/// # Errors
+///
+/// When a function can't be defined, which lengua's tests rule out.
+pub fn linker_traced(
+    module: &wasmtime::Module,
+    trace: &trace::Shared,
+) -> Result<Linker<Host>, String> {
+    let wanted: Vec<(&str, &str)> = module
+        .imports()
+        .map(|import| (import.module(), import.name()))
+        .collect();
+    let mut linker = Linker::new(module.engine());
+    let mut defining = Defining {
+        linker: &mut linker,
+        wanted: Some(wanted.as_slice()),
+        trace: Some(trace),
     };
     define(&mut defining).map_err(|error| format!("lengua's host couldn't be set up: {error}"))?;
     Ok(linker)
@@ -572,22 +603,30 @@ struct Defining<'l> {
     linker: &'l mut Linker<Host>,
     /// The functions to define, each by its module and its name, or every one.
     wanted: Option<&'l [(&'l str, &'l str)]>,
+    /// The trace each call goes into, for a run that asked for one.
+    trace: Option<&'l trace::Shared>,
 }
 
 impl Defining<'_> {
     /// Defines `name` of `module` as `function`, as [`Linker::func_wrap`] does, when it is
-    /// wanted.
-    fn func_wrap<Params, Results>(
+    /// wanted; for a run that asked for a trace, so that each call of it goes into the trace
+    /// ([`trace::Traced`]).
+    fn func_wrap<Params, Results, Marker>(
         &mut self,
         module: &str,
         name: &str,
-        function: impl wasmtime::IntoFunc<Host, Params, Results>,
+        function: impl wasmtime::IntoFunc<Host, Params, Results> + trace::Traced<Marker>,
     ) -> wasmtime::Result<()> {
         if self
             .wanted
             .is_none_or(|wanted| wanted.contains(&(module, name)))
         {
-            self.linker.func_wrap(module, name, function)?;
+            match self.trace {
+                Some(trace) => function.define(self.linker, module, name, trace)?,
+                None => {
+                    self.linker.func_wrap(module, name, function)?;
+                }
+            }
         }
         Ok(())
     }

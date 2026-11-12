@@ -168,6 +168,13 @@ folder (or the one `--in` names), gives the program only the environment variabl
 and exits with the program's own code, or 134 when the program trapped
 ([docs/run.md](docs/run.md)).
 
+To see what a run does, ask for one of three tools, each off unless asked for: a trace of
+every call the program made to the host (`--trace`), a profile of where its time went by
+function of `main.wat` (`--profile`), and a stop at a line or a function that shows the values
+there (`--stop-at 42` or `--stop-at '$parse'`). The agent has the same three on the `run` tool.
+A stop runs a copy of `main.wat` with the stop written in, which `check` never stamps
+([docs/run.md](docs/run.md), The tools of a run).
+
 Share a program by its idea, which anyone's agent compiles and checks, or by its folder, which
 `lengua-mcp check` attests on any computer with no lock and no key. A lock is signed with a key
 in your own data folder, so it verifies only there.
@@ -507,12 +514,18 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
   9 names a length that comes from two paths, and `check` computes where each named text of
   the data is and holds the numbers to it. Proofs that reach a server and modules that
   `check` links are not built.
-- **W23, working with other code; W24, tools:** what a programming language has
+- **W23, working with other code:** what a programming language has
   that lengua still lacks ([todo.md](todo.md)). One part of W23 is built, on main:
   a module that a compiler made from Rust, C or another language, run as the
   program itself under an idea's grants and tests, and marked "trusted, not proven" (above).
   The rest of W23, a lengua program as a library and an outside module that a lengua program
   calls, isn't started.
+- **W24, tools:** built: a trace of a run's calls to the host, a profile of its time by
+  function, and a stop at a line or a function of `main.wat` that shows its values, each on
+  the `run` tool and from a shell, and a first cut of a language server for editors,
+  `lengua-mcp lsp`, which shows `check`'s findings of the two files on their lines. Not
+  built: a step to the next line and a second stop ([DESIGN.md](DESIGN.md), The tools of a
+  run).
 
 [ROADMAP.md](ROADMAP.md) has each milestone's design and the runs that verify it.
 

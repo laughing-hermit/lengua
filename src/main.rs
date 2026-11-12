@@ -15,8 +15,10 @@ use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage: lengua-mcp [--data-dir <absolute path>] [--version]
        lengua-mcp [--data-dir <absolute path>] run <program folder> [--in <folder>] \
-[--env NAME=value]... [[--] <argument>...]
+[--env NAME=value]... [--trace] [--profile] [--stop-at <line or $function>] \
+[--show-memory <address>:<length>] [[--] <argument>...]
        lengua-mcp check <program folder>
+       lengua-mcp lsp
        lengua-mcp [--data-dir <absolute path>] doctor
        lengua-mcp [--data-dir <absolute path>] install [--check] [--link] [--prefix <folder>]
        lengua-mcp wasm <main.wat> [-o <main.wasm>]
@@ -85,6 +87,7 @@ fn main() -> ExitCode {
         Ok(Command::Serve(data_dir)) => data_dir,
         Ok(Command::Run(data_dir, request)) => return run_from_shell(&data_dir, &request),
         Ok(Command::Check(path)) => return attest(&path),
+        Ok(Command::Lsp) => return lsp(),
         Ok(Command::Doctor(data_dir)) => return doctor(data_dir.as_ref()),
         Ok(Command::Install(data_dir, options)) => {
             return ExitCode::from(lengua::install::install(&options, data_dir.as_ref()));
@@ -132,6 +135,21 @@ fn run_from_shell(data_dir: &DataDir, request: &ShellRun) -> ExitCode {
         Err(message) => {
             eprintln!("lengua-mcp: {message}");
             ExitCode::from(REFUSED)
+        }
+    }
+}
+
+/// Serves an editor as a language server, on standard input and output, until it says `exit`:
+/// the findings of a folder's idea.md and main.wat, each on its line. Exits 0 when the editor
+/// said `shutdown` first, as the protocol asks, and 1 otherwise.
+fn lsp() -> ExitCode {
+    let served = lengua::lsp::serve(&mut std::io::stdin().lock(), &mut std::io::stdout().lock());
+    match served {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::from(1),
+        Err(error) => {
+            eprintln!("lengua-mcp: lsp: {error}");
+            ExitCode::from(1)
         }
     }
 }
@@ -237,6 +255,7 @@ enum Command {
     Serve(DataDir),
     Run(DataDir, ShellRun),
     Check(String),
+    Lsp,
     Doctor(Option<DataDir>),
     Install(Option<DataDir>, lengua::install::Options),
     Wasm(PathBuf, Option<PathBuf>),
@@ -255,6 +274,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Command, String>
                     .ok_or(lengua::data_dir::NOT_FOUND)?;
                 return Ok(Command::Run(data_dir, request));
             }
+            "lsp" => return Ok(Command::Lsp),
             "check" => {
                 let path = args.next().ok_or("check needs a program folder")?;
                 if let Some(extra) = args.next() {

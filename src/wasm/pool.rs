@@ -82,6 +82,8 @@ pub struct Spec<'a> {
     pub max_written: Option<u64>,
     /// Whether it runs in a worker of its own, which goes with it.
     pub alone: bool,
+    /// The tools the run is asked for: none, but for a run that asks.
+    pub tools: crate::wasm::tools::Tools,
     /// Whether its worker loads the module's compiled form, kept in the data folder under the
     /// user's seal, in place of compiling it, as the `run` tool's does: a module with no such
     /// form the worker takes is compiled there, sealed and kept for the next run.
@@ -117,6 +119,11 @@ impl<'a> Spec<'a> {
             setup: Setup::Test,
             max_written: Some(crate::wasm::host::limits::TEST_WRITTEN),
             alone: false,
+            tools: crate::wasm::tools::Tools {
+                trace: None,
+                profile: false,
+                stop: None,
+            },
             sealed: false,
         }
     }
@@ -392,6 +399,7 @@ impl Pool {
                 max_file: limits.max_file_size,
                 max_written: spec.max_written,
             },
+            tools: spec.tools,
         };
         let request = Request::Run(Box::new(job));
         let idle = if spec.alone { None } else { self.take() };
@@ -469,6 +477,24 @@ impl Pool {
     /// As [`Self::start`].
     pub async fn run(&self, program: &Program, spec: Spec<'_>, limits: Limits) -> io::Result<Run> {
         self.start(program, spec, limits).await?.wait().await
+    }
+
+    /// Runs `program` as [`Self::run`] does, and gives what the run's tools found too
+    /// (`spec.tools`): nothing for a run that asked for none, or that never started.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::start`].
+    pub async fn run_found(
+        &self,
+        program: &Program,
+        spec: Spec<'_>,
+        limits: Limits,
+    ) -> io::Result<(Run, Option<Box<crate::wasm::tools::Found>>)> {
+        self.start(program, spec, limits)
+            .await?
+            .finish_found(false)
+            .await
     }
 }
 
@@ -568,12 +594,20 @@ impl Running {
         self.finish(true).await
     }
 
-    async fn finish(mut self, stop: bool) -> io::Result<Run> {
+    async fn finish(self, stop: bool) -> io::Result<Run> {
+        self.finish_found(stop).await.map(|(run, _)| run)
+    }
+
+    /// [`Self::finish`]'s work: how the run went, and what its tools found.
+    async fn finish_found(
+        mut self,
+        stop: bool,
+    ) -> io::Result<(Run, Option<Box<crate::wasm::tools::Found>>)> {
         if stop && let Some(stdin) = self.stdin.as_mut() {
             let _ = job::send(stdin, &Request::Stop(self.id)).await;
         }
         let waited = tokio::time::timeout(self.timeout, &mut self.done).await;
-        let (done, stdout) = match waited {
+        let (mut done, stdout) = match waited {
             Ok(Ok(Ok((done, stdout)))) => (done, Some(stdout)),
             Ok(Ok(Err(error))) => (
                 lost(
@@ -621,8 +655,10 @@ impl Running {
             None => (Ok(BTreeMap::new()), BTreeSet::new()),
         };
         let lines = Arc::clone(&self.lines);
-        Ok(runner::run_of(done, left, |offset| {
+        let found = done.found.take();
+        let run = runner::run_of(done, left, |offset| {
             crate::wasm::text::line_at(&lines.0, &lines.1, offset)
-        }))
+        });
+        Ok((run, found))
     }
 }

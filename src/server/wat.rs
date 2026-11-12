@@ -15,6 +15,7 @@
 //! proven" in every reply and before every run.
 
 mod outside;
+mod tools;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -828,6 +829,10 @@ pub enum NotRun {
     /// This process only runs what was compiled before, and the idea names a secret: the
     /// machine code is read on every run, with main.wat's rules, which lengua-mcp does.
     Secret,
+    /// This process only runs what was compiled before, and the run asks for a tool that takes
+    /// the compiler, as it says: a profile, whose engine has a clock that moves, or a stop,
+    /// which runs a copy of main.wat built for the run.
+    Tool(String),
 }
 
 impl From<String> for NotRun {
@@ -1009,11 +1014,17 @@ struct Checked<'r> {
     connections: Vec<Made>,
     /// lengua's own folders, where no file or folder an argument names may lie.
     own: Vec<PathBuf>,
+    /// The tools the run is asked for, with what their reports need.
+    equipment: Option<crate::wasm::tools::Equipment>,
 }
 
 impl Order for Checked<'_> {
     fn module(&self) -> &wasmtime::Module {
         &self.compiled
+    }
+
+    fn equipment(&self) -> Option<&crate::wasm::tools::Equipment> {
+        self.equipment.as_ref()
     }
 
     fn here(&self) -> Here<'_> {
@@ -1075,9 +1086,16 @@ pub(super) fn run_from_shell(
         if !ready.secrets.is_empty() && !engine::compiles() {
             return Err(NotRun::Secret);
         }
-        let compiled = loaded_or_compiled(data_dir, &ready.key, &ready.module, || {
-            kept_or_built(data_dir, &folder, &ready)
-        })?;
+        // A profile or a stop runs a module compiled here for the one run, and a trace the
+        // module every run loads.
+        let mut equipment = tools::for_shell(&request.tools, &folder, &ready)?;
+        let asked_for = equipment.as_mut().and_then(|(_, module)| module.take());
+        let compiled = match asked_for {
+            Some(module) => module,
+            None => loaded_or_compiled(data_dir, &ready.key, &ready.module, || {
+                kept_or_built(data_dir, &folder, &ready)
+            })?,
+        };
         loaded_keeps_secrets(&folder, &ready, &compiled)?;
         let connections = reaches(&ready.network)
             .iter()
@@ -1101,6 +1119,7 @@ pub(super) fn run_from_shell(
             compiled,
             connections,
             own,
+            equipment: equipment.map(|(equipment, _)| equipment),
         })
     })?;
     let lengua = engine::name();
@@ -1659,6 +1678,18 @@ impl LenguaServer {
         let built = built_as_tested(folder, &ready)?;
         // An idea that names a secret: the code this computer runs is checked first.
         keeps_secrets(folder, &ready, &built, Setup::Run)?;
+        // The tools the run asks for: a stop runs a copy of main.wat built for this run.
+        let asked = crate::wasm::tools::Asked {
+            trace: params.trace,
+            profile: params.profile,
+            stop_at: params.stop_at.clone(),
+            show_memory: params.show_memory.clone(),
+        };
+        let tools::Equipped {
+            tools: run_tools,
+            names,
+            instead,
+        } = tools::equipped(&asked, &ready, &built)?;
         // An outside module's every reply says what it is.
         let said = ready.code.words().map(str::to_owned);
         let (uses, network) = (ready.uses, ready.network);
@@ -1682,9 +1713,11 @@ impl LenguaServer {
             }
             (Some(name), Some(folder)) => read_stdin_file(folder, name)?,
         };
+        // A copy with a stop is compiled for this one run: no compiled form of it is loaded or kept.
+        let checked_module = instead.is_none();
         let assertions = built.assertions.clone();
         let program = Arc::new(
-            Program::new(built)
+            Program::new(instead.unwrap_or(built))
                 .map_err(|error| format!("lengua couldn't keep the module: {error}"))?,
         );
         let connections = reaches(&network);
@@ -1704,14 +1737,18 @@ impl LenguaServer {
             own: &own,
             setup: Setup::Run,
             // Its worker loads the compiled form check kept, under the user's seal.
-            sealed: true,
+            sealed: checked_module,
             max_written,
             alone: true,
+            tools: run_tools,
             ..Spec::new(&params.args, &stdin, Policy::of(&uses, &network))
         };
         let may_reach = may_reach(&uses, &network);
         // A server, of TCP connections or of UDP datagrams, serves in the background.
         if network.listens.is_some() || network.reach.receives.is_some() {
+            if asked.any() {
+                return Err(tools::NO_TOOLS_SERVING.to_owned());
+            }
             let mut report = self
                 .serve_wasm_in_background(folder, &program, spec, assertions)
                 .await?;
@@ -1724,12 +1761,15 @@ impl LenguaServer {
             max_file_size,
             ..Limits::default()
         };
-        let run = self
+        let (run, found) = self
             .pool()
-            .run(&program, spec, limits)
+            .run_found(&program, spec, limits)
             .await
             .map_err(|error| format!("couldn't run the program: {error}"))?;
         let mut report = ended_report(&run, &assertions, limits);
+        if asked.any() {
+            tools::into_report(&mut report, found, run_tools, &names);
+        }
         report.may_reach = may_reach;
         report.outside = said;
         Ok(report)

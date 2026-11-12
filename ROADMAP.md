@@ -774,7 +774,43 @@ calls, is not started. Runs: todo.md's table.
 
 What a programmer expects beside `check`: a run that stops at a line of main.wat and shows its
 values, a profile of a run's time by function and line, and a trace of what a run asked the host
-for. Each is a tool call or a flag. *Not started.*
+for. Each is a tool call or a flag. *Built, with a first cut of a language server.*
+
+**Built** (`src/wasm/tools.rs`, `src/wasm/host/trace.rs`, `src/server/wat/tools.rs`;
+`tests/tools.rs`):
+
+- **A trace.** `run`'s `trace`, and `--trace` for `lengua-mcp run` and lengua-run: every call the
+  program made to the host, in order, with the numbers it passed and the host's answer, the first
+  512 and a count of the rest. It holds no byte of the program's memory. A run that doesn't ask
+  runs the host's functions as they were.
+- **A profile.** `run`'s `profile`, and `--profile`: samples of the program's stack, one about
+  each millisecond, counted by function of main.wat and by line, taken with Wasmtime's own
+  backtrace where the engine already looks at its clock. The counts change from run to run and
+  the report's form doesn't.
+- **A stop.** `run`'s `stop_at` and `show_memory`, and `--stop-at` and `--show-memory`: the run
+  ends at a line of main.wat or at the start of a function, and the report has the function's
+  locals by name, the globals the program changes and up to 1,024 bytes of memory.
+
+**The stop is the nearest thing, not a debugger.** Wasmtime 50 stops a program at a deadline, a
+count or a trap, and shows a stopped program's exports, not its locals. So a stop runs a copy of
+main.wat with the stop written in, which keeps each local in a new global and then traps. `check`
+never tests or stamps the copy; it runs under the idea's grants. Not there: a step to the next
+line, a second stop, a stop on a condition, a changed value, and a stop in a piece of split work
+or in an outside module.
+
+**The three kinds of program that differ**, each pinned by a test:
+
+| | Trace | Profile | Stop |
+|---|---|---|---|
+| A `- Secret:` line | names and answers only | given | refused |
+| A `- Splits:` line | the program's own calls | the program's own code | refused |
+| An outside module | given | given | refused |
+
+**A first cut of a language server** (`lengua-mcp lsp`, `src/lsp.rs`): over standard input and
+output, it publishes the findings of a folder's idea.md and main.wat as an editor opens, changes
+and saves them: the idea's format and tests, main.wat's build and its rules. It runs no test and
+no proof, and has no completion, hover or formatting. No editor was tried with it. Runs:
+todo.md's table.
 
 ## Before the pivot
 

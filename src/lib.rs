@@ -26,6 +26,7 @@ pub mod hash;
 pub mod idea;
 pub mod install;
 pub mod lock;
+pub mod lsp;
 pub mod measure;
 pub mod named;
 pub mod names;

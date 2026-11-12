@@ -15,6 +15,7 @@ pub mod parts;
 pub mod pool;
 pub mod runner;
 pub mod text;
+pub mod tools;
 pub mod wasi;
 pub mod worker;
 

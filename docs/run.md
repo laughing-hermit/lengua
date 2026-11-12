@@ -8,8 +8,8 @@ this is how a lengua computation runs.
 ## Run it
 
 ```sh
-lengua-run [--data-dir <absolute path>] <program folder> [--in <folder>] [--env NAME=value]... [--] [<argument>...]
-lengua-mcp [--data-dir <absolute path>] run <program folder> [--in <folder>] [--env NAME=value]... [--] [<argument>...]
+lengua-run [--data-dir <absolute path>] <program folder> [--in <folder>] [--env NAME=value]... [<tool>...] [--] [<argument>...]
+lengua-mcp [--data-dir <absolute path>] run <program folder> [--in <folder>] [--env NAME=value]... [<tool>...] [--] [<argument>...]
 ```
 
 Both are in `server/` of the lengua plugin's folder, and `lengua-mcp install --link` also puts
@@ -17,7 +17,8 @@ them in `~/.local/bin` on Linux and macOS. `lengua-run` only runs checked progra
 built without the engine's compiler, so it starts sooner and holds less memory, and `check`'s
 done reply names it. `lengua-mcp` is lengua's MCP server, whose `run` runs every checked program
 and compiles what `lengua-run` can't load. Both make the same checks and give the program the
-same things.
+same things. A `<tool>` is `--trace`, `--profile`, `--stop-at` or `--show-memory`
+([The tools of a run](#the-tools-of-a-run)).
 
 They run a folder whose `lengua.lock`, signed with this user's key, records `idea.md` and
 `main.wat` as they are. `check` writes that record on this computer once `main.wat` builds,
@@ -192,6 +193,90 @@ compiles its module itself and keeps it in memory. lengua has no other store of 
 code: Wasmtime's own cache is not built in, and the folder an agent's harness gives the
 plugin (`PLUGIN_DATA`) is not used. A `cache` folder that an older lengua left in the data
 folder or there is read by nothing, and may be deleted.
+
+## The tools of a run
+
+A run can be asked for three tools. Each is off unless it is asked for, and a run that asks for
+none is the run described above: its host's functions, its engine and its module are the same.
+
+```sh
+lengua-mcp run <program folder> --trace [<argument>...]
+lengua-mcp run <program folder> --profile [<argument>...]
+lengua-mcp run <program folder> --stop-at <line or $function> [--show-memory <address>:<length>] [<argument>...]
+```
+
+The options come before the program's arguments. `lengua-run` takes the same words: it traces a
+run itself, and it leaves a profile and a stop to `lengua-mcp`, beside it, since both take the
+compiler. Each report goes to standard error once the program has ended, one line each, after
+the program's own output. In an agent, the `run` tool takes `trace`, `profile`, `stop_at` and
+`show_memory`, and its reply holds `host_calls`, `profile` and `stopped`.
+
+**A trace** lists every call the program made to lengua's host, in order:
+
+```text
+lengua-mcp: trace: args_sizes_get(2048, 2052) = 0
+lengua-mcp: trace: fd_write(1, 16, 1, 8) = 0
+lengua-mcp: trace: proc_exit(0) ended the run with exit code 0
+```
+
+A line is the function's name, the numbers the program passed, and the error number the host
+answered: 0 for none, and WASI's name beside any other, as `= 8 (BADF)`. A function of lengua's
+own modules has its module's name first, as `lengua_split_1.split`. The numbers are
+descriptors, addresses and lengths. A trace never holds a byte of the program's memory: not the
+text it wrote, not a path it opened. It keeps the first 512 calls and says how many came after
+them.
+
+**A profile** says where the run's time went. The engine looks at its clock where a function
+starts and at the head of each loop. In a profiled run that clock moves on each millisecond,
+and each time the engine sees it move, lengua notes which functions are on the program's stack,
+with Wasmtime's own backtrace.
+
+```text
+lengua-mcp: profile: 412 samples, one about every 1000 microseconds
+lengua-mcp: profile: function $count (main.wat line 61): 398 own, 412 with calls
+lengua-mcp: profile: main.wat line 70: 398 samples
+```
+
+`own` counts the samples that fell in the function itself, and `with calls` those that fell in
+it or in a function it called, among the 20 innermost calls. A line is the start of a function
+or the head of a loop, not each instruction. The time inside a call of the host is not sampled.
+A run shorter than a millisecond has no sample, and the report says so. The counts change from
+run to run; the form of the lines does not. From a shell, a profiled run is compiled again for
+that run, for the engine whose clock moves, and is not the compiled form other runs load.
+
+**A stop** ends the run when it reaches a line of `main.wat`, or the start of one of its
+functions, before the instruction there runs, and says the values on hand:
+
+```text
+lengua-mcp: stop: stopped at line 104 of main.wat, in $parse_i64
+lengua-mcp: stop: local $at: i32 10 (0x0000000a)
+lengua-mcp: stop: memory: 6d 61 69 6e 2e 77 61 73 6d 00 32 00
+```
+
+It shows the function's parameters and locals by their names, each global the program may
+change, and with `--show-memory` up to 1,024 bytes of its memory in hex. A run that reached its
+stop exits with 0. A run that ended before the place ends as it would have, and the report says
+it never reached the place.
+
+The engine lengua pins has no way to stop at a place that lengua can use within its rules. So a
+stop runs **a copy of `main.wat` with the stop written in**: on the line of the place, each
+local goes to a global the copy adds, and then the copy traps. The copy has `main.wat`'s lines
+and numbers. It is built for the one run and kept nowhere. `check` never tests it, the lock
+never stamps it, and no proof covers it. It runs in the same host, under the idea's grants, so
+it reaches nothing the idea doesn't grant. A stop is at one place for one run: there is no step
+to the next line, no second stop and no value changed by hand.
+
+Three kinds of program differ:
+
+| | Trace | Profile | Stop |
+|---|---|---|---|
+| An idea with a `- Secret:` line | the calls' names and the host's answers, with none of the numbers the program passed | given | refused: a stop shows values |
+| An idea with a `- Splits:` line | the program's own calls; its pieces' calls are not in it | the program's own code; its pieces are not sampled | refused: the pieces' values are not kept |
+| An outside module, `main.wasm` | given | given, by the names the module's own `name` section has | refused: there is no `main.wat` to stop in |
+
+A server, which the `run` tool leaves serving in the background, gets none of the three from
+the tool. From a shell, a report is said once the program has ended, so a run that a signal
+stops, as a server's is, says none.
 
 ## The receipt
 
