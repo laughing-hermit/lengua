@@ -85,3 +85,43 @@ its own with `grep` and `awk`, which stand in here for what `check` says in seco
 | The places of the 54 texts in `$texts` | computed with `awk` from the texts' lengths, not by hand |
 
 The 180 operators a function are the rule the agent met first, twice, before any check ran.
+
+## The check cycles
+
+Each row is one dispatch. "Minutes" is the run from its dispatch to its end: about 17 of them
+build lengua's tests on the runner, whatever is checked.
+
+### Cycle 1 (run 43162164513, at 3a1574f): json and http as first written
+
+| Folder | Lines of main.wat | What `check` said |
+|---|---|---|
+| json | 561 | `idea_problems`: one sentence of `# Purpose` has 26 words |
+| http | 675 | `idea_problems`: one sentence of `# Purpose` has 28 words |
+
+Neither main.wat was read: `check` stops at the idea. The agent had counted words while it
+wrote and still missed two sentences. Fix: both split, and from here the agent counted each
+sentence's words with `awk` before a dispatch, which found two more in httpd's idea. A run
+for httpd dispatched beside this one (43164618516) was cancelled, since it would have stopped
+at the same part. Cost: one cycle for two sentences.
+
+### Cycle 2 (runs 43166298467 and 43166302283, at 5a2b0b5)
+
+| Folder | Lines | What `check` said |
+|---|---|---|
+| json | 561 | **`done` at its first check of the code**: every rule holds, 369 test runs pass. No rule broken and no test failed in 561 lines written by hand |
+| http | 691 | `idea_problems`: B1's example isn't in its generated test's ranges (`hello.txt` has letters the generator of `path` doesn't draw) |
+| httpd | 3,610 | not reached: its part http isn't done |
+
+json's proofs, with 60 seconds for all of them: 5 of its 10 generated tests proven for every
+input in range (B3, B4, B5, B7, B8, B9: the values alone, the texts that are refused, 33
+levels, input too long, output closed), each "settled by the terms themselves"; 4 tested, not
+proven, out of time (B1 at 9 of 12 input combinations with one path cvc5 couldn't confirm in
+time, B2 at 4 of 648, B6 at 9 of 12). The contract's nine clauses were what the agent had
+written: the reach of each function was as it had reasoned.
+
+`check` reported one problem of http's idea, and the second kind of problem (an example that
+its generated test can't draw) only once the first kind (STE) was gone. The agent then held
+every example of the three ideas to its generated test by hand and found eight more of the
+same kind in httpd's idea: five examples that lacked the `?query` their generated steps have,
+one whose two queries used letters outside the generator's, and a key, `color`, outside its
+generator's letters. Without that pass, each could have cost a cycle.
