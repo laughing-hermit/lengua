@@ -105,9 +105,9 @@ impl Program {
     /// and the memory of each module it calls.
     #[must_use]
     pub fn pages(&self) -> u64 {
-        self.calls
-            .iter()
-            .fold(self.pages, |pages, called| pages.saturating_add(called.pages))
+        self.calls.iter().fold(self.pages, |pages, called| {
+            pages.saturating_add(called.pages)
+        })
     }
 
     /// What the build made.

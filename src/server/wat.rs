@@ -32,9 +32,8 @@ use super::{
     LenguaServer, Model, Passed, RUN_SECONDS, RunParams, RunReport, Serving, ShellRun, Stage,
     VERIFIED_NOTE, Witness, already_serving, background_limits, check_wait, cost_line, counted,
     ended_report, idea_alone, idea_problems, keep_tested, may_reach, own_folder_problem,
-    own_folders,
-    proof_time, proven_detail, random_seed, reaches, read_optional, settled, state_for_run,
-    wait_for, working_folder,
+    own_folders, proof_time, proven_detail, random_seed, reaches, read_optional, settled,
+    state_for_run, wait_for, working_folder,
 };
 use crate::checker::{
     self,
@@ -2367,8 +2366,7 @@ mod tests {
         let data_dir = DataDir::new(data.path().join("data"));
         let key = Key::load_or_create(&data_dir).expect("a key");
         let program = tempfile::tempdir().expect("a folder");
-        let folder =
-            ProgramFolder::new(program.path().to_str().expect("UTF-8")).expect("absolute");
+        let folder = ProgramFolder::new(program.path().to_str().expect("UTF-8")).expect("absolute");
         let (uses, network) = idea::grants(idea_text).expect("its grants");
         let secrets = idea::secrets(idea_text).expect("its secrets");
         assert!(!secrets.is_empty());

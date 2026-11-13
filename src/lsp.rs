@@ -221,9 +221,9 @@ fn publish(output: &mut impl Write, open: &BTreeMap<String, String>, uri: &str) 
     }
     let text_of = |file: &str| {
         let uri = format!("{base}/{file}");
-        open.get(&uri)
-            .cloned()
-            .or_else(|| path_of(&uri).and_then(|path| crate::state::read_text(&path).ok().flatten()))
+        open.get(&uri).cloned().or_else(|| {
+            path_of(&uri).and_then(|path| crate::state::read_text(&path).ok().flatten())
+        })
     };
     let idea_text = text_of(IDEA_FILE);
     let code = text_of(CODE_FILE);
@@ -421,9 +421,11 @@ mod tests {
             .replace(purpose, &format!("{purpose} {long}"))
             .replace("{a + b}", "{a - b}");
         let (of_idea, of_code) = findings(Some(&both), Some(CODE));
-        let sentence = of_idea
-            .iter()
-            .position(|finding| finding.message.starts_with("STE: this sentence has 32 words"));
+        let sentence = of_idea.iter().position(|finding| {
+            finding
+                .message
+                .starts_with("STE: this sentence has 32 words")
+        });
         let formula = of_idea
             .iter()
             .position(|finding| finding.message.contains("formula disagrees with the idea"));

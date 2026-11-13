@@ -1079,9 +1079,8 @@ fn an_outside_module_s_idea_calls_no_module_and_offers_no_function() {
             .iter()
             .map(ToString::to_string)
             .collect();
-        let refusal = format!(
-            "line {at}: an outside module calls no other module and offers no function"
-        );
+        let refusal =
+            format!("line {at}: an outside module calls no other module and offers no function");
         assert!(
             problems.iter().any(|problem| problem.starts_with(&refusal)
                 && problem.contains("Remove the `- Calls:` and `- Exports:` lines")),
