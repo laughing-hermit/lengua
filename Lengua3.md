@@ -142,7 +142,7 @@ with its own behaviours and its own `# Structure`, and the top `idea.md` names t
 holds the grants.
 
 The agent writes only the ideas and `src/`. `check` generates `Cargo.toml` (name, edition, the
-lints of section 5, a release profile with `panic = "abort"`, only the dependencies rule 13
+lints of section 5, a release profile with `panic = "abort"`, only the crates the idea declares, as rule 13
 allows) and `wit/world.wit`, and holds them unchanged: a hand edit is a finding.
 
 ### The idea file
@@ -277,8 +277,8 @@ adapted for Rust that runs as a WebAssembly component and is written by an AI.
 | 5 | Two assertions a function, on average | At least two `assert!` or `debug_assert!` per function, on average. | lengua's lint |
 | 6 | Data in the smallest scope | No `static mut`, no global with interior mutability. | `[lints]` and lengua's lint |
 | 7 | Check every return value and parameter | Every `Result` and `#[must_use]` value is used. No `unwrap`, `expect` or indexing that can panic in program code. | `[lints]`: `unused_must_use`, `clippy::unwrap_used`, `clippy::expect_used`, `clippy::indexing_slicing` |
-| 8 | Limit the preprocessor | No `macro_rules!` that define items, no `build.rs`, no `cfg` beyond the target. Macros and derives only from the allowed crates (rule 13). | lengua's lint and the generated `Cargo.toml` |
-| 9 | Restrict pointers | No `unsafe` at all in the application's own code, so no raw pointers. The allowed crates may use it, and the reply says which do. | `#![forbid(unsafe_code)]` through `[lints]` |
+| 8 | Limit the preprocessor | No `macro_rules!` that define items, no `build.rs`, no `cfg` beyond the target. Macros and derives only from the crates the idea declares (rule 13). | lengua's lint and the generated `Cargo.toml` |
+| 9 | Restrict pointers | No `unsafe` at all in the application's own code, so no raw pointers. A declared crate may use it, and the reply says which do. | `#![forbid(unsafe_code)]` through `[lints]` |
 | 10 | All warnings on, from day one | Every warning is an error; clippy's `pedantic` group on; from the first build. | `[lints]` |
 
 Added for an AI language:
@@ -287,7 +287,7 @@ Added for an AI language:
 |---|---|---|
 | 11 | No comments and no doc comments in code files. The idea is the documentation. | lengua's lint |
 | 12 | Every function is named in its module's `# Structure`, and nothing else is. | `check` |
-| 13 | Dependencies only from an allow-list kept by lengua: the standard library, the bundle's own libraries, and GPUI, its web crate, GPUI Kit and what they need, each pinned by checksum. | The generated `Cargo.toml` and `Cargo.lock` |
+| 13 | Any crate from the Rust ecosystem, if the idea declares it (`- Uses crate:`) and it builds for the targets. Each is pinned by checksum in `Cargo.lock`, signed in the lock, and named in the reply with whether it uses `unsafe`. A crate in the code that the idea does not declare is a finding. | The generated `Cargo.toml`, `Cargo.lock` and the lock |
 
 And on the built component: imports only from the world; no threads, no relaxed SIMD and no other
 feature whose result can differ between machines; a size limit.
@@ -314,7 +314,7 @@ component says so.
   the score. It says how strong the tests are, and decides between `checked` and `tested`.
 - **The front end:** each screen's behaviours run against the screen's state through GPUI's test
   context: given the state, when the user clicks or types, then the state and what is shown.
-  The screen is not compared pixel by pixel in v1.
+  The screen is not compared pixel by pixel; the tests compare state and text, not images.
 - **Deterministic:** the same input gives the same output on every system, every time.
 
 ## 8. Milestones
@@ -360,9 +360,11 @@ Unchanged from lengua 2:
   GPUI makes the file much larger.
 - **GPUI's web target is new** and lives in Zed's repository: pin one commit, and expect to
   follow it as it changes.
-- **Dependencies:** the allow-list brings code lengua did not write, some with `unsafe`. Each is
-  pinned by checksum, and the reply names them. Fetching them needs the network once, at the
-  first build.
+- **Crates:** the whole Rust ecosystem is open, but not every crate builds for WebAssembly: a
+  crate that needs threads, a C library or one operating system's own calls fails the build,
+  and `check` says which. Crates bring code lengua did not write, some with `unsafe`; each is
+  declared in the idea, pinned by checksum and named in the reply. They are downloaded once,
+  at the first build, and kept.
 - **Browser support:** WebGPU is in current Chrome, Edge, Firefox and Safari; older browsers get
   WebGL2.
 - **GPUI's test context** must run on all five systems for the front end's tests.
