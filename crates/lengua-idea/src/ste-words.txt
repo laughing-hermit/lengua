@@ -86,6 +86,8 @@ body n
 both dc
 boundary n
 box n
+brace n
+bracket n
 break v
 broken ax
 broke v
@@ -109,6 +111,7 @@ cart n
 case n
 cause nv
 cell n
+cent n
 certain a
 change nv
 channel n
@@ -120,19 +123,23 @@ choice n
 choose v
 chosen x
 chose v
+chunk n
 clean av
 clean v
 clear av
 click nv
+client n
 clock n
 closed a
 close v
 code n
 collect v
+colon n
 color n
 colour n
 column n
 come v
+comma n
 command n
 comment n
 common a
@@ -221,6 +228,7 @@ environment n
 equal av
 equally r
 error n
+escape n
 even r
 event n
 ever r
@@ -263,6 +271,7 @@ form n
 for p
 found vx
 four q
+fraction n
 frame n
 free a
 frequently r
@@ -273,6 +282,7 @@ function n
 gap n
 gave v
 general a
+get v
 given x
 give v
 global a
@@ -289,6 +299,7 @@ had m
 half n
 hard a
 has m
+hash n
 have m
 header n
 heading n
@@ -298,6 +309,7 @@ help nv
 he o
 here r
 her o
+hexadecimal a
 hidden x
 hide v
 high a
@@ -369,6 +381,7 @@ left x
 length n
 less dr
 let v
+letter n
 level n
 library n
 lift v
@@ -377,6 +390,7 @@ line n
 link n
 link nv
 list nv
+listen v
 load v
 local a
 location n
@@ -418,6 +432,7 @@ more dr
 most dr
 move v
 much dr
+multiple n
 must m
 my o
 name n
@@ -469,6 +484,7 @@ out pr
 output n
 outside p
 over p
+overflow n
 own a
 owner n
 packet n
@@ -493,6 +509,7 @@ place n
 plain a
 pointer n
 point nv
+polynomial n
 port n
 position n
 positive a
@@ -521,6 +538,7 @@ query n
 queue n
 quick a
 quickly r
+quote n
 random a
 range n
 ran v
@@ -567,6 +585,7 @@ save v
 saw v
 scale n
 screen n
+search v
 secondary a
 second qn
 section n
@@ -656,6 +675,7 @@ tag n
 taken x
 target n
 task n
+tax n
 team n
 tell v
 temporary a
@@ -694,6 +714,7 @@ touch v
 toward p
 trace n
 tree n
+trim v
 true a
 try v
 turn v

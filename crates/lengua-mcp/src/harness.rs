@@ -119,7 +119,7 @@ mod tests {
         });
         assert!(toml.contains(
             "my_json = { package = \"my-json-mutant\", path = \"../mutant\" }"
-        );
+        ));
         assert!(toml.contains("name = \"my-json-mutant-harness\""));
         let found = mapped(
             vec![problem("main.rs", FIRST_ARM + 1, "rust-error", "no".to_string())],
