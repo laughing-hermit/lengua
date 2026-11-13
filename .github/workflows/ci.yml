@@ -110,6 +110,39 @@ jobs:
           name: cargo-lock-${{ github.run_number }}
           path: Cargo.lock
 
+  pnpm-lockfile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: toolchain
+        run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+      - name: pnpm
+        run: npm install --global pnpm@12.18.0
+      - name: web/pnpm-lock.yaml of examples/notes up to date
+        id: lock
+        run: |
+          cargo test --locked -p lengua-mcp --test check the_wiki_joins_the_screens_and_the_server_through_api_md
+          d=target/tmp/lengua-mcp-notes-wiki/notes/web
+          if [ -f examples/notes/web/pnpm-lock.yaml ]; then
+            cp examples/notes/web/pnpm-lock.yaml "$d/pnpm-lock.yaml"
+          fi
+          (cd "$d" && CI=true pnpm install --lockfile-only)
+          if cmp -s "$d/pnpm-lock.yaml" examples/notes/web/pnpm-lock.yaml; then
+            exit 0
+          fi
+          cp "$d/pnpm-lock.yaml" pnpm-lock.yaml
+          echo "the packages resolved: $(grep -c '^  /\|^  [@a-z]' pnpm-lock.yaml) lines of packages"
+          echo "differs=true" >> "$GITHUB_OUTPUT"
+          exit 1
+      - if: ${{ failure() && steps.lock.outputs.differs == 'true' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: pnpm-lock-${{ github.run_number }}
+          path: pnpm-lock.yaml
+
   component:
     runs-on: ubuntu-24.04
     env:
@@ -185,12 +218,14 @@ jobs:
           node --version
           pnpm --version
       - name: clippy
-        run: cargo clippy --workspace --all-targets --locked
+        run: cargo clippy --workspace --all-targets --locked --keep-going
       - name: tests built
         if: ${{ needs.plan.outputs.mode == 'compile' }}
         run: cargo test --workspace --locked --no-run
       - name: tests run
         if: ${{ needs.plan.outputs.mode == 'test' }}
+        env:
+          LENGUA_CHROME: ${{ matrix.target == 'linux-x86_64' && '/usr/bin/google-chrome' || '' }}
         run: cargo test --workspace --locked --no-fail-fast
       - name: the imports of the built examples, as Wasmtime reads them
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}

@@ -51,7 +51,9 @@ fn add(body: &str) -> (u16, String) {
     if title.chars().count() > LONGEST_TITLE {
         return (400, error("A title has 40 characters or fewer."));
     }
-    let next = u32::try_from(NOTES.len()).unwrap_or(u32::MAX).saturating_add(1);
+    let next = u32::try_from(NOTES.len())
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
     debug_assert!(next > 2);
     (201, note_json(next, &title, &text))
 }

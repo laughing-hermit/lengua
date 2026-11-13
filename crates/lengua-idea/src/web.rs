@@ -668,10 +668,10 @@ pub(crate) fn plan(
     generated.push(SUM.to_string());
     findings.extend(unlisted(folder, &generated, &sources));
     let hash = sha256::hex(sum.as_bytes());
-    let mut texts = made;
-    texts.push((SUM.to_string(), sum));
+    let mut written = made;
+    written.push((SUM.to_string(), sum));
     Some(WebPlan {
-        texts,
+        texts: written,
         stamp: Stamp {
             key: "web_sha256",
             file: SUM,

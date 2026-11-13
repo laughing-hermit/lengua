@@ -544,6 +544,7 @@ fn record(key: &Key, value: &str, found: &[String], test: &mut Test) {
             .expect_headers
             .push((name.to_lowercase(), first.unwrap_or_default())),
         Key::ExpectBody => test.expect_body = first,
+        Key::Range(_) => {}
     }
 }
 
