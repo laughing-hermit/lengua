@@ -2,7 +2,7 @@
 
 The program is the HTTP server of a small shop. It lists the items of its catalog with their
 prices, and it gives the total of a basket, with the tax, as JSON. It is one WebAssembly file
-of three modules, `catalog`, `basket` and `pages`. It uses two shared libraries of lengua,
+of three modules, `catalog`, `basket` and `pages`. It uses two shared libraries of `lengua`,
 `json` and `decimal`, and a component in C that gives the tax.
 
 # Behaviours

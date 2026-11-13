@@ -2,8 +2,8 @@
 
 The library sorts a list in a stable order and finds a value in a sorted list. A stable sort
 keeps the order of equal items. The sort is a merge sort with no recursion, and the search is a
-binary search that finds the first equal item. It is a lengua library on the standard library
-alone, and it works on the types of the program.
+binary search that finds the first equal item. It is a `lengua` library on the standard library
+only, and it works on the types of the program.
 
 # Behaviours
 

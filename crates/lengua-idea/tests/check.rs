@@ -466,11 +466,11 @@ fn a_module_without_its_idea_or_its_mod_line_is_refused() {
 
 const LIBRARY: &str = "# Purpose
 
-The library gives the double of a number.
+The library gives two times a number.
 
 # Behaviours
 
-## Double a number
+## Give two times a number
 
 Given the number 2,
 When the program calls `double`,
@@ -489,7 +489,7 @@ Then it gives 4.
 
 # Structure
 
-- `double`: gives the double of a number.
+- `double`: gives two times a number.
 ";
 
 #[test]

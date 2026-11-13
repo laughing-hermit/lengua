@@ -2,7 +2,7 @@
 
 The program is an HTTP server. It answers `GET /hello?name=<name>` with the text
 `Hello, <name>!`, and any other path with the status 404. The host serves it on the TCP port
-7810, and the program reaches nothing else.
+7810, and the program gets no other grant.
 
 # Behaviours
 
@@ -12,7 +12,7 @@ Given a request for `/hello?name=Ada`,
 When the server answers,
 Then the status is 200 and the body is `Hello, Ada!`.
 
-### Example: Ada
+### Example: the name `Ada`
 
 - Request: `GET /hello?name=Ada`
 - Expect status: 200

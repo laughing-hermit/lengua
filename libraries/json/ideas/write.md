@@ -57,7 +57,7 @@ Then it gives the JSON text with commas between the parts.
 - Call: `write(&parse("[[], {}]").unwrap())`
 - Expect value: `"[[],{}]"`
 
-### Cases: texts that go through the writer and the reader
+### Cases: texts that go through `write` and `parse`
 
 - Range `s`: text of 0 to 12 characters from "ab é~"
 - Call: `parse(&write(&Value::Text("{s}".to_string())))`

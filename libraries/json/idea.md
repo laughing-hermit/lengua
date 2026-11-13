@@ -3,7 +3,7 @@
 The library reads and writes JSON text, as RFC 8259 gives it, with a value type of its own. A
 number keeps its text, so no digit is lost; the `decimal` library reads it as a number. The two
 modules use no recursion: a list in a list is a frame on a stack, up to 512 frames.
-It is a lengua library on the standard library alone, in two modules, `read` and `write`.
+It is a `lengua` library on the standard library only, in two modules, `read` and `write`.
 
 # Behaviours
 

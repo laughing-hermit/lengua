@@ -601,6 +601,7 @@ satisfactory a
 save v
 saw v
 scale n
+schedule n
 screen n
 search v
 secondary a
@@ -692,6 +693,7 @@ symbol n
 system n
 table n
 tag n
+take v
 taken x
 target n
 task n

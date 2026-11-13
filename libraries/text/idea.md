@@ -1,8 +1,9 @@
 # Purpose
 
-The library cuts text into lines, parts and words, removes the blank characters at the ends of
-a text, and checks that bytes are valid UTF-8. It is a lengua library on the standard library
-alone. The blank characters are the space, the `tab`, the line end and the carriage return.
+The library cuts text into lines, parts and words. It removes the blank characters at the ends of
+a text, and it checks that bytes are valid UTF-8. It is a `lengua` library on the standard
+library only. The blank characters are the space, the `tab`, the line end and the carriage
+return.
 
 # Behaviours
 
@@ -41,7 +42,7 @@ Then it gives the two lines, with no line ends.
 
 Given the text `a,b,,c` and a comma,
 When a program calls `split`,
-Then it gives the four parts, and the third part is empty.
+Then it gives the four parts, and the part after the second comma is empty.
 
 ### Example: commas
 
@@ -59,7 +60,7 @@ Given words with spaces, `tab` characters and line ends between them,
 When a program calls `words`,
 Then it gives the words.
 
-### Example: blanks between words
+### Example: blank characters between words
 
 - Call: `words(" one\ttwo \n three ")`
 - Expect value: `["one", "two", "three"]`
@@ -70,12 +71,12 @@ Given a text with blank characters at its start and at its end,
 When a program calls `trim`,
 Then it gives the text with no blank characters at its ends.
 
-### Example: blanks at the two ends
+### Example: blank characters at the two ends
 
 - Call: `trim(" \t a b \r\n")`
 - Expect value: `"a b"`
 
-### Example: only blanks
+### Example: only blank characters
 
 - Call: `trim(" \n ")`
 - Expect value: `""`
@@ -142,7 +143,7 @@ Then it gives the position of the first byte of the character that is not valid.
 - Call: `is_utf8(b"\xf4\x8f\xbf\xbf")`
 - Expect value: `true`
 
-### Example: a third byte that does not continue
+### Example: a last byte that does not continue
 
 - Call: `is_utf8(b"\xe2\x82(")`
 - Expect value: `false`

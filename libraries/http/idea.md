@@ -1,9 +1,9 @@
 # Purpose
 
-The library reads and writes the messages of HTTP/1.1, as RFC 9112 gives them: requests,
-answers, their headers, and bodies with a length or in chunks. A header name is in lower case
-after a read, and a search for a header ignores the case. It is a lengua library on the standard
-library alone; a server uses it on the bytes that its host gives.
+The library reads and writes the messages of HTTP/1.1, as RFC 9112 gives them. A message is a
+request or an answer, with its headers and a body with a length or in chunks. A header name is
+in lower case after a read, and a search for a header ignores the case. It is a `lengua`
+library on the standard library only; a server uses it on the bytes that its host gives.
 
 # Behaviours
 

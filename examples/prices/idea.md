@@ -1,8 +1,9 @@
 # Purpose
 
 The program adds prices. It reads one price a line from the standard input, with two places
-after the point, and it writes the sum with two places. It uses the lengua library `decimal`, so
-a price that is not valid or a sum past the range of `i64` is an error, and never a wrong sum.
+after the point, and it writes the sum with two places. It uses the `lengua` library
+`decimal`. So a price that is not valid or a sum past the range of `i64` is an error, and
+never a wrong sum.
 
 # Behaviours
 

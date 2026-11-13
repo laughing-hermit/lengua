@@ -3,7 +3,7 @@
 The library works with civil dates of the Gregorian calendar and with times in UTC. It counts the
 days between dates, and it tells the number of days of a month. It reads and writes dates and
 times in the ISO 8601 forms `2026-11-13` and `2026-11-13T14:02:11Z`. Day 0 is 1970-01-01. It is
-a lengua library on the standard library alone.
+a `lengua` library on the standard library only.
 
 # Behaviours
 

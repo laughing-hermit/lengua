@@ -565,7 +565,7 @@ of each grant, with the interfaces their types come from:
 | `- Reads: the clock` | `wasi:clocks/wall-clock`; the host gives its real clocks |
 | `- Reads: random numbers` | `wasi:random/random`, `insecure` (and `insecure-seed`, already in the always set) |
 | `- Reads:` or `- Writes: files in ...` | `wasi:filesystem/types`, `preopens`; `wasi:clocks/wall-clock` (for the type `datetime`) |
-| `- Connects to: ...` or `- Listens on: ...` | `wasi:sockets/network`, `instance-network`, `tcp`, `tcp-create-socket`, `ip-name-lookup`, and since L7 `udp` and `udp-create-socket`; `wasi:clocks/monotonic-clock` (for the type `duration`) |
+| `- Connects to: ...` or `- Listens on: ...` | `wasi:sockets/network`, `instance-network`, `tcp`, `tcp-create-socket`, `ip-name-lookup`, and since L7 `udp` and `udp-create-socket`; `wasi:clocks/monotonic-clock` (for the type `duration`), and since L7 `wasi:clocks/wall-clock`, which `std`'s sockets import (run 43464215484) |
 | `- Serves: HTTP on TCP port N` (L7) | `wasi:http/types` |
 
 UDP is in no grant: since L7 the world of a network grant names `wasi:sockets/udp` and

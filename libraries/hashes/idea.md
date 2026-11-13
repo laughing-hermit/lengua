@@ -1,7 +1,7 @@
 # Purpose
 
-The library gives the SHA-256 hash and the CRC-32 value of bytes. It is a lengua library on the
-standard library alone, so a program can use it in place of a crate. The values are the values
+The library gives the SHA-256 hash and the CRC-32 value of bytes. It is a `lengua` library on the
+standard library only, so a program can use it in place of a crate. The values are the values
 of the standards: FIPS 180-4 for SHA-256, and the CRC-32 of ISO 3309 and `zlib`.
 
 # Behaviours
@@ -23,7 +23,7 @@ Given the bytes `abc`,
 When a program calls `sha256_hex`,
 Then it gives the hash that FIPS 180-4 gives for `abc`.
 
-### Example: abc
+### Example: the bytes `abc`
 
 - Call: `sha256_hex(b"abc")`
 - Expect value: `"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"`

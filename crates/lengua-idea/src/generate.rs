@@ -111,6 +111,7 @@ pub(crate) fn interfaces(grant: Grant) -> &'static [&'static str] {
         ],
         Grant::Network | Grant::Listen => &[
             "wasi:clocks/monotonic-clock",
+            "wasi:clocks/wall-clock",
             "wasi:sockets/instance-network",
             "wasi:sockets/ip-name-lookup",
             "wasi:sockets/network",

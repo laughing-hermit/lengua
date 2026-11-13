@@ -4,7 +4,7 @@ The library reads and writes whole numbers and decimal numbers with a fixed numb
 as `i64` values. A decimal number is a whole number of its smallest units: with two places,
 `12.34` is 1234.
 The library reports an overflow when a value is past the range of `i64`, and it never gives a
-wrong value. It is a lengua library on the standard library alone.
+wrong value. It is a `lengua` library on the standard library only.
 
 # Behaviours
 
