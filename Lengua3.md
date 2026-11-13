@@ -111,6 +111,30 @@ failure fails the run.
 - every reply and `index.md` start with a "Where it runs" line, for example "One WebAssembly
   file. Runs on any OS and CPU. Sandboxed: it reaches only what the idea grants."
 
+### The person approves the idea before any code
+
+The idea file is what the person asked for, so the person approves it before the agent writes
+code, and again whenever a change alters what the program does or may reach.
+
+1. **The `write-idea` skill writes the idea and runs `check`** until it has no problems.
+2. **It shows the person a plain review,** not the raw file: the purpose; each behaviour in one
+   line with its example; what the program may reach (files, network, secrets, storage); where
+   it runs (one WebAssembly file, or which native part and why); and the crates it will use,
+   with their reasons.
+3. **The person approves, or says what to change.** The agent changes the idea and shows the
+   review again. No code is written before approval.
+4. **`check` records the approval.** It is given with the tool's `approve` input, which the
+   agent passes only after the person said yes. `check` writes the hash of the approved ideas
+   into the lock.
+5. **The `build` skill starts only from an approved idea.** If an idea's behaviours, grants,
+   native parts or crates differ from the approved hash, `check` refuses to build and asks for
+   a new review. A change that touches only wording or `# Structure` does not.
+6. **Changes are reviewed as changes:** the review shows what was added, removed or changed
+   since the last approval, not the whole idea again.
+
+What lengua can't do: it can't prove a person, and not the agent, said yes. The skill asks,
+and the lock and the log record when and what was approved.
+
 ### Nothing unless absolutely necessary
 
 One principle runs through lengua:
@@ -1557,7 +1581,7 @@ Each one is green on all five runners before the next starts.
 | L8 | The GPUI front end: screens built for the browser, embedded in the one file; several screens with navigation and forms; their behaviours tested; what a screen reader can read, tested and written down; one Zed commit pinned; lengua's own std-only crates also built for WebAssembly in CI | A web application with GPUI screens ships as one file and opens in a browser |
 | L9 | Full stack: storage granted by the idea; outgoing HTTP calls (other services and AI models, with streaming replies); secrets given by the host and never written to the lock or logs; logins (sessions, password hashing, tokens) as a shared library; the front end calling its own server with shared Rust types; logs and errors of a running app; an embeddings and vector-search shared library; a tested way to deploy | A full-stack application (front end, server, storage, logins, an AI call) is `checked` and runs as one file |
 | L10 | Native parts: `- Native:` with a named reason, built for the user's system and on five runners, the same checks, the `native` label, the "Where it runs" line; an example desktop app with its own GPUI window whose logic stays WebAssembly; what a native part can reach, written down | A native part is built, checked and labelled; an undeclared native need is refused |
-| L11 | The skills rewritten for Rust, GPUI, full stack and native parts: "Where it runs" before any code, pure Rust first, the merit test for crates, crates that aren't pure Rust flagged; the Agent Plugins version settled; a product test in an interactive session | An agent goes from a request to a `checked` full-stack application with the plugin alone |
+| L11 | The skills rewritten for Rust, GPUI, full stack and native parts; the person reviews and approves the idea before any code, and again for changes (`approve` in `check`, the approved hash in the lock, `build` refused without it); "Where it runs" before any code, pure Rust first, the merit test for crates, crates that aren't pure Rust flagged; the Agent Plugins version settled; a product test in an interactive session | An agent goes from a request to a `checked` full-stack application with the plugin alone |
 | L12 | The scale test: a full-stack application (GPUI front end, server, storage, logins, an AI call) in one file, built and then changed three times | A report of cycles and breakages, next to lengua 2's 3,638-line record |
 | L13 | The finish line: trace and profile; a bench of lengua's overhead; release archives for the five systems with install steps; every path a milestone listed as never exercised, now exercised or its reason written; WASI 0.3 checked again; every document current; a short guide to the owner's own steps (publishing, loading the plugin, branch protection) | The finish-line run green on five; only main and tags remain |
 
