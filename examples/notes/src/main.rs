@@ -20,7 +20,7 @@ impl wasip2::exports::http::incoming_handler::Guest for Notes {
         let body = if post { body_of(&request) } else { Vec::new() };
         let (status, kind, bytes) = answer(&path, post, &body);
         debug_assert!((100..600).contains(&status));
-        debug_assert!(!kind.is_empty());
+        debug_assert_ne!(kind.len(), 0);
         send(response_out, status, kind, &bytes);
     }
 }
@@ -49,7 +49,7 @@ fn answer(path: &str, post: bool, body: &[u8]) -> (u16, &'static str, Vec<u8>) {
         (status, JSON, text.into_bytes())
     };
     debug_assert!(found.0 == 200 || found.1 == JSON);
-    debug_assert!(!found.2.is_empty());
+    debug_assert_ne!(found.2.len(), 0);
     found
 }
 
@@ -67,6 +67,6 @@ fn send(response_out: ResponseOutparam, status: u16, kind: &str, bytes: &[u8]) {
         let _ = stream.flush();
     }
     debug_assert!(status >= 100);
-    debug_assert!(!kind.is_empty());
+    debug_assert_ne!(kind.len(), 0);
     let _ = OutgoingBody::finish(out, None);
 }

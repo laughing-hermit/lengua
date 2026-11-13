@@ -25,7 +25,7 @@ impl Note {
             text: String::new(),
             left: false,
         };
-        debug_assert!(note.title.is_empty());
+        debug_assert_eq!(note.title.len(), 0);
         debug_assert!(!note.left);
         note
     }

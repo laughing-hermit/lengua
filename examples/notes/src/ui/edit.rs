@@ -4,7 +4,7 @@ use gpui::{
 };
 use gpui_component::button::Button;
 use gpui_component::input::{Input, InputEvent, InputState};
-use http_client::{AsyncBody, HttpClient};
+use http_client::AsyncBody;
 
 use crate::note::Move;
 
@@ -63,7 +63,7 @@ impl Edit {
             ),
         ];
         debug_assert_eq!(changes.len(), 2);
-        debug_assert!(title_input.entity_id() != text_input.entity_id());
+        debug_assert_ne!(title_input.entity_id(), text_input.entity_id());
         Self {
             title: String::new(),
             text: String::new(),
@@ -100,7 +100,7 @@ impl Edit {
         self.left = true;
         cx.emit(Move::Back);
         debug_assert!(self.left);
-        debug_assert!(self.changes.len() == 2);
+        debug_assert_eq!(self.changes.len(), 2);
         cx.notify();
     }
 }

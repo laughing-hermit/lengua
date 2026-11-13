@@ -5,7 +5,7 @@ use gpui::{
 };
 use gpui_component::Root;
 use gpui_component::button::Button;
-use http_client::{AsyncBody, HttpClient};
+use http_client::AsyncBody;
 use json::Value;
 
 use crate::edit::Edit;
@@ -25,11 +25,11 @@ pub fn start(cx: &mut App) {
     gpui_component::init(cx);
     let opened = cx.open_window(WindowOptions::default(), |window, cx| {
         let list = cx.new(|cx| List::make(window, cx));
-        list.update(cx, |list, cx| list.load(cx));
+        list.update(cx, List::load);
         cx.new(|cx| Root::new(list, window, cx))
     });
     debug_assert!(opened.is_ok());
-    debug_assert!(!cx.windows().is_empty());
+    debug_assert_ne!(cx.windows().len(), 0);
 }
 
 fn follow<T: EventEmitter<Move> + 'static>(
@@ -49,7 +49,7 @@ fn field(item: &Value, name: &str) -> String {
     } else {
         String::new()
     };
-    debug_assert!(!name.is_empty());
+    debug_assert_ne!(name.len(), 0);
     debug_assert!(text.len() < 1 << 16);
     text
 }
@@ -61,7 +61,7 @@ impl List {
         let edit = cx.new(|cx| Edit::make(window, cx));
         let moves = vec![follow(cx, &note), follow(cx, &edit)];
         debug_assert_eq!(moves.len(), 2);
-        debug_assert!(note.entity_id() != edit.entity_id());
+        debug_assert_ne!(note.entity_id(), edit.entity_id());
         Self {
             data: "[]".to_string(),
             page: "list".to_string(),
@@ -100,8 +100,8 @@ impl List {
         } else {
             self.status = "failed".to_string();
         }
-        debug_assert!(!self.status.is_empty());
-        debug_assert!(!self.data.is_empty());
+        debug_assert_ne!(self.status.len(), 0);
+        debug_assert_ne!(self.data.len(), 0);
         cx.notify();
     }
 
@@ -148,7 +148,7 @@ impl List {
         }
         self.page = "list".to_string();
         debug_assert_eq!(self.page, "list");
-        debug_assert!(!self.data.is_empty());
+        debug_assert_ne!(self.data.len(), 0);
         cx.notify();
     }
 
@@ -193,7 +193,7 @@ impl List {
             );
         }
         debug_assert!(notes.len() < 1 << 16);
-        debug_assert!(!self.status.is_empty());
+        debug_assert_ne!(self.status.len(), 0);
         column.child(
             div().debug_selector(|| "new".to_string()).child(
                 Button::new("new")
@@ -211,7 +211,7 @@ impl Render for List {
             "edit" => div().child(self.edit.clone()),
             _ => self.rows(cx),
         };
-        debug_assert!(!self.page.is_empty());
+        debug_assert_ne!(self.page.len(), 0);
         debug_assert!(self.chosen >= -1);
         div()
             .size_full()

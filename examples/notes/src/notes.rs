@@ -18,7 +18,7 @@ pub fn listing() -> Value {
         })
         .collect();
     debug_assert_eq!(items.len(), notes.len());
-    debug_assert!(!items.is_empty());
+    debug_assert_ne!(items.len(), 0);
     Value::List(items)
 }
 
@@ -49,7 +49,7 @@ pub fn create(body: &[u8]) -> (u16, String) {
         ("title".to_string(), Value::Text(title.clone())),
         ("text".to_string(), Value::Text(text_of(&value, "text"))),
     ]);
-    debug_assert!(!title.trim().is_empty());
+    debug_assert_ne!(title.trim().len(), 0);
     debug_assert!(title.chars().count() <= TITLE_LIMIT);
     (201, json::write(&note))
 }
@@ -73,7 +73,7 @@ pub fn text_of(value: &Value, field: &str) -> String {
     } else {
         String::new()
     };
-    debug_assert!(!field.is_empty());
+    debug_assert_ne!(field.len(), 0);
     debug_assert!(text.len() <= 1 << 16);
     text
 }
