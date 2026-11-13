@@ -581,7 +581,7 @@ makes the component. So the world needs no `wit/deps/` folder, and it is the sta
 component is held to at L3. Since L7 a server takes its bindings from the crate `wasip2`
 (`wasip2::http::proxy::export!`), which carries WASI 0.2.12's own WIT, and a program that uses a
 component from another language takes the bindings of its interface from `wit-bindgen`'s
-`generate!` with the interface written inline; neither needs `wit/deps/`. The interfaces a
+`generate!` with the interface written inline and `path: []`, so that it does not read `wit/`; neither needs `wit/deps/`. The interfaces a
 trusted component exports are not in `world.wit`: `check` reads them from the component and
 holds the program's imports to the world and to them.
 

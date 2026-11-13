@@ -10,6 +10,7 @@ use wasip2::http::types::{
 
 wit_bindgen::generate!({
     inline: "package lengua:tax;\n\ninterface rates {\n  tax-of: func(cents: u64) -> u64;\n}\n\nworld shop {\n  import rates;\n}\n",
+    path: [],
 });
 
 struct Shop;
