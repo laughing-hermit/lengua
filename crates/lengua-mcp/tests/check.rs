@@ -541,9 +541,9 @@ fn an_ungranted_import_is_refused_at_check_and_at_run() {
     let run = server.run_to_end(5000, &folder, &json!({}));
     assert_eq!(run["state"], "refused", "{run:#}");
     assert!(
-        run["message"]
-            .as_str()
-            .is_some_and(|m| m.contains("there is no lock `lengua.lock`") && m.contains("run `check`")),
+        run["message"].as_str().is_some_and(
+            |m| m.contains("there is no lock `lengua.lock`") && m.contains("run `check`")
+        ),
         "{run:#}"
     );
     assert_eq!(run["stdout"], "", "{run:#}");
@@ -860,10 +860,8 @@ fn a_hash_map_works_without_a_grant_of_random_numbers() {
 }
 
 fn lengua_run() -> PathBuf {
-    Path::new(env!("CARGO_BIN_EXE_lengua-mcp")).with_file_name(format!(
-        "lengua-run{}",
-        std::env::consts::EXE_SUFFIX
-    ))
+    Path::new(env!("CARGO_BIN_EXE_lengua-mcp"))
+        .with_file_name(format!("lengua-run{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn run_lengua_run(folder: &Path, args: &[&str], home_folder: &Path) -> (std::process::Output, f64) {
@@ -899,7 +897,10 @@ fn refused_for(reply: &Value, part: &str) {
 fn a_changed_byte_in_each_locked_file_is_refused_at_run() {
     let (mut server, folder, _) = built("hello", "lock-files");
     let lock = fs::read_to_string(folder.join("lengua.lock")).expect("the lock");
-    assert!(lock.starts_with("lengua-lock 1\nkind program\nlengua "), "{lock}");
+    assert!(
+        lock.starts_with("lengua-lock 1\nkind program\nlengua "),
+        "{lock}"
+    );
     assert!(lock.contains("\nlabel checked\nscore 0 of 0\n"), "{lock}");
     assert!(lock.contains("\ntoolchain rustc "), "{lock}");
     let good = server.run_to_end(5000, &folder, &json!({}));
@@ -942,7 +943,10 @@ fn a_changed_byte_in_each_locked_file_is_refused_at_run() {
     let (output, _) = run_lengua_run(&folder, &[], &home());
     assert_eq!(output.status.code(), Some(125), "{output:?}");
     let message = String::from_utf8_lossy(&output.stderr);
-    assert!(message.contains("`idea.md` changed") && message.contains("run `check`"), "{message}");
+    assert!(
+        message.contains("`idea.md` changed") && message.contains("run `check`"),
+        "{message}"
+    );
 }
 
 #[test]

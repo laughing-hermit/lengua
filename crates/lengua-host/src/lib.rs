@@ -382,7 +382,14 @@ impl Host {
                 ));
             }
         }
-        let ctx = match context(folder, &build.package, &build.grants, input, streams, output) {
+        let ctx = match context(
+            folder,
+            &build.package,
+            &build.grants,
+            input,
+            streams,
+            output,
+        ) {
             Ok(ctx) => ctx,
             Err(message) => return Ending::Refused(message),
         };

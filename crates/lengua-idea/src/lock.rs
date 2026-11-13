@@ -313,7 +313,9 @@ pub fn text(folder: &Path, facts: &Facts, key: &Key) -> Result<String, String> {
     entries.extend(facts.sealed.as_deref().map(|s| ("sealed", s)));
     for (tag, path) in entries {
         if path.contains(['\r', '\n']) || path.is_empty() {
-            return Err(format!("lengua can't lock the file `{path}`: its name has a line end"));
+            return Err(format!(
+                "lengua can't lock the file `{path}`: its name has a line end"
+            ));
         }
         let bytes = fs::read(folder.join(path))
             .map_err(|e| format!("lengua could not read `{path}` to lock it: {e}"))?;
@@ -495,7 +497,10 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(key_file(&home)).expect("a file").permissions().mode();
+            let mode = fs::metadata(key_file(&home))
+                .expect("a file")
+                .permissions()
+                .mode();
             assert_eq!(mode & 0o777, 0o600);
             let folder_mode = fs::metadata(&home).expect("a folder").permissions().mode();
             assert_eq!(folder_mode & 0o777, 0o700);
@@ -516,15 +521,31 @@ mod tests {
         assert!(lines.contains(&"label checked"), "{written}");
         assert!(lines.contains(&"score 3 of 3"), "{written}");
         assert!(lines.contains(&"toolchain rustc 1.100.0"), "{written}");
-        for file in ["idea.md", "index.md", "log.md", "src/main.rs", "Cargo.toml", "wit/world.wit"] {
+        for file in [
+            "idea.md",
+            "index.md",
+            "log.md",
+            "src/main.rs",
+            "Cargo.toml",
+            "wit/world.wit",
+        ] {
             assert!(
-                lines.iter().any(|l| l.starts_with("file ") && l.ends_with(&format!(" {file}"))),
+                lines
+                    .iter()
+                    .any(|l| l.starts_with("file ") && l.ends_with(&format!(" {file}"))),
                 "{file} in {written}"
             );
         }
-        assert!(lines.iter().any(|l| l.starts_with("component ")), "{written}");
+        assert!(
+            lines.iter().any(|l| l.starts_with("component ")),
+            "{written}"
+        );
         assert!(lines.iter().any(|l| l.starts_with("sealed ")), "{written}");
-        assert!(lines.last().is_some_and(|l| l.starts_with("hmac-sha256 ") && l.len() == 76));
+        assert!(
+            lines
+                .last()
+                .is_some_and(|l| l.starts_with("hmac-sha256 ") && l.len() == 76)
+        );
     }
 
     #[test]
@@ -537,14 +558,23 @@ mod tests {
         write(&path, &lock, &facts, &key).expect("a lock");
         let verified = verify(&path, &lock, Kind::Program, &key).expect("a good lock");
         assert_eq!(verified.label, "checked");
-        assert_eq!(verified.sealed().map(super::Sealed::bytes), Some(&b"sealed code"[..]));
+        assert_eq!(
+            verified.sealed().map(super::Sealed::bytes),
+            Some(&b"sealed code"[..])
+        );
         assert!(verify(&path, &lock, Kind::Test, &key).is_err());
         let other = create_key(&path.join("other"), [3; KEY_BYTES]).expect("a key");
         let refused = verify(&path, &lock, Kind::Program, &other).expect_err("another key");
-        assert!(refused.contains("not signed with this user's key"), "{refused}");
+        assert!(
+            refused.contains("not signed with this user's key"),
+            "{refused}"
+        );
         fs::write(path.join("src/main.rs"), "fn main() { }\n").expect("a change");
         let refused = verify(&path, &lock, Kind::Program, &key).expect_err("a change");
-        assert!(refused.contains("`src/main.rs` changed") && refused.contains("run `check`"), "{refused}");
+        assert!(
+            refused.contains("`src/main.rs` changed") && refused.contains("run `check`"),
+            "{refused}"
+        );
         fs::write(path.join("src/main.rs"), "fn main() {}\n").expect("undone");
         fs::write(path.join("src/extra.rs"), "\n").expect("a new file");
         let refused = verify(&path, &lock, Kind::Program, &key).expect_err("a new file");

@@ -40,6 +40,12 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
 - Given a `Cargo.toml` or `wit/world.wit` changed by hand, when `check` runs, then it gives the
   finding `generated-edited` at the first line that differs, and writes nothing; given the
   file removed, it writes it again.
+- Given a program's facts and the user's key, when `lock::write` runs, then it writes the lock
+  of Lengua3.md, section 4, "The lock": the SHA-256 of every file, signed with HMAC-SHA256.
+- Given a lock, when `lock::verify` runs, then it refuses a lock signed with another key or
+  changed by hand, any listed file that changed or is not there, and, for a program's lock, a
+  new idea or Rust file, naming each file and "run `check`"; otherwise it gives the sealed
+  bytes it hashed.
 
 ## Structure
 
@@ -93,7 +99,17 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
 - `text.rs`: `tokenize`, `sentences` and `join` cut text into words and sentences;
   `split_headings`, `literal`, `split_key`, `backticked`, `snake`, `upper_camel` and
   `relative_path` read the markdown.
-- `sha256.rs`: `hex` gives the SHA-256 of bytes.
+- `sha256.rs`: `digest` and `hex` give the SHA-256 of bytes, `hmac` the HMAC-SHA256 of RFC 2104
+  (tested with the vectors of RFC 4231), `to_hex` and `from_hex` turn bytes into hexadecimal and
+  back, and `same` compares two digests in a time that does not depend on where they differ.
+- `lock.rs`: the user's key and the lock. `data_folder` finds lengua's data folder
+  (`LENGUA_HOME`, else `%APPDATA%\lengua`, `~/Library/Application Support/lengua`, or
+  `$XDG_DATA_HOME/lengua` or `~/.local/share/lengua`); `create_key`, `read_key`, `user_key` and
+  `user_key_or_create` make and read `key` (64 hexadecimal digits, owner-only on Unix,
+  `write_private`, `make_folder`); `program_files` lists what a program's lock holds (`ideas`,
+  `sources`); `text` and `write` make and write a lock (`Facts`, `Kind`); `verify` checks a
+  lock's signature (`signed`) and every file in it (`check_entry`), and gives `Verified`, with
+  the `Sealed` bytes that only it makes, for `lengua-seal`.
 - `wiki.rs`: `write` writes the frontmatter, `index.md`, `log.md` and the generated files;
   `Stamp` is the hash of a generated file in the frontmatter; `date` turns seconds
   into a date.

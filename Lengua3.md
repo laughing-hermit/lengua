@@ -605,6 +605,12 @@ epoch interruption on and a thread that moves the epoch every 10 ms. Each run ha
 and a linker that holds the world's interfaces and nothing else, each added by its own
 `add_to_linker` (the synchronous bindings of `wasmtime_wasi::p2`).
 
+Since L6 the host is its own crate, `crates/lengua-host`, on `wasmtime` with only `runtime`,
+`std` and `component-model` (no compiler), `wasmtime-wasi` with `p2` and `wasmtime-wasi-io`,
+shared by `lengua-mcp` and `lengua-run`. `lengua-mcp` adds `cranelift` to its own `wasmtime`, to
+compile and seal; every run, of `run` and of the tests, loads sealed precompiled code in a
+process of its own (section 4, "The lock").
+
 How each grant maps to the host:
 
 | Grant | The host |
@@ -629,9 +635,13 @@ symbolic link that points out of it are refused (tested at L3).
 (Wasmtime's `Deterministic` over 4,096 bytes made by SplitMix64), so two runs give the same
 output on every system.
 
-**The `run` tool.** `run {folder, arguments?, stdin?, fixed?}` reads the ideas without writing
-anything (`lengua_idea::program`), refuses a folder whose ideas have findings, and runs the
-built component from `target/` (the lock and sealed code are L6) on its own thread. It waits up
+**The `run` tool.** `run {folder, arguments?, stdin?, fixed?}` verifies `lengua.lock` first
+(section 4, "The lock"), and refuses a program whose files are not as the lock signed them;
+then it reads the ideas without writing anything (`lengua_idea::program`), refuses a folder
+whose ideas have findings and input the idea does not grant, and runs the program in a process
+of its own: `lengua-mcp worker`, which verifies the lock again, loads the sealed code and runs
+it with its output in memory (since L6; before, the built component from `target/` ran on a
+thread of the server). It waits up
 to 30 seconds; a run that is still going then replies `running`, and a `run` with the same
 folder, component and input waits for the same run. The reply:
 
@@ -642,10 +652,12 @@ folder, component and input waits for the same run. The reply:
 | `out_of_time` | the program ran past its idea's `- Time:` | `message`, `stdout`, `stderr` |
 | `out_of_memory` | the program grew its memory past its idea's `- Memory:` | `message`, `stdout`, `stderr` |
 | `trapped` | the program stopped with a trap (a panic aborts with one) | `message`, the trap's text |
-| `refused` | the host did not start it: ideas with findings, input not granted, no component, an import the world lacks | `message` |
+| `refused` | the host did not start it: no lock, a file not as the lock signed it, a lock signed with another key, ideas with findings, input not granted, an import the world lacks | `message` |
 
-A host call that blocks (a long sleep) is not stopped by the epoch; `run` stops waiting for it
-two seconds past the time and replies `out_of_time` (section 10).
+A host call that blocks (a long sleep, a blocking read) is not stopped by the epoch, so since
+L6 every run is a process of its own, and lengua stops the process at the idea's time and two
+seconds (`Child::kill`, on every system); the reply is then `out_of_time` with no output. This
+closed the finding of L3 (section 10).
 
 ### Libraries and other languages
 
@@ -729,6 +741,138 @@ It also names the sealed, precompiled form of the component that `run` and `leng
 and only when every check passed. So there is no moment when the lock is current and the
 documentation is not. A change to any idea, any code or any document without a new check means
 the lock no longer matches, and `run` refuses the program.
+
+#### The lock as built
+
+Decided at L6 (2026-11-13), in `crates/lengua-idea/src/lock.rs` (the key, the format, the
+check), `crates/lengua-seal` (loading sealed code), `crates/lengua-host` (the host, shared),
+`crates/lengua-run` (the lean runner) and `crates/lengua-mcp` (`check` writes it, `run` and the
+worker check it).
+
+**The user's key.** 32 random bytes, made by the first `check` (`getrandom`, already in the
+dependency graph through Wasmtime's `rand`; the standard library has no source of random bytes
+on every system) and kept as 64 hexadecimal digits and a line end in the file `key` of lengua's
+data folder:
+
+| System | The data folder |
+|---|---|
+| any, for tests and for a person who wants another | `$LENGUA_HOME` |
+| Linux | `$XDG_DATA_HOME/lengua` (when it is an absolute path), otherwise `~/.local/share/lengua` |
+| macOS | `~/Library/Application Support/lengua` |
+| Windows | `%APPDATA%\lengua` |
+
+On Linux and macOS the folder is made owner-only (`0700`) and the key `0600`; on Windows
+`%APPDATA%` is already the user's own. The key is written to a new file and then linked into
+place, so two servers that start at once keep one key. Nothing else reads it: it signs, it is
+never sent anywhere, and a lock made on another computer or by another user is refused there,
+so a lock is this user's statement that `check` passed here.
+
+**The format of `lengua.lock`.** Text, one entry a line, each line ending with a line end
+(`\n`, on every system), in this order:
+
+```
+lengua-lock 1
+kind program
+lengua 0.1.0
+toolchain rustc 1.100.0 (…)
+label checked
+score 6 of 6
+file 3b0f… idea.md
+file 9c1e… ideas/words.md
+file 77aa… index.md
+file 0d4c… log.md
+file 51f2… src/main.rs
+file a903… src/words.rs
+file e1b0… Cargo.toml
+file 4c88… wit/world.wit
+file 0f6d… Cargo.lock
+component 8a2b… target/wasm32-wasip2/release/words.wasm
+sealed 6e19… target/lengua/sealed/8a2b….cwasm
+hmac-sha256 2c5d…
+```
+
+- `lengua-lock 1` is the format's version; `kind` is `program` (the lock `check` writes) or
+  `test` (the locks the tests use, below); `lengua` is lengua's version.
+- `toolchain` is the first line of `rustc --version` in the program's folder, as `doctor`
+  read it when the job started; `label` and `score` are the program's (section 6), `score`
+  as `<caught> of <counted>`, or `none`.
+- Each `file`, `component` and `sealed` line is a tag, the SHA-256 of the file in lowercase
+  hexadecimal, and its path relative to the folder with `/` between names. The files are every
+  idea (`idea.md`, then `ideas/*.md` and `ideas/ui/*.md`, each sorted), `index.md`, `log.md`,
+  every file under `src/` (sorted), the generated `Cargo.toml` and `wit/world.wit`, and
+  `Cargo.lock` when the folder has one (Cargo writes it at the first build). Then the
+  component that `cargo build` made, and the sealed precompiled code (a library, L7, has no
+  `sealed` line).
+- The last line is `hmac-sha256` and the HMAC-SHA256 (RFC 2104) under the user's key of every
+  byte before that line. lengua's own SHA-256 and HMAC, on the standard library, are tested
+  with the vectors of RFC 4231.
+
+The lock holds the front end's compiled part and the one file when there is a front end (L8);
+until then the component is the one file.
+
+**When `check` writes it.** In the same `check` call as the wiki, right after it, and only
+when the build job is `done` for the same key (the label in the wiki and in the lock is the one
+of that job). A check whose job is `building`, `testing`, `mutating`, `build_failed` or
+`tests_failed` writes no lock, and the lock that was there (if any) no longer matches the
+log, which every check writes, so `run` refuses until a check is `done` again. Since every
+check adds a log entry, every `done` check writes the lock again.
+
+**Sealed precompiled code.** When the build ends and the component checks pass, the job
+precompiles the component for this computer (`Component::serialize` of the component lengua's
+engine compiled, the same bytes Cranelift made for the import check) and writes it to
+`target/lengua/sealed/<the component's SHA-256>.cwasm`, with a test lock next to it
+(`<SHA-256>.lock`: `kind test` and one `sealed` line, signed). The tests and the mutants run
+from sealed code too, each mutant from its own, removed after its tests. The lock's `sealed`
+line names the program's.
+
+**Loading it, the one `unsafe` call.** Wasmtime loads precompiled code only through `unsafe`
+functions (`Component::deserialize`, `deserialize_raw`, `deserialize_file`): the bytes are run
+as machine code with no check of what they do. docs.wasmtime.dev (Wasmtime 50.0.1) has no safe
+way: the safe constructors (`Component::new`, `from_binary`, `from_file`) compile, which needs
+Cranelift, and Wasmtime's on-disk cache is only for those. So lengua's own code, which forbids
+`unsafe` everywhere, has one exception, decided at L6: the crate `crates/lengua-seal`, the only
+manifest without the workspace's lints (it denies `unsafe_code` and allows it on one
+function), with exactly one `unsafe` call, `Component::deserialize`, in `load`. `load` takes a
+`lengua_idea::lock::Sealed`, which only `lock::verify` makes, after it checked the lock's HMAC
+under the user's key and the precompiled file's SHA-256; the bytes loaded are the bytes hashed,
+read into memory once. A test of `lengua-seal` counts the `unsafe` blocks of every crate and
+fails if there is any other. Wasmtime itself refuses code made by another Wasmtime version, for
+another CPU or with other settings, and `run` then says to run `check`.
+
+**What `run` and `lengua-run` refuse.** Before they run anything, both verify the lock, in this
+order, and refuse with a message that ends "run `check`":
+1. no `lengua.lock`;
+2. a signature that is not the HMAC under this user's key (another key, or the lock changed by
+   hand);
+3. a lock of the wrong kind or format;
+4. every file of the lock whose SHA-256 differs (``` `src/main.rs` changed ```) or that is not
+   there, and every idea or file under `src/` that is not in the lock (``` `src/extra.rs` is
+   new ```), all in one message.
+
+Then the ideas are read (`lengua_idea::program`) for the grants, the input is held to them,
+and the sealed code is loaded. `run` verifies in the server first and again in the worker that
+loads the code.
+
+**Every run in a process of its own.** A host call that blocks (a sleep, a blocking read) is
+not stopped by Wasmtime's epoch, so each run is a process: `run` and each test start
+`lengua-mcp worker <kind> <lock> <folder> <root> <fixed | live> [arguments...]`, give it the
+standard input, and kill it with `Child::kill` (on every system; no job object is needed, as
+the worker starts no process of its own) when the idea's time and two seconds have passed; the
+run is then `out_of_time` with no output. The worker writes its outcome as one frame on its
+standard output: a line `<ending> <exit code> <message bytes> <stdout bytes> <stderr bytes>`,
+then the message, standard output and standard error. `lengua-run` is a process of its own
+already: a thread ends it at the same time. The example `sleepy` (a 30 s sleep, `- Time: 1 s`)
+tests it.
+
+**`lengua-run`.** `lengua-run <folder> [arguments...]` runs a checked folder from a shell, on
+`lengua-host` and `lengua-seal` alone: Wasmtime with no compiler (`runtime`, `std` and
+`component-model`; CI fails if `cargo tree -p lengua-run` has Cranelift, and builds it alone so
+that the features of `lengua-mcp` do not join it). It verifies the lock as `run` does, grants
+only what the idea grants (arguments only with `- Reads: arguments`; standard input passed
+through only with `- Reads: standard input`, otherwise empty; standard output and standard error
+passed through; the real clocks only when granted), and stops with the program's exit code, or
+its own: 124 out of time, 125 refused, 126 out of memory, 134 trapped, each with a line
+`lengua-run: <what>: <message>` on standard error. MEASURE-LENGUA-RUN
 
 ### The wiki and the log: documentation that can't drift
 
@@ -973,8 +1117,10 @@ component: a module's examples are examples of the program. A screen's examples
 makes in it every folder the idea grants (read and write), writes each ``File `<path>` `` of
 the example, and runs the component through the host with that folder as the program's
 folder, the example's standard input and arguments, and `fixed` on (section 4, "Fixed runs").
-The run has the idea's memory and time; a host call that blocks is given up two seconds past
-the time, as `run` does. An example that gives arguments or a standard input that the idea
+The run has the idea's memory and time, and since L6 it is a process of its own (`lengua-mcp
+worker`, from the component's sealed code and test lock), stopped at the time and two seconds, as
+`run` does.
+An example that gives arguments or a standard input that the idea
 does not grant fails, with the grant named. Then lengua compares, and every difference is in
 the one finding:
 - how the run ended (`Expect end`, `exited` when absent; a trap's or the limit's message
@@ -1167,6 +1313,25 @@ Decided for lengua 3 at L5 (2026-11-13):
 - **The label is the program's** and is written by the next `check` after the job ends; a
   program with no mutant counted is `checked` (section 6).
 
+Decided for lengua 3 at L6 (2026-11-13):
+
+- **The lock** is text, signed with HMAC-SHA256 under the user's key, written by `check` only
+  when its job is `done`, right after the wiki in the same call (section 4, "The lock as
+  built", with its exact format).
+- **The user's key** is 32 bytes from `getrandom` (in the graph through Wasmtime), in lengua's
+  data folder (`$LENGUA_HOME`, else the system's own: XDG on Linux, Application Support on
+  macOS, `%APPDATA%` on Windows), owner-only where the system allows.
+- **One crate may use `unsafe`: `crates/lengua-seal`**, with one `unsafe` call,
+  `Component::deserialize`, run only on bytes that `lock::verify` checked. Wasmtime has no safe
+  way to load precompiled code without its compiler.
+- **The host is the crate `lengua-host`**, with no compiler; `lengua-mcp` compiles and seals,
+  `lengua-run` only loads.
+- **Every run is a process of its own**, killed at the idea's time and two seconds: `run`'s and
+  every test's (`lengua-mcp worker`), and `lengua-run` itself. The tests and mutants run from
+  sealed code with test locks, so the one `unsafe` call always follows a verified signature.
+- **`lengua-run`** is a new binary crate; its exit codes are the program's, or 124, 125, 126 and
+  134 for lengua-run's own endings.
+
 ## 10. Risks and open questions
 
 - **WASI 0.2, decided at L0 (2026-11-13): lengua 3 targets WASI 0.2, `wasm32-wasip2`.**
@@ -1217,7 +1382,11 @@ Decided for lengua 3 at L5 (2026-11-13):
   `wasi:io/poll`) sleeps for real, even with the stepped clock. `run` stops waiting two
   seconds past the time and replies `out_of_time`, but the run's thread goes on until the
   sleep ends. To close at L6 with the lean runner (a pollable of lengua's own, or the
-  runner's process stopped).
+  runner's process stopped). **Closed at L6:** every run is a process of its own (`lengua-mcp
+  worker` for `run` and the tests, `lengua-run` from a shell), stopped at the time and two
+  seconds with `Child::kill` or by its own end, on all five systems; the example `sleepy` (a
+  sleep of 30 s, `- Time: 1 s`) is stopped at about 3 s, in its test, by `run` and by
+  `lengua-run` (section 4, "The lock as built").
 - **Found at L3: the test format has no key for how a run ends.** An example must give `Expect
   exit code`, but a program stopped at its time or memory limit has none. The examples
   `forever` and `greedy` write `Expect exit code: 1` for now; L5 needs a key such as `Expect

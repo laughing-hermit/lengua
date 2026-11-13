@@ -46,7 +46,10 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<Outcome> {
     let [name, code, sizes @ ..] = fields.as_slice() else {
         return None;
     };
-    let sizes: Vec<usize> = sizes.iter().map(|s| s.parse().ok()).collect::<Option<_>>()?;
+    let sizes: Vec<usize> = sizes
+        .iter()
+        .map(|s| s.parse().ok())
+        .collect::<Option<_>>()?;
     let [message, stdout, stderr] = sizes.as_slice() else {
         return None;
     };
@@ -108,7 +111,9 @@ pub(crate) fn run(request: &Request) -> Outcome {
     let mut child = match spawned {
         Ok(child) => child,
         Err(error) => {
-            return Outcome::refused(format!("lengua could not start the program's process: {error}"));
+            return Outcome::refused(format!(
+                "lengua could not start the program's process: {error}"
+            ));
         }
     };
     let stdin = input.stdin.clone();
@@ -142,9 +147,7 @@ pub(crate) fn run(request: &Request) -> Outcome {
     if let Some(writer) = writer {
         let _ = writer.join();
     }
-    let bytes = reader
-        .and_then(|r| r.join().ok())
-        .unwrap_or_default();
+    let bytes = reader.and_then(|r| r.join().ok()).unwrap_or_default();
     if killed {
         return stopped();
     }
@@ -159,10 +162,11 @@ fn outcome(kind: &str, lock_path: &Path, folder: &Path, input: &Input) -> Outcom
     let Some(kind) = Kind::parse(kind) else {
         return Outcome::refused(format!("`{kind}` is not a kind of lock"));
     };
-    let verified = match lock::user_key().and_then(|key| lock::verify(folder, lock_path, kind, &key)) {
-        Ok(verified) => verified,
-        Err(message) => return Outcome::refused(message),
-    };
+    let verified =
+        match lock::user_key().and_then(|key| lock::verify(folder, lock_path, kind, &key)) {
+            Ok(verified) => verified,
+            Err(message) => return Outcome::refused(message),
+        };
     let report = lengua_idea::program(folder);
     if !report.findings.is_empty() {
         return Outcome::refused(
@@ -187,11 +191,15 @@ fn outcome(kind: &str, lock_path: &Path, folder: &Path, input: &Input) -> Outcom
 
 pub(crate) fn serve(args: &[String]) -> ExitCode {
     let [kind, lock_path, folder, root, mode, arguments @ ..] = args else {
-        eprintln!("usage: lengua-mcp worker <kind> <lock> <folder> <root> <fixed | live> [arguments...]");
+        eprintln!(
+            "usage: lengua-mcp worker <kind> <lock> <folder> <root> <fixed | live> [arguments...]"
+        );
         return ExitCode::from(2);
     };
     let mut stdin = Vec::new();
-    let _ = std::io::stdin().take(u64::try_from(OUTPUT).unwrap_or(u64::MAX)).read_to_end(&mut stdin);
+    let _ = std::io::stdin()
+        .take(u64::try_from(OUTPUT).unwrap_or(u64::MAX))
+        .read_to_end(&mut stdin);
     let input = Input {
         arguments: arguments.to_vec(),
         stdin,
@@ -200,7 +208,11 @@ pub(crate) fn serve(args: &[String]) -> ExitCode {
     };
     let result = outcome(kind, Path::new(lock_path), Path::new(folder), &input);
     let mut out = std::io::stdout().lock();
-    if out.write_all(&encode(&result)).and_then(|()| out.flush()).is_err() {
+    if out
+        .write_all(&encode(&result))
+        .and_then(|()| out.flush())
+        .is_err()
+    {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS

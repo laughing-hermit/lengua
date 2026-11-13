@@ -12,8 +12,8 @@ next starts (Lengua3.md, section 8).
 | L2 | Generate `Cargo.toml` and the world; build in the background; `doctor` | Landed on main at a9aad3e (run 43380465318, green on five) |
 | L3 | The host on the component model: standard input and output, arguments, files, clock, random | Landed on main at 05b8b14 (run 43388384600, green on five) |
 | L4 | The Power of 10 lint and the component checks | Landed on main at f197505 (run 43399815151, green on five) |
-| L5 | Tests from the idea, generated cases, mutation score, trust labels | Done on `wip/l5`; the five-runner landing run is named in the landing report |
-| L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | Not started |
+| L5 | Tests from the idea, generated cases, mutation score, trust labels | Landed on main at 7ce9264 (run 43439284107, green on five) |
+| L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | Done on `wip/l6`; the five-runner landing run is named in the landing report |
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Not started |
 | L8 | The GPUI front end, embedded in the one file, its behaviours tested | Not started |
 | L9 | The skills rewritten for Rust and GPUI; a product test in an interactive session | Not started |
@@ -295,6 +295,54 @@ next starts (Lengua3.md, section 8).
 - **2026-11-13, L5: no new crates.** The runs and the mutants are on the standard library and
   the host that is already there.
 
+- **2026-11-13, L6: the lock** (`lengua.lock`): text, one entry a line, the SHA-256 of every
+  idea, `index.md`, `log.md`, every file in `src/`, `Cargo.toml`, `wit/world.wit`, `Cargo.lock`
+  when there is one, the component and the sealed code, with lengua's version, the toolchain
+  (`rustc --version` as `doctor` read it), the label and the score; signed with HMAC-SHA256
+  under the user's key. Written by `check` only when the job is `done`, right after the wiki in
+  the same call. Exact format: Lengua3.md, section 4, "The lock as built".
+- **2026-11-13, L6: HMAC on lengua's own SHA-256** (`sha256.rs`, standard library only), tested
+  with the vectors of RFC 4231 (cases 1 to 7, case 5 truncated to 128 bits).
+- **2026-11-13, L6: the user's key** is 32 bytes in the file `key` of lengua's data folder:
+  `$LENGUA_HOME`, else `$XDG_DATA_HOME/lengua` or `~/.local/share/lengua` on Linux,
+  `~/Library/Application Support/lengua` on macOS, `%APPDATA%\lengua` on Windows; folder `0700`
+  and key `0600` on Linux and macOS, `%APPDATA%`'s own access on Windows. Made by the first
+  `check`, written to a new file and hard-linked into place so that two servers keep one key.
+- **2026-11-13, L6: `getrandom` 0.4.3 for the key's bytes**, a direct dependency of `lengua-mcp`
+  only, already in the graph through `wasmtime-wasi`'s `rand` (the lock does not grow by it).
+  The standard library has no random bytes on every system (only `/dev/urandom` on Unix, nothing
+  on Windows), so one crate on every system rather than two ways. To reverse: read
+  `/dev/urandom` on Unix and keep `getrandom` for Windows only.
+- **2026-11-13, L6: one crate may use `unsafe`, `crates/lengua-seal`** (the owner's decision,
+  recorded): one function, `load`, one `unsafe` call, `Component::deserialize`, on bytes that
+  only `lock::verify` gives, after the HMAC and the precompiled file's SHA-256 are checked.
+  docs.wasmtime.dev (Wasmtime 50.0.1) has no safe way to load precompiled code: every
+  `deserialize` is `unsafe`, and the safe constructors compile with Cranelift. Its manifest is
+  the only one without the workspace's lints (it denies `unsafe_code` and allows it on `load`);
+  its test counts the `unsafe` blocks of every crate. Why: `crates/lengua-seal/README.md`.
+- **2026-11-13, L6: the host is the crate `lengua-host`**, with Wasmtime's `runtime`, `std` and
+  `component-model` only; `lengua-mcp` keeps `cranelift` on its own `wasmtime` to compile and
+  seal, and no longer names `wasmtime-wasi` or `wasmtime-wasi-io` itself.
+- **2026-11-13, L6: every run is a process of its own** (L3's finding): `run` and every test
+  start `lengua-mcp worker`, which verifies the lock, loads the sealed code and writes one
+  frame; the parent kills it with `Child::kill` at the idea's time and two seconds, on every
+  system (no job object: the worker starts no process). The tests and mutants run from sealed
+  code with signed test locks (`kind test`), so the one `unsafe` call always follows a verified
+  signature. `run` verifies the lock in the server before anything else, so a changed file is
+  named even when it would also be a finding.
+- **2026-11-13, L6: `lengua-run`**, a new binary crate on `lengua-host`, `lengua-seal` and
+  `lengua-idea`: no compiler (CI fails if `cargo tree -p lengua-run` has Cranelift, and builds
+  it alone); the lock verified as `run` does; standard input passed through only with
+  `- Reads: standard input`; a thread ends it at the time and two seconds; exit codes: the
+  program's, 124 out of time, 125 refused, 126 out of memory, 134 trapped.
+- **2026-11-13, L6: `ungranted` is now refused at run for its missing lock** (its build fails,
+  so no lock is written); the linker still links only the world.
+- **2026-11-13, L6: `missing_errors_doc` allowed in the workspace's clippy lints**: the new public
+  functions that return `Result` (the lock's) would need doc comments, which rule 11 forbids in
+  lengua's own code.
+- **2026-11-13, L6: the example `sleepy`** sleeps 30 s with `- Time: 1 s`; its test expects
+  `out of time`.
+
 ## Runs
 
 The five-runner run a landing rests on is at the head it tests, so it is named in the landing report and added here at the next milestone.
@@ -327,6 +375,11 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-13 | [43396401311](https://github.com/laughing-hermit/lengua/actions/runs/43396401311) | wip/l4 6891515 | test, linux-x86_64 | Green: 59 + 10 (`lengua-idea`: every example keeps every rule, broken code refused), 13 + 20 (`lengua-lint`: the tokenizer with random slices, then a test a rule), 10 + 20 + 2 + 2 (`lengua-mcp`: the lint, `rust-format` and clippy's `unwrap` refusals, both engine refusals, every example built); imports as Wasmtime reads them (Lengua3.md, section 10); hello world: clippy from clean 0.10 s, the build after it 0.46 s, the build alone 0.41 s, so clippy adds about 0.15 s |
 | 2026-11-13 | [43397875153](https://github.com/laughing-hermit/lengua/actions/runs/43397875153) | wip/l4 2003d94 | test, all five | Green on Linux x86-64, Linux ARM64 and macOS ARM64; failed on Windows x86-64 and Windows ARM64 only in `code_that_rustfmt_would_change_is_a_finding`: `rustfmt` names the file by its verbatim path (`\\?\D:\...`), so the `rust-format` finding's file was not relative (fixed, with a unit test). Hello world, in seconds, fmt check / clippy from clean / build after clippy / build alone: Linux x86-64 0.04 / 0.09 / 0.30 / 0.30; Linux ARM64 0.05 / 0.12 / 0.43 / 0.45; macOS ARM64 0.17 / 0.37 / 0.75 / 0.87; Windows x86-64 0.14 / 0.31 / 0.83 / 0.95; Windows ARM64 0.22 / 0.44 / 0.92 / 0.95. So fmt and clippy add 0.1 to 0.5 s to a small program's build |
 | 2026-11-13 | [43399815151](https://github.com/laughing-hermit/lengua/actions/runs/43399815151) | wip/l4 f197505 | test, all five | Green on five: the L4 landing run |
+| 2026-11-13 | [43405575039](https://github.com/laughing-hermit/lengua/actions/runs/43405575039) | wip/l5 dc6d382 | test, linux-x86_64 | Failed: a stray brace in `build.rs` (from splicing the file), clippy `similar_names` (`test`, `text`) |
+| 2026-11-13 | [43406340194](https://github.com/laughing-hermit/lengua/actions/runs/43406340194) | wip/l5 b59f5c9 | test, linux-x86_64 | Failed: clippy `map_unwrap_or` in `mutation.rs`, and a format patch (applied) |
+| 2026-11-13 | [43407010727](https://github.com/laughing-hermit/lengua/actions/runs/43407010727) | wip/l5 2feb776 | test, linux-x86_64 | Failed as planned on `clock`: its example's diff gave the fixed random number, `1859844318930836693`; and `small`'s `assert!(!name.is_empty())`, which clippy refuses in a program |
+| 2026-11-13 | [43407715800](https://github.com/laughing-hermit/lengua/actions/runs/43407715800) | wip/l5 8fbb147 | test, linux-x86_64 | Green: 65 + 12 (`lengua-idea`), 18 + 20 (`lengua-lint`, the mutator among them), 12 + 25 + 2 + 2 (`lengua-mcp`). Seconds from the first `check` to the end of the job: hello 3.1 (no mutant, `checked`), echo 6.9 (1 of 1), count 9.4 (1 of 2, `tested`), files 32.2 (6 of 6), clock 7.6 (1 of 2), forever 10.6 (0 of 2), greedy 8.8 (0 of 4), words 7.4 (1 of 1), small 25.4 (6 of 6, `checked`; again after a change of `main` 3.4 s, 4 of 6 from the cache), the weak `small` 26.3 (3 of 6, `tested`); a wrong output 4.3 and a failing boundary 3.7 to `tests_failed` |
+| 2026-11-13 | [43439284107](https://github.com/laughing-hermit/lengua/actions/runs/43439284107) | wip/l5 7ce9264 | test, all five | Green on five: the L5 landing run |
 
 ## What the permission checks refused
 
@@ -339,7 +392,3 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 - **2026-11-13, L4:** a shell command of the builder that began with `perl -v` (a slip, before a
   `sed` edit) was refused. Again a mistake, not a need: the edit went on with the editor's
   tools.
-| 2026-11-13 | [43405575039](https://github.com/laughing-hermit/lengua/actions/runs/43405575039) | wip/l5 dc6d382 | test, linux-x86_64 | Failed: a stray brace in `build.rs` (from splicing the file), clippy `similar_names` (`test`, `text`) |
-| 2026-11-13 | [43406340194](https://github.com/laughing-hermit/lengua/actions/runs/43406340194) | wip/l5 b59f5c9 | test, linux-x86_64 | Failed: clippy `map_unwrap_or` in `mutation.rs`, and a format patch (applied) |
-| 2026-11-13 | [43407010727](https://github.com/laughing-hermit/lengua/actions/runs/43407010727) | wip/l5 2feb776 | test, linux-x86_64 | Failed as planned on `clock`: its example's diff gave the fixed random number, `1859844318930836693`; and `small`'s `assert!(!name.is_empty())`, which clippy refuses in a program |
-| 2026-11-13 | [43407715800](https://github.com/laughing-hermit/lengua/actions/runs/43407715800) | wip/l5 8fbb147 | test, linux-x86_64 | Green: 65 + 12 (`lengua-idea`), 18 + 20 (`lengua-lint`, the mutator among them), 12 + 25 + 2 + 2 (`lengua-mcp`). Seconds from the first `check` to the end of the job: hello 3.1 (no mutant, `checked`), echo 6.9 (1 of 1), count 9.4 (1 of 2, `tested`), files 32.2 (6 of 6), clock 7.6 (1 of 2), forever 10.6 (0 of 2), greedy 8.8 (0 of 4), words 7.4 (1 of 1), small 25.4 (6 of 6, `checked`; again after a change of `main` 3.4 s, 4 of 6 from the cache), the weak `small` 26.3 (3 of 6, `tested`); a wrong output 4.3 and a failing boundary 3.7 to `tests_failed` |

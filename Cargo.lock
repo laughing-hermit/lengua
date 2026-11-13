@@ -848,6 +848,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
+name = "lengua-host"
+version = "0.1.0"
+dependencies = [
+ "lengua-idea",
+ "wasmtime",
+ "wasmtime-wasi",
+ "wasmtime-wasi-io",
+]
+
+[[package]]
 name = "lengua-idea"
 version = "0.1.0"
 dependencies = [
@@ -862,13 +872,31 @@ version = "0.1.0"
 name = "lengua-mcp"
 version = "0.1.0"
 dependencies = [
+ "getrandom",
+ "lengua-host",
  "lengua-idea",
+ "lengua-seal",
  "rmcp",
  "serde_json",
  "tokio",
  "wasmtime",
- "wasmtime-wasi",
- "wasmtime-wasi-io",
+]
+
+[[package]]
+name = "lengua-run"
+version = "0.1.0"
+dependencies = [
+ "lengua-host",
+ "lengua-idea",
+ "lengua-seal",
+]
+
+[[package]]
+name = "lengua-seal"
+version = "0.1.0"
+dependencies = [
+ "lengua-idea",
+ "wasmtime",
 ]
 
 [[package]]

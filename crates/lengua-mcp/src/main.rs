@@ -16,10 +16,10 @@ use rmcp::{Json, ServerHandler, ServiceExt, schemars, serde, tool, tool_handler,
 
 use crate::build::{Builds, Stage, Status};
 use crate::host::Host;
-use lengua_host::{Ending, Input, Outcome};
-use lengua_idea::lock::{self, Facts, Key, Kind};
 use crate::runs::{Progress, Runs};
+use lengua_host::{Ending, Input, Outcome};
 use lengua_idea::Trust;
+use lengua_idea::lock::{self, Facts, Key, Kind};
 
 const VERSION: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
 
@@ -453,8 +453,8 @@ impl Lengua {
             return Err(format!("{} is not a folder", folder.display()));
         }
         let lock_path = folder.join(lock::LOCK);
-        let verified = lock::user_key()
-            .and_then(|key| lock::verify(&folder, &lock_path, Kind::Program, &key));
+        let verified =
+            lock::user_key().and_then(|key| lock::verify(&folder, &lock_path, Kind::Program, &key));
         if let Err(message) = verified {
             return Ok(Json(plain("refused", Some(message), 0)));
         }
