@@ -173,7 +173,12 @@ fn workspace(worker: &Worker) -> Result<Workspace, String> {
             path: "../mutant",
             harness: &harness,
         };
-        harness::write(folder, harness::MUTANT_FOLDER, &spec, &testing::cases(&worker.build))?;
+        harness::write(
+            folder,
+            harness::MUTANT_FOLDER,
+            &spec,
+            &testing::cases(&worker.build),
+        )?;
     }
     let build = Build {
         artifact: tested_artifact(&worker.build),
@@ -364,7 +369,10 @@ mod tests {
         let manifest = "[package]\nname = \"shop\"\n\n[lib]\nname = \"shop\"\npath = \"src/main.rs\"\n\n[dependencies]\njson = { path = \"../libraries/json\" }\nwasip2 = \"=2.0.1\"\n\n[workspace]\n";
         let folder = std::path::Path::new("/work/shop");
         let text = super::mutant_manifest(manifest, "shop", folder);
-        assert!(text.contains("[package]\nname = \"shop-mutant\"\n"), "{text}");
+        assert!(
+            text.contains("[package]\nname = \"shop-mutant\"\n"),
+            "{text}"
+        );
         assert!(text.contains("[lib]\nname = \"shop_mutant\"\n"), "{text}");
         assert!(
             text.contains("json = { path = \"/work/shop/../libraries/json\" }"),

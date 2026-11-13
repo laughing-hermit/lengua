@@ -568,7 +568,10 @@ fn outside_inputs(folder: &Path, prepared: &Prepared) -> Vec<(String, Vec<u8>)> 
         .map(|l| (l.lock.clone(), l.lock_sha256.clone().into_bytes()))
         .collect();
     for (file, _, _) in &prepared.top.components {
-        out.push((file.clone(), fs::read(folder.join(file)).unwrap_or_default()));
+        out.push((
+            file.clone(),
+            fs::read(folder.join(file)).unwrap_or_default(),
+        ));
     }
     out
 }
@@ -657,7 +660,10 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .unwrap_or_else(|| "program".to_string());
     let mut read = read_all(folder, &title, &mut findings);
-    let program = read.pages.first().is_some_and(|p| p.kind == IdeaKind::Program);
+    let program = read
+        .pages
+        .first()
+        .is_some_and(|p| p.kind == IdeaKind::Program);
     if program {
         link(&mut read.pages, &read.constraints, &mut findings);
     }

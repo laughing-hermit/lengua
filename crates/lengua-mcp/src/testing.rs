@@ -243,7 +243,9 @@ fn answers(test: &Test, got: &[Option<Vec<u8>>], out: &mut Vec<String>) {
         return;
     };
     match got.first() {
-        Some(Some(bytes)) => out.extend(diff("the answer", wanted, &String::from_utf8_lossy(bytes))),
+        Some(Some(bytes)) => {
+            out.extend(diff("the answer", wanted, &String::from_utf8_lossy(bytes)))
+        }
         _ => out.push("the client did not reach the program".to_string()),
     }
 }

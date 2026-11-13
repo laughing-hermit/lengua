@@ -410,14 +410,24 @@ fn a_program_of_three_modules_is_one_build_of_every_file() {
     let build = report.build.expect("a build");
     assert_eq!(
         build.sources,
-        ["src/main.rs", "src/lines.rs", "src/report.rs", "src/words.rs"]
+        [
+            "src/main.rs",
+            "src/lines.rs",
+            "src/report.rs",
+            "src/words.rs"
+        ]
     );
     let files: BTreeSet<&str> = build.tests.iter().map(|t| t.file.as_str()).collect();
     assert_eq!(
         files,
-        ["idea.md", "ideas/lines.md", "ideas/report.md", "ideas/words.md"]
-            .into_iter()
-            .collect()
+        [
+            "idea.md",
+            "ideas/lines.md",
+            "ideas/report.md",
+            "ideas/words.md"
+        ]
+        .into_iter()
+        .collect()
     );
     let cargo = read(&folder, "Cargo.toml");
     assert!(cargo.contains(
@@ -442,7 +452,11 @@ fn a_module_without_its_idea_or_its_mod_line_is_refused() {
     );
     let folder = example_copy("tally", "no-mod");
     let main = read(&folder, "src/main.rs");
-    fs::write(folder.join("src/main.rs"), main.replace("mod report;\n", "")).expect("a file");
+    fs::write(
+        folder.join("src/main.rs"),
+        main.replace("mod report;\n", ""),
+    )
+    .expect("a file");
     assert!(
         codes_of(&folder).contains(&("src/main.rs".to_string(), "module-undeclared")),
         "{:?}",
@@ -511,7 +525,10 @@ fn a_library_is_tested_through_calls_and_reaches_nothing() {
         "- Standard input: \"2\"\n- Expect exit code: 0\n",
     ));
     assert!(codes_of(&folder).contains(&("idea.md".to_string(), "example-library-call")));
-    body(&LIBRARY.replace("- Time: 2 s\n", "- Time: 2 s\n- Serves: HTTP on TCP port 8080\n"));
+    body(&LIBRARY.replace(
+        "- Time: 2 s\n",
+        "- Time: 2 s\n- Serves: HTTP on TCP port 8080\n",
+    ));
     assert!(codes_of(&folder).contains(&("idea.md".to_string(), "constraint-kind")));
 }
 
@@ -530,7 +547,10 @@ fn a_library_that_is_not_checked_is_refused_by_the_program_that_uses_it() {
     let idea = read(&program, "idea.md");
     fs::write(
         program.join("idea.md"),
-        idea.replace("- Time: 2 s\n", "- Time: 2 s\n- Uses: `../libraries/twice`\n"),
+        idea.replace(
+            "- Time: 2 s\n",
+            "- Time: 2 s\n- Uses: `../libraries/twice`\n",
+        ),
     )
     .expect("the idea");
     let found = codes_of(&program);

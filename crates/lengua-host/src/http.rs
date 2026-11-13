@@ -13,7 +13,9 @@ use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
 use wasmtime_wasi_http::p2::bindings::http::types::{ErrorCode, Scheme};
 use wasmtime_wasi_http::p2::bindings::sync::Proxy;
 use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
-use wasmtime_wasi_http::{Error as HttpError, RequestOptions, WasiBody, WasiHttpHooks, WasiHttpView};
+use wasmtime_wasi_http::{
+    Error as HttpError, RequestOptions, WasiBody, WasiHttpHooks, WasiHttpView,
+};
 
 use crate::{Ending, Host, Input, OUTPUT, Outcome, Prepared, Program, Streams, trap_ending};
 
@@ -31,8 +33,7 @@ impl WasiHttpHooks for Refuse {
         _request: hyper::Request<WasiBody>,
         _options: Option<RequestOptions>,
         _fut: Sent,
-    ) -> Box<dyn Future<Output = Result<(hyper::Response<WasiBody>, Sent), HttpError>> + Send>
-    {
+    ) -> Box<dyn Future<Output = Result<(hyper::Response<WasiBody>, Sent), HttpError>> + Send> {
         Box::new(std::future::ready(Err(HttpError::HttpRequestDenied)))
     }
 }
@@ -72,10 +73,12 @@ fn content_length(head: &str) -> usize {
 }
 
 fn chunked(head: &str) -> bool {
-    head.lines().filter_map(|l| l.split_once(':')).any(|(name, value)| {
-        name.trim().eq_ignore_ascii_case("transfer-encoding")
-            && value.to_ascii_lowercase().contains("chunked")
-    })
+    head.lines()
+        .filter_map(|l| l.split_once(':'))
+        .any(|(name, value)| {
+            name.trim().eq_ignore_ascii_case("transfer-encoding")
+                && value.to_ascii_lowercase().contains("chunked")
+        })
 }
 
 fn dechunk(mut rest: &[u8]) -> Result<Vec<u8>, String> {
@@ -88,12 +91,16 @@ fn dechunk(mut rest: &[u8]) -> Result<Vec<u8>, String> {
         let line = String::from_utf8_lossy(rest.get(..end).unwrap_or_default()).to_string();
         let size = usize::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16)
             .map_err(|_| format!("`{line}` is not a chunk size"))?;
-        let data = rest.get(end + 2..end + 2 + size).ok_or("a chunk is short")?;
+        let data = rest
+            .get(end + 2..end + 2 + size)
+            .ok_or("a chunk is short")?;
         if size == 0 {
             return Ok(out);
         }
         out.extend_from_slice(data);
-        rest = rest.get(end + 4 + size..).ok_or("a chunk has no line end")?;
+        rest = rest
+            .get(end + 4 + size..)
+            .ok_or("a chunk has no line end")?;
     }
 }
 
@@ -153,7 +160,13 @@ pub fn response_bytes(status: u16, headers: &[(String, Vec<u8>)], body: &[u8]) -
         out.extend_from_slice(value);
         out.extend_from_slice(b"\r\n");
     }
-    out.extend_from_slice(format!("content-length: {}\r\nconnection: close\r\n\r\n", body.len()).as_bytes());
+    out.extend_from_slice(
+        format!(
+            "content-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        )
+        .as_bytes(),
+    );
     out.extend_from_slice(body);
     out
 }
@@ -201,11 +214,7 @@ fn answer_bytes(response: Option<Answer>, deadline: Instant) -> Vec<u8> {
             }
         }
         Some(Err(code)) => response_bytes(500, &[], format!("{code:?}").as_bytes()),
-        None => response_bytes(
-            500,
-            &[],
-            b"the server ended with no answer to the request",
-        ),
+        None => response_bytes(500, &[], b"the server ended with no answer to the request"),
     }
 }
 
@@ -378,8 +387,9 @@ mod tests {
 
     #[test]
     fn a_request_is_read_with_its_headers_and_body() {
-        let request = parse(b"POST /items?a=1 HTTP/1.1\r\nHost: shop\r\nContent-Length: 3\r\n\r\nteaextra")
-            .expect("a request");
+        let request =
+            parse(b"POST /items?a=1 HTTP/1.1\r\nHost: shop\r\nContent-Length: 3\r\n\r\nteaextra")
+                .expect("a request");
         assert_eq!(request.method(), "POST");
         assert_eq!(request.uri().path(), "/items");
         assert_eq!(request.headers()["host"], "shop");

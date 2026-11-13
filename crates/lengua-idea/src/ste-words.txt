@@ -102,11 +102,13 @@ by p
 byte n
 cache n
 calculate v
+calendar n
 call nv
 came v
 cancel v
 can m
 cannot m
+carriage n
 cart n
 case n
 cause nv
@@ -124,6 +126,7 @@ choose v
 chosen x
 chose v
 chunk n
+civil a
 clean av
 clean v
 clear av
@@ -132,6 +135,7 @@ client n
 clock n
 closed a
 close v
+closure n
 code n
 collect v
 colon n
@@ -375,6 +379,7 @@ last ar
 late ar
 later r
 layout n
+leap n
 least dr
 left a
 left x
@@ -418,6 +423,7 @@ measure v
 memory n
 menu n
 me o
+merge v
 message n
 method n
 million q
@@ -433,6 +439,7 @@ most dr
 move v
 much dr
 multiple n
+multiply v
 must m
 my o
 name n
@@ -496,6 +503,7 @@ parse v
 part n
 pass v
 password n
+past p
 path n
 pattern n
 people n
@@ -507,6 +515,7 @@ per p
 person n
 place n
 plain a
+plus p
 pointer n
 point nv
 polynomial n
@@ -596,6 +605,7 @@ send v
 sentence n
 sent vx
 separate av
+separator n
 sequence n
 serious a
 server n
@@ -651,6 +661,7 @@ statement n
 state n
 static a
 status n
+stay v
 step n
 still r
 stop v
@@ -668,6 +679,7 @@ sufficient a
 sum n
 supply v
 sure a
+surrogate n
 symbol n
 system n
 table n
@@ -785,3 +797,4 @@ yet r
 you o
 your o
 zero qn
+zone n

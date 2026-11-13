@@ -44,7 +44,12 @@ pub(crate) fn main_text(package: &str, cases: &[Case]) -> String {
     out
 }
 
-pub(crate) fn write(folder: &Path, dir: &str, library: &Library, cases: &[Case]) -> Result<(), String> {
+pub(crate) fn write(
+    folder: &Path,
+    dir: &str,
+    library: &Library,
+    cases: &[Case],
+) -> Result<(), String> {
     let place = folder.join(dir);
     let fail = |e: std::io::Error| format!("lengua could not write the harness `{dir}`: {e}");
     fs::create_dir_all(&place).map_err(fail)?;
@@ -100,7 +105,10 @@ mod tests {
 
     #[test]
     fn the_harness_calls_each_case_on_its_own_line() {
-        let text = main_text("my-json", &[case("parse(\"1\")"), case("write(&Value::Null)")]);
+        let text = main_text(
+            "my-json",
+            &[case("parse(\"1\")"), case("write(&Value::Null)")],
+        );
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines[1], "use my_json::*;");
         assert_eq!(
@@ -117,12 +125,15 @@ mod tests {
             path: "../mutant",
             harness: "my-json-mutant-harness",
         });
-        assert!(toml.contains(
-            "my_json = { package = \"my-json-mutant\", path = \"../mutant\" }"
-        ));
+        assert!(toml.contains("my_json = { package = \"my-json-mutant\", path = \"../mutant\" }"));
         assert!(toml.contains("name = \"my-json-mutant-harness\""));
         let found = mapped(
-            vec![problem("main.rs", FIRST_ARM + 1, "rust-error", "no".to_string())],
+            vec![problem(
+                "main.rs",
+                FIRST_ARM + 1,
+                "rust-error",
+                "no".to_string(),
+            )],
             &[case("a()"), case("b()")],
         );
         assert_eq!(found[0].file, "ideas/parse.md");

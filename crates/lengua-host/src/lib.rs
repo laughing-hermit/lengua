@@ -318,7 +318,11 @@ fn context(
     let grants = &run.build.grants;
     let mut builder = WasiCtxBuilder::new();
     let server = grants.server.is_some();
-    let stdin_input = if server { Input::default() } else { input.clone() };
+    let stdin_input = if server {
+        Input::default()
+    } else {
+        input.clone()
+    };
     streams_of(&mut builder, grants, &stdin_input, streams, output);
     if grants.reach(Reach::Arguments) {
         let mut all = vec![run.build.package.clone()];

@@ -394,7 +394,9 @@ fn check_entry(
         let lock = folder.join(path);
         let place = lock.parent().unwrap_or(folder);
         if let Err(message) = verify(place, &lock, Kind::Library, key) {
-            changed.push(format!("the library of `{path}` is not as its lock signed it ({message})"));
+            changed.push(format!(
+                "the library of `{path}` is not as its lock signed it ({message})"
+            ));
         }
     }
     Some((path.to_string(), sealed))

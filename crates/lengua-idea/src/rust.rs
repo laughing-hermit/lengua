@@ -1,10 +1,10 @@
 use std::fs;
 use std::path::Path;
 
-use crate::idea::IdeaKind;
-use crate::{Finding, Library};
 use crate::constraints::Constraints;
+use crate::idea::IdeaKind;
 use crate::wiki::Page;
+use crate::{Finding, Library};
 
 fn rust_files(folder: &Path, relative: &str, out: &mut Vec<String>) {
     let Ok(entries) = fs::read_dir(folder.join(relative)) else {
@@ -115,7 +115,10 @@ fn declarations(folder: &Path, pages: &[Page], top: Option<&Constraints>) -> Vec
     let text = fs::read_to_string(folder.join("src/main.rs")).unwrap_or_default();
     let declared = lengua_lint::declared(&text.replace("\r\n", "\n"));
     for page in pages.iter().filter(|p| p.kind == IdeaKind::Module) {
-        if !declared.iter().any(|d| d.kind == "mod" && d.name == page.name) {
+        if !declared
+            .iter()
+            .any(|d| d.kind == "mod" && d.name == page.name)
+        {
             findings.push(finding(
                 "src/main.rs",
                 "module-undeclared",

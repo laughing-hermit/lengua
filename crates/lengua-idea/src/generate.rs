@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use crate::{Finding, Library, Shape};
 use crate::constraints::{Constraints, Grant};
 use crate::sha256;
 use crate::wiki::{Page, Stamp};
+use crate::{Finding, Library, Shape};
 
 pub(crate) const CARGO_TOML: &str = "Cargo.toml";
 pub(crate) const WORLD: &str = "wit/world.wit";
@@ -639,7 +639,9 @@ world program {
             libraries: &[],
         };
         let text = cargo_toml(&package);
-        assert!(text.contains("[lib]\nname = \"shop\"\npath = \"src/main.rs\"\ncrate-type = [\"cdylib\"]\n"));
+        assert!(text.contains(
+            "[lib]\nname = \"shop\"\npath = \"src/main.rs\"\ncrate-type = [\"cdylib\"]\n"
+        ));
         assert!(!text.contains("missing_errors_doc"));
         let world = world(&[Grant::Http], Shape::Server);
         assert!(world.contains("  import wasi:http/types@0.2.12;\n"));

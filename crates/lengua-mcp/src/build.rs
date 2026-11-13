@@ -532,13 +532,22 @@ struct Part {
     sha256: String,
 }
 
-fn trusted_parts(folder: &Path, build: &Build, host: &Host) -> Result<(Vec<Part>, Vec<String>), Vec<Problem>> {
+fn trusted_parts(
+    folder: &Path,
+    build: &Build,
+    host: &Host,
+) -> Result<(Vec<Part>, Vec<String>), Vec<Problem>> {
     let mut parts = Vec::new();
     let mut exports = Vec::new();
     let mut found = Vec::new();
     for part in &build.components {
         let Ok(bytes) = fs::read(folder.join(&part.file)) else {
-            found.push(problem("idea.md", part.line, "component-missing", format!("lengua could not read the component `{}`", part.file)));
+            found.push(problem(
+                "idea.md",
+                part.line,
+                "component-missing",
+                format!("lengua could not read the component `{}`", part.file),
+            ));
             continue;
         };
         let sha256 = lengua_idea::sha256_hex(&bytes);
@@ -558,12 +567,19 @@ fn trusted_parts(folder: &Path, build: &Build, host: &Host) -> Result<(Vec<Part>
                 "idea.md",
                 part.line,
                 "component-refused",
-                format!("wasmtime did not take the component `{}`: {error}", part.file),
+                format!(
+                    "wasmtime did not take the component `{}`: {error}",
+                    part.file
+                ),
             )),
         }
         parts.push(Part { bytes, sha256 });
     }
-    if found.is_empty() { Ok((parts, exports)) } else { Err(found) }
+    if found.is_empty() {
+        Ok((parts, exports))
+    } else {
+        Err(found)
+    }
 }
 
 fn seal_failed(message: &str) -> Vec<Problem> {
@@ -626,7 +642,10 @@ fn library(
             "Cargo.toml",
             1,
             "build-error",
-            format!("the build ended, but lengua could not read `{}`: {error}", build.artifact),
+            format!(
+                "the build ended, but lengua could not read `{}`: {error}",
+                build.artifact
+            ),
         )]
     })?;
     let cases = testing::cases(build);
@@ -657,7 +676,12 @@ fn library(
         Err(message) => return Err(vec![problem("Cargo.toml", 1, "build-error", message)]),
     }
     let bytes = fs::read(folder.join(&harness_build.artifact)).map_err(|error| {
-        vec![problem("Cargo.toml", 1, "build-error", format!("lengua could not read the harness: {error}"))]
+        vec![problem(
+            "Cargo.toml",
+            1,
+            "build-error",
+            format!("lengua could not read the harness: {error}"),
+        )]
     })?;
     let sha256 = lengua_idea::sha256_hex(&bytes);
     ungranted(&bytes, &sha256, &harness_build.world, host)?;

@@ -122,9 +122,13 @@ struct BuildReply {
 #[serde(crate = "rmcp::serde")]
 #[schemars(crate = "rmcp::schemars")]
 struct PartReply {
-    #[schemars(description = "The folder of a library or the file of a component, relative to the program's folder")]
+    #[schemars(
+        description = "The folder of a library or the file of a component, relative to the program's folder"
+    )]
     path: String,
-    #[schemars(description = "Its trust label: checked or tested for a lengua library, trusted for a component lengua did not build")]
+    #[schemars(
+        description = "Its trust label: checked or tested for a lengua library, trusted for a component lengua did not build"
+    )]
     label: String,
 }
 
@@ -300,7 +304,11 @@ fn seal_program(
     };
     let library = plan.library;
     let facts = Facts {
-        kind: if library { Kind::Library } else { Kind::Program },
+        kind: if library {
+            Kind::Library
+        } else {
+            Kind::Program
+        },
         toolchain: status.toolchain.clone(),
         trust: report.trust,
         files: lock::program_files(folder),

@@ -10,6 +10,8 @@ use crate::text::{
 
 const KEYWORDS: [&str; 4] = ["Given", "When", "Then", "And"];
 const PROGRAM_KEYS: &str = "`Standard input`, `Arguments`, `File `path``, `Server `host:port``, `Client `port``, `Call`, `Request`, `Request header `name``, `Request body`, `Expect standard output`, `Expect standard error`, `Expect exit code`, `Expect end`, `Expect file `path``, `Expect answer`, `Expect value`, `Expect status`, `Expect header `name``, `Expect body`";
+type Make = fn(String) -> Key;
+
 const METHODS: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
 const SCREEN_KEYS: &str =
     "`State `field``, `Click`, `Type into `element``, `Expect state `field``, `Expect text`";
@@ -75,7 +77,7 @@ impl Key {
                 .and_then(backticked)
                 .map(str::to_string)
         };
-        let shapes: [(&str, fn(String) -> Self); 10] = [
+        let shapes: [(&str, Make); 10] = [
             ("Expect file ", Self::OutputFile),
             ("File ", Self::File),
             ("Expect state ", Self::ExpectState),
@@ -609,7 +611,11 @@ fn shape_rules(head: usize, keys: &[Key], test: &Test, sink: &mut Sink) {
     let http_keys = keys.iter().any(|k| {
         matches!(
             k,
-            Key::Status | Key::ExpectHeader(_) | Key::ExpectBody | Key::RequestHeader(_) | Key::RequestBody
+            Key::Status
+                | Key::ExpectHeader(_)
+                | Key::ExpectBody
+                | Key::RequestHeader(_)
+                | Key::RequestBody
         )
     });
     if http_keys && !request {

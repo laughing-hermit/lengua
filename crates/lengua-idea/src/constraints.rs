@@ -551,10 +551,7 @@ mod tests {
                 9
             )]
         );
-        assert_eq!(
-            out.grants,
-            [Grant::Network, Grant::Listen, Grant::Http]
-        );
+        assert_eq!(out.grants, [Grant::Network, Grant::Listen, Grant::Http]);
     }
 
     #[test]

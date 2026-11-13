@@ -46,7 +46,12 @@ pub(crate) fn description(idea: &str) -> String {
     String::new()
 }
 
-fn one(folder: &Path, path: &str, line: usize, key: Option<&lock::Key>) -> Result<Library, Finding> {
+fn one(
+    folder: &Path,
+    path: &str,
+    line: usize,
+    key: Option<&lock::Key>,
+) -> Result<Library, Finding> {
     let place = folder.join(path);
     let missing = || {
         finding(
@@ -64,14 +69,18 @@ fn one(folder: &Path, path: &str, line: usize, key: Option<&lock::Key>) -> Resul
         return Err(finding(
             line,
             "library-name",
-            format!("the folder of the library `{path}` is not a package name: lowercase letters, digits, `-` and `_`"),
+            format!(
+                "the folder of the library `{path}` is not a package name: lowercase letters, digits, `-` and `_`"
+            ),
         ));
     }
     let Some(key) = key else {
         return Err(finding(
             line,
             "library-lock",
-            format!("lengua could not read the user's key, so it can't verify the lock of the library `{path}`; call check"),
+            format!(
+                "lengua could not read the user's key, so it can't verify the lock of the library `{path}`; call check"
+            ),
         ));
     };
     let lock_path = place.join(lock::LOCK);

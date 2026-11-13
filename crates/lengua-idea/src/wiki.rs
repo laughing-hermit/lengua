@@ -320,7 +320,10 @@ pub(crate) fn write(
             .filter(|other| other.uses.iter().any(|u| u == page.id()))
             .map(|other| other.id().to_string())
             .collect();
-        texts.push((page.file.clone(), page_text(page, &used_by, label, parts.shape)));
+        texts.push((
+            page.file.clone(),
+            page_text(page, &used_by, label, parts.shape),
+        ));
     }
     texts.push(("index.md".to_string(), index_text(pages, label, parts)));
     let previous = fs::read_to_string(folder.join("log.md"))

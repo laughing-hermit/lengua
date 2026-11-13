@@ -92,7 +92,12 @@ impl Host {
             .collect()
     }
 
-    pub(crate) fn seal_code(&self, folder: &Path, bytes: &[u8], sha256: &str) -> Result<String, String> {
+    pub(crate) fn seal_code(
+        &self,
+        folder: &Path,
+        bytes: &[u8],
+        sha256: &str,
+    ) -> Result<String, String> {
         let component = self.component(bytes, sha256)?;
         let code = component
             .serialize()
