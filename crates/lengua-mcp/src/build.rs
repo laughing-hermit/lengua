@@ -889,7 +889,11 @@ mod tests {
     #[test]
     fn the_paths_of_a_build_are_remapped_to_fixed_names() {
         let root = std::env::temp_dir().join(format!("lengua-mcp-{}-remap", std::process::id()));
-        let inner = root.join("app").join("target").join("lengua").join("mutant");
+        let inner = root
+            .join("app")
+            .join("target")
+            .join("lengua")
+            .join("mutant");
         std::fs::create_dir_all(&inner).expect("a folder");
         let app = root.join("app");
         std::fs::write(app.join("idea.md"), "# Purpose\n").expect("an idea");

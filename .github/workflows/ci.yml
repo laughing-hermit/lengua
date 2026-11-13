@@ -196,16 +196,16 @@ jobs:
       - name: the bytes of the built components, for the check that every system builds the same
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |
-          mkdir -p same
+          mkdir -p "same/${{ matrix.target }}"
           for pair in "hello target/tmp/lengua-mcp-hello/hello/target/wasm32-wasip2/release/hello.wasm" \
                       "shop target/tmp/lengua-mcp-shop/examples/shop/target/wasm32-wasip2/release/shop.wasm"; do
             set -- $pair
             if [ -f "$2" ]; then
-              cp "$2" "same/$1.wasm"
+              cp "$2" "same/${{ matrix.target }}/$1.wasm"
             fi
           done
-          ls -l same
-          cd same && (sha256sum *.wasm 2> /dev/null || shasum -a 256 *.wasm) | tee sums.txt
+          ls -l "same/${{ matrix.target }}"
+          cd "same/${{ matrix.target }}" && (sha256sum *.wasm 2> /dev/null || shasum -a 256 *.wasm) | tee sums.txt
       - uses: actions/upload-artifact@v5
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         with:
@@ -305,6 +305,7 @@ jobs:
       - uses: actions/download-artifact@v5
         with:
           pattern: built-*
+          merge-multiple: true
           path: built
       - name: hello and the shop have the same SHA-256 on every system that built them
         run: |
@@ -313,7 +314,8 @@ jobs:
           for name in hello shop; do
             echo "== $name"
             first=""
-            for dir in built/built-*; do
+            for dir in built/*/; do
+              dir=${dir%/}
               file="$dir/$name.wasm"
               if [ ! -f "$file" ]; then
                 echo "$(basename "$dir"): not built"
