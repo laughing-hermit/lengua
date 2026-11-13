@@ -233,7 +233,8 @@ fix costs a user:
 2. **Listings**: one per folder, shared, and 1,048,576 entries in all among a program's
    descriptors. Cost: a folder with more entries can't be listed, or have a path in it opened
    (`IO`).
-3. **A handed folder's files** are read only as regular files of at most 32 MiB. Cost: an
+3. **A handed folder's files** are read only as regular files of a bounded size: an idea.md of at
+   most 1 MiB, a main.wat of at most 4 MiB, any other of at most 32 MiB. Cost: an
    idea.md, main.wat, lengua.lock, index.md or log.md that is a symbolic link is refused.
 4. **A named computer is never this one.** Cost: a name the user's own computer resolves to its
    loopback, as a line of the hosts file does, is refused; the idea says a port alone.
@@ -263,14 +264,138 @@ Still open from it, for the owner:
   program itself changes something.
 - `check` writes index.md and log.md in the parent of a handed folder, with titles from the
   handed idea.
-- The tests of a handed folder may each take a worker with 1 GiB of memory; nothing bounds the
-  workers' memory in all.
-- A size cap on what `check` builds and proves in the server (a 32 MiB main.wat is still read
-  and built there), and the time the checker takes on it, have no test.
+- Closed on 2026-11-13 ("The sweep of small open items", below): a bound on the memory of a
+  handed folder's tests in all, and a size for the idea.md and the main.wat that `check` reads
+  and builds. The time the checker takes on a main.wat of that size has no test.
 - Not shown failing by themselves before their fixes, since an earlier line of the same test
   failed first: the named pipes (main.wat and lengua.lock), `fd_write` past the deadline, the
   `PLUGIN_DATA` folder, and the numeric spellings of the loopback. The TLS shutdown's wait and the
   connections' total have no test: both need a place that doesn't answer.
+
+### The sweep of small open items (2026-11-13)
+
+Seven entries of the lists above and below that were small defects or missing tests, not limits
+by design. Six are closed and one had only its test missing. The suite on all five runners at
+f5f3207 (43341679843).
+
+What was built, each with a test that fails without it:
+1. **`$http_number` takes 19 digits**, as `$decimal_parse` did (`examples/http`, and its copy in
+   `examples/httpd`, changed in one step). Nineteen digits write a number below 2 to the 64th,
+   so the sum does not wrap; a number above the most that 64 signed bits hold is given as that
+   most (`HTTP_MOST_NUMBER`). So a Content-Length of 19 digits gets 413 again, and one of 20
+   digits or more gets 400. Tests: http's new B14 (proven for every input in range) and its
+   B13, whose two numbers of 19 digits are now of 20; httpd's B14 has a row of five lengths of
+   19 digits, and its B12 a length of 20 digits. Seen failing: http's new idea against its old
+   main.wat, `range ?` where B14 expects the two numbers (43331134350).
+2. **A HEAD that is refused gets no body.** httpd's `$examine` notes a request that starts with
+   `HEAD` and a space before it reads the request line, so every answer to it goes out with the
+   head alone: 505, 400, 431, 501, 413 and the rest. `$route` no longer sets the note. Test:
+   httpd's new B25, four refusals of a HEAD, each with the log's length 0. Seen failing: the
+   new idea against `$examine` and `$route` as they were (43336813522).
+3. **A size for idea.md and main.wat.** `state::read_file` reads an idea.md of at most 1 MiB and
+   a main.wat of at most 4 MiB (`MAX_IDEA_BYTES`, `MAX_CODE_BYTES`, `most_bytes`); any other
+   file of a folder keeps 32 MiB. The refusal names the size: `main.wat holds more than 4 MiB,
+   the most lengua reads of a main.wat`. It comes from the one function that reads a program's
+   file, so `check`, the attester, `run` and the editor's server refuse the file unread and
+   unbuilt. The largest of the repository, httpd's, hold 45 KiB and 190 KiB. Tests:
+   `a_program_s_file_is_read_only_as_a_regular_file_of_a_bounded_size` (each size and a byte
+   more), `a_file_past_its_size_is_not_read` (the attester) and
+   `check_refuses_a_main_wat_or_an_idea_past_its_size` (the tool).
+4. **The attester and the editor's server read an idea at once.** `server::idea_alone` is the
+   reading of an idea's text that `check`'s idea stage makes (its words, its tests, its type,
+   its threads, in the order of the lines), without what stands beside the idea: its parts.
+   `lengua-mcp check` and `lengua-mcp lsp` use it. Tests:
+   `the_attester_says_every_problem_of_an_idea_at_once` and
+   `lsp::tests::every_problem_of_an_idea_is_a_finding_at_once`.
+5. **The refusal that had no test**: `- Calls:` or `- Exports:` beside `- Module:`
+   (`an_outside_module_s_idea_calls_no_module_and_offers_no_function`). Nothing was fixed.
+6. **For a secret, the `run` tool reads the compiled form its worker loads**
+   (`kept_keeps_secrets`, `src/server/wat.rs`): the file the data folder keeps for the tool's
+   runs, loaded in the server only under the user's seal as that module's; where none loads,
+   the server compiles, seals and keeps one, as the worker would, and reads what it kept. The
+   server's own second compile is gone. Test:
+   `the_run_tool_reads_the_compiled_form_its_worker_loads`, where the code kept under the
+   module's seal divides by a secret and the module's own compile does not.
+7. **The tests' memory in all.** A test's run starts once the memory its program declares as
+   its most, with that of the modules it calls, fits beside the tests that run: 65,536 pages,
+   4 GiB, for a pool (`TEST_PAGES`, `Pool::start`). The server has one pool, so the tests of
+   every folder checked at once share it. Those that wait are served in their order. Test:
+   `tests_at_once_stay_within_the_pool_s_memory`.
+
+Decisions made without asking, each for the owner to reverse:
+- **A number of 19 digits above 9223372036854775807 is given as that number**, not refused, so
+  every length of 19 digits gets 413. `$decimal_parse` refused such a number, which gave 400.
+  A Range of such a number reads as a place far past any file.
+- **`HEAD` is known by the request's first five bytes**, before the request line is read. So a
+  request line that is not valid, and a head that is too long, are answered with no body when
+  they start with `HEAD` and a space, and the log's line has the length 0.
+- **1 MiB and 4 MiB** are more than 20 times the largest idea and the largest main.wat of the repository.
+  To change them: the two constants in `src/state.rs`.
+- **The attester does not look for an idea's parts**, as before: a handed folder is attested
+  alone. The editor's server now holds main.wat to its rules also when the idea has problems
+  of its words alone, since such an idea still reads.
+- **The editor's server reads a file that isn't open as `check` reads it**: a regular file
+  within its size, no link.
+- **4 GiB for the tests of a pool** is chosen, not measured: four programs of the most memory,
+  1 GiB, at once. Cost: on a computer with more than four cores, the tests of a program that
+  declares 1 GiB take longer than before, within the same 90 seconds. A program that declares a
+  few pages, as every program of the repository does (the most is 1,538 pages, 96 MiB), waits
+  for nothing. A run of the `run` tool waits for nothing. To change it: `TEST_PAGES` in
+  `src/wasm/pool.rs`.
+- **The bound is on what programs declare**, not on what a worker process holds: the engine's
+  own memory and a worker's compiled modules are outside it.
+
+Still open from it, for the owner:
+- **The server's read and the worker's load of the compiled form are two reads of one file.**
+  Both take it only under the user's seal as this module's, for this kind of run. A file put
+  in its place between the two by someone with the user's key, such as another lengua of this
+  user that compiles the same module at that moment, is loaded without having been read. To
+  close it, the worker itself would read the code it loaded: the job would carry the operators
+  that take a secret, and the worker would refuse after its world, the connections and the
+  listener, is made, where today the tool refuses before anything is reached. That order is why
+  it was not done here.
+- **A refused request is closed without waiting for what a client still sends.**
+- **The time the checker takes on a main.wat of 4 MiB** has no test.
+- **The idea of a part that an idea builds on** is still read by `idea::parse` when `check`
+  looks for it (`missing_parts`): it says that the part has problems, not which.
+
+B24, two clients at once, and the order of the log's two lines: the model's, not the server's.
+`check` says of it "tested, not proven: the model disagreed with a real run", for an order of
+the two clients' steps that prints the lines the other way round. The server's loop was read
+for a race (`$main`, `$receive`, `$progress`, `examples/httpd/main.wat`), and it has none
+there:
+- The server is one thread. `$progress` answers a whole request (`$route`), prints its line of
+  the log (`$log`) and closes the connection, in one call, with no wait between them. The next
+  request is looked at only after the next `poll_oneoff`.
+- The test's clients are ordered by cause (`talk_at_once`, `src/testrun.rs`): the first client
+  holds its last byte; the second sends all of its request, and the test reads the start of
+  its answer; only then does the first send its last byte. So the first request is whole only
+  after the second's answer went out, and the second's line is printed in the call that sent
+  that answer.
+- So in every real run the lines come as B24 says: the second client's, then the first's. The
+  order that the model finds lets the first client's last byte come before the second's answer,
+  which the test's client never does: the model lets the clients' steps go in any order. The
+  test's expectation is honest, and nothing in httpd was changed for it.
+- Open, in the prover, which this sweep did not touch: the model of clients at once does not
+  hold a client's held byte back until the answer before it was read.
+
+The runs:
+- 43327005451 (at 62f8d88): `check` of http and httpd with the two fixes, done; http's 14
+  generated tests proven, its new B14 for every input in range.
+- 43331134350 and 43336813522: the tests seen failing without the fixes, each a throwaway
+  branch since deleted: http's new idea against its old main.wat (B14: `range ?`), and httpd's
+  new idea with `$examine` and `$route` as they were (B25: the 505 kept its body). A first try
+  of the second, 43331139152, took out more than the fix and failed on every HEAD.
+- 43331125474 (at b21380e): the library's tests and host_hard, wasm_scale, calls and
+  wasm_limits on Linux on x86-64, every new test among them passed; its format job's patch
+  came from the compile run 43331130210 and was applied (d3a8664).
+- 43341684459 (at f5f3207, main's proofs' depth merged in): `check` of http and httpd, done.
+  httpd's 27 generated tables: 9 proven for every input in range, 8 to a length, 10 tested,
+  not proven (B3, B6, B10, B23 and the new B25: more than 256 paths; B16 to B18: a file the
+  program wrote; B22: out of time; B24: the model's order of the clients, above). The two
+  fixes moved none of the old tables from proven.
+- 43341679843 (at f5f3207): the suite on all five runners, format and the gate, green. The
+  commit that writes this record changes todo.md alone.
 
 ### The gaps the two reviews left open (2026-11-11)
 
@@ -497,10 +622,9 @@ Still open from it, for the owner:
 - A count of operators, every problem of an idea at once, names for data and the skills'
   missing pages were open here and are built: the next section.
 - **The mutation test takes 8 mutants a program**, which is one in 455 lines of httpd.
-- **`$http_number` takes 18 digits where `$decimal_parse` took 19**, so a Content-Length of
-  19 digits gets 400 and not 413 since the refactor; no test sees it.
-- **A request that is refused before its method is known keeps its body when the method was
-  HEAD**, and the server closes without waiting for what a client still sends.
+- `$http_number`'s 18 digits, and the body that a refused HEAD kept, are closed (2026-11-13,
+  "The sweep of small open items", above).
+- **The server closes a refused request without waiting for what a client still sends.**
 
 ### After the scale test: `check`'s reply and the skills (2026-11-12)
 
@@ -1392,10 +1516,9 @@ Decisions, each one the owner may reverse:
 - **`check` compiles each module one more time** (the `run` form), in the server, after the
   tests pass. For add that is milliseconds. For a large outside module it is one more
   Cranelift compile of up to 16 MiB of WebAssembly, not measured here.
-- **A secret idea's machine code is still read from the server's own compile** for the `run`
-  tool (`keeps_secrets`), not from the bytes the worker loads, as it was before. The two are
-  the same engine and settings. Reading the loaded form, as a shell's run does
-  (`loaded_keeps_secrets`), is open.
+- **A secret idea's machine code was read from the server's own compile** for the `run` tool,
+  not from the bytes the worker loads. Closed on 2026-11-13: the tool reads the compiled form
+  its worker loads ("The sweep of small open items", which says what is left of it).
 - **The worker says why it compiled on standard error only.** The `run` tool's reply has no
   field for it: a field would change the reply's schema, which W24's branch is changing too.
 
