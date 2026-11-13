@@ -866,6 +866,18 @@ Decided for lengua 3 at L2 (2026-11-13):
   pins: Rust 1.100.0 in `rust-toolchain.toml` with both WebAssembly targets, and Wasmtime
   50.0.1, added as a dependency at L3. Look at 0.3 again at L3 and at L7 (HTTP): take it when
   `wasmtime-wasi` calls it stable and its Rust target builds with `rustup` alone.
+- **The standard library imports more than hello world's grants (found at L2, for L3).** The
+  `hello.wasm` that Rust 1.100.0 builds for `wasm32-wasip2` (66,121 bytes, CI run 43379311761)
+  imports, all at `@0.2.12`: `wasi:cli/environment`, `exit`, `stderr`, `stdin`, `stdout`,
+  `terminal-input`, `terminal-output`, `terminal-stderr`, `terminal-stdin`,
+  `terminal-stdout`; `wasi:clocks/monotonic-clock`; `wasi:io/error`, `poll`, `streams`; and it
+  exports `wasi:cli/run`. So `std` imports `environment`, `stdin` (with its terminal
+  interfaces) and `monotonic-clock` even when the program does not use them. L3 must decide:
+  either a grant's absence is held by the host (it links these interfaces with nothing behind
+  them: no arguments, no variables, an empty standard input, a fixed clock) and the check at
+  check time refuses only interfaces outside this set, or the world's "always" set grows to
+  them. Files, random numbers and sockets were not imported by hello world, so for those the
+  world's rule holds as written.
 - **Build time:** a cold `cargo build` can take longer than one tool call; the background job
   and a kept build folder per program must hide it.
 - **The user must have Rust installed**, with its two WebAssembly targets. lengua 2 needed nothing
