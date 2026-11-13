@@ -27,10 +27,10 @@ impl wasip2::exports::http::incoming_handler::Guest for Notes {
 
 fn body_of(request: &IncomingRequest) -> Vec<u8> {
     let mut bytes = Vec::new();
-    if let Ok(body) = request.consume() {
-        if let Ok(stream) = body.stream() {
-            let _ = stream.take(LIMIT).read_to_end(&mut bytes);
-        }
+    if let Ok(body) = request.consume()
+        && let Ok(stream) = body.stream()
+    {
+        let _ = stream.take(LIMIT).read_to_end(&mut bytes);
     }
     debug_assert!(bytes.len() <= usize::try_from(LIMIT).unwrap_or(usize::MAX));
     debug_assert!(bytes.capacity() >= bytes.len());
