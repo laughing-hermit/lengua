@@ -15,10 +15,12 @@ next starts (Lengua3.md, section 8).
 | L5 | Tests from the idea, generated cases, mutation score, trust labels | Landed on main at 7ce9264 (run 43439284107, green on five) |
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | Landed on main at cb314b2 (run 43450491850, green on five) |
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Done on `wip/l7`; the five-runner landing run is named in the landing report |
-| L8 | The GPUI front end, embedded in the one file, its behaviours tested | Not started |
-| L9 | The skills rewritten for Rust and GPUI; a product test in an interactive session | Not started |
-| L10 | The scale test | Not started |
-| L11 | Trace and profile; a bench of lengua's overhead; documents; the finish line | Not started |
+| L8 | The Next.js front end, exported statically and embedded in the one file; TypeScript held like Rust; the wiki across both sides | Built on `wip/l8-next`; the five-runner landing run is named in the landing report |
+| L9 | Full stack: AI models as a grant, storage, outgoing calls, secrets, logins, shared types, logs, embeddings, deployment, libraries using libraries, concurrent serving | Not started |
+| L10 | Native parts and the Electron desktop app | Not started |
+| L11 | The three skills (`vision`, `write-idea`, `build`), approval, "Where it runs", a product test in an interactive session | Not started |
+| L12 | The scale test: a Next.js and Rust full-stack application with an AI call | Not started |
+| L13 | The finish line: release, the never-exercised sweep, WASI 0.3 again, documents, the owner's guide, the final run | Not started |
 
 ## Decisions
 
@@ -412,6 +414,104 @@ next starts (Lengua3.md, section 8).
 - **2026-11-13, L7: lengua's STE dictionary grows by the words of programs** that the new ideas
   need (`client`, `listen`, `get`, `hash`, `chunk`, `bracket`, `escape`, `overflow`, `tax`, ...),
   each with its part of speech.
+
+- **2026-11-13, L8: the owner's decision, final: Rust and TypeScript.** The back end stays Rust
+  compiled to WebAssembly; the front end is Next.js in TSX with shadcn/ui and Vercel's AI-UI
+  tools, built with pnpm and Turbopack, exported statically (`output: 'export'`) and carried and
+  served by the back end, so a web app is one file; desktop apps are Electron (L10). GPUI, GPUI
+  Kit, Leptos and Tauri are dropped; the GPUI attempt is at the tag `archive/l8-gpui`.
+  Lengua3.md was rewritten for it first (commits 37c67e1, 3cf4c74, 76ccde8, the last a coherence
+  pass of the whole document).
+- **2026-11-13, L8: "the UI SDK from Vercel Labs" is json-render**
+  ([github.com/vercel-labs/json-render](https://github.com/vercel-labs/json-render), Apache-2.0,
+  first published 2026-01; `@json-render/core` and `@json-render/react` 0.22.0): generative UI,
+  in which a model answers with a JSON description of a screen (`root` and a flat map of
+  `elements`) and the front end draws it only with the components of a catalog it defines
+  (`defineCatalog` with `zod` shapes, `defineRegistry`, `Renderer`). No other Vercel Labs
+  project is called a UI SDK (searched on 2026-11-13). Used in `examples/notes`: the screen
+  `note` asks the back end (`POST /api/ui`) and draws the answer with a catalog of two shadcn
+  components; the answer is fixed until L9's `- Asks: an AI model`. AI Elements and the AI SDK's
+  `useChat` were looked at and are not used at L8: both are made for chat and a streaming
+  route in the AI SDK's own protocol, and bring more packages.
+- **2026-11-13, L8: TypeScript is read in Rust by `oxc_parser` 0.158.0** (with `oxc_allocator`,
+  `oxc_ast`, `oxc_ast_visit`, `oxc_span`, `oxc_syntax`, all `=0.158.0`), in a new crate
+  `crates/lengua-ts`, used by `lengua-mcp` only, so `lengua-idea` stays on the standard library
+  and `lengua-run` has no parser. It merits it: a TypeScript parser is a large project of its
+  own. What it brings, counted in the `Cargo.lock` the lockfile job resolved (run 43529537966):
+  40 new packages, the `oxc_*` crates (`allocator`, `ast`, `ast_macros`, `ast_visit`,
+  `data_structures`, `diagnostics`, `ecmascript`, `estree`, `index`, `parser`,
+  `regular_expression`, `span`, `str`, `syntax`), `bytecount`, `castaway`, `compact_str`,
+  `cow-utils`, `fastrand`, `nonmax`, `num-bigint`, `num-integer`, `phf` and its four crates,
+  `seq-macro`, `siphasher`, `smawk`, `static_assertions`, `textwrap`, `unicode-id-start`,
+  `unicode-segmentation`, `unicode-width`, `zmij_ecma`, and three more `icu_*` crates.
+- **2026-11-13, L8: the TypeScript rules are Rust's, rule for rule** (Lengua3.md, section 5,
+  "The same checks for Rust and TypeScript"). Decisions inside them, each to reverse if the
+  owner wants:
+  - rule 5 in TypeScript is `assert(condition, message)` from the generated `@/lib/lengua`, two
+    a function on average, each screen's main component not counted (as `main` is not);
+  - `any`, casts (but `as const`), the non-null `!`, `@ts-ignore` and the like are refused with
+    no way to give a reason: a reason would be a comment, which rule 11 forbids, and nothing in
+    the example needs one;
+  - an arrow function inside a function is part of it, as a closure is in Rust; a `function`
+    declaration inside one is `ts-nested`; the arrow functions passed to json-render's
+    `defineRegistry` at the top of a file are closures of no named function (as a closure passed
+    to a crate is);
+  - a `for` is bounded with a counter from a number, `<` or `<=` against a number, an
+    `UPPER_CASE` constant or a `.length`, `++` or `+= 1`, not changed in the body; no `while`;
+  - module-level `let`, `var` and `new` are global state (`ts-global`);
+  - a promise is handled when awaited, returned, or ended with `.catch` or a two-argument
+    `.then`; an `async` arrow in a JSX attribute and `void` of a call are refused;
+  - screens import only `react`, `next/link`, `@/lib/...`, `@/components/ui/...`, other screens
+    and declared packages;
+  - no formatter for TypeScript at L8 (no Prettier in the base): rule 4 counts lines as written.
+- **2026-11-13, L8: the generated files of `web/`** are `package.json` (exact versions,
+  `packageManager: pnpm@12.18.0`), `pnpm-workspace.yaml` (`strictDepBuilds: false`, no
+  `allowBuilds`, so no install script runs; `minimumReleaseAge: 0`, since every version is
+  pinned by hand; `verifyDepsBeforeRun: false`), `next.config.mjs` (static export, trailing
+  slashes, unoptimized images, a fixed build id `lengua` so the export is the same bytes,
+  `typescript.ignoreBuildErrors` since lengua runs `tsc` itself), `tsconfig.json` (strict and
+  the rest; `noUncheckedSideEffectImports: false`, so the layout's `import "./globals.css"`
+  needs no declaration), `vitest.config.mts`, `postcss.config.mjs`, `app/layout.tsx`,
+  `app/globals.css`, a `page.tsx` route per screen, shadcn's components and `lib/utils.ts`,
+  `lib/lengua.ts` (the typed client, `assert`, `useScreen`, `queryParam`), the screen tests and
+  `lengua.sum`. "The lint config" is lengua's own checks in Rust, so there is no ESLint config.
+  The previous text of each is in `web/lengua.sum`, whose hash is the top idea's `web_sha256`.
+- **2026-11-13, L8: the npm packages, 19 direct in `examples/notes`**: the base, `next` 16.4.6,
+  `react` and `react-dom` 19.3.1, `typescript` 7.0.2, `@types/react` and `@types/react-dom`
+  19.3.0, `@types/node` 26.6.6, `tailwindcss` and `@tailwindcss/postcss` 4.3.5, `vitest`
+  5.1.0, `vite` 8.3.8, `happy-dom` 21.0.4, `@testing-library/react` 16.3.3,
+  `@testing-library/dom` 10.4.2 (14, the current release of each on 2026-11-13, read from the
+  npm registry); `clsx` 2.1.1 and `tailwind-merge` 3.7.0 with shadcn; and the example's own
+  `@json-render/core` and `@json-render/react` 0.22.0 and `zod` 4.6.7. No
+  `class-variance-authority`, Radix or `lucide-react`: lengua's copies of shadcn's components
+  use a plain table of classes and plain elements. No `@vitejs/plugin-react`: Vite's own JSX
+  transform is enough. happy-dom, not jsdom (far fewer packages); no `user-event`. TypeScript 7
+  works with Next.js 16.4, whose build runs the project's `tsc`.
+- **2026-11-13, L8: the front end is built in a copy, `target/lengua/web/`,** so `next build`
+  can't change the held files (it applies its own `tsconfig` settings) and `node_modules` stays
+  out of `web/`. pnpm writes `web/pnpm-lock.yaml` at the first build (copied back), and later
+  builds are `--frozen-lockfile`.
+- **2026-11-13, L8: the typed client is generated from `- Route:` lines** (new grammar: a route's
+  path parameters can't be read from examples alone) and the JSON of the server's examples: a
+  type per route's body, answer and failure, a check of each answer's shape at run time, and a
+  function per route. Every route has an example (`route-untested`). Screen tests answer each
+  request from the server's examples, so both sides are held to the same examples.
+- **2026-11-13, L8: screens are server ideas' parts** (`screen-server`); their state for the
+  tests is the object of `useScreen`; their routes are `/` for `home` and `/<name>/`; `Click`
+  once per example; a new key `Expect label`.
+- **2026-11-13, L8: the 40 mutants are spread over the Rust and the TypeScript functions
+  together**; a screen's mutant runs Vitest with two environment variables that the generated
+  Vitest config reads, so nothing is copied.
+- **2026-11-13, L8: the export is served from a generated crate, `lengua_web`,** in
+  `target/lengua/assets`, a path dependency of the program (`exclude = ["target"]` in its
+  `[workspace]`); the server calls `lengua_web::asset(path)`.
+- **2026-11-13, L8: the browser check is Chrome through its DevTools protocol**, from a small
+  client in `lengua-mcp`'s tests on the standard library and `serde_json`, on Linux x86-64 in CI
+  (`LENGUA_CHROME`); no Playwright, which downloads its own browsers.
+- **2026-11-13, L8: the wiki joins both sides**: `api.md` (`lengua Interface`), `# Links` on every
+  idea of an application with screens or routes (out of the idea's hash), `index.md`'s
+  `# Back end`, `# Front end`, `# Interface` and `# Dependencies`.
+
 ## Runs
 
 The five-runner run a landing rests on is at the head it tests, so it is named in the landing report and added here at the next milestone.
@@ -484,3 +584,6 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 - **2026-11-13, L7:** a shell command of the builder that began with `python3 -` (a slip, before
   an edit of `lengua-lint`'s model) was refused. Again a mistake, not a need: the edit went on
   with the editor's tools.
+- **2026-11-13, L8:** a shell command of the builder that began with `perl -v` (a slip, before a
+  `grep`) was refused. Again a mistake, not a need: the work went on with `grep` and the
+  editor's tools.

@@ -2084,6 +2084,25 @@ Decided for lengua 3 at L7 (2026-11-13):
 - **New dependencies of lengua's own**: `wasmtime-wasi-http` 50.0.1 (`p2`) and `hyper` 1 (no
   features, for its re-exported types; already in the graph), both in `lengua-host`.
 
+Decided for lengua 3 at L8 (2026-11-13):
+
+- **The front end is Next.js**, exported statically and served by the back end from a generated
+  crate, `lengua_web`; the front end is built in `target/lengua/web/` with pnpm, `tsc`, Vitest and
+  `next build` before the Rust (section 4, "Web applications" and "The build job").
+- **TypeScript is held like Rust** by a new crate, `crates/lengua-ts`, on `oxc_parser` 0.158.0
+  (section 5, "The same checks for Rust and TypeScript"); `lengua-idea` stays on the standard
+  library and takes the TypeScript check as a function from `lengua-mcp`.
+- **The generated files of `web/`** are held through `web/lengua.sum` and the top idea's
+  `web_sha256`; shadcn/ui's components are lengua's own copies, written by `check`.
+- **The typed client** comes from `- Route:` lines and the server's examples, with a check of each
+  answer's shape at run time; screens call the back end only through it.
+- **The screens' examples** are Vitest tests on happy-dom with Testing Library, answered by the
+  server's examples; Chrome reads the served app's accessibility tree in CI.
+- **The mutants** of the Rust and of the screens share the cap of 40 and the threshold of 80%.
+- **The wiki joins both sides**: `api.md`, `# Links`, the two-sided `index.md`.
+- **The npm packages** are the base, shadcn's two, and those the idea declares, each pinned; the
+  list and the reasons are in `todo.md`.
+
 ## 10. Risks and open questions
 
 - **WASI 0.2, decided at L0 (2026-11-13): lengua 3 targets WASI 0.2, `wasm32-wasip2`.**

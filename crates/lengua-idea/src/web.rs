@@ -264,6 +264,14 @@ fn path_expression(route: &Route) -> String {
     format!("`{}`", parts.join("/"))
 }
 
+fn validator(out: &mut String, name: &str, check: &str) {
+    let value = if check == "true" { "_value" } else { "value" };
+    let _ = writeln!(
+        out,
+        "\nfunction is{name}({value}: unknown): {value} is {name} {{\n  return {check};\n}}"
+    );
+}
+
 fn route_code(route: &Route, out: &mut String) {
     let answer = type_name(route, "Answer");
     let failure = type_name(route, "Failure");
@@ -295,16 +303,8 @@ fn route_code(route: &Route, out: &mut String) {
     } else {
         "undefined"
     };
-    let _ = writeln!(
-        out,
-        "\nfunction is{answer}(value: unknown): value is {answer} {{\n  return {};\n}}",
-        checks.0
-    );
-    let _ = writeln!(
-        out,
-        "\nfunction is{failure}(value: unknown): value is {failure} {{\n  return {};\n}}",
-        checks.1
-    );
+    validator(out, &answer, &checks.0);
+    validator(out, &failure, &checks.1);
     let label = format!("`{} {}`", route.method, route.path);
     let _ = writeln!(
         out,
