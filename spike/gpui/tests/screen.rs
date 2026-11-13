@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    AppContext, Bounds, Context, DevicePixels, Entity, Font, FontId, FontMetrics, FontRun, GlyphId,
+    AppContext, Bounds, Context, DevicePixels, Entity, Font, FontId, FontMetrics, FontRun, GlyphId, Styled,
     IntoElement, LineLayout, Modifiers, NoopTextSystem, ParentElement, Pixels, PlatformTextSystem,
     Render, RenderGlyphParams, Size, TestAppContext, TestDispatcher, TextRenderingMode, Window,
     div,

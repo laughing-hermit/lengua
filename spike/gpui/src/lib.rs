@@ -61,6 +61,13 @@ impl Render for Counter {
 pub fn start() {
     gpui_platform::web_init();
     gpui_platform::single_threaded_web().run(|cx: &mut gpui::App| {
+        let fonts = vec![
+            std::borrow::Cow::Borrowed(include_bytes!("../fonts/IBMPlexSans-Regular.ttf").as_slice()),
+            std::borrow::Cow::Borrowed(include_bytes!("../fonts/IBMPlexSans-SemiBold.ttf").as_slice()),
+        ];
+        if let Err(error) = cx.text_system().add_fonts(fonts) {
+            web_sys_free_log(&error.to_string());
+        }
         gpui_component::init(cx);
         let opened = cx.open_window(gpui::WindowOptions::default(), |window, cx| {
             let view = cx.new(|cx| Counter::new(window, cx));
@@ -69,3 +76,6 @@ pub fn start() {
         drop(opened);
     });
 }
+
+#[cfg(target_family = "wasm")]
+fn web_sys_free_log(_text: &str) {}

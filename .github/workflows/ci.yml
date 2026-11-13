@@ -288,6 +288,12 @@ jobs:
         run: |
           rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal --component clippy --target wasm32-unknown-unknown
           rustc --version
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            spike/gpui/target
+          key: spike-${{ hashFiles('spike/gpui/Cargo.toml') }}
       - name: wasm-bindgen 0.2.130, pinned by SHA-256
         run: |
           curl -sSfL -o wb.tar.gz https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.130/wasm-bindgen-0.2.130-x86_64-unknown-linux-musl.tar.gz
@@ -332,7 +338,7 @@ jobs:
             timeout 60 google-chrome --headless=new --no-sandbox $flags --window-size=800,600 --virtual-time-budget=20000 --enable-logging=stderr --v=0 --dump-dom http://127.0.0.1:8099/index.html 2> chrome.log | head -c 3000
             echo
             grep -i 'console\|error\|webgl\|webgpu\|gpui' chrome.log | head -40
-            timeout 60 google-chrome --headless=new --no-sandbox $flags --window-size=800,600 --virtual-time-budget=20000 --screenshot="$PWD/shot-$(echo $flags | wc -c).png" http://127.0.0.1:8099/index.html 2>/dev/null || true
+            timeout 60 google-chrome --headless=new --no-sandbox $flags --window-size=800,600 --virtual-time-budget=30000 --screenshot="$PWD/shot-$(echo $flags | wc -c).png" http://127.0.0.1:8099/index.html 2>/dev/null || true
           done
           ls -l *.png || true
       - uses: actions/upload-artifact@v5
