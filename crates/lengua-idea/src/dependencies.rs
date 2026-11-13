@@ -98,8 +98,9 @@ fn uses_unsafe(dir: &Path) -> bool {
 }
 
 fn links_a_library(dir: &Path) -> bool {
-    fs::read_to_string(dir.join("build.rs"))
-        .is_ok_and(|script| script.contains("rustc-link-lib") || script.contains("rustc-link-search"))
+    fs::read_to_string(dir.join("build.rs")).is_ok_and(|script| {
+        script.contains("rustc-link-lib") || script.contains("rustc-link-search")
+    })
 }
 
 fn not_pure(dir: &Path) -> bool {
@@ -211,7 +212,9 @@ pub(crate) fn count(folder: &Path, declared: &[(String, String)]) -> Count {
             count.native.push(label);
         }
     }
-    write_cache(folder, &hash, &count);
+    if count.unread.is_empty() {
+        write_cache(folder, &hash, &count);
+    }
     count
 }
 

@@ -1303,7 +1303,9 @@ the folder's root are OKF's reserved files (OKF sections 8 and 9).
   comments, in their sources in Cargo's folder), which are not pure Rust (a `links` key with a build script that links a native library, or
   `cc`, `cmake`, `pkg-config`, `bindgen` or `vcpkg` among their build dependencies), and any
   whose source lengua could not read. The count is kept in `target/lengua/crates.txt` under the
-  `Cargo.lock`'s SHA-256. An idea's title is its `title` (above).
+  `Cargo.lock`'s SHA-256 once every source was read (before the first build ends, Cargo has
+  not downloaded them all; run 43519544263 kept a count made too early). An idea's title is its
+  `title` (above).
 - **Every page in the folder is a concept** (since L9): each `.md` file of the folder other than
   `index.md` and `log.md` (the ideas, the component pages, and any page the agent adds, such
   as `vision.md` at L11) has frontmatter with a non-empty `type` (`okf-type` otherwise), and
