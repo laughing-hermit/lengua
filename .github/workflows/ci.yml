@@ -178,6 +178,8 @@ jobs:
           cargo --version
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked
+      - name: lengua's own std-only crates, built for WebAssembly (wasm32-wasip2)
+        run: cargo build --locked --target wasm32-wasip2 -p lengua-idea -p lengua-lint
       - name: tests built
         if: ${{ needs.plan.outputs.mode == 'compile' }}
         run: cargo test --workspace --locked --no-run
@@ -191,6 +193,25 @@ jobs:
             echo "$f: $(wc -c < "$f") bytes"
             cargo run --locked -q -p lengua-mcp -- imports "$f"
           done
+      - name: the bytes of the built components, for the check that every system builds the same
+        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+        run: |
+          mkdir -p same
+          for pair in "hello target/tmp/lengua-mcp-hello/hello/target/wasm32-wasip2/release/hello.wasm" \
+                      "shop target/tmp/lengua-mcp-shop/examples/shop/target/wasm32-wasip2/release/shop.wasm"; do
+            set -- $pair
+            if [ -f "$2" ]; then
+              cp "$2" "same/$1.wasm"
+            fi
+          done
+          ls -l same
+          cd same && (sha256sum *.wasm 2> /dev/null || shasum -a 256 *.wasm) | tee sums.txt
+      - uses: actions/upload-artifact@v5
+        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+        with:
+          name: built-${{ matrix.target }}
+          path: same
+          if-no-files-found: ignore
       - name: the shared libraries, checked by the tests, built for wasm32-unknown-unknown too
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |
@@ -275,3 +296,39 @@ jobs:
           time (for i in $(seq 20); do ./target/release/lengua-run --version > /dev/null; done)
           TIMEFORMAT='lengua-mcp --version, 20 runs: %R s'
           time (for i in $(seq 20); do ./target/release/lengua-mcp --version > /dev/null; done)
+
+  same-bytes:
+    needs: [plan, check]
+    if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: built-*
+          path: built
+      - name: hello and the shop have the same SHA-256 on every system that built them
+        run: |
+          ls built
+          status=0
+          for name in hello shop; do
+            echo "== $name"
+            first=""
+            for dir in built/built-*; do
+              file="$dir/$name.wasm"
+              if [ ! -f "$file" ]; then
+                echo "$(basename "$dir"): not built"
+                status=1
+                continue
+              fi
+              echo "$(basename "$dir"): $(wc -c < "$file") bytes, $(sha256sum "$file" | cut -d' ' -f1)"
+              if [ -z "$first" ]; then
+                first="$file"
+              elif ! cmp -s "$first" "$file"; then
+                status=1
+                echo "  differs from $(basename "$(dirname "$first")"): $(cmp -l "$first" "$file" | wc -l) bytes differ; the first differences:"
+                cmp -l "$first" "$file" | head -20 || true
+                diff <(strings -n 8 "$first") <(strings -n 8 "$file") | head -40 || true
+              fi
+            done
+          done
+          exit $status

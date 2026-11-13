@@ -98,7 +98,9 @@ The rule for a native part:
 
 The two native programs that lengua itself is made of, `lengua-mcp` and `lengua-run`, are the
 standing exception: something native must run the WebAssembly. lengua's own std-only
-libraries are also built for WebAssembly, so the checker could one day run as WebAssembly too.
+libraries are also built for WebAssembly, so the checker could one day run as WebAssembly too:
+since L8, CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2` on every runner, and a
+failure fails the run.
 
 **Where it runs, said plainly.** The user is never surprised:
 - before any code is written, the `write-idea` skill says whether the request will be one
@@ -1690,6 +1692,18 @@ Decided for lengua 3 at L7 (2026-11-13):
 - **New dependencies of lengua's own**: `wasmtime-wasi-http` 50.0.1 (`p2`) and `hyper` 1 (no
   features, for its re-exported types; already in the graph), both in `lengua-host`.
 
+Decided for lengua 3 at L8 (2026-11-13), the parts that do not depend on the front end:
+
+- **Builds hold no paths of one computer.** Every cargo call of the build job gets
+  `CARGO_ENCODED_RUSTFLAGS`: the `RUSTFLAGS` of its environment and `--remap-path-prefix` for
+  the Cargo home (`/cargo`), the program's folder (`/app`, the folder of `idea.md` above the
+  call's folder) and each path dependency of its `Cargo.toml` (`/<name>`). Cargo's network
+  retries are 10 (`CARGO_NET_RETRY`).
+- **CI holds `hello` and the shop to one SHA-256 on every runner** (the job `same-bytes`, from
+  the components each check job uploads), and prints the bytes that differ when they do not.
+- **CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2`** on every runner, and a
+  failure fails the run (section 1).
+
 ## 10. Risks and open questions
 
 - **WASI 0.2, decided at L0 (2026-11-13): lengua 3 targets WASI 0.2, `wasm32-wasip2`.**
@@ -1826,6 +1840,39 @@ Decided for lengua 3 at L7 (2026-11-13):
   default, and lengua's `wit/world.wit` is a statement for the host, not WIT for a binding
   generator (it imports WASI with no `wit/deps/`). A program writes `path: []` with `inline`; the
   `build` skill (L9) says so.
+- **History: GPUI's web target, tried at L8 and dropped on 2026-11-13.** The owner then chose
+  Leptos for the front end and Tauri for the desktop; GPUI, GPUI Kit, Next.js and Electron are
+  dropped. The work is kept at the tag `archive/l8-gpui`. What was found, in CI on Linux x86-64:
+  - **The pin:** GPUI Kit (`gpui-component` 0.9.1, 2026-11-09) requires `gpui-pre` `=0.3.12`, the
+    crates.io snapshot of Zed commit `d2a4fb6ded7c470be25d1541281da3882495b65b`, so one Zed commit
+    could be pinned only through that exact version, not through a `git` dependency with
+    `rev =`, which would put a second, incompatible `gpui` in the graph.
+  - **What built:** GPUI and GPUI Kit built for `wasm32-unknown-unknown` on stable Rust 1.100.0
+    with the web platform single-threaded (default features off); the default `multithreaded`
+    needs a nightly toolchain and a cross-origin-isolated page. A cold release build (LTO, one
+    codegen unit) took 3 min 18 s; the `.wasm` had 23,051,428 bytes, 20,977,185 after
+    `wasm-bindgen` 0.2.130 (about 21 MB), and the loader 161,147 bytes; 466 crates in the
+    browser's graph, 801 in the lock with the native tests' (runs 43490423487, 43491793393).
+  - **The GPU:** headless Chrome 157 on the runner has no WebGPU adapter; GPUI fell back to WebGL2
+    through SwiftShader and drew a GPUI Kit button and text field. WebGPU on a real GPU was not
+    exercised.
+  - **Fonts were needed:** with no fonts, GPUI panicked at its first text
+    (`gpui-pre-0.3.12/src/text_system.rs:620`); its web text system has none of its own and falls
+    back to IBM Plex Sans, which then had to be shipped in the file.
+  - **Accessibility:** GPUI builds its AccessKit tree only when not compiled for wasm
+    (`gpui/src/window.rs`, `cfg(not(target_family = "wasm"))`), and `gpui_web` has no
+    accessibility code, so a screen reader could reach only GPUI's canvas and its hidden
+    `textarea`, never its text. Read from the source; the DevTools check of the accessibility
+    tree never ran.
+  - **Tests:** natively, GPUI's `TestAppContext` ran a screen: a click at a debug selector,
+    typing into a text field, and the text of the last frame through a recording text system
+    (2 min 16 s to build, 0.03 s to run).
+  - **Paths:** the browser's `.wasm` held the absolute paths of the Cargo home in its panic
+    messages; this led to the remapping of L8 (section 9).
+  - **How far the whole application got** (an example of three screens, runs 43496636597 to
+    43508359575): the front end built, `wasm-bindgen` ran and the one file was made; the screens'
+    tests, their mutants, the serving by `lengua-run` and the browser test never passed before
+    the change of direction.
 
 ## Sources
 
