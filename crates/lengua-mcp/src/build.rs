@@ -465,7 +465,9 @@ pub(crate) fn tool(
 ) -> Result<(bool, String), String> {
     let mut command = Command::new(program);
     if program == "cargo" {
-        command.env("CARGO_ENCODED_RUSTFLAGS", encoded_flags(folder));
+        command
+            .env("CARGO_ENCODED_RUSTFLAGS", encoded_flags(folder))
+            .env("CARGO_NET_RETRY", "10");
     }
     let mut child = command
         .args(args)
@@ -511,10 +513,11 @@ fn fetch(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> Result<()
     if build.crates == 0 || fs::read_to_string(&stamp).is_ok_and(|s| s == hash) {
         return Ok(());
     }
-    let mut args = vec!["fetch", "--target", build.target];
-    if let Some(front) = &build.front {
-        args.extend(["--target", front.target]);
-    }
+    let args: Vec<&str> = if build.front.is_some() {
+        vec!["fetch"]
+    } else {
+        vec!["fetch", "--target", build.target]
+    };
     match cargo(folder, &args, slot) {
         Ok((true, _)) => {
             let _ = stamp.parent().map(fs::create_dir_all);

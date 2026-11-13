@@ -527,7 +527,7 @@ The generated `Cargo.toml` makes the folder a workspace of three packages (`memb
 ["web/app", "web/files"]`), so one `Cargo.lock` pins the server's and the front end's crates
 together, and the lock signs it.
 
-**The build job**, for a program with screens, after the fetch (now for both targets):
+**The build job**, for a program with screens, after the fetch (`cargo fetch` with no `--target`, since the front end's build also needs host crates that a fetch for the two targets leaves out):
 `cargo fmt --check -p <name>` and `rustfmt --check --edition 2024` on each screen file; `cargo
 clippy -p <name>-app --release --target wasm32-unknown-unknown -- -D warnings` and `cargo build
 -p <name>-app`; `wasm-bindgen <the app's .wasm> --target web --no-typescript --out-dir
