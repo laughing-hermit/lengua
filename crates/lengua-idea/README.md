@@ -7,7 +7,9 @@ four sections, the behaviours and their examples, the constraints, the structure
 and ASD-STE100 Simplified Technical English. It collects every problem of every idea in one
 pass. When there are no problems, it makes `Cargo.toml` and `wit/world.wit` from the ideas,
 holds the ones already there to what it wrote, and writes them with the wiki: the frontmatter
-of each idea, `index.md` and `log.md`. It uses the Rust standard library and `lengua-lint`
+of each idea, `index.md` and `log.md`, with the trust label it is given. It reads every
+example and Cases block as a test, draws the cases of a block, and gives the mutants of the
+code through `lengua-lint`. It uses the Rust standard library and `lengua-lint`
 (itself on the standard library alone) only. The grammar and
 the formats are in
 [Lengua3.md](../../Lengua3.md), section 4, "The idea file's grammar", "What the STE check
@@ -20,6 +22,12 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
 - Given a folder whose ideas follow the grammar, when `check` runs, then it gives no findings
   and writes the frontmatter of each idea, `index.md`, `log.md`, `Cargo.toml` and
   `wit/world.wit`, and its report has the build's package, file and key.
+- Given a label and a score from the build job, when `check_with` runs, then the frontmatter of
+  every idea and `index.md` carry the label and the log entry the label and the score.
+- Given an example or a Cases block, when the ideas are read, then the build carries it as a
+  `Test` with its input and its expectations, and `cases` gives its runs: one for an example,
+  and for a Cases block the boundary values of its ranges first, then 20 drawn from a fixed
+  seed.
 - Given the same folder, when `check` runs again, then it writes only `log.md`, with an entry
   that says nothing changed.
 - Given a Rust file that changed while its idea did not, when `check` runs, then its reply has
@@ -35,8 +43,13 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
 
 ## Structure
 
-- `check` (`lib.rs`): with `prepare`, finds the idea files, reads each one, links the modules,
-  sorts the findings and, with none, makes the generated files; then writes them with the wiki.
+- `check` and `check_with` (`lib.rs`): with `prepare`, find the idea files, read each one, link the modules,
+  sort the findings and, with none, make the generated files; then write them with the wiki,
+  with the label that `check_with`'s function gives for the build (`check` gives `unchecked`),
+  and read the ideas again for the lines of the tests in the files as written.
+- `Label` (with `Label::name`), `Trust` (with `Trust::text`), `tests_hash` and `mutants`
+  (`lib.rs`): the trust label and the score, the hash of the tests with the grants (part of
+  the build's key), and the mutants of the program's Rust files.
 - `program` (`lib.rs`): does what `check` does without writing anything, for the host's `run`.
 - `Finding`, `Note`, `Report` (`lib.rs`): the reply of `check` and `program`.
 - `Sink::new`, `Sink::add` (`lib.rs`): collect the findings of one file.
@@ -51,9 +64,13 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
 - `frontmatter.rs`: `split` reads the frontmatter and `Front::render` writes it back with
   lengua's keys first; `Front::value` and `Front::body_text` read it.
 - `idea.rs`: `parse` splits the sections and reads `# Purpose` (`purpose`).
-- `behaviours.rs`: `parse` reads the behaviours, `statement` the Given, When and Then lines,
+- `cases.rs`: `Test`, `Range`, `End` (with `End::name` and `End::parse`) and `Case` are a
+  test and a run of it; `cases` draws the runs of a block (`boundaries`, `pick`, `drawn`, a
+  `Draw` from `seed`) and fills its strings (`filled`, `fill`); `CASES_DRAWN` is 20.
+- `behaviours.rs`: `parse` reads the behaviours and gives each block as a `Test`, `statement`
+  the Given, When and Then lines,
   `block` an Example or Cases block, and `items`, `fenced`, `one_string`, `strings`,
-  `state_value`, `values`, `key_place`, `range`, `integer_range`, `text_range`,
+  `state_value`, `values`, `record`, `key_place`, `range`, `integer_range`, `text_range`,
   `template_names` and `templates` their items.
 - `constraints.rs`: `parse` and `Reader::item` read the constraints; `module_name`, `names`,
   `reads`, `files_in` (with `folder`), `host_port`, `amount`, `semver` and `crate_line` check
@@ -68,7 +85,8 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
   `wit/world.wit` (`world` and `world_names`: the always set, then the interfaces of each
   grant from `interfaces`), checks the
   package's name (`package_name`) and the crates (`crates`), and holds the files there
-  (`held`, `first_difference`); `artifact` names the built file and `inputs` (with `collect`)
+  (`held`, `first_difference`); `artifact` names the built file and `inputs` (with `collect`:
+  the generated texts, the files of `src/` and the tests' hash)
   gives the build's key.
 - `ste.rs`: `Dictionary::load` reads `ste-words.txt` and `ste-replace.txt`;
   `Dictionary::paragraph`, `description` and `words` check text with the STE rules.

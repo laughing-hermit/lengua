@@ -116,12 +116,12 @@ fn place(root: &Path, build: &Build, test: &Test) -> Result<(), String> {
     for folder in &build.grants.folders {
         fs::create_dir_all(root.join(&folder.path)).map_err(fail)?;
     }
-    for (path, text) in &test.files {
+    for (path, content) in &test.files {
         let file = root.join(path);
         if let Some(parent) = file.parent() {
             fs::create_dir_all(parent).map_err(fail)?;
         }
-        fs::write(&file, text).map_err(fail)?;
+        fs::write(&file, content).map_err(fail)?;
     }
     Ok(())
 }

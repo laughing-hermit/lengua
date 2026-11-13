@@ -6,8 +6,10 @@
 of 10 that lengua's lint holds: rules 1, 2, 4, 5, 6, 8, 10 (the attributes that turn a warning
 off), 11 and 12. It uses the Rust standard library only: its own tokenizer of Rust's lexical
 grammar and its own reader of items and function bodies, no `syn`. What it can't read soundly is
-the finding `rust-read`, not a guess. What each rule accepts and refuses, and what the reader
-resolves, is in [Lengua3.md](../../Lengua3.md), section 5.
+the finding `rust-read`, not a guess. Since L5 it also makes the mutants of a program's code
+for the mutation score. What each rule accepts and refuses, and what the reader
+resolves, is in [Lengua3.md](../../Lengua3.md), section 5; the mutations are in section 7, "How
+the tests run".
 
 ## Behaviours
 
@@ -15,6 +17,9 @@ resolves, is in [Lengua3.md](../../Lengua3.md), section 5.
   `lint` runs, then it gives every finding of every rule, each with the file, the line, the
   code and a plain message, sorted by file and line.
 - Given a program that keeps every rule, when `lint` runs, then it gives no findings.
+- Given the Rust files of a program and a cap, when `mutants` runs, then it gives at most the
+  cap of mutants, spread over the functions, each with its file, line, function, change and
+  edits, and the program's text with the bodies of its functions left out.
 - Given a file that the tokenizer can't read (a string or a comment with no end, a delimiter
   that does not close), when `lint` runs, then it gives one `rust-read` finding for the file
   and checks the other files.
@@ -25,7 +30,8 @@ resolves, is in [Lengua3.md](../../Lengua3.md), section 5.
   `file_rules` (comments, tokens, macro definitions, loops in macros), `function_rules`
   (loops, nested items, length), `assertions` (with `assertions_in`), `recursion` and
   `structure`; `finding` makes a finding; `Finding`, `Source` and `LINES` are its interface.
-- `lex.rs`: `tokens` cuts the text into tokens with the `Lexer` (`peek`, `bump`, `bump_n`,
+- `lex.rs`: `tokens` cuts the text into tokens, each with its line and its byte offsets, with
+  the `Lexer` (`peek`, `bump`, `bump_n`,
   `eat_while`, `push`, `shebang`, `token`, `block_comment`, `raw_prefix`, `raw_string`,
   `string`, `quote`, `exponent`, `number`); `Token::is`, `Kind`, `Error`, `ident_start`,
   `ident_continue`, `digit` and `unterminated` help it.
@@ -55,3 +61,9 @@ resolves, is in [Lengua3.md](../../Lengua3.md), section 5.
 - `tests/rules.rs`: for every rule, a program that breaks it is refused with that rule's code,
   and a program that keeps them all has no findings; `lex.rs` has the tokenizer's tests,
   tricky inputs and random slices among them.
+- `mutate.rs`: `mutants` reads each file and, for each function (`function_mutants`), finds
+  the places to change (`site`: `operator`, with `operand_end` and `operand_start`; `integer`;
+  the booleans with `replaced`; `negate` for a condition; `default_return`), leaving out the
+  arguments of assertions (`assertion_spans`), and spreads the cap over the functions; `apply`
+  makes a mutant's text from its `Edit`s; `Mutant`, `Mutation`, `Site`, `OPERATORS` and
+  `DEFAULTS` are its data, `joined` and `line_start` its helpers.

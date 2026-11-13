@@ -146,8 +146,8 @@ fn drawn(range: &Range, boundary: Option<usize>, draw: &mut Draw) -> String {
 }
 
 fn seed(test: &Test) -> u64 {
-    let text = format!("{}\0{}\0{:?}", test.behaviour, test.name, test.ranges);
-    let hex = sha256::hex(text.as_bytes());
+    let named = format!("{}\0{}\0{:?}", test.behaviour, test.name, test.ranges);
+    let hex = sha256::hex(named.as_bytes());
     u64::from_str_radix(hex.get(..16).unwrap_or("0"), 16).unwrap_or(0)
 }
 
@@ -177,10 +177,10 @@ pub(crate) fn fill(text: &str, values: &[(String, String)]) -> String {
 }
 
 fn filled(test: &Test, values: &[(String, String)]) -> Test {
-    let one = |text: &String| fill(text, values);
+    let one = |written: &String| fill(written, values);
     let pairs = |list: &[(String, String)]| -> Vec<(String, String)> {
         list.iter()
-            .map(|(path, text)| (path.clone(), fill(text, values)))
+            .map(|(path, written)| (path.clone(), fill(written, values)))
             .collect()
     };
     Test {

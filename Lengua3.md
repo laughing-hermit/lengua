@@ -202,7 +202,8 @@ space or `-`), a blank line or a `#` comment. A key may be there one time only.
   (`lengua Program`, `lengua Module` or `lengua Screen`), `description` (the first sentence of
   `# Purpose`), `module` (`main` for the top idea), `source` (`src/main.rs`, `src/<name>.rs`,
   `src/ui/<name>.rs`), `uses` and `used_by` (OKF concept ids, the file without `.md`: `idea`,
-  `ideas/cart`, `ideas/ui/basket`), `label` (`unchecked` until the tests run at L5),
+  `ideas/cart`, `ideas/ui/basket`), `label` (`unchecked`, `tested` or `checked`, section 6;
+  since L5 the program's label, on every idea of it),
   `idea_sha256` (the SHA-256 of the idea's text after the frontmatter, blank lines at its
   start left out) and `source_sha256` (of the Rust file, or `none`); on the top idea only,
   `cargo_sha256` and `world_sha256`, the SHA-256 of the `Cargo.toml` and `wit/world.wit` that
@@ -247,9 +248,10 @@ standard input, no arguments and no files unless the example gives them):
 | `Standard input` | a string | the bytes on standard input |
 | `Arguments` | strings with spaces between them | the arguments after the program's name |
 | ``File `<path>` `` | a string | a file that is there before the run |
-| `Expect standard output` | a string | standard output, compared exactly |
+| `Expect standard output` | a string | standard output, compared exactly; when absent, the standard output is empty |
 | `Expect standard error` | a string | standard error, compared exactly; not compared when absent |
-| `Expect exit code` | a number from 0 to 255 | the exit code; every example has it |
+| `Expect end` | `exited`, `out of time`, `out of memory` or `trapped` | how the run ends (since L5); `exited` when absent |
+| `Expect exit code` | a number from 0 to 255 | the exit code; every example that ends `exited` has it, and no other example has it |
 | ``Expect file `<path>` `` | a string | a file's content after the run, compared exactly |
 
 The keys of a screen example (state and text are compared; pixels are not, section 7):
@@ -286,7 +288,8 @@ range or more:
 Its other items are the example keys, and a string there can name a range as `{<name>}`
 (`{{` and `}}` are braces). Every name must be a range of the block, and every range must be
 used. Ranges and `{...}` are only in Cases blocks; in an Example, a brace is a brace. lengua
-draws boundary values first, then values from a fixed seed (at L5).
+draws boundary values first, then 20 values from a fixed seed (section 7, "How the tests
+run").
 
 **`# Constraints`**: only list items, one line each, `- <Key>: <value>`:
 
@@ -393,8 +396,12 @@ imports `wasi:cli/environment`, `stdin`, `terminal-input`, `terminal-stdin` and
 `wasi:clocks/monotonic-clock` even for hello world (section 10), so the world has an *always*
 set that holds them, and the host links them with nothing behind them unless the idea grants
 them: no arguments and no environment variables, an empty standard input, no terminal, and a
-monotonic clock that only moves forward, 1 ms at each read. Every other interface (files,
-sockets, random numbers, the wall clock, HTTP) is in the world only when granted.
+monotonic clock that only moves forward, 1 ms at each read. Since L5 the always set also holds
+`wasi:random/insecure-seed`, from which `std`'s `RandomState` takes the keys of every `HashMap`
+and `HashSet` (section 10): without `- Reads: random numbers` the host gives it a fixed value,
+so a `HashMap` works with no grant and gives the same order on every run, while random numbers
+themselves (`wasi:random/random` and `insecure`) still need the grant. Every other interface
+(files, sockets, random numbers, the wall clock, HTTP) is in the world only when granted.
 
 Two checks hold it:
 - **At check:** when the build ends, `check` compiles the component with Wasmtime and reads its
@@ -497,6 +504,7 @@ world program {
   import wasi:io/error@0.2.12;
   import wasi:io/poll@0.2.12;
   import wasi:io/streams@0.2.12;
+  import wasi:random/insecure-seed@0.2.12;
 
   export wasi:cli/run@0.2.12;
 }
@@ -510,11 +518,11 @@ for a library). The interfaces of each grant, with the interfaces their types co
 
 | Grant | Interfaces |
 |---|---|
-| always (standard output, standard error, the exit code, and what `std` imports with no grant, since L3) | `wasi:cli/environment`, `exit`, `stdin`, `stdout`, `stderr`, `terminal-input`, `terminal-output`, `terminal-stdin`, `terminal-stdout`, `terminal-stderr`; `wasi:clocks/monotonic-clock`; `wasi:io/error`, `poll`, `streams` |
+| always (standard output, standard error, the exit code, and what `std` imports with no grant, since L3) | `wasi:cli/environment`, `exit`, `stdin`, `stdout`, `stderr`, `terminal-input`, `terminal-output`, `terminal-stdin`, `terminal-stdout`, `terminal-stderr`; `wasi:clocks/monotonic-clock`; `wasi:io/error`, `poll`, `streams`; since L5 `wasi:random/insecure-seed` (the keys of `HashMap`) |
 | `- Reads: standard input` | none more: the host gives the input (below) |
 | `- Reads: arguments` | none more: the host gives the arguments, and never environment variables |
 | `- Reads: the clock` | `wasi:clocks/wall-clock`; the host gives its real clocks |
-| `- Reads: random numbers` | `wasi:random/random`, `insecure`, `insecure-seed` |
+| `- Reads: random numbers` | `wasi:random/random`, `insecure` (and `insecure-seed`, already in the always set) |
 | `- Reads:` or `- Writes: files in ...` | `wasi:filesystem/types`, `preopens`; `wasi:clocks/wall-clock` (for the type `datetime`) |
 | `- Connects to: ...` | `wasi:sockets/network`, `instance-network`, `tcp`, `tcp-create-socket`, `ip-name-lookup`; `wasi:clocks/monotonic-clock` (for the type `duration`) |
 
@@ -536,9 +544,13 @@ background, in the program's folder, on a thread with one child process:
 - since L4, `cargo fmt --check`, whose differences are `rust-format` findings, then `cargo
   clippy --release --target wasm32-wasip2 --offline --message-format=short -- -D warnings`
   (section 5);
-- then `cargo build --release --target wasm32-wasip2 --offline --message-format=short`.
+- then `cargo build --release --target wasm32-wasip2 --offline --message-format=short`;
+- since L5, when the component checks pass, the tests (`testing`), then the mutants
+  (`mutating`), on the same thread (section 7).
 
-The job's key is the SHA-256 of `Cargo.toml`, `wit/world.wit` and every file in `src/`. A
+The job's key is the SHA-256 of `Cargo.toml`, `wit/world.wit`, every file in `src/` and,
+since L5, the tests of every idea with the grants (so a change of an example runs the tests
+again, and a change of the purpose alone does not). A
 `check` with the same key replies with the job's state and starts nothing; a `check` with a
 new key stops the job that runs (if one does) and starts a new one. A built component that is
 no longer there is built again. Before a new job, `check` runs `doctor`'s checks; when a part
@@ -551,8 +563,16 @@ is missing, the build is `build_failed` with one finding, `toolchain-missing`, w
 |---|---|---|
 | `no_code` | there is no `src/main.rs` yet; nothing is built | `target` |
 | `building` | the build runs; call `check` again | `seconds` so far, `target` |
-| `built` | the build passed | `seconds` it took, `target`, `component` (its absolute path), `size` (bytes), `sha256` |
 | `build_failed` | the build failed | `seconds`, `target`; the errors are in `findings` |
+| `testing` (since L5) | the component is built and the tests run; call `check` again | `component` (its absolute path), `size` (bytes), `sha256`; `tests` with `total`, `run` and `failed` |
+| `tests_failed` | a test failed | as `testing`; each failed run is a finding (section 7) |
+| `mutating` | every test passed and the mutants run; call `check` again | as `testing`; `mutants` with `total`, `done`, `caught`, `survived`, `unbuilt`, `same` and `cached` |
+| `done` | the job ended: built, tested and measured | as `mutating`; `seconds` it took |
+
+L4's state `built` is gone: a built component goes on to `testing`. Next to `build`, the reply
+has `label` (`unchecked` until `done`, then `checked` or `tested`, section 6) and `score` (the
+mutation score in percent, or none when no mutant counted), and each mutant that survived is a
+note with its file and line. No tool call waits for the job: each `check` replies at once.
 
 The compiler's errors and warnings become findings, all of them, in the format of L1: the
 file relative to the folder (with `/`), the line, the code `rust-error` or `rust-warning`, and
@@ -589,12 +609,12 @@ How each grant maps to the host:
 
 | Grant | The host |
 |---|---|
-| always | standard output and standard error to memory (16 MiB each, returned by `run`); standard input empty; no terminal; the exit code |
+| always | standard output and standard error to memory (16 MiB each, returned by `run`); standard input empty; no terminal; the exit code; since L5, `insecure-seed` with a fixed value unless random numbers are granted |
 | none for the environment | no environment variables, ever; no arguments unless granted |
 | `- Reads: standard input` | the `stdin` of the `run` call as the standard input; without the grant, `run` with `stdin` is refused |
 | `- Reads: arguments` | the folder's name and the `arguments` of the `run` call; without the grant, `run` with arguments is refused |
 | `- Reads: the clock` | the real wall clock and monotonic clock; without it, the monotonic clock moves 1 ms at each read, and the wall clock (there only for the files' type `datetime`) reads 2026-01-01T00:00:00Z |
-| `- Reads: random numbers` | Wasmtime's random number generators |
+| `- Reads: random numbers` | Wasmtime's random number generators, and its real `insecure-seed` |
 | ``- Reads: files in `<folder>` `` | the folder, preopened under its own name (`data/...` in the program), read-only; a folder that is not there is a refusal |
 | ``- Writes: files in `<folder>` `` | the folder, preopened read-write, made when it is not there |
 | `- Memory:` | a `ResourceLimiter` refuses to grow a memory past it; the program stops and `run` replies `out_of_memory` |
@@ -604,7 +624,7 @@ How each grant maps to the host:
 Wasmtime keeps a preopened folder's paths inside it: `..` out of it, an absolute path, and a
 symbolic link that points out of it are refused (tested at L3).
 
-**Fixed runs.** `run` with `fixed: true`, as the tests of L5 will run, gives the wall clock
+**Fixed runs.** `run` with `fixed: true`, as the tests run since L5, gives the wall clock
 2026-01-01T00:00:00Z, the stepped monotonic clock, and random numbers from a fixed seed
 (Wasmtime's `Deterministic` over 4,096 bytes made by SplitMix64), so two runs give the same
 output on every system.
@@ -778,7 +798,10 @@ Decided at L1 (2026-11-13). The folder is an OKF v0.2 bundle: every idea is a co
 
   An idea or a code file is *new* when the frontmatter had no hash for it, *changed* when the
   hash differs, and *removed* when its code file is gone. A check that changed nothing ends
-  its first line with `; nothing changed`. Each *Note* is also in the reply's `notes`.
+  its first line with `; nothing changed`. Each *Note* is also in the reply's `notes`. Since L5
+  the label is the program's (section 6), and when it is `checked` or `tested` the first line
+  also has the score: ``label `checked`, mutation score 6 of 6 (100%)``, or ``label `checked`, no
+  mutant counted``.
 
 ## 5. The Power of 10, for Rust compiled to WebAssembly
 
@@ -895,12 +918,31 @@ NaNs are canonical.
 
 | Label | Means |
 |---|---|
-| `checked` | Built by lengua, every rule holds, every test passes, and the mutation score is above the threshold |
-| `tested` | Built by lengua, every rule holds and every test passes, but the tests are weak: the mutation score is under the threshold |
-| `trusted` | A component lengua did not build; it runs under the grants, and its tests run, but nothing about its code is checked |
+| `unchecked` | Not yet through every check: the job runs, a test failed, the build failed, or there is no code |
+| `checked` | Built by lengua, every rule holds, every test passes, and the mutation score is at or above the threshold, 80% |
+| `tested` | Built by lengua, every rule holds and every test passes, but the tests are weak: the mutation score is under 80% |
+| `trusted` | A component lengua did not build; it runs under the grants, and its tests run, but nothing about its code is checked (L7) |
 
 `check`'s reply and the wiki show the label of every program. A program that uses a `trusted`
 component says so.
+
+Decided at L5 (2026-11-13):
+
+- **The threshold is 80%**: `checked` when caught × 100 ≥ 80 × counted. Some mutants can't be
+  caught by any test (a change the program's output never shows, such as the start of a loop
+  that runs past its time limit), so 100% would ask for the impossible; 80% is the bar that
+  mutation tools commonly set as "high" (Stryker's default `high` is 80), and it still asks for
+  a test of every boundary and every branch in a small program. Under it, the surviving
+  mutants are notes, so the agent knows which tests to add.
+- **The label is the program's**: every idea of the program, `index.md`'s lines and the log
+  entry carry the same label, since the tests and the score are the program's as a whole.
+- **No mutant counted is `checked`**: a program whose code has no place to mutate (hello world
+  is one `println!`), or whose mutants all fail to build or build to the same component, has
+  nothing the tests could miss; its score is none, and the log says `no mutant counted`.
+- **When the label is written:** `check` writes the wiki before it starts or asks about the
+  job, so the label in the wiki is the one of the job that was `done` at that call; the next
+  `check` after the job ends writes `checked` or `tested`. A failed test, a failed build and a
+  running job all give `unchecked`.
 
 ## 7. Tests
 
@@ -915,6 +957,101 @@ component says so.
   context: given the state, when the user clicks or types, then the state and what is shown.
   The screen is not compared pixel by pixel; the tests compare state and text, not images.
 - **Deterministic:** the same input gives the same output on every system, every time.
+
+### How the tests run
+
+Decided at L5 (2026-11-13), in `crates/lengua-mcp/src/testing.rs` and `mutation.rs`, with the
+drawing of cases in `crates/lengua-idea/src/cases.rs` and the mutator in
+`crates/lengua-lint/src/mutate.rs`.
+
+**Which tests.** Every `### Example:` and `### Cases:` block of every idea, the top one and
+each module's, in the order of the ideas and then of the file, runs against the program's one
+component: a module's examples are examples of the program. A screen's examples
+(`ideas/ui/`) run at L8 with GPUI's test context; until then each is a note, "it was not run".
+
+**One run.** For each run, lengua makes a new empty folder under the system's temporary folder,
+makes in it every folder the idea grants (read and write), writes each ``File `<path>` `` of
+the example, and runs the component through the host with that folder as the program's
+folder, the example's standard input and arguments, and `fixed` on (section 4, "Fixed runs").
+The run has the idea's memory and time; a host call that blocks is given up two seconds past
+the time, as `run` does. An example that gives arguments or a standard input that the idea
+does not grant fails, with the grant named. Then lengua compares, and every difference is in
+the one finding:
+- how the run ended (`Expect end`, `exited` when absent; a trap's or the limit's message
+  follows the difference);
+- the exit code, when the run exited;
+- standard output, always (an example without `Expect standard output` expects none);
+- standard error, when the example gives it;
+- each ``Expect file `<path>` `` in the run's folder after the run.
+
+**The finding.** A failed example is `test-failed`, a failed drawn case `case-failed`, at the
+idea file and the line of its `### Example:` or `### Cases:` heading. The message names the
+example and its behaviour, a case's drawn values (``the case with `n` = 9 of `numbers of one
+digit` ``), and for each difference the expected text and the text that came, from 20
+characters before the first character that differs, at most 60 characters each, as Rust
+writes a string: ``standard output: expected "small\n" and got "large\n" (they differ at
+character 1)``. Every run runs, so one reply has every failure.
+
+**Drawn cases.** For each `### Cases:` block lengua draws, with SplitMix64 from a seed that is
+the SHA-256 of the behaviour's name, the block's name and its ranges (so a block always draws
+the same cases, wherever it is in the file, on every system):
+1. the boundary values first: each range's low end, the value above it, the value below the
+   high end, and the high end (for a text range, those are its lengths; the characters are
+   drawn), the first case taking each range's first boundary, the second each range's
+   second, and so on;
+2. then 20 cases from the seed, each value anywhere in its range;
+3. a case drawn before (the same values) is not run again, so a block has at most 24 cases (a
+   range of ten integers has at most ten).
+
+Each `{name}` of the block's strings becomes the drawn value, `{{` and `}}` a brace.
+
+**Mutants.** When every test passes, the job measures the tests with mutants of the program's
+own code: lengua's mutator reads each Rust file with `lengua-lint`'s tokenizer and reader, and
+in each function's body (`main` among them) finds the places to change:
+
+| Mutation | From | To |
+|---|---|---|
+| an arithmetic operator | `+`, `-`, `*`, `/`, `%`, `+=`, `-=`, `*=`, `/=` | `-`, `+`, `/`, `*`, `*`, `-=`, `+=`, `/=`, `*=` |
+| a comparison | `<`, `<=`, `>`, `>=`, `==`, `!=` | `<=`, `<`, `>=`, `>`, `!=`, `==` |
+| a logical operator | `&&`, `\|\|` | `\|\|`, `&&` |
+| a constant | a decimal integer `n` (with its suffix) | `n + 1` |
+| a boolean | `true`, `false` | `false`, `true` |
+| a condition | `if <condition> {` (not `if let`) | `if !(<condition>) {` |
+| a return value | the body of a function that returns `bool`, `char`, an integer, a float, `String`, `&str`, `Option<...>` or `Vec<...>` | `{ let _ = { <the body> }; Default::default() }` |
+
+An operator is one with a space on both sides, as `rustfmt` writes a binary operator (so a
+generic's `<`, a unary `-` and a path's `::` are not), between an operand and an operand. A
+tuple field (`t.0`) and a hexadecimal, octal or binary number are not constants to change. The
+arguments of `assert!`, `assert_eq!`, `assert_ne!` and their `debug_` forms are not mutated:
+a weaker assertion is a mutant no example can catch (and `debug_assert!` is not in a release
+build at all).
+
+**At most 40 mutants**, spread over the functions: the first place of each function, then the
+second of each, and so on, until 40. Each mutant is built in its own package,
+`target/lengua/mutant/` (a copy of `Cargo.toml` with the package named `<name>-mutant`, and of
+`src/`, with the one change), with `cargo build --release --target wasm32-wasip2 --offline
+--target-dir <the program's target>`, so it reuses the program's build folder and its built
+crates; then the tests run on it, in order, until one fails:
+
+| The mutant | Counts | Is |
+|---|---|---|
+| a test failed on it | yes | `caught` |
+| every test passed | yes | `survived`; a note at its file and line: ``a mutant survived: in `size`, `<=` became `<`, and every test still passed; add a test whose result tells the two apart`` |
+| it did not build | no | `unbuilt` |
+| it built to the same bytes as the program | no | `same`: the compiler made the change disappear, so no test could catch it |
+
+The score is caught / counted. 40 keeps a check of a small program to about a minute on the
+runners (each mutant is one build of about a second and its tests), and gives the score a
+step of 2.5% at most; a larger program has its 40 spread over all its functions.
+
+**The cache.** `target/lengua/mutants` keeps the result of each mutant by a key: the SHA-256 of
+lengua's version, the tests (without their lines, so moving an example does not count) and the
+grants, `Cargo.toml`, every Rust file with the bodies of its functions left out, and then the
+mutant's function (its whole text), its place in the function and its change. So when only
+the bodies of some functions change, a later check builds the mutants of those functions only
+and takes the others from the cache (the reply's `cached`); a change outside the bodies (a
+type, a `use`, a constant), of the tests, of the grants or of lengua measures them all again.
+The file keeps only the mutants of the last check.
 
 ## 8. Milestones
 
@@ -1010,6 +1147,26 @@ Decided for lengua 3 at L4 (2026-11-13):
 - **The size limit is 64 MiB**, and lengua's engine refuses relaxed SIMD and threads and
   canonicalizes NaNs.
 
+Decided for lengua 3 at L5 (2026-11-13):
+
+- **The tests run in the build job**, after the component checks, then the mutants; the
+  states are `building`, `testing`, `mutating` and `done` (or `build_failed`,
+  `tests_failed`), each with its progress, and `check` never waits for them (section 4, "The
+  reply").
+- **`Expect end`** (`exited`, `out of time`, `out of memory`, `trapped`; `exited` when absent)
+  is in the test format, and `Expect exit code` goes only with `exited` (L3's finding).
+  `forever` and `greedy` use it.
+- **An example with no `Expect standard output` expects an empty standard output**, as the
+  grammar's "compared exactly" says; only standard error is not compared when absent.
+- **`insecure-seed` is in the always set**, with a fixed value unless the idea grants random
+  numbers (L4's finding), so a `HashMap` needs no grant; `wasi:random/random` and `insecure`
+  still need `- Reads: random numbers`.
+- **lengua's own mutator, at most 40 mutants, the threshold 80%, a cache by function** (section
+  7, "How the tests run"; section 6). No new crate: the mutator is in `lengua-lint`, the runs
+  and the mutants in `lengua-mcp`.
+- **The label is the program's** and is written by the next `check` after the job ends; a
+  program with no mutant counted is `checked` (section 6).
+
 ## 10. Risks and open questions
 
 - **WASI 0.2, decided at L0 (2026-11-13): lengua 3 targets WASI 0.2, `wasm32-wasip2`.**
@@ -1064,7 +1221,8 @@ Decided for lengua 3 at L4 (2026-11-13):
 - **Found at L3: the test format has no key for how a run ends.** An example must give `Expect
   exit code`, but a program stopped at its time or memory limit has none. The examples
   `forever` and `greedy` write `Expect exit code: 1` for now; L5 needs a key such as `Expect
-  end: out of time`.
+  end: out of time`. **Closed at L5:** `Expect end` is in the grammar, and `forever` and `greedy`
+  use it.
 - **Open at L3: what more `std` imports.** The CI step "the imports of the built examples"
   lists the `wasi:` names in each example's bytes (run 43387181531). That is not the list of
   imports: `files.wasm` has the name `wasi:random/insecure-seed`, and `clock.wasm` the names of
@@ -1082,6 +1240,8 @@ Decided for lengua 3 at L4 (2026-11-13):
   `HashSet`, takes its keys from `insecure-seed`. So a program with a `HashMap` needs `- Reads:
   random numbers` today. Still open (for L5, whose tests need it): to put `insecure-seed` in the
   always set with a fixed seed behind it unless random numbers are granted, as the clock is.
+  **Decided at L5:** it is in the always set, as that says (section 4); the example `words`
+  uses a `HashMap` with no grant.
 - **Build time:** a cold `cargo build` can take longer than one tool call; the background job
   and a kept build folder per program must hide it.
 - **The user must have Rust installed**, with its two WebAssembly targets. lengua 2 needed nothing

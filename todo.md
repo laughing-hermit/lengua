@@ -11,8 +11,8 @@ next starts (Lengua3.md, section 8).
 | L1 | The idea file: reader, STE check, test format, `# Structure`, OKF, the wiki | Landed on main at c3d1db1 (run 43376901162, green on five) |
 | L2 | Generate `Cargo.toml` and the world; build in the background; `doctor` | Landed on main at a9aad3e (run 43380465318, green on five) |
 | L3 | The host on the component model: standard input and output, arguments, files, clock, random | Landed on main at 05b8b14 (run 43388384600, green on five) |
-| L4 | The Power of 10 lint and the component checks | Done on `wip/l4`; the five-runner landing run is named in the landing report |
-| L5 | Tests from the idea, generated cases, mutation score, trust labels | Not started |
+| L4 | The Power of 10 lint and the component checks | Landed on main at f197505 (run 43399815151, green on five) |
+| L5 | Tests from the idea, generated cases, mutation score, trust labels | Done on `wip/l5`; the five-runner landing run is named in the landing report |
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | Not started |
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Not started |
 | L8 | The GPUI front end, embedded in the one file, its behaviours tested | Not started |
@@ -237,6 +237,64 @@ next starts (Lengua3.md, section 8).
 - **2026-11-13, L4: `forever` and `greedy` loop with `for` over `0..u64::MAX` and
   `0..u32::MAX`**, bounded as rule 2 asks, and still past their limits; their ideas say so.
 
+- **2026-11-13, L5: the tests run in the build job**, after the component checks: `building`,
+  `testing`, `mutating`, `done` (or `build_failed`, `tests_failed`), each with its progress in
+  the reply (`tests`: total, run, failed; `mutants`: total, done, caught, survived, unbuilt,
+  same, cached). L4's state `built` is gone. No tool call waits: `check` replies at once.
+- **2026-11-13, L5: every example and Cases block of every idea is a test of the program's one
+  component**; screens (`ideas/ui/`) are notes until L8. Each run has a new temporary folder
+  with every granted folder made in it and the example's files written, `fixed` on, the
+  idea's memory and time. A failed run is `test-failed` or `case-failed` at the block's
+  heading, with every difference in one message: the end, the exit code, the output (from 20
+  characters before the first difference, 60 at most, as Rust writes a string) and the files.
+- **2026-11-13, L5: an example with no `Expect standard output` expects none**, as the grammar's
+  "compared exactly" says; standard error is compared only when given. To reverse: compare the
+  output only when given, like standard error.
+- **2026-11-13, L5: `Expect end: exited | out of time | out of memory | trapped`** (L3's
+  finding), `exited` when absent; `Expect exit code` goes with `exited` only
+  (`example-exit-code-end` otherwise, `example-end` for a bad value). `forever` and `greedy`
+  use it.
+- **2026-11-13, L5: drawn cases**: the boundary values of each range first (low, low + 1,
+  high - 1, high; for text, the lengths), then 20 from SplitMix64 seeded with the SHA-256 of
+  the behaviour's name, the block's name and its ranges; the same values are not run twice, so
+  a block has at most 24 cases. The seed does not depend on the line, so moving a block draws
+  the same cases.
+- **2026-11-13, L5: `wasi:random/insecure-seed` joins the always set** (L4's finding), with a
+  fixed value unless `- Reads: random numbers`, so `HashMap` and `HashSet` work with no grant
+  and give the same order on every run; `wasi:random/random` and `insecure` still need the
+  grant. Recommended in the plan; the example `words` shows it. To reverse: drop it from
+  `ALWAYS` in `generate.rs`, and a `HashMap` needs the grant again.
+- **2026-11-13, L5: lengua's own mutator** in `lengua-lint` (`mutate.rs`, on its tokenizer,
+  which now keeps each token's byte offsets): operators with a space on each side, decimal
+  constants plus one, booleans, `if` conditions negated, and the body of a function returning
+  a plain type replaced by `Default::default()`; assertions' arguments are not mutated (a
+  weaker assertion is a mutant no example can catch, and `debug_assert!` is not in a release
+  build).
+- **2026-11-13, L5: at most 40 mutants**, spread round-robin over the functions: each mutant is
+  a release build of about a second on the runners plus its tests, so 40 keeps a small
+  program's check to about a minute in the background, and a score step of 2.5% at most.
+- **2026-11-13, L5: a mutant is built in its own package** `target/lengua/mutant/` (the
+  package `<name>-mutant`) with `--target-dir` the program's own `target/`, so it reuses the
+  build folder and the built crates, and the program's own component is never overwritten
+  and its `src/` is never touched. A mutant that builds to the same bytes as the program
+  (`same`) or does not build (`unbuilt`) does not count.
+- **2026-11-13, L5: the cache** `target/lengua/mutants` keeps each mutant's result by the
+  SHA-256 of lengua's version, the tests without their lines and the grants, `Cargo.toml`,
+  the code with the functions' bodies left out, and the mutant's function and change; so a
+  later check builds only the mutants of the functions whose bodies changed.
+- **2026-11-13, L5: the threshold is 80%** (caught × 100 ≥ 80 × counted gives `checked`, under
+  it `tested`): some mutants no test can catch, so 100% asks for the impossible; 80% is
+  Stryker's default "high". **No mutant counted is `checked`** (hello world has nothing to
+  mutate). To reverse: make it `tested`, and then a program with no operator can't be
+  `checked`.
+- **2026-11-13, L5: the label is the program's**, on every idea's frontmatter, every line of
+  `index.md` and the log entry (with the score); `check` asks for the job's state while it
+  writes the wiki, so the label is the one of the job that was done at that call.
+- **2026-11-13, L5: the tests' lines are those of the files as written**: `check` reads the
+  ideas again after it writes the frontmatter, so a finding's line is the line in the file.
+- **2026-11-13, L5: no new crates.** The runs and the mutants are on the standard library and
+  the host that is already there.
+
 ## Runs
 
 The five-runner run a landing rests on is at the head it tests, so it is named in the landing report and added here at the next milestone.
@@ -268,6 +326,7 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-13 | [43395657235](https://github.com/laughing-hermit/lengua/actions/runs/43395657235) | wip/l4 735e028 | test, linux-x86_64 | Failed: clippy `assert_is_empty` in a test and `type_complexity` in `lengua-idea` |
 | 2026-11-13 | [43396401311](https://github.com/laughing-hermit/lengua/actions/runs/43396401311) | wip/l4 6891515 | test, linux-x86_64 | Green: 59 + 10 (`lengua-idea`: every example keeps every rule, broken code refused), 13 + 20 (`lengua-lint`: the tokenizer with random slices, then a test a rule), 10 + 20 + 2 + 2 (`lengua-mcp`: the lint, `rust-format` and clippy's `unwrap` refusals, both engine refusals, every example built); imports as Wasmtime reads them (Lengua3.md, section 10); hello world: clippy from clean 0.10 s, the build after it 0.46 s, the build alone 0.41 s, so clippy adds about 0.15 s |
 | 2026-11-13 | [43397875153](https://github.com/laughing-hermit/lengua/actions/runs/43397875153) | wip/l4 2003d94 | test, all five | Green on Linux x86-64, Linux ARM64 and macOS ARM64; failed on Windows x86-64 and Windows ARM64 only in `code_that_rustfmt_would_change_is_a_finding`: `rustfmt` names the file by its verbatim path (`\\?\D:\...`), so the `rust-format` finding's file was not relative (fixed, with a unit test). Hello world, in seconds, fmt check / clippy from clean / build after clippy / build alone: Linux x86-64 0.04 / 0.09 / 0.30 / 0.30; Linux ARM64 0.05 / 0.12 / 0.43 / 0.45; macOS ARM64 0.17 / 0.37 / 0.75 / 0.87; Windows x86-64 0.14 / 0.31 / 0.83 / 0.95; Windows ARM64 0.22 / 0.44 / 0.92 / 0.95. So fmt and clippy add 0.1 to 0.5 s to a small program's build |
+| 2026-11-13 | [43399815151](https://github.com/laughing-hermit/lengua/actions/runs/43399815151) | wip/l4 f197505 | test, all five | Green on five: the L4 landing run |
 
 ## What the permission checks refused
 

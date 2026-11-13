@@ -458,8 +458,6 @@ fn compile(
     built(folder, build, host)
 }
 
-}
-
 pub(crate) const SIZE_LIMIT: usize = 64 << 20;
 
 pub(crate) fn too_large(size: usize, limit: usize) -> Option<Problem> {

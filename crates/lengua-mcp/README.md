@@ -6,12 +6,14 @@
 output with the official Rust SDK, `rmcp`. It has two tools. `check` checks the ideas of a
 program's folder with `lengua-idea`, writes the generated files, builds the program to a
 WebAssembly component in the background, and holds the component's imports to the world of its
-grants, replying with every problem and the build's state as structured JSON. `run` runs the
+grants; then, in the same background job, it runs the examples of the ideas as tests and measures
+them with mutants of the code, and gives the trust label, replying with every problem and the
+job's state as structured JSON. `run` runs the
 built component on Wasmtime under exactly the grants of its idea, with the idea's memory and
 time as limits. Its command `doctor` checks that the Rust toolchain can build. Later milestones
-add the tests, the lock and the lean runner (see [Lengua3.md](../../Lengua3.md), section 4,
+add the lock and the lean runner (see [Lengua3.md](../../Lengua3.md), section 4,
 "The generated files, the build job and `doctor`", "Grants become the component's world" and
-"The host").
+"The host", and sections 6 and 7).
 
 ## Behaviours
 
@@ -30,11 +32,23 @@ add the tests, the lock and the lean runner (see [Lengua3.md](../../Lengua3.md),
   `check` (input `folder`) and `run` (inputs `folder`, `arguments`, `stdin` and `fixed`), each
   with an output schema.
 - Given a call of `check` with a folder, when the server replies, then the structured content
-  has `ok`, `checked_by`, `findings` (each with `file`, `line`, `code` and `message`), `notes`,
+  has `ok`, `checked_by`, `findings` (each with `file`, `line`, `code` and `message`), `notes`
+  (each with `file`, `line` when it has one, and `message`), `label`, `score`,
   `written` and, when the ideas have no problems, `build`.
-- Given a folder with ideas and code with no problems, when `check` is called until the
-  build's state is not `building`, then the state is `built`, with the component's path, size
-  and SHA-256.
+- Given a folder with ideas and code with no problems, when `check` is called until the job's
+  state is not `building`, `testing` or `mutating`, then the state is `done`, with the
+  component's path, size
+  and SHA-256, the tests that ran, the mutants, and the label `checked` or `tested`.
+- Given an example whose output, exit code, end or files differ from what the program gives,
+  when the tests run, then the state is `tests_failed` and the finding `test-failed` (or
+  `case-failed`, with the drawn values) is at the idea and the line of the block, with the
+  expected text and the text that came.
+- Given a program whose tests pass, when the mutants run, then each mutant the tests do not
+  catch is a note at its file and line, the score is caught of counted, and the label is
+  `checked` at 80% or more and `tested` under it; a later check builds only the mutants of the
+  functions that changed.
+- Given a program with a `HashMap` and no grant of random numbers, when it runs, then it works:
+  `insecure-seed` is in the always set, with a fixed value.
 - Given code that `rustfmt` would change, when the build ends, then its state is `build_failed`
   with a `rust-format` finding for each place, and nothing else is built.
 - Given code that clippy refuses (an `unwrap`, for one), when the build ends, then its state is
@@ -74,22 +88,38 @@ add the tests, the lock and the lean runner (see [Lengua3.md](../../Lengua3.md),
   input and output.
 - `run_doctor`: runs the doctor's checks in the current folder and writes their lines.
 - `Lengua::check`: the tool; checks the folder and turns the report into the reply.
-- `Lengua::reply`, `build_reply`: turn a `lengua_idea::Report` and the build's state into a
+- `Lengua::reply`, `build_reply`: turn a `lengua_idea::Report` and the job's state (the
+  snapshot taken while the wiki is written, or a new one) into a
   `CheckReply`.
 - `Lengua::run`: the tool; reads the ideas with `lengua_idea::program`, refuses input that is
   not granted (`ungranted_input`), and turns the run's progress into a `RunReply` (`run_reply`,
   `plain`, `millis`).
 - `now`: the seconds since 1970, for the log's date.
-- `CheckParams`, `CheckReply`, `FindingReply`, `NoteReply`, `BuildReply`, `RunParams`,
+- `CheckParams`, `CheckReply`, `FindingReply`, `NoteReply`, `BuildReply`, `TestsReply`,
+  `MutantsReply`, `RunParams`,
   `RunReply`: the tools' input and output, with their JSON schemas.
 - `VERSION`: the name of the package and its version, joined by a space.
-- `build.rs`: `Builds::new` and `Builds::status` give the state of a folder's build and start a
-  new job when the build's key changed (`Job::start`, `Job::current`, `Job::status`,
-  `Job::stop`); `run`, `fetch` (with `fetch_stamp`), `step`, `cargo` and `built` run the job on
-  its thread: `cargo fmt --check` (`format_problems`), clippy, then the build;
-  `ungranted` holds the component's size (`too_large`, `SIZE_LIMIT`) and imports to the world;
-  `problems`, `located` and
-  `relative` turn the compiler's lines into findings; `lock` and `problem` are helpers.
+- `build.rs`: `Builds::new`, `Builds::snapshot` (the state of the job of the same key, or
+  none) and `Builds::status` give the state of a folder's job and start a new one when the
+  key changed (`Job::start`, `Job::current`, `Job::status`, `Job::stop`); the `Worker` runs it
+  on its thread (`Worker::work`, with `update`, `stopped` and `finish`): `compile` (`fetch`
+  with `fetch_stamp`, `step`, `cargo`; `cargo fmt --check` with `format_problems`, clippy, the
+  build, and `built`), then the tests, then the mutants; `ungranted` holds the component's size
+  (`too_large`, `SIZE_LIMIT`) and imports to the world; `problems`, `located` and `relative`
+  turn the compiler's lines into findings; `Status` (with `Status::new`, `Status::score` and
+  `Status::trust`, whose `THRESHOLD` is 80), `Stage` (with `Stage::name` and
+  `Stage::running`), `Tests`, `Mutants`, `Component`, `Problem` and `Remark` are the job's
+  state; `lock` and `problem` are helpers.
+- `testing.rs`: `cases` expands the tests of the ideas (screens left out) into runs;
+  `run_case` runs one in a new folder (`place`) on its own thread (`bounded`), refuses input
+  the idea does not grant (`ungranted`), and compares the end, the exit code, the output and
+  the files (`compare`, with `diff` and `shown`); `problem` makes the finding, with
+  `values_text` for a case's drawn values.
+- `mutation.rs`: `run` gets the mutants from `lengua_idea::mutants`, at most `MUTANTS` (40),
+  takes each result from the cache (`read_cache`, `write_cache`, keyed by `context` and
+  `key`) or builds the mutant in its package (`workspace`, `mutant_name`) and runs the tests on
+  it (`verdict`), and makes a note of each survivor (`remark`); `Verdict` (with `name` and
+  `parse`) and `Workspace` are its data.
 - `host.rs`: `Host::new` makes the engine, with relaxed SIMD and shared-everything threads off
   and NaNs canonical, and its epoch thread; `Host::component` compiles a
   component once per SHA-256; `Host::imports` lists its imports, and `outside` and `grant_for`
@@ -113,4 +143,8 @@ add the tests, the lock and the lean runner (see [Lengua3.md](../../Lengua3.md),
   runs `hello`, `echo` (arguments), `count` (standard input), `files` (a read folder, a write
   folder, and paths out of them), `ungranted` (refused at check and at run), `forever` (the
   time limit), `greedy` (the memory limit) and `clock` (fixed and real clock and random
-  numbers).
+  numbers); then the tests and mutants: a wrong output (`test-failed` with the diff), a failing
+  boundary of `small` (`case-failed`), `small` checked with its label in the wiki and the cache
+  after a change of `main`, a weak idea of `small` tested with a surviving mutant as a note,
+  and `words` (a `HashMap` with no grant); `until_built` writes how long each job took to
+  `target/tmp/lengua-timings.txt`.

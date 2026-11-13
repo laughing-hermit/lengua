@@ -213,8 +213,8 @@ pub(crate) fn run(worker: &Worker, cases: &[Case]) -> bool {
     let mut remarks = Vec::new();
     for mutant in &mutation.mutants {
         let key = key(&context, mutant);
-        let cached = old.get(&key).copied();
-        let found = if let Some(found) = cached {
+        let hit = old.get(&key).copied();
+        let found = if let Some(found) = hit {
             found
         } else {
             if space.is_none() {
@@ -239,7 +239,7 @@ pub(crate) fn run(worker: &Worker, cases: &[Case]) -> bool {
         worker.update(|s| {
             let m = &mut s.mutants;
             m.done += 1;
-            m.cached += usize::from(cached.is_some());
+            m.cached += usize::from(hit.is_some());
             match found {
                 Verdict::Caught => m.caught += 1,
                 Verdict::Survived => m.survived += 1,

@@ -153,13 +153,13 @@ fn operator(text: &str, code: &Code, at: usize) -> Option<Site> {
     let mut last = at;
     let mut op = first.text.clone();
     while op.len() < 3 {
-        let (Some(this), Some(next)) = (code.tokens.get(last), code.tokens.get(last + 1)) else {
+        let (Some(this), Some(after)) = (code.tokens.get(last), code.tokens.get(last + 1)) else {
             break;
         };
-        if !(this.joint && next.kind == Kind::Punct && next.start == this.end) {
+        if !(this.joint && after.kind == Kind::Punct && after.start == this.end) {
             break;
         }
-        op.push_str(&next.text);
+        op.push_str(&after.text);
         last += 1;
     }
     let (_, to) = OPERATORS.iter().find(|(from, _)| *from == op)?;
@@ -204,20 +204,20 @@ fn negate(text: &str, code: &Code, at: usize) -> Option<Site> {
     if code.is(at + 1, "let") {
         return None;
     }
-    let mut next = at + 1;
+    let mut scan = at + 1;
     let open = loop {
-        if next >= code.len() {
+        if scan >= code.len() {
             return None;
         }
-        if code.is(next, "{") {
-            break next;
+        if code.is(scan, "{") {
+            break scan;
         }
-        let stop = [";", ",", ")", "]", "}"].iter().any(|s| code.is(next, s))
-            || code.joint(next, "=", ">");
+        let stop = [";", ",", ")", "]", "}"].iter().any(|s| code.is(scan, s))
+            || code.joint(scan, "=", ">");
         if stop {
             return None;
         }
-        next = code.after(next);
+        scan = code.after(scan);
     };
     if open <= at + 1 {
         return None;
