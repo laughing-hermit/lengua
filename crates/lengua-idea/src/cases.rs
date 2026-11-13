@@ -81,6 +81,17 @@ pub struct Test {
     pub exit_code: Option<u8>,
     pub end: End,
     pub expect_files: Vec<(String, String)>,
+    pub call: Option<String>,
+    pub value: Option<String>,
+    pub servers: Vec<(String, String)>,
+    pub clients: Vec<(u16, String)>,
+    pub answer: Option<String>,
+    pub request: Option<String>,
+    pub request_headers: Vec<(String, String)>,
+    pub request_body: Option<String>,
+    pub status: Option<u16>,
+    pub expect_headers: Vec<(String, String)>,
+    pub expect_body: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -193,6 +204,20 @@ fn filled(test: &Test, values: &[(String, String)]) -> Test {
         stdout: test.stdout.as_ref().map(one),
         stderr: test.stderr.as_ref().map(one),
         expect_files: pairs(&test.expect_files),
+        call: test.call.as_ref().map(one),
+        value: test.value.as_ref().map(one),
+        servers: pairs(&test.servers),
+        clients: test
+            .clients
+            .iter()
+            .map(|(port, sent)| (*port, fill(sent, values)))
+            .collect(),
+        answer: test.answer.as_ref().map(one),
+        request: test.request.as_ref().map(one),
+        request_headers: pairs(&test.request_headers),
+        request_body: test.request_body.as_ref().map(one),
+        expect_headers: pairs(&test.expect_headers),
+        expect_body: test.expect_body.as_ref().map(one),
         ..test.clone()
     }
 }

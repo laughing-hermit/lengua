@@ -259,6 +259,10 @@ fn every_example_keeps_every_rule() {
     names.sort();
     assert!(names.len() >= 8, "{names:?}");
     for name in names {
+        let idea = read(&examples.join(&name), "idea.md");
+        if idea.contains("- Uses: `../") || idea.contains("- Uses component:") {
+            continue;
+        }
         let to = std::env::temp_dir()
             .join(format!("lengua-idea-{}-rules", std::process::id()))
             .join(&name);
@@ -374,4 +378,166 @@ fn the_build_carries_every_test_of_every_idea() {
     assert_eq!(build.tests_hash.len(), 64);
     let again = lengua_idea::program(&folder).build.expect("a build");
     assert_eq!(again.inputs, build.inputs);
+}
+
+fn example_copy(name: &str, test: &str) -> PathBuf {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples")
+        .join(name);
+    let to = std::env::temp_dir()
+        .join(format!("lengua-idea-{}-{test}", std::process::id()))
+        .join(name);
+    if to.exists() {
+        fs::remove_dir_all(&to).expect("an old copy removed");
+    }
+    copy(&from, &to);
+    to
+}
+
+fn codes_of(folder: &Path) -> Vec<(String, &'static str)> {
+    lengua_idea::program(folder)
+        .findings
+        .into_iter()
+        .map(|f| (f.file, f.code))
+        .collect()
+}
+
+#[test]
+fn a_program_of_three_modules_is_one_build_of_every_file() {
+    let folder = example_copy("tally", "modules");
+    let report = lengua_idea::check(&folder, NOV_13_2026);
+    assert_eq!(report.findings, []);
+    let build = report.build.expect("a build");
+    assert_eq!(
+        build.sources,
+        ["src/main.rs", "src/lines.rs", "src/report.rs", "src/words.rs"]
+    );
+    let files: BTreeSet<&str> = build.tests.iter().map(|t| t.file.as_str()).collect();
+    assert_eq!(
+        files,
+        ["idea.md", "ideas/lines.md", "ideas/report.md", "ideas/words.md"]
+            .into_iter()
+            .collect()
+    );
+    let cargo = read(&folder, "Cargo.toml");
+    assert!(cargo.contains(
+        "include = [\"src/main.rs\", \"src/lines.rs\", \"src/report.rs\", \"src/words.rs\"]"
+    ));
+    let index = read(&folder, "index.md");
+    assert!(index.contains("* [words](ideas/words.md) - "), "{index}");
+}
+
+#[test]
+fn a_module_without_its_idea_or_its_mod_line_is_refused() {
+    let folder = example_copy("tally", "no-idea");
+    fs::remove_file(folder.join("ideas/report.md")).expect("the idea removed");
+    let found = codes_of(&folder);
+    assert!(
+        found.contains(&("src/report.rs".to_string(), "rule-12-source-unlisted")),
+        "{found:?}"
+    );
+    assert!(
+        found.contains(&("idea.md".to_string(), "module-missing")),
+        "{found:?}"
+    );
+    let folder = example_copy("tally", "no-mod");
+    let main = read(&folder, "src/main.rs");
+    fs::write(folder.join("src/main.rs"), main.replace("mod report;\n", "")).expect("a file");
+    assert!(
+        codes_of(&folder).contains(&("src/main.rs".to_string(), "module-undeclared")),
+        "{:?}",
+        codes_of(&folder)
+    );
+}
+
+const LIBRARY: &str = "# Purpose
+
+The library gives the double of a number.
+
+# Behaviours
+
+## Double a number
+
+Given the number 2,
+When the program calls `double`,
+Then it gives 4.
+
+### Example: two
+
+- Call: `double(2)`
+- Expect value: `4`
+
+# Constraints
+
+- Memory: 16 MiB
+- Time: 2 s
+- Exports: `double`
+
+# Structure
+
+- `double`: gives the double of a number.
+";
+
+#[test]
+fn a_library_is_tested_through_calls_and_reaches_nothing() {
+    let folder = std::env::temp_dir()
+        .join(format!("lengua-idea-{}-library", std::process::id()))
+        .join("twice");
+    let _ = fs::remove_dir_all(&folder);
+    fs::create_dir_all(folder.join("src")).expect("a folder");
+    fs::write(folder.join("idea.md"), LIBRARY).expect("the idea");
+    fs::write(
+        folder.join("src/main.rs"),
+        "#[must_use]\npub fn double(number: u64) -> u64 {\n    debug_assert!(number < u64::MAX / 2);\n    debug_assert!(number <= u64::MAX);\n    number * 2\n}\n",
+    )
+    .expect("the code");
+    let report = lengua_idea::check(&folder, NOV_13_2026);
+    assert_eq!(report.findings, []);
+    let build = report.build.expect("a build");
+    assert!(build.library);
+    assert_eq!(build.artifact, "target/wasm32-wasip2/release/libtwice.rlib");
+    assert!(read(&folder, "Cargo.toml").contains("[lib]\nname = \"twice\"\n"));
+    assert!(read(&folder, "idea.md").contains("type: lengua Library\n"));
+    let harness = build.harness();
+    assert_eq!(harness.package, "twice-harness");
+    assert!(harness.grants.reach(lengua_idea::Reach::Arguments));
+    let body = |text: &str| fs::write(folder.join("idea.md"), text).expect("the idea");
+    body(&LIBRARY.replace("- Exports: `double`", "- Exports: `double`, `triple`"));
+    assert!(codes_of(&folder).contains(&("idea.md".to_string(), "export-missing")));
+    body(&LIBRARY.replace("- Time: 2 s\n", "- Time: 2 s\n- Reads: arguments\n"));
+    assert!(codes_of(&folder).contains(&("idea.md".to_string(), "library-grant")));
+    body(&LIBRARY.replace(
+        "- Call: `double(2)`\n- Expect value: `4`\n",
+        "- Standard input: \"2\"\n- Expect exit code: 0\n",
+    ));
+    assert!(codes_of(&folder).contains(&("idea.md".to_string(), "example-library-call")));
+    body(&LIBRARY.replace("- Time: 2 s\n", "- Time: 2 s\n- Serves: HTTP on TCP port 8080\n"));
+    assert!(codes_of(&folder).contains(&("idea.md".to_string(), "constraint-kind")));
+}
+
+#[test]
+fn a_library_that_is_not_checked_is_refused_by_the_program_that_uses_it() {
+    let root = std::env::temp_dir().join(format!("lengua-idea-{}-uses", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let library = root.join("libraries/twice");
+    fs::create_dir_all(library.join("src")).expect("a folder");
+    fs::write(library.join("idea.md"), LIBRARY).expect("the idea");
+    let program = root.join("app");
+    copy(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello"),
+        &program,
+    );
+    let idea = read(&program, "idea.md");
+    fs::write(
+        program.join("idea.md"),
+        idea.replace("- Time: 2 s\n", "- Time: 2 s\n- Uses: `../libraries/twice`\n"),
+    )
+    .expect("the idea");
+    let found = codes_of(&program);
+    assert!(
+        found.contains(&("idea.md".to_string(), "library-lock")),
+        "{found:?}"
+    );
+    fs::remove_dir_all(&library).expect("removed");
+    assert!(codes_of(&program).contains(&("idea.md".to_string(), "library-missing")));
 }

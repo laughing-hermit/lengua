@@ -4,7 +4,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use lengua_host::{Ending, Host, Input, OUTPUT, Outcome, Streams};
+use lengua_host::{Ending, Host, Input, OUTPUT, Outcome, Program, Streams};
 use lengua_idea::lock::{self, Kind};
 
 const POLL: Duration = Duration::from_millis(5);
@@ -176,6 +176,11 @@ fn outcome(kind: &str, lock_path: &Path, folder: &Path, input: &Input) -> Outcom
     let Some(build) = report.build else {
         return Outcome::refused("lengua could not read the program".to_string());
     };
+    let build = if build.library {
+        build.harness()
+    } else {
+        build
+    };
     let Some(sealed) = verified.sealed() else {
         return Outcome::refused("the lock seals no code to run".to_string());
     };
@@ -183,8 +188,24 @@ fn outcome(kind: &str, lock_path: &Path, folder: &Path, input: &Input) -> Outcom
         Ok(host) => host,
         Err(message) => return Outcome::refused(message),
     };
-    match lengua_seal::load(host.engine(), sealed) {
-        Ok(component) => host.run(folder, &component, &build, input, Streams::Memory),
+    let loaded = lengua_seal::load(host.engine(), sealed).and_then(|component| {
+        let trusted = verified
+            .trusted()
+            .iter()
+            .map(|part| lengua_seal::load(host.engine(), part))
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok((component, trusted))
+    });
+    match loaded {
+        Ok((component, trusted)) => {
+            let program = Program {
+                folder,
+                component: &component,
+                trusted: &trusted,
+                build: &build,
+            };
+            host.run(&program, input, Streams::Memory)
+        }
         Err(message) => Outcome::refused(message),
     }
 }

@@ -1,3 +1,6 @@
+mod http;
+mod network;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -5,19 +8,24 @@ use std::thread;
 use std::time::Duration;
 
 use lengua_idea::{Build, Grants, Reach};
+use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{Component, HasData, Linker, ResourceTable};
 use wasmtime::{Config, Engine, ResourceLimiter, Store, Trap};
 use wasmtime_wasi::cli::{WasiCli, WasiCliView};
 use wasmtime_wasi::clocks::{WasiClocks, WasiClocksView};
 use wasmtime_wasi::filesystem::{WasiFilesystem, WasiFilesystemView};
 use wasmtime_wasi::p2::bindings::sync::Command;
-use wasmtime_wasi::p2::bindings::{cli, clocks, filesystem, random, sync};
+use wasmtime_wasi::p2::bindings::{cli, clocks, filesystem, random, sockets, sync};
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::random::{WasiRandom, WasiRandomView};
+use wasmtime_wasi::sockets::{WasiSockets, WasiSocketsView};
 use wasmtime_wasi::{
     Deterministic, FsPerms, HostMonotonicClock, HostWallClock, I32Exit, WasiCtx, WasiCtxBuilder,
     WasiCtxView, WasiView,
 };
+use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
+
+pub use crate::http::{read_request, response_bytes};
 
 pub const TICK_MS: u64 = 10;
 pub const OUTPUT: usize = 16 << 20;
@@ -73,6 +81,13 @@ pub struct Host {
     engine: Engine,
 }
 
+pub struct Program<'a> {
+    pub folder: &'a Path,
+    pub component: &'a Component,
+    pub trusted: &'a [Component],
+    pub build: &'a Build,
+}
+
 struct Limits {
     memory: usize,
     hit: bool,
@@ -106,6 +121,8 @@ struct Guest {
     ctx: WasiCtx,
     table: ResourceTable,
     limits: Limits,
+    http: WasiHttpCtx,
+    hooks: http::Refuse,
 }
 
 impl WasiView for Guest {
@@ -113,6 +130,16 @@ impl WasiView for Guest {
         WasiCtxView {
             ctx: &mut self.ctx,
             table: &mut self.table,
+        }
+    }
+}
+
+impl WasiHttpView for Guest {
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
+            hooks: &mut self.hooks,
+            table: &mut self.table,
+            ctx: &mut self.http,
         }
     }
 }
@@ -173,6 +200,34 @@ fn seeded(seed: u64, length: usize) -> Vec<u8> {
     out
 }
 
+fn link_sockets(l: &mut Linker<Guest>, interface: &str) -> wasmtime::Result<bool> {
+    let view = <Guest as WasiSocketsView>::sockets;
+    match interface {
+        "wasi:sockets/tcp" => sync::sockets::tcp::add_to_linker::<Guest, WasiSockets>(l, view)?,
+        "wasi:sockets/udp" => sync::sockets::udp::add_to_linker::<Guest, WasiSockets>(l, view)?,
+        "wasi:sockets/udp-create-socket" => {
+            sync::sockets::udp_create_socket::add_to_linker::<Guest, WasiSockets>(l, view)?;
+        }
+        "wasi:sockets/ip-name-lookup" => {
+            sync::sockets::ip_name_lookup::add_to_linker::<Guest, WasiSockets>(l, view)?;
+        }
+        "wasi:sockets/tcp-create-socket" => {
+            sockets::tcp_create_socket::add_to_linker::<Guest, WasiSockets>(l, view)?;
+        }
+        "wasi:sockets/instance-network" => {
+            sockets::instance_network::add_to_linker::<Guest, WasiSockets>(l, view)?;
+        }
+        "wasi:sockets/network" => {
+            let options = sync::LinkOptions::default();
+            let network: sockets::network::LinkOptions = (&options).into();
+            sockets::network::add_to_linker::<Guest, WasiSockets>(l, &network, view)?;
+        }
+        "wasi:http/types" => wasmtime_wasi_http::p2::add_only_http_to_linker_sync(l)?,
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
 fn link(linker: &mut Linker<Guest>, interface: &str) -> wasmtime::Result<bool> {
     let l = linker;
     let cli_view = <Guest as WasiCliView>::cli;
@@ -224,20 +279,18 @@ fn link(linker: &mut Linker<Guest>, interface: &str) -> wasmtime::Result<bool> {
         "wasi:random/insecure-seed" => {
             random::insecure_seed::add_to_linker::<Guest, WasiRandom>(l, random_view)?;
         }
-        _ => return Ok(false),
+        _ => return link_sockets(l, interface),
     }
     Ok(true)
 }
 
-fn context(
-    folder: &Path,
-    name: &str,
+fn streams_of(
+    builder: &mut WasiCtxBuilder,
     grants: &Grants,
     input: &Input,
     streams: Streams,
     output: (&MemoryOutputPipe, &MemoryOutputPipe),
-) -> Result<WasiCtx, String> {
-    let mut builder = WasiCtxBuilder::new();
+) {
     match streams {
         Streams::Memory => {
             builder
@@ -254,8 +307,21 @@ fn context(
             builder.inherit_stdout().inherit_stderr();
         }
     }
+}
+
+fn context(
+    run: &Program,
+    input: &Input,
+    streams: Streams,
+    output: (&MemoryOutputPipe, &MemoryOutputPipe),
+) -> Result<WasiCtx, String> {
+    let grants = &run.build.grants;
+    let mut builder = WasiCtxBuilder::new();
+    let server = grants.server.is_some();
+    let stdin_input = if server { Input::default() } else { input.clone() };
+    streams_of(&mut builder, grants, &stdin_input, streams, output);
     if grants.reach(Reach::Arguments) {
-        let mut all = vec![name.to_string()];
+        let mut all = vec![run.build.package.clone()];
         all.extend(input.arguments.iter().cloned());
         builder.args(all.as_slice());
     }
@@ -271,7 +337,8 @@ fn context(
             .secure_random(Deterministic::new(seeded(SEED, RANDOM_BYTES)))
             .insecure_random(Deterministic::new(seeded(SEED ^ 1, RANDOM_BYTES)));
     }
-    let root = input.root.as_deref().unwrap_or(folder);
+    network::allow(&mut builder, grants);
+    let root = input.root.as_deref().unwrap_or(run.folder);
     for granted in &grants.folders {
         let place = root.join(&granted.path);
         if granted.write && !place.exists() {
@@ -304,17 +371,19 @@ fn ending(result: &wasmtime::Result<Result<(), ()>>, memory_hit: bool) -> Ending
     match result {
         Ok(Ok(())) => Ending::Exited(0),
         Ok(Err(())) => Ending::Exited(1),
-        Err(error) => {
-            if let Some(exit) = error.downcast_ref::<I32Exit>() {
-                Ending::Exited(exit.0)
-            } else if error.downcast_ref::<Trap>() == Some(&Trap::Interrupt) {
-                Ending::OutOfTime("the program ran past the time of its idea".to_string())
-            } else if memory_hit {
-                Ending::OutOfMemory
-            } else {
-                Ending::Trapped(format!("{error:#}"))
-            }
-        }
+        Err(error) => trap_ending(error, memory_hit),
+    }
+}
+
+fn trap_ending(error: &wasmtime::Error, memory_hit: bool) -> Ending {
+    if let Some(exit) = error.downcast_ref::<I32Exit>() {
+        Ending::Exited(exit.0)
+    } else if error.downcast_ref::<Trap>() == Some(&Trap::Interrupt) {
+        Ending::OutOfTime("the program ran past the time of its idea".to_string())
+    } else if memory_hit {
+        Ending::OutOfMemory
+    } else {
+        Ending::Trapped(format!("{error:#}"))
     }
 }
 
@@ -326,6 +395,21 @@ pub fn config() -> Config {
         .wasm_relaxed_simd(false)
         .wasm_shared_everything_threads(false);
     config
+}
+
+#[must_use]
+pub fn exported_interfaces(engine: &Engine, component: &Component) -> Vec<String> {
+    component
+        .component_type()
+        .exports(engine)
+        .filter(|(_, item)| matches!(item.ty, ComponentItem::ComponentInstance(_)))
+        .map(|(name, _)| name.to_string())
+        .collect()
+}
+
+struct Prepared {
+    store: Store<Guest>,
+    linker: Linker<Guest>,
 }
 
 impl Host {
@@ -347,17 +431,13 @@ impl Host {
     }
 
     #[must_use]
-    pub fn run(
-        &self,
-        folder: &Path,
-        component: &Component,
-        build: &Build,
-        input: &Input,
-        streams: Streams,
-    ) -> Outcome {
+    pub fn run(&self, run: &Program, input: &Input, streams: Streams) -> Outcome {
+        if run.build.grants.server.is_some() {
+            return self.answer(run, input);
+        }
         let stdout = MemoryOutputPipe::new(OUTPUT);
         let stderr = MemoryOutputPipe::new(OUTPUT);
-        let ending = self.execute(folder, component, build, input, streams, (&stdout, &stderr));
+        let ending = self.execute(run, input, streams, (&stdout, &stderr));
         Outcome {
             ending,
             stdout: stdout.contents().to_vec(),
@@ -365,44 +445,90 @@ impl Host {
         }
     }
 
-    fn execute(
+    fn prepare(
         &self,
-        folder: &Path,
-        component: &Component,
-        build: &Build,
+        run: &Program,
         input: &Input,
         streams: Streams,
         output: (&MemoryOutputPipe, &MemoryOutputPipe),
-    ) -> Ending {
+    ) -> Result<Prepared, Ending> {
         let mut linker = Linker::new(&self.engine);
-        for interface in &build.world {
+        for interface in &run.build.world {
             if let Err(error) = link(&mut linker, interface) {
-                return Ending::Refused(format!(
+                return Err(Ending::Refused(format!(
                     "the host could not link `{interface}`: {error:#}"
-                ));
+                )));
             }
         }
-        let ctx = match context(
-            folder,
-            &build.package,
-            &build.grants,
-            input,
-            streams,
-            output,
-        ) {
-            Ok(ctx) => ctx,
-            Err(message) => return Ending::Refused(message),
-        };
-        let memory = usize::try_from(build.grants.memory).unwrap_or(usize::MAX);
+        let ctx = context(run, input, streams, output).map_err(Ending::Refused)?;
+        let memory = usize::try_from(run.build.grants.memory).unwrap_or(usize::MAX);
         let guest = Guest {
             ctx,
             table: ResourceTable::new(),
             limits: Limits { memory, hit: false },
+            http: WasiHttpCtx::new(),
+            hooks: http::Refuse,
         };
         let mut store = Store::new(&self.engine, guest);
         store.limiter(limiter);
-        store.set_epoch_deadline(build.grants.time_ms / TICK_MS + 1);
-        let command = match Command::instantiate(&mut store, component, &linker) {
+        store.set_epoch_deadline(run.build.grants.time_ms / TICK_MS + 1);
+        self.link_trusted(&mut linker, &mut store, run.trusted)?;
+        Ok(Prepared { store, linker })
+    }
+
+    fn link_trusted(
+        &self,
+        linker: &mut Linker<Guest>,
+        store: &mut Store<Guest>,
+        trusted: &[Component],
+    ) -> Result<(), Ending> {
+        let refuse = |error: wasmtime::Error| {
+            Ending::Refused(format!(
+                "the host could not link the trusted component: {error:#}"
+            ))
+        };
+        for part in trusted {
+            let instance = linker.instantiate(&mut *store, part).map_err(refuse)?;
+            let ty = part.component_type();
+            for (name, item) in ty.exports(&self.engine) {
+                let ComponentItem::ComponentInstance(inner) = item.ty else {
+                    continue;
+                };
+                let Some(outer) = instance.get_export_index(&mut *store, None, name) else {
+                    continue;
+                };
+                let mut place = linker.instance(name).map_err(refuse)?;
+                for (function, found) in inner.exports(&self.engine) {
+                    if !matches!(found.ty, ComponentItem::ComponentFunc(_)) {
+                        continue;
+                    }
+                    let index = instance.get_export_index(&mut *store, Some(&outer), function);
+                    let Some(func) = index.and_then(|i| instance.get_func(&mut *store, &i)) else {
+                        continue;
+                    };
+                    place
+                        .func_new(function, move |mut s, _ty, params, results| {
+                            func.call(&mut s, params, results)
+                        })
+                        .map_err(refuse)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        run: &Program,
+        input: &Input,
+        streams: Streams,
+        output: (&MemoryOutputPipe, &MemoryOutputPipe),
+    ) -> Ending {
+        let Prepared { mut store, linker } = match self.prepare(run, input, streams, output) {
+            Ok(prepared) => prepared,
+            Err(ending) => return ending,
+        };
+        let command = match Command::instantiate(&mut store, run.component, &linker) {
             Ok(command) => command,
             Err(error) => {
                 if store.data().limits.hit {

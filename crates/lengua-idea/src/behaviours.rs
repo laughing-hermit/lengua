@@ -9,7 +9,8 @@ use crate::text::{
 };
 
 const KEYWORDS: [&str; 4] = ["Given", "When", "Then", "And"];
-const PROGRAM_KEYS: &str = "`Standard input`, `Arguments`, `File `path``, `Expect standard output`, `Expect standard error`, `Expect exit code`, `Expect end`, `Expect file `path``";
+const PROGRAM_KEYS: &str = "`Standard input`, `Arguments`, `File `path``, `Server `host:port``, `Client `port``, `Call`, `Request`, `Request header `name``, `Request body`, `Expect standard output`, `Expect standard error`, `Expect exit code`, `Expect end`, `Expect file `path``, `Expect answer`, `Expect value`, `Expect status`, `Expect header `name``, `Expect body`";
+const METHODS: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
 const SCREEN_KEYS: &str =
     "`State `field``, `Click`, `Type into `element``, `Expect state `field``, `Expect text`";
 pub(crate) const MAX_TEXT_LENGTH: u64 = 65_536;
@@ -30,15 +31,21 @@ enum Key {
     ExpectState(String),
     ExpectText,
     Range(String),
+    Server(String),
+    Client(String),
+    Answer,
+    Call,
+    Value,
+    Request,
+    RequestHeader(String),
+    RequestBody,
+    Status,
+    ExpectHeader(String),
+    ExpectBody,
 }
 
 impl Key {
-    fn parse(text: &str) -> Option<Self> {
-        let named = |prefix: &str| {
-            text.strip_prefix(prefix)
-                .and_then(backticked)
-                .map(str::to_string)
-        };
+    fn exact(text: &str) -> Option<Self> {
         Some(match text {
             "Standard input" => Self::Input,
             "Arguments" => Self::Arguments,
@@ -48,22 +55,41 @@ impl Key {
             "Expect end" => Self::End,
             "Click" => Self::Click,
             "Expect text" => Self::ExpectText,
-            _ => {
-                if let Some(path) = named("Expect file ") {
-                    Self::OutputFile(path)
-                } else if let Some(path) = named("File ") {
-                    Self::File(path)
-                } else if let Some(field) = named("Expect state ") {
-                    Self::ExpectState(field)
-                } else if let Some(field) = named("State ") {
-                    Self::State(field)
-                } else if let Some(element) = named("Type into ") {
-                    Self::TypeInto(element)
-                } else {
-                    Self::Range(named("Range ")?)
-                }
-            }
+            "Expect answer" => Self::Answer,
+            "Call" => Self::Call,
+            "Expect value" => Self::Value,
+            "Request" => Self::Request,
+            "Request body" => Self::RequestBody,
+            "Expect status" => Self::Status,
+            "Expect body" => Self::ExpectBody,
+            _ => return None,
         })
+    }
+
+    fn parse(text: &str) -> Option<Self> {
+        if let Some(found) = Self::exact(text) {
+            return Some(found);
+        }
+        let named = |prefix: &str| {
+            text.strip_prefix(prefix)
+                .and_then(backticked)
+                .map(str::to_string)
+        };
+        let shapes: [(&str, fn(String) -> Self); 10] = [
+            ("Expect file ", Self::OutputFile),
+            ("File ", Self::File),
+            ("Expect state ", Self::ExpectState),
+            ("State ", Self::State),
+            ("Type into ", Self::TypeInto),
+            ("Range ", Self::Range),
+            ("Server ", Self::Server),
+            ("Client ", Self::Client),
+            ("Request header ", Self::RequestHeader),
+            ("Expect header ", Self::ExpectHeader),
+        ];
+        shapes
+            .into_iter()
+            .find_map(|(prefix, make)| named(prefix).map(make))
     }
 
     fn screen(&self) -> Option<bool> {
@@ -75,7 +101,18 @@ impl Key {
             | Self::ErrorOutput
             | Self::ExitCode
             | Self::End
-            | Self::OutputFile(_) => Some(false),
+            | Self::OutputFile(_)
+            | Self::Server(_)
+            | Self::Client(_)
+            | Self::Answer
+            | Self::Call
+            | Self::Value
+            | Self::Request
+            | Self::RequestHeader(_)
+            | Self::RequestBody
+            | Self::Status
+            | Self::ExpectHeader(_)
+            | Self::ExpectBody => Some(false),
             Self::State(_)
             | Self::Click
             | Self::TypeInto(_)
@@ -95,8 +132,36 @@ impl Key {
                 | Self::OutputFile(_)
                 | Self::ExpectState(_)
                 | Self::ExpectText
+                | Self::Answer
+                | Self::Value
+                | Self::Status
+                | Self::ExpectHeader(_)
+                | Self::ExpectBody
         )
     }
+}
+
+fn request_line(value: &str) -> Option<String> {
+    let inner = backticked(value)?;
+    let (method, target) = inner.split_once(' ')?;
+    let good = METHODS.contains(&method)
+        && target.starts_with('/')
+        && !target.contains(char::is_whitespace);
+    good.then(|| inner.to_string())
+}
+
+fn port(text: &str) -> Option<u16> {
+    text.parse::<u16>().ok().filter(|p| *p > 0)
+}
+
+fn address(text: &str) -> bool {
+    text.rsplit_once(':').is_some_and(|(host, p)| {
+        port(p).is_some()
+            && !host.is_empty()
+            && host
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    })
 }
 
 struct Item<'l> {
@@ -328,7 +393,54 @@ fn values(key: &Key, item: &Item, value: &str, sink: &mut Sink) -> Vec<String> {
         | Key::ErrorOutput
         | Key::OutputFile(_)
         | Key::TypeInto(_)
-        | Key::ExpectText => one_string(item, value, sink).into_iter().collect(),
+        | Key::ExpectText
+        | Key::Server(_)
+        | Key::Client(_)
+        | Key::Answer
+        | Key::RequestHeader(_)
+        | Key::RequestBody
+        | Key::ExpectHeader(_)
+        | Key::ExpectBody => one_string(item, value, sink).into_iter().collect(),
+        Key::Call => {
+            let found = backticked(value).map(str::to_string);
+            if found.is_none() {
+                sink.add(
+                    item.line,
+                    "example-value",
+                    "write the call in backticks, for example ``- Call: `parse(\"1\")` ``"
+                        .to_string(),
+                );
+            }
+            found.into_iter().collect()
+        }
+        Key::Value => match backticked(value) {
+            Some(text) => vec![text.to_string()],
+            None => one_string(item, value, sink).into_iter().collect(),
+        },
+        Key::Request => {
+            let found = request_line(value);
+            if found.is_none() {
+                sink.add(
+                    item.line,
+                    "example-value",
+                    format!(
+                        "write the method and the path in backticks, for example ``- Request: `GET /items` ``; the methods are {}",
+                        METHODS.join(", ")
+                    ),
+                );
+            }
+            found.into_iter().collect()
+        }
+        Key::Status => {
+            if !value.parse::<u16>().is_ok_and(|s| (100..=599).contains(&s)) {
+                sink.add(
+                    item.line,
+                    "example-value",
+                    "a status is a number from 100 to 599".to_string(),
+                );
+            }
+            Vec::new()
+        }
         Key::Arguments => strings(item, value, sink),
         Key::State(_) | Key::ExpectState(_) => state_value(item, value, sink),
         Key::ExitCode => {
@@ -378,6 +490,25 @@ fn record(key: &Key, value: &str, found: &[String], test: &mut Test) {
             .push((path.clone(), first.unwrap_or_default())),
         Key::ExitCode => test.exit_code = value.parse().ok(),
         Key::End => test.end = End::parse(value).unwrap_or_default(),
+        Key::Server(at) => test.servers.push((at.clone(), first.unwrap_or_default())),
+        Key::Client(at) => {
+            if let Some(number) = port(at) {
+                test.clients.push((number, first.unwrap_or_default()));
+            }
+        }
+        Key::Answer => test.answer = first,
+        Key::Call => test.call = first,
+        Key::Value => test.value = first,
+        Key::Request => test.request = first,
+        Key::RequestHeader(name) => test
+            .request_headers
+            .push((name.clone(), first.unwrap_or_default())),
+        Key::RequestBody => test.request_body = first,
+        Key::Status => test.status = value.parse().ok(),
+        Key::ExpectHeader(name) => test
+            .expect_headers
+            .push((name.to_lowercase(), first.unwrap_or_default())),
+        Key::ExpectBody => test.expect_body = first,
         Key::State(_)
         | Key::Click
         | Key::TypeInto(_)
@@ -417,6 +548,80 @@ fn key_place(key: &Key, key_text: &str, screen: bool, cases: bool, line: usize, 
             line,
             "example-path",
             format!("`{path}` is not a relative path inside the program's folder"),
+        );
+    }
+    let bad_place = match key {
+        Key::Server(at) => !address(at),
+        Key::Client(at) => port(at).is_none(),
+        _ => false,
+    };
+    if bad_place {
+        sink.add(
+            line,
+            "example-address",
+            format!("`{key_text}` names a server as `host:port` and a client by its port, from 1 to 65535"),
+        );
+    }
+}
+
+fn shape_rules(head: usize, keys: &[Key], test: &Test, sink: &mut Sink) {
+    let call = keys.contains(&Key::Call);
+    let request = keys.contains(&Key::Request);
+    let exited = test.end == End::Exited;
+    let mut add = |code: &'static str, message: &str| sink.add(head, code, message.to_string());
+    if call && request {
+        add(
+            "example-mixed",
+            "a block is a call of a library, a request to a server, or a run of a program, not two of them",
+        );
+    }
+    if call || request {
+        if keys.contains(&Key::ExitCode) {
+            add(
+                "example-exit-code-unused",
+                "a call or a request has no exit code; remove `- Expect exit code:`",
+            );
+        }
+    } else if exited && !keys.contains(&Key::ExitCode) {
+        add(
+            "example-exit-code-missing",
+            "this block has no `- Expect exit code:` item",
+        );
+    }
+    if call && exited && !keys.contains(&Key::Value) {
+        add(
+            "example-value-missing",
+            "a call has an `- Expect value:` item, the value as Rust's `{:?}` writes it",
+        );
+    }
+    if keys.contains(&Key::Value) && !call {
+        add(
+            "example-call-missing",
+            "`- Expect value:` goes with a `- Call:` item",
+        );
+    }
+    if request && exited && !keys.contains(&Key::Status) {
+        add(
+            "example-status-missing",
+            "a request has an `- Expect status:` item",
+        );
+    }
+    let http_keys = keys.iter().any(|k| {
+        matches!(
+            k,
+            Key::Status | Key::ExpectHeader(_) | Key::ExpectBody | Key::RequestHeader(_) | Key::RequestBody
+        )
+    });
+    if http_keys && !request {
+        add(
+            "example-request-missing",
+            "the keys of a request go with a `- Request:` item",
+        );
+    }
+    if keys.contains(&Key::Answer) && test.clients.len() != 1 {
+        add(
+            "example-client-missing",
+            "`- Expect answer:` goes with one `- Client `port`:` item",
         );
     }
 }
@@ -475,12 +680,8 @@ fn block(
         keys.push(key);
     }
     let exited = test.end == End::Exited;
-    if !screen && exited && !keys.contains(&Key::ExitCode) {
-        sink.add(
-            head,
-            "example-exit-code-missing",
-            "this block has no `- Expect exit code:` item".to_string(),
-        );
+    if !screen {
+        shape_rules(head, &keys, test, sink);
     }
     if !screen && !exited && keys.contains(&Key::ExitCode) {
         sink.add(
@@ -842,5 +1043,76 @@ mod tests {
         assert_eq!(first.expect_files, [("out.txt".to_string(), String::new())]);
         assert_eq!(tests[1].ranges.len(), 2);
         assert_eq!(tests[1].arguments, Some(vec!["{n}".to_string()]));
+    }
+
+    #[test]
+    fn calls_requests_and_network_fixtures_are_examples() {
+        let base = "## Use it\nGiven a value,\nWhen the program runs,\nThen it gives the result.\n";
+        let call = format!(
+            "{base}### Example: a call\n- Call: `parse(\"[1]\")`\n- Expect value: `Ok(List([Number(\"1\")]))`\n"
+        );
+        let request = format!(
+            "{base}### Example: a request\n- Request: `POST /items?a=1`\n- Request header `Content-Type`: \"text/plain\"\n- Request body: \"tea\"\n- Expect status: 201\n- Expect header `Content-Type`: \"application/json\"\n- Expect body: \"{{}}\"\n"
+        );
+        let network = format!(
+            "{base}### Example: a server and a client\n- Server `127.0.0.1:7878`: \"pong\"\n- Client `7879`: \"ping\"\n- Expect answer: \"PING\"\n- Expect exit code: 0\n"
+        );
+        for text in [&call, &request, &network] {
+            assert_eq!(codes(IdeaKind::Program, text), Vec::<&str>::new(), "{text}");
+        }
+        let mut sink = Sink::new("idea.md");
+        let tests = parse(
+            IdeaKind::Program,
+            1,
+            &lines(&format!("{call}{}", &request[base.len()..]), 2),
+            &Dictionary::load(),
+            &mut sink,
+        );
+        assert_eq!(sink.findings, []);
+        assert_eq!(tests[0].call.as_deref(), Some("parse(\"[1]\")"));
+        assert_eq!(tests[0].value.as_deref(), Some("Ok(List([Number(\"1\")]))"));
+        assert_eq!(tests[1].request.as_deref(), Some("POST /items?a=1"));
+        assert_eq!(tests[1].status, Some(201));
+        assert_eq!(
+            tests[1].expect_headers,
+            [("content-type".to_string(), "application/json".to_string())]
+        );
+        assert_eq!(tests[1].expect_body.as_deref(), Some("{}"));
+    }
+
+    #[test]
+    fn a_call_or_a_request_has_its_expectation_and_no_exit_code() {
+        let base = "## Use it\nGiven a value,\nWhen the program runs,\nThen it gives the result.\n### Example: a\n";
+        let with = |items: &str| codes(IdeaKind::Module, &format!("{base}{items}"));
+        assert_eq!(with("- Call: `f()`\n"), ["example-value-missing"]);
+        assert_eq!(
+            with("- Call: `f()`\n- Expect value: `1`\n- Expect exit code: 0\n"),
+            ["example-exit-code-unused"]
+        );
+        assert_eq!(
+            with("- Expect value: `1`\n- Expect exit code: 0\n"),
+            ["example-call-missing"]
+        );
+        assert_eq!(with("- Request: `GET /`\n"), ["example-status-missing"]);
+        assert_eq!(
+            with("- Request: `FETCH /`\n- Expect status: 200\n"),
+            ["example-value"]
+        );
+        assert_eq!(
+            with("- Expect status: 200\n- Expect exit code: 0\n"),
+            ["example-request-missing"]
+        );
+        assert_eq!(
+            with("- Call: `f()`\n- Expect value: `1`\n- Request: `GET /`\n- Expect status: 200\n"),
+            ["example-mixed"]
+        );
+        assert_eq!(
+            with("- Server `host`: \"a\"\n- Expect exit code: 0\n"),
+            ["example-address"]
+        );
+        assert_eq!(
+            with("- Expect answer: \"a\"\n- Expect exit code: 0\n"),
+            ["example-client-missing"]
+        );
     }
 }

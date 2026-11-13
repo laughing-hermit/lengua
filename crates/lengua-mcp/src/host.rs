@@ -92,7 +92,7 @@ impl Host {
             .collect()
     }
 
-    pub(crate) fn seal(&self, folder: &Path, bytes: &[u8], sha256: &str) -> Result<Seal, String> {
+    pub(crate) fn seal_code(&self, folder: &Path, bytes: &[u8], sha256: &str) -> Result<String, String> {
         let component = self.component(bytes, sha256)?;
         let code = component
             .serialize()
@@ -104,10 +104,25 @@ impl Host {
             fs::create_dir_all(parent).map_err(fail)?;
         }
         fs::write(&path, code).map_err(fail)?;
+        Ok(sealed)
+    }
+
+    pub(crate) fn seal(
+        &self,
+        folder: &Path,
+        bytes: &[u8],
+        sha256: &str,
+        trusted: &[String],
+    ) -> Result<Seal, String> {
+        let sealed = self.seal_code(folder, bytes, sha256)?;
         let key = lock::user_key()?;
         let lock = folder.join(format!("{SEALED}/{sha256}.lock"));
-        lock::write(folder, &lock, &Facts::test(&sealed), &key)?;
+        lock::write(folder, &lock, &Facts::test(&sealed, trusted), &key)?;
         Ok(Seal { sealed, lock })
+    }
+
+    pub(crate) fn exports(&self, component: &Component) -> Vec<String> {
+        lengua_host::exported_interfaces(self.engine(), component)
     }
 }
 

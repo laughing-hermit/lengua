@@ -56,6 +56,16 @@ pub(crate) struct Model {
     pub uses: Vec<Use>,
     pub findings: Vec<Finding>,
     pub files: Vec<String>,
+    pub declared: Vec<Declared>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Declared {
+    pub file: usize,
+    pub kind: String,
+    pub name: String,
+    pub public: bool,
+    pub line: usize,
 }
 
 struct Reader<'a> {
@@ -238,6 +248,7 @@ impl Reader<'_> {
         if at >= to {
             return to;
         }
+        let public = code.is(at, "pub") && !code.is(at + 1, "(");
         if code.is(at, "pub") {
             at += 1;
             if code.is(at, "(") {
@@ -245,6 +256,9 @@ impl Reader<'_> {
             }
         }
         at = skip_qualifiers(code, at);
+        if owner.is_none() {
+            self.declare(at, to, public);
+        }
         match code.ident(at).unwrap_or("") {
             "fn" => self.function(at, to, owner),
             "struct" | "enum" | "union" if code.name(at + 1).is_some() => self.type_def(at, to),
@@ -260,6 +274,34 @@ impl Reader<'_> {
             _ if code.is(at, ";") => at + 1,
             _ if code.segment(at).is_some() => self.macro_item(at, to),
             _ => self.unreadable(at, to, "this item"),
+        }
+    }
+
+    fn declare(&mut self, at: usize, to: usize, public: bool) {
+        let code = self.code;
+        let kind = code.ident(at).unwrap_or_default().to_string();
+        let names: Vec<String> = match kind.as_str() {
+            "fn" | "struct" | "enum" | "union" | "trait" | "mod" | "type" | "static" | "const" => {
+                code.name(at + 1).map(str::to_string).into_iter().collect()
+            }
+            "use" => {
+                let end = code.find(at, to, ";").unwrap_or(at);
+                let mut found = code.names(at + 1, end);
+                if (at..end).any(|k| code.is(k, "*")) {
+                    found.push("*".to_string());
+                }
+                found
+            }
+            _ => Vec::new(),
+        };
+        for name in names {
+            self.model.declared.push(Declared {
+                file: self.file,
+                kind: kind.clone(),
+                name,
+                public,
+                line: code.line(at),
+            });
         }
     }
 

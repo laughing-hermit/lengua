@@ -12,7 +12,7 @@ use lengua_idea::{Build, Label, Trust};
 
 use crate::doctor;
 use crate::host::{Host, Seal, grant_for, outside};
-use crate::{mutation, testing};
+use crate::{harness, mutation, testing};
 
 pub(crate) const THRESHOLD: usize = 80;
 
@@ -37,6 +37,8 @@ pub(crate) struct Component {
     pub size: u64,
     pub sha256: String,
     pub seal: Option<Seal>,
+    pub tested: String,
+    pub trusted: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -218,15 +220,15 @@ impl Worker {
             s.remarks = screens;
             s.tests.total = cases.len();
         });
-        let Some(seal) = seal.filter(|_| !self.build.library) else {
+        let Some(seal) = seal else {
             return self.finish(Stage::Done, Vec::new());
         };
         let mut problems = Vec::new();
-        for case in &cases {
+        for (index, case) in cases.iter().enumerate() {
             if self.stopped() {
                 return;
             }
-            let failed = testing::run_case(&self.folder, &self.build, &seal.lock, case);
+            let failed = testing::run_case(&self.folder, &self.build, &seal.lock, (index, case));
             if let Some(detail) = &failed {
                 problems.push(testing::problem(case, detail));
             }
@@ -465,6 +467,9 @@ fn compile(
     for args in [&clippy[..], &building[..]] {
         step(folder, args, slot)?;
     }
+    if build.library {
+        return library(folder, build, slot, host);
+    }
     built(folder, build, host)
 }
 
@@ -481,79 +486,99 @@ pub(crate) fn too_large(size: usize, limit: usize) -> Option<Problem> {
     })
 }
 
-fn ungranted(bytes: &[u8], sha256: &str, build: &Build, host: &Host) -> Vec<Problem> {
-    let wasm = Path::new(&build.artifact)
-        .extension()
-        .is_some_and(|e| e == "wasm");
-    if !wasm {
-        return Vec::new();
-    }
+fn ungranted(
+    bytes: &[u8],
+    sha256: &str,
+    world: &[String],
+    host: &Host,
+) -> Result<wasmtime::component::Component, Vec<Problem>> {
     if let Some(found) = too_large(bytes.len(), SIZE_LIMIT) {
-        return vec![found];
+        return Err(vec![found]);
     }
-    let component = match host.component(bytes, sha256) {
-        Ok(component) => component,
-        Err(error) => {
-            return vec![problem(
-                "Cargo.toml",
-                1,
-                "component-refused",
-                format!(
-                    "wasmtime did not take the component: {error}; lengua's host refuses threads, shared memory and relaxed SIMD, whose results can differ between machines"
-                ),
-            )];
-        }
-    };
-    outside(&host.imports(&component), &build.world)
-        .into_iter()
-        .map(|import| {
-            let advice = grant_for(&import).map_or_else(
-                || "; no grant allows it, so change the code so that it does not use it".to_string(),
-                |grant| format!("; to allow it, add {grant} to `# Constraints`, or change the code so that it does not use it"),
-            );
-            problem(
+    host.component(bytes, sha256).map_err(|error| {
+        vec![problem(
+            "Cargo.toml",
+            1,
+            "component-refused",
+            format!(
+                "wasmtime did not take the component: {error}; lengua's host refuses threads, shared memory and relaxed SIMD, whose results can differ between machines"
+            ),
+        )]
+    })
+    .and_then(|component| {
+        let found: Vec<Problem> = outside(&host.imports(&component), world)
+            .into_iter()
+            .map(|import| {
+                let advice = grant_for(&import).map_or_else(
+                    || "; no grant allows it, so change the code so that it does not use it".to_string(),
+                    |grant| format!("; to allow it, add {grant} to `# Constraints`, or change the code so that it does not use it"),
+                );
+                problem(
+                    "idea.md",
+                    1,
+                    "import-ungranted",
+                    format!(
+                        "the component imports `{import}`, which is not in the world the grants of the idea make, so the host does not link it{advice}"
+                    ),
+                )
+            })
+            .collect();
+        if found.is_empty() { Ok(component) } else { Err(found) }
+    })
+}
+
+struct Part {
+    bytes: Vec<u8>,
+    sha256: String,
+}
+
+fn trusted_parts(folder: &Path, build: &Build, host: &Host) -> Result<(Vec<Part>, Vec<String>), Vec<Problem>> {
+    let mut parts = Vec::new();
+    let mut exports = Vec::new();
+    let mut found = Vec::new();
+    for part in &build.components {
+        let Ok(bytes) = fs::read(folder.join(&part.file)) else {
+            found.push(problem("idea.md", part.line, "component-missing", format!("lengua could not read the component `{}`", part.file)));
+            continue;
+        };
+        let sha256 = lengua_idea::sha256_hex(&bytes);
+        match host.component(&bytes, &sha256) {
+            Ok(component) => {
+                for import in outside(&host.imports(&component), &build.world) {
+                    found.push(problem(
+                        "idea.md",
+                        part.line,
+                        "component-import-ungranted",
+                        format!("the trusted component `{}` imports `{import}`, which is not in the world the grants of the idea make; it runs under the program's grants only", part.file),
+                    ));
+                }
+                exports.extend(host.exports(&component));
+            }
+            Err(error) => found.push(problem(
                 "idea.md",
-                1,
-                "import-ungranted",
-                format!(
-                    "the component imports `{import}`, which is not in the world the grants of the idea make, so the host does not link it{advice}"
-                ),
-            )
-        })
-        .collect()
+                part.line,
+                "component-refused",
+                format!("wasmtime did not take the component `{}`: {error}", part.file),
+            )),
+        }
+        parts.push(Part { bytes, sha256 });
+    }
+    if found.is_empty() { Ok((parts, exports)) } else { Err(found) }
+}
+
+fn seal_failed(message: &str) -> Vec<Problem> {
+    vec![problem(
+        "Cargo.toml",
+        1,
+        "seal-failed",
+        format!("lengua could not seal the precompiled code: {message}"),
+    )]
 }
 
 fn built(folder: &Path, build: &Build, host: &Host) -> Result<Component, Vec<Problem>> {
     let component = folder.join(&build.artifact);
-    match fs::read(&component) {
-        Ok(bytes) => {
-            let sha256 = lengua_idea::sha256_hex(&bytes);
-            let problems = ungranted(&bytes, &sha256, build, host);
-            if !problems.is_empty() {
-                return Err(problems);
-            }
-            let seal = if build.library {
-                None
-            } else {
-                crate::host::clear(folder);
-                let sealed = host.seal(folder, &bytes, &sha256).map_err(|message| {
-                    vec![problem(
-                        "Cargo.toml",
-                        1,
-                        "seal-failed",
-                        format!("lengua could not seal the precompiled code: {message}"),
-                    )]
-                })?;
-                Some(sealed)
-            };
-            Ok(Component {
-                size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-                sha256,
-                seal,
-                path: component,
-            })
-        }
-        Err(error) => Err(vec![problem(
+    let bytes = fs::read(&component).map_err(|error| {
+        vec![problem(
             "Cargo.toml",
             1,
             "build-error",
@@ -561,8 +586,93 @@ fn built(folder: &Path, build: &Build, host: &Host) -> Result<Component, Vec<Pro
                 "the build ended, but lengua could not read `{}`: {error}",
                 build.artifact
             ),
-        )]),
+        )]
+    })?;
+    let sha256 = lengua_idea::sha256_hex(&bytes);
+    let (parts, exports) = trusted_parts(folder, build, host)?;
+    let mut world = build.world.clone();
+    world.extend(exports);
+    ungranted(&bytes, &sha256, &world, host)?;
+    crate::host::clear(folder);
+    let mut trusted = Vec::new();
+    for part in &parts {
+        trusted.push(
+            host.seal_code(folder, &part.bytes, &part.sha256)
+                .map_err(|m| seal_failed(&m))?,
+        );
     }
+    let seal = host
+        .seal(folder, &bytes, &sha256, &trusted)
+        .map_err(|m| seal_failed(&m))?;
+    Ok(Component {
+        size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        tested: sha256.clone(),
+        sha256,
+        seal: Some(seal),
+        trusted,
+        path: component,
+    })
+}
+
+fn library(
+    folder: &Path,
+    build: &Build,
+    slot: &Mutex<Option<Child>>,
+    host: &Host,
+) -> Result<Component, Vec<Problem>> {
+    let path = folder.join(&build.artifact);
+    let rlib = fs::read(&path).map_err(|error| {
+        vec![problem(
+            "Cargo.toml",
+            1,
+            "build-error",
+            format!("the build ended, but lengua could not read `{}`: {error}", build.artifact),
+        )]
+    })?;
+    let cases = testing::cases(build);
+    let harness_build = build.harness();
+    let spec = harness::Library {
+        package: &build.package,
+        dependency: &build.package,
+        path: "../../..",
+        harness: &harness_build.package,
+    };
+    harness::write(folder, harness::FOLDER, &spec, &cases)
+        .map_err(|m| vec![problem("Cargo.toml", 1, "build-error", m)])?;
+    let dir = folder.join(harness::FOLDER);
+    let target_dir = folder.join("target").to_string_lossy().to_string();
+    let args = [
+        "build",
+        "--release",
+        "--target",
+        build.target,
+        "--offline",
+        "--message-format=short",
+        "--target-dir",
+        target_dir.as_str(),
+    ];
+    match cargo(&dir, &args, slot) {
+        Ok((true, _)) => {}
+        Ok((false, text)) => return Err(harness::mapped(problems(&dir, &text), &cases)),
+        Err(message) => return Err(vec![problem("Cargo.toml", 1, "build-error", message)]),
+    }
+    let bytes = fs::read(folder.join(&harness_build.artifact)).map_err(|error| {
+        vec![problem("Cargo.toml", 1, "build-error", format!("lengua could not read the harness: {error}"))]
+    })?;
+    let sha256 = lengua_idea::sha256_hex(&bytes);
+    ungranted(&bytes, &sha256, &harness_build.world, host)?;
+    crate::host::clear(folder);
+    let seal = host
+        .seal(folder, &bytes, &sha256, &[])
+        .map_err(|m| seal_failed(&m))?;
+    Ok(Component {
+        size: u64::try_from(rlib.len()).unwrap_or(u64::MAX),
+        sha256: lengua_idea::sha256_hex(&rlib),
+        tested: sha256,
+        seal: Some(seal),
+        trusted: Vec::new(),
+        path,
+    })
 }
 
 fn relative(folder: &Path, path: &str) -> String {

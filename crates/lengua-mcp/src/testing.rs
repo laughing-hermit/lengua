@@ -6,6 +6,7 @@ use std::time::Duration;
 use lengua_idea::{Build, Case, End, Range, Reach, Test};
 
 use crate::build::Problem;
+use crate::fixtures::Fixtures;
 use crate::runs::GRACE;
 use crate::worker::{self, Request};
 use lengua_host::{Ending, Input, Outcome};
@@ -55,6 +56,70 @@ pub(crate) fn diff(what: &str, expected: &str, got: &str) -> Option<String> {
     ))
 }
 
+pub(crate) fn request_bytes(test: &Test) -> Vec<u8> {
+    let line = test.request.as_deref().unwrap_or("GET /");
+    let body = test.request_body.clone().unwrap_or_default();
+    let mut out = format!("{line} HTTP/1.1\r\n");
+    let mut host = false;
+    for (name, value) in &test.request_headers {
+        host |= name.eq_ignore_ascii_case("host");
+        out.push_str(name);
+        out.push_str(": ");
+        out.push_str(value);
+        out.push_str("\r\n");
+    }
+    if !host {
+        out.push_str("host: localhost\r\n");
+    }
+    if !body.is_empty() || test.request_body.is_some() {
+        out.push_str("content-length: ");
+        out.push_str(&body.len().to_string());
+        out.push_str("\r\n");
+    }
+    out.push_str("\r\n");
+    out.push_str(&body);
+    out.into_bytes()
+}
+
+pub(crate) fn parse_response(bytes: &[u8]) -> Option<(u16, Vec<(String, String)>, String)> {
+    let end = bytes.windows(4).position(|w| w == b"\r\n\r\n")?;
+    let head = String::from_utf8_lossy(bytes.get(..end)?).to_string();
+    let body = String::from_utf8_lossy(bytes.get(end + 4..)?).to_string();
+    let mut lines = head.split("\r\n");
+    let status: u16 = lines.next()?.split(' ').nth(1)?.parse().ok()?;
+    let headers = lines
+        .filter_map(|l| l.split_once(':'))
+        .map(|(n, v)| (n.trim().to_lowercase(), v.trim().to_string()))
+        .collect();
+    Some((status, headers, body))
+}
+
+fn compare_http(test: &Test, outcome: &Outcome, out: &mut Vec<String>) {
+    let Some((status, headers, body)) = parse_response(&outcome.stdout) else {
+        out.push(format!(
+            "the server's answer is not an HTTP answer: {:?}",
+            String::from_utf8_lossy(&outcome.stdout)
+        ));
+        return;
+    };
+    if let Some(wanted) = test.status
+        && wanted != status
+    {
+        out.push(format!(
+            "status: expected {wanted} and got {status} (the body: {body:?})"
+        ));
+    }
+    for (name, wanted) in &test.expect_headers {
+        match headers.iter().find(|(n, _)| n == name) {
+            Some((_, got)) => out.extend(diff(&format!("the header `{name}`"), wanted, got)),
+            None => out.push(format!("the answer has no header `{name}`")),
+        }
+    }
+    if let Some(wanted) = &test.expect_body {
+        out.extend(diff("body", wanted, &body));
+    }
+}
+
 fn compare(test: &Test, outcome: &Outcome, root: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let (end, detail) = match &outcome.ending {
@@ -91,11 +156,18 @@ fn compare(test: &Test, outcome: &Outcome, root: &Path) -> Vec<String> {
         out.push(format!("exit code: expected {wanted} and got {code}"));
     }
     let stdout = String::from_utf8_lossy(&outcome.stdout);
-    out.extend(diff(
-        "standard output",
-        test.stdout.as_deref().unwrap_or(""),
-        &stdout,
-    ));
+    if test.request.is_some() {
+        compare_http(test, outcome, &mut out);
+    } else if let Some(value) = &test.value {
+        let got = stdout.strip_suffix('\n').unwrap_or(&stdout);
+        out.extend(diff("value", value, got));
+    } else {
+        out.extend(diff(
+            "standard output",
+            test.stdout.as_deref().unwrap_or(""),
+            &stdout,
+        ));
+    }
     if let Some(wanted) = &test.stderr {
         let stderr = String::from_utf8_lossy(&outcome.stderr);
         out.extend(diff("standard error", wanted, &stderr));
@@ -147,7 +219,41 @@ fn ungranted(build: &Build, test: &Test) -> Option<String> {
     None
 }
 
-pub(crate) fn run_case(folder: &Path, build: &Build, lock: &Path, case: &Case) -> Option<String> {
+fn input_of(test: &Test, index: usize, root: &Path) -> Input {
+    let (arguments, stdin) = if test.call.is_some() {
+        (vec![index.to_string()], Vec::new())
+    } else if test.request.is_some() {
+        (Vec::new(), request_bytes(test))
+    } else {
+        (
+            test.arguments.clone().unwrap_or_default(),
+            test.stdin.clone().unwrap_or_default().into_bytes(),
+        )
+    };
+    Input {
+        arguments,
+        stdin,
+        fixed: true,
+        root: Some(root.to_path_buf()),
+    }
+}
+
+fn answers(test: &Test, got: &[Option<Vec<u8>>], out: &mut Vec<String>) {
+    let Some(wanted) = &test.answer else {
+        return;
+    };
+    match got.first() {
+        Some(Some(bytes)) => out.extend(diff("the answer", wanted, &String::from_utf8_lossy(bytes))),
+        _ => out.push("the client did not reach the program".to_string()),
+    }
+}
+
+pub(crate) fn run_case(
+    folder: &Path,
+    build: &Build,
+    lock: &Path,
+    (index, case): (usize, &Case),
+) -> Option<String> {
     let test = &case.test;
     if let Some(message) = ungranted(build, test) {
         return Some(message);
@@ -157,21 +263,21 @@ pub(crate) fn run_case(folder: &Path, build: &Build, lock: &Path, case: &Case) -
         std::process::id(),
         RUNS.fetch_add(1, Ordering::Relaxed)
     ));
-    let result = place(&root, build, test).map(|()| {
-        let input = Input {
-            arguments: test.arguments.clone().unwrap_or_default(),
-            stdin: test.stdin.clone().unwrap_or_default().into_bytes(),
-            fixed: true,
-            root: Some(root.clone()),
-        };
+    let limit = Duration::from_millis(build.grants.time_ms) + GRACE;
+    let result = place(&root, build, test).and_then(|()| {
+        let input = input_of(test, index, &root);
+        let fixtures = Fixtures::start(test, limit)?;
         let outcome = worker::run(&Request {
             kind: Kind::Test,
             lock,
             folder,
             input: &input,
-            limit: Duration::from_millis(build.grants.time_ms) + GRACE,
+            limit,
         });
-        compare(test, &outcome, &root)
+        let got = fixtures.finish();
+        let mut found = compare(test, &outcome, &root);
+        answers(test, &got, &mut found);
+        Ok(found)
     });
     let _ = fs::remove_dir_all(&root);
     match result {

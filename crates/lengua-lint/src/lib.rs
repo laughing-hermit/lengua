@@ -12,7 +12,16 @@ use crate::code::Code;
 use crate::model::Model;
 use crate::rules::{ASSERTS, Context};
 
+pub use crate::model::Declared;
 pub use crate::mutate::{Edit, Mutant, Mutation, apply, mutants};
+
+#[must_use]
+pub fn declared(text: &str) -> Vec<Declared> {
+    let Ok(read) = code::read(text) else {
+        return Vec::new();
+    };
+    model::read(&[Some(read)], &[String::new()]).declared
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Finding {

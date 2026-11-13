@@ -4,6 +4,7 @@ mod constraints;
 mod frontmatter;
 mod generate;
 mod idea;
+mod library;
 pub mod lock;
 mod rust;
 mod sha256;
@@ -20,6 +21,7 @@ use crate::ste::Dictionary;
 use crate::wiki::Page;
 
 pub use crate::cases::{CASES_DRAWN, Case, End, Range, Test, cases};
+pub use crate::library::Library;
 pub use lengua_lint::{Edit, Mutant, Mutation, apply};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -95,6 +97,8 @@ pub struct Grants {
     pub reaches: Vec<Reach>,
     pub folders: Vec<Folder>,
     pub hosts: Vec<String>,
+    pub listens: Vec<u16>,
+    pub server: Option<u16>,
     pub memory: u64,
     pub time_ms: u64,
 }
@@ -104,6 +108,32 @@ impl Grants {
     pub fn reach(&self, reach: Reach) -> bool {
         self.reaches.contains(&reach)
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Shape {
+    #[default]
+    Command,
+    Server,
+    Library,
+}
+
+impl Shape {
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Command => "program",
+            Self::Server => "server",
+            Self::Library => "library",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Trusted {
+    pub file: String,
+    pub built: String,
+    pub line: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -117,9 +147,42 @@ pub struct Build {
     pub grants: Grants,
     pub world: Vec<String>,
     pub library: bool,
+    pub shape: Shape,
+    pub libraries: Vec<Library>,
+    pub components: Vec<Trusted>,
     pub sources: Vec<String>,
     pub tests: Vec<Test>,
     pub tests_hash: String,
+}
+
+impl Build {
+    #[must_use]
+    pub fn harness(&self) -> Self {
+        Self {
+            package: harness_name(&self.package),
+            artifact: format!(
+                "target/{}/release/{}.wasm",
+                self.target,
+                harness_name(&self.package)
+            ),
+            grants: Grants {
+                reaches: vec![Reach::Arguments],
+                ..self.grants.clone()
+            },
+            world: generate::world_names(&[])
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            library: false,
+            shape: Shape::Command,
+            ..self.clone()
+        }
+    }
+}
+
+#[must_use]
+pub fn harness_name(package: &str) -> String {
+    format!("{package}-harness")
 }
 
 fn grants(top: &constraints::Constraints) -> Grants {
@@ -148,8 +211,104 @@ fn grants(top: &constraints::Constraints) -> Grants {
             .collect(),
         folders,
         hosts: top.hosts.clone(),
+        listens: top.listens.clone(),
+        server: top.serves.map(|(port, _)| port),
         memory: top.memory,
         time_ms: top.time_ms,
+    }
+}
+
+fn shape_of(top: &constraints::Constraints) -> Shape {
+    if !top.exports.is_empty() {
+        Shape::Library
+    } else if top.serves.is_some() {
+        Shape::Server
+    } else {
+        Shape::Command
+    }
+}
+
+fn top_finding(line: usize, code: &'static str, message: String) -> Finding {
+    Finding {
+        file: "idea.md".to_string(),
+        line,
+        code,
+        message,
+    }
+}
+
+fn shape_rules(top: &constraints::Constraints, findings: &mut Vec<Finding>) {
+    let exports_line = top.exports.first().map(|(_, line)| *line);
+    if let (Some(_), Some((_, line))) = (exports_line, top.serves) {
+        findings.push(top_finding(
+            line,
+            "constraint-kind",
+            "an idea is a program, a server (`- Serves:`) or a library (`- Exports:`), not two of them".to_string(),
+        ));
+    }
+    if let Some(line) = exports_line {
+        let mut reached = Vec::new();
+        if !top.grants.is_empty() {
+            reached.push("grants");
+        }
+        if !top.libraries.is_empty() {
+            reached.push("lengua libraries");
+        }
+        if !top.components.is_empty() {
+            reached.push("components");
+        }
+        if !reached.is_empty() {
+            findings.push(top_finding(
+                line,
+                "library-grant",
+                format!("a library has no {} of its own: the program that uses it grants what it reaches; remove them, or make the idea a program", reached.join(" and ")),
+            ));
+        }
+    }
+    let input = [
+        constraints::Grant::StandardInput,
+        constraints::Grant::Arguments,
+    ];
+    if let Some((_, line)) = top.serves
+        && top.grants.iter().any(|g| input.contains(g))
+    {
+        findings.push(top_finding(
+            line,
+            "server-input",
+            "a server gets requests, not a standard input or arguments; remove `- Reads: standard input` and `- Reads: arguments`".to_string(),
+        ));
+    }
+}
+
+fn test_rules(tests: &[Test], shape: Shape, findings: &mut Vec<Finding>) {
+    for test in tests.iter().filter(|t| !t.screen) {
+        let problem = match shape {
+            Shape::Library if test.call.is_none() => Some((
+                "example-library-call",
+                "a library has no entry of its own, so each of its examples is a `- Call:` of its functions with an `- Expect value:`",
+            )),
+            Shape::Server if test.request.is_none() => Some((
+                "example-server-request",
+                "a server answers requests, so each of its examples is a `- Request:` with an `- Expect status:`",
+            )),
+            Shape::Command | Shape::Server if test.call.is_some() => Some((
+                "example-library-call",
+                "`- Call:` is for the examples of a library, an idea with `- Exports:`",
+            )),
+            Shape::Command | Shape::Library if test.request.is_some() => Some((
+                "example-server-request",
+                "`- Request:` is for the examples of a server, an idea with `- Serves:`",
+            )),
+            _ => None,
+        };
+        if let Some((code, message)) = problem {
+            findings.push(Finding {
+                file: test.file.clone(),
+                line: test.line,
+                code,
+                message: message.to_string(),
+            });
+        }
     }
 }
 
@@ -391,6 +550,8 @@ fn link(pages: &mut [Page], constraints: &[constraints::Constraints], findings: 
 struct Prepared {
     pages: Vec<Page>,
     top: constraints::Constraints,
+    shape: Shape,
+    libraries: Vec<Library>,
     plan: generate::Plan,
     tests: Vec<Test>,
 }
@@ -400,92 +561,157 @@ pub fn tests_hash(tests: &[Test], grants: &Grants) -> String {
     sha256::hex(format!("{tests:?}\0{grants:?}").as_bytes())
 }
 
+fn outside_inputs(folder: &Path, prepared: &Prepared) -> Vec<(String, Vec<u8>)> {
+    let mut out: Vec<(String, Vec<u8>)> = prepared
+        .libraries
+        .iter()
+        .map(|l| (l.lock.clone(), l.lock_sha256.clone().into_bytes()))
+        .collect();
+    for (file, _, _) in &prepared.top.components {
+        out.push((file.clone(), fs::read(folder.join(file)).unwrap_or_default()));
+    }
+    out
+}
+
 fn build(folder: &Path, prepared: &Prepared) -> Build {
     let plan = &prepared.plan;
     let grants = grants(&prepared.top);
     let tests_hash = tests_hash(&prepared.tests, &grants);
+    let extra = outside_inputs(folder, prepared);
     Build {
-        artifact: generate::artifact(&plan.package, plan.library),
+        artifact: generate::artifact(&plan.package, prepared.shape),
         package: plan.package.clone(),
         target: generate::TARGET,
         crates: plan.crates,
         code: folder.join("src/main.rs").is_file(),
-        inputs: generate::inputs(folder, &plan.texts, &tests_hash),
+        inputs: generate::inputs(folder, &plan.texts, &tests_hash, &extra),
         grants,
         world: generate::world_names(&prepared.top.grants)
             .into_iter()
             .map(str::to_string)
             .collect(),
-        library: plan.library,
+        library: prepared.shape == Shape::Library,
+        shape: prepared.shape,
+        libraries: prepared.libraries.clone(),
+        components: prepared
+            .top
+            .components
+            .iter()
+            .map(|(file, built, line)| Trusted {
+                file: file.clone(),
+                built: built.clone(),
+                line: *line,
+            })
+            .collect(),
         sources: prepared.pages.iter().map(|p| p.source.clone()).collect(),
         tests: prepared.tests.clone(),
         tests_hash,
     }
 }
 
-fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
-    if !folder.join("idea.md").is_file() {
-        return Err(vec![Finding {
-            file: "idea.md".to_string(),
-            line: 1,
-            code: "idea-missing",
-            message: "the folder has no `idea.md`".to_string(),
-        }]);
-    }
-    let mut report = Report::default();
+struct Read {
+    pages: Vec<Page>,
+    constraints: Vec<constraints::Constraints>,
+    structures: Vec<Vec<(usize, String)>>,
+    tests: Vec<Test>,
+}
+
+fn read_all(folder: &Path, title: &str, findings: &mut Vec<Finding>) -> Read {
     let dictionary = Dictionary::load();
     let mut sink = Sink::new("ideas/");
     let sources = discover(folder, &mut sink);
-    report.findings.append(&mut sink.findings);
+    findings.append(&mut sink.findings);
+    let mut read = Read {
+        pages: Vec::new(),
+        constraints: Vec::new(),
+        structures: Vec::new(),
+        tests: Vec::new(),
+    };
+    for source in &sources {
+        let page_title = if source.kind == IdeaKind::Program {
+            title
+        } else {
+            source.name.as_str()
+        };
+        if let Some((page, idea)) = read_page(folder, source, page_title, &dictionary, findings) {
+            read.pages.push(page);
+            read.constraints.push(idea.constraints);
+            read.structures.push(idea.structure);
+            read.tests.extend(idea.tests);
+        }
+    }
+    read
+}
+
+fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
+    if !folder.join("idea.md").is_file() {
+        return Err(vec![top_finding(
+            1,
+            "idea-missing",
+            "the folder has no `idea.md`".to_string(),
+        )]);
+    }
+    let mut findings = Vec::new();
     let title = fs::canonicalize(folder)
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .unwrap_or_else(|| "program".to_string());
-    let mut pages = Vec::new();
-    let mut constraints = Vec::new();
-    let mut structures = Vec::new();
-    let mut tests = Vec::new();
-    for source in &sources {
-        let page_title = if source.kind == IdeaKind::Program {
-            title.as_str()
-        } else {
-            source.name.as_str()
-        };
-        if let Some((page, idea)) = read_page(
-            folder,
-            source,
-            page_title,
-            &dictionary,
-            &mut report.findings,
-        ) {
-            pages.push(page);
-            constraints.push(idea.constraints);
-            structures.push(idea.structure);
-            tests.extend(idea.tests);
+    let mut read = read_all(folder, &title, &mut findings);
+    let program = read.pages.first().is_some_and(|p| p.kind == IdeaKind::Program);
+    if program {
+        link(&mut read.pages, &read.constraints, &mut findings);
+    }
+    let top = read.constraints.first().cloned().unwrap_or_default();
+    let shape = shape_of(&top);
+    if program {
+        shape_rules(&top, &mut findings);
+        test_rules(&read.tests, shape, &mut findings);
+    }
+    if shape != Shape::Command {
+        findings.retain(|f| f.code != "structure-main-missing");
+    }
+    let libraries = library::resolve(folder, &top.libraries, &mut findings);
+    for (file, _, line) in &top.components {
+        if !folder.join(file).is_file() {
+            findings.push(top_finding(
+                *line,
+                "component-missing",
+                format!("the component `{file}` is not there; build it, or remove the line"),
+            ));
         }
     }
-    if pages.first().is_some_and(|p| p.kind == IdeaKind::Program) {
-        link(&mut pages, &constraints, &mut report.findings);
-    }
     if folder.join("src/main.rs").is_file() {
-        report
-            .findings
-            .extend(rust::lint(folder, &pages, &structures, &constraints));
+        findings.extend(rust::lint(
+            folder,
+            &read.pages,
+            &read.structures,
+            &read.constraints,
+            &libraries,
+        ));
     }
-    report.findings.sort();
-    if !report.findings.is_empty() {
-        return Err(report.findings);
+    findings.sort();
+    if !findings.is_empty() {
+        return Err(findings);
     }
-    let plan = generate::plan(folder, &title, &pages, &constraints, &mut report.findings);
-    report.findings.sort();
-    if !report.findings.is_empty() {
-        return Err(report.findings);
+    let plan = generate::plan(
+        folder,
+        &title,
+        &read.pages,
+        &read.constraints,
+        (shape, &libraries),
+        &mut findings,
+    );
+    findings.sort();
+    if !findings.is_empty() {
+        return Err(findings);
     }
     Ok(Prepared {
-        pages,
-        top: constraints.into_iter().next().unwrap_or_default(),
+        pages: read.pages,
+        top,
+        shape,
+        libraries,
         plan,
-        tests,
+        tests: read.tests,
     })
 }
 
@@ -509,12 +735,18 @@ pub fn check_with(folder: &Path, now: u64, trust: impl FnOnce(&Build) -> Trust) 
     }
     let planned = build(folder, &prepared);
     report.trust = trust(&planned);
+    let parts = wiki::Parts {
+        shape: prepared.shape,
+        libraries: &prepared.libraries,
+        components: &prepared.top.components,
+    };
     let written = wiki::write(
         folder,
         &prepared.pages,
         &prepared.plan.texts,
         now,
         &report.trust,
+        &parts,
     );
     report.written = written.files;
     report.notes = written.notes;

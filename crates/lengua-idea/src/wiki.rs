@@ -3,7 +3,13 @@ use std::path::Path;
 
 use crate::frontmatter::Front;
 use crate::idea::IdeaKind;
-use crate::{Finding, Note, Trust};
+use crate::{Finding, Library, Note, Shape, Trust};
+
+pub(crate) struct Parts<'a> {
+    pub shape: Shape,
+    pub libraries: &'a [Library],
+    pub components: &'a [(String, String, usize)],
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Stamp {
@@ -87,21 +93,25 @@ fn flow(list: &[String]) -> String {
     format!("[{}]", list.join(", "))
 }
 
-fn type_name(kind: IdeaKind) -> &'static str {
+fn type_name(kind: IdeaKind, shape: Shape) -> &'static str {
     match kind {
-        IdeaKind::Program => "lengua Program",
+        IdeaKind::Program => match shape {
+            Shape::Command => "lengua Program",
+            Shape::Server => "lengua Server",
+            Shape::Library => "lengua Library",
+        },
         IdeaKind::Module => "lengua Module",
         IdeaKind::Screen => "lengua Screen",
     }
 }
 
-pub(crate) fn page_text(page: &Page, used_by: &[String], label: &str) -> String {
+pub(crate) fn page_text(page: &Page, used_by: &[String], label: &str, shape: Shape) -> String {
     let source_hash = page
         .source_hash
         .clone()
         .unwrap_or_else(|| "none".to_string());
     let mut keys = vec![
-        ("type", type_name(page.kind).to_string()),
+        ("type", type_name(page.kind, shape).to_string()),
         ("description", quoted(&page.description)),
         ("module", page.name.clone()),
         ("source", page.source.clone()),
@@ -115,7 +125,7 @@ pub(crate) fn page_text(page: &Page, used_by: &[String], label: &str) -> String 
     page.front.render(&keys)
 }
 
-pub(crate) fn index_text(pages: &[Page], label: &str) -> String {
+pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
     let mut out = String::from("---\nokf_version: \"0.2\"\n---\n");
     let groups = [
         ("Program", IdeaKind::Program),
@@ -133,14 +143,37 @@ pub(crate) fn index_text(pages: &[Page], label: &str) -> String {
                 )
             })
             .collect();
-        if !lines.is_empty() {
-            out.push_str("\n# ");
-            out.push_str(heading);
-            out.push_str("\n\n");
-            out.push_str(&lines.concat());
-        }
+        section(&mut out, heading, &lines);
     }
+    let libraries: Vec<String> = parts
+        .libraries
+        .iter()
+        .map(|l| {
+            format!(
+                "* [{}]({}/idea.md) - {} Label: `{}`.\n",
+                l.name, l.path, l.description, l.label
+            )
+        })
+        .collect();
+    section(&mut out, "Libraries", &libraries);
+    let components: Vec<String> = parts
+        .components
+        .iter()
+        .map(|(file, built, _)| {
+            format!("* [{file}]({file}) - A component built from {built}. Label: `trusted`.\n")
+        })
+        .collect();
+    section(&mut out, "Components", &components);
     out
+}
+
+fn section(out: &mut String, heading: &str, lines: &[String]) {
+    if !lines.is_empty() {
+        out.push_str("\n# ");
+        out.push_str(heading);
+        out.push_str("\n\n");
+        out.push_str(&lines.concat());
+    }
 }
 
 fn change(previous: Option<&str>, now: Option<&str>) -> Option<&'static str> {
@@ -270,6 +303,7 @@ pub(crate) fn write(
     generated: &[(String, String)],
     now: u64,
     trust: &Trust,
+    parts: &Parts,
 ) -> Written {
     let mut out = Written {
         files: Vec::new(),
@@ -286,9 +320,9 @@ pub(crate) fn write(
             .filter(|other| other.uses.iter().any(|u| u == page.id()))
             .map(|other| other.id().to_string())
             .collect();
-        texts.push((page.file.clone(), page_text(page, &used_by, label)));
+        texts.push((page.file.clone(), page_text(page, &used_by, label, parts.shape)));
     }
-    texts.push(("index.md".to_string(), index_text(pages, label)));
+    texts.push(("index.md".to_string(), index_text(pages, label, parts)));
     let previous = fs::read_to_string(folder.join("log.md"))
         .unwrap_or_default()
         .replace("\r\n", "\n");

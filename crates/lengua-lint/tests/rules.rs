@@ -444,3 +444,29 @@ fn what_the_reader_can_t_read_is_a_finding() {
     );
     assert!(all.contains(&"rust-read"), "{all:?}");
 }
+
+#[test]
+fn the_top_level_items_and_whether_each_is_public_are_read() {
+    let text = "mod cart;\npub mod pages;\npub use cart::total;\npub use pages::*;\npub(crate) fn hidden() {}\npub fn shown() {}\npub struct Value;\nenum Kind {\n    A,\n}\nimpl Kind {\n    pub fn inner(&self) {}\n}\n";
+    let found: Vec<(String, String, bool)> = lengua_lint::declared(text)
+        .into_iter()
+        .map(|d| (d.kind, d.name, d.public))
+        .collect();
+    let wanted = [
+        ("mod", "cart", false),
+        ("mod", "pages", true),
+        ("use", "cart", true),
+        ("use", "total", true),
+        ("use", "pages", true),
+        ("use", "*", true),
+        ("fn", "hidden", false),
+        ("fn", "shown", true),
+        ("struct", "Value", true),
+        ("enum", "Kind", false),
+    ];
+    let wanted: Vec<(String, String, bool)> = wanted
+        .iter()
+        .map(|(k, n, p)| ((*k).to_string(), (*n).to_string(), *p))
+        .collect();
+    assert_eq!(found, wanted);
+}

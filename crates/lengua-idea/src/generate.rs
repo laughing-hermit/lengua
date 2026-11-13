@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use crate::Finding;
+use crate::{Finding, Library, Shape};
 use crate::constraints::{Constraints, Grant};
 use crate::sha256;
 use crate::wiki::{Page, Stamp};
@@ -109,14 +109,17 @@ pub(crate) fn interfaces(grant: Grant) -> &'static [&'static str] {
             "wasi:filesystem/preopens",
             "wasi:filesystem/types",
         ],
-        Grant::Network => &[
+        Grant::Network | Grant::Listen => &[
             "wasi:clocks/monotonic-clock",
             "wasi:sockets/instance-network",
             "wasi:sockets/ip-name-lookup",
             "wasi:sockets/network",
             "wasi:sockets/tcp",
             "wasi:sockets/tcp-create-socket",
+            "wasi:sockets/udp",
+            "wasi:sockets/udp-create-socket",
         ],
+        Grant::Http => &["wasi:http/types"],
     }
 }
 
@@ -130,14 +133,31 @@ pub(crate) fn package_name(name: &str) -> bool {
 
 pub(crate) struct Package<'a> {
     pub name: &'a str,
-    pub library: bool,
+    pub shape: Shape,
     pub sources: &'a [String],
     pub crates: &'a [(String, String)],
+    pub libraries: &'a [(String, String)],
 }
 
 fn quoted_list(items: &[String]) -> String {
     let quoted: Vec<String> = items.iter().map(|i| format!("\"{i}\"")).collect();
     format!("[{}]", quoted.join(", "))
+}
+
+fn dependencies(package: &Package) -> Vec<String> {
+    let mut lines: Vec<(String, String)> = package
+        .crates
+        .iter()
+        .map(|(name, version)| (name.clone(), format!("{name} = \"={version}\"")))
+        .collect();
+    lines.extend(
+        package
+            .libraries
+            .iter()
+            .map(|(name, path)| (name.clone(), format!("{name} = {{ path = \"{path}\" }}"))),
+    );
+    lines.sort();
+    lines.into_iter().map(|(_, line)| line).collect()
 }
 
 pub(crate) fn cargo_toml(package: &Package) -> String {
@@ -150,20 +170,22 @@ pub(crate) fn cargo_toml(package: &Package) -> String {
         format!("include = {}", quoted_list(package.sources)),
         String::new(),
     ];
-    if package.library {
-        lines.push("[lib]".to_string());
-        lines.push(format!("name = \"{}\"", package.name.replace('-', "_")));
-    } else {
+    if package.shape == Shape::Command {
         lines.push("[[bin]]".to_string());
         lines.push(format!("name = \"{}\"", package.name));
+    } else {
+        lines.push("[lib]".to_string());
+        lines.push(format!("name = \"{}\"", package.name.replace('-', "_")));
     }
     lines.push("path = \"src/main.rs\"".to_string());
+    if package.shape == Shape::Server {
+        lines.push("crate-type = [\"cdylib\"]".to_string());
+    }
     lines.push(String::new());
-    if !package.crates.is_empty() {
+    let dependencies = dependencies(package);
+    if !dependencies.is_empty() {
         lines.push("[dependencies]".to_string());
-        for (name, version) in package.crates {
-            lines.push(format!("{name} = \"={version}\""));
-        }
+        lines.extend(dependencies);
         lines.push(String::new());
     }
     for line in [
@@ -177,6 +199,14 @@ pub(crate) fn cargo_toml(package: &Package) -> String {
         "unwrap_used = \"deny\"",
         "expect_used = \"deny\"",
         "indexing_slicing = \"deny\"",
+    ] {
+        lines.push(line.to_string());
+    }
+    if package.shape == Shape::Library {
+        lines.push("missing_errors_doc = \"allow\"".to_string());
+        lines.push("missing_panics_doc = \"allow\"".to_string());
+    }
+    for line in [
         "",
         "[profile.release]",
         "opt-level = 3",
@@ -203,7 +233,7 @@ pub(crate) fn world_names(grants: &[Grant]) -> Vec<&'static str> {
     names
 }
 
-pub(crate) fn world(grants: &[Grant], library: bool) -> String {
+pub(crate) fn world(grants: &[Grant], shape: Shape) -> String {
     let names = world_names(grants);
     let mut text = String::from("package lengua:program;\n\nworld program {\n");
     for name in names {
@@ -213,8 +243,15 @@ pub(crate) fn world(grants: &[Grant], library: bool) -> String {
         text.push_str(WASI);
         text.push_str(";\n");
     }
-    if !library {
-        text.push_str("\n  export wasi:cli/run@");
+    let export = match shape {
+        Shape::Command => Some("wasi:cli/run"),
+        Shape::Server => Some("wasi:http/incoming-handler"),
+        Shape::Library => None,
+    };
+    if let Some(export) = export {
+        text.push_str("\n  export ");
+        text.push_str(export);
+        text.push('@');
         text.push_str(WASI);
         text.push_str(";\n");
     }
@@ -222,11 +259,12 @@ pub(crate) fn world(grants: &[Grant], library: bool) -> String {
     text
 }
 
-pub(crate) fn artifact(name: &str, library: bool) -> String {
-    if library {
-        format!("target/{TARGET}/release/lib{}.rlib", name.replace('-', "_"))
-    } else {
-        format!("target/{TARGET}/release/{name}.wasm")
+pub(crate) fn artifact(name: &str, shape: Shape) -> String {
+    let snake = name.replace('-', "_");
+    match shape {
+        Shape::Library => format!("target/{TARGET}/release/lib{snake}.rlib"),
+        Shape::Server => format!("target/{TARGET}/release/{snake}.wasm"),
+        Shape::Command => format!("target/{TARGET}/release/{name}.wasm"),
     }
 }
 
@@ -294,7 +332,6 @@ fn crates(
 
 pub(crate) struct Plan {
     pub package: String,
-    pub library: bool,
     pub crates: usize,
     pub texts: Vec<(String, String)>,
     pub stamps: Vec<Stamp>,
@@ -305,6 +342,7 @@ pub(crate) fn plan(
     title: &str,
     pages: &[Page],
     constraints: &[Constraints],
+    (shape, libraries): (Shape, &[Library]),
     findings: &mut Vec<Finding>,
 ) -> Plan {
     let top = constraints.first().cloned().unwrap_or_default();
@@ -320,20 +358,24 @@ pub(crate) fn plan(
     }
     let used = crates(pages, constraints, findings);
     let sources: Vec<String> = pages.iter().map(|p| p.source.clone()).collect();
+    let linked: Vec<(String, String)> = libraries
+        .iter()
+        .map(|l| (l.name.clone(), l.path.clone()))
+        .collect();
     let package = Package {
         name: title,
-        library: top.exports,
+        shape,
         sources: &sources,
         crates: &used,
+        libraries: &linked,
     };
     let files = [
         ("cargo_sha256", CARGO_TOML, cargo_toml(&package)),
-        ("world_sha256", WORLD, world(&top.grants, top.exports)),
+        ("world_sha256", WORLD, world(&top.grants, shape)),
     ];
     let previous = pages.first().map(|p| &p.front);
     let mut plan = Plan {
         package: title.to_string(),
-        library: top.exports,
         crates: used.len(),
         texts: Vec::new(),
         stamps: Vec::new(),
@@ -377,13 +419,19 @@ pub(crate) fn collect(folder: &Path, relative: &str, out: &mut Vec<(String, Vec<
     }
 }
 
-pub(crate) fn inputs(folder: &Path, generated: &[(String, String)], tests: &str) -> String {
+pub(crate) fn inputs(
+    folder: &Path,
+    generated: &[(String, String)],
+    tests: &str,
+    extra: &[(String, Vec<u8>)],
+) -> String {
     let mut files: Vec<(String, Vec<u8>)> = generated
         .iter()
         .map(|(file, text)| (file.clone(), text.as_bytes().to_vec()))
         .collect();
     collect(folder, "src", &mut files);
     files.push(("tests".to_string(), tests.as_bytes().to_vec()));
+    files.extend(extra.iter().cloned());
     let mut all = Vec::new();
     for (path, bytes) in files {
         all.extend_from_slice(path.as_bytes());
@@ -400,6 +448,7 @@ mod tests {
     use std::fs;
 
     use super::{Package, cargo_toml, first_difference, held, package_name, world};
+    use crate::Shape;
     use crate::constraints::Grant;
     use crate::sha256;
 
@@ -439,9 +488,10 @@ codegen-units = 1
         let sources = ["src/main.rs".to_string()];
         let package = Package {
             name: "hello",
-            library: false,
+            shape: Shape::Command,
             sources: &sources,
             crates: &[],
+            libraries: &[],
         };
         assert_eq!(cargo_toml(&package), HELLO);
     }
@@ -452,19 +502,21 @@ codegen-units = 1
         let crates = [("gpui".to_string(), "0.2.0".to_string())];
         let package = Package {
             name: "word-count",
-            library: true,
+            shape: Shape::Library,
             sources: &sources,
             crates: &crates,
+            libraries: &[("json".to_string(), "../json".to_string())],
         };
         let text = cargo_toml(&package);
-        assert!(text.starts_with("[package]\nname = \"word-count\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\ninclude = [\"src/main.rs\", \"src/words.rs\"]\n\n[lib]\nname = \"word_count\"\npath = \"src/main.rs\"\n\n[dependencies]\ngpui = \"=0.2.0\"\n\n[lints.rust]\n"));
+        assert!(text.starts_with("[package]\nname = \"word-count\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\ninclude = [\"src/main.rs\", \"src/words.rs\"]\n\n[lib]\nname = \"word_count\"\npath = \"src/main.rs\"\n\n[dependencies]\ngpui = \"=0.2.0\"\njson = { path = \"../json\" }\n\n[lints.rust]\n"));
+        assert!(text.contains("indexing_slicing = \"deny\"\nmissing_errors_doc = \"allow\"\nmissing_panics_doc = \"allow\"\n"));
         assert!(text.ends_with("codegen-units = 1\n\n[workspace]\n"));
     }
 
     #[test]
     fn hello_world_gets_the_always_set_only() {
         assert_eq!(
-            world(&[], false),
+            world(&[], Shape::Command),
             "package lengua:program;
 
 world program {
@@ -502,7 +554,7 @@ world program {
                 Grant::Files,
                 Grant::Network,
             ],
-            true,
+            Shape::Library,
         );
         for name in [
             "wasi:cli/stdin",
@@ -520,18 +572,18 @@ world program {
             assert_eq!(text.matches(&line).count(), 1, "{name} in {text}");
         }
         assert!(!text.contains("export"));
-        assert!(!text.contains("udp"));
-        assert_eq!(text.matches("import").count(), 25);
+        assert!(text.contains("  import wasi:sockets/udp@0.2.12;\n"));
+        assert_eq!(text.matches("import").count(), 27);
     }
 
     #[test]
     fn standard_input_and_arguments_add_nothing_and_the_clock_adds_the_wall_clock() {
-        let none = world(&[], false);
+        let none = world(&[], Shape::Command);
         assert_eq!(
-            world(&[Grant::StandardInput, Grant::Arguments], false),
+            world(&[Grant::StandardInput, Grant::Arguments], Shape::Command),
             none
         );
-        let clock = world(&[Grant::Clock], false);
+        let clock = world(&[Grant::Clock], Shape::Command);
         assert_eq!(clock.matches("import").count(), 16);
         assert!(clock.contains("  import wasi:clocks/wall-clock@0.2.12;\n"));
         assert!(!none.contains("wall-clock"));
@@ -574,5 +626,32 @@ world program {
         assert_eq!(first_difference("a\nb\nc\n", "a\nb\nc\n"), 4);
         assert_eq!(first_difference("a\nx\nc\n", "a\nb\nc\n"), 2);
         assert_eq!(first_difference("a\n", "a\nb\n"), 2);
+    }
+
+    #[test]
+    fn a_server_is_a_cdylib_that_exports_the_handler() {
+        let sources = ["src/main.rs".to_string()];
+        let package = Package {
+            name: "shop",
+            shape: Shape::Server,
+            sources: &sources,
+            crates: &[],
+            libraries: &[],
+        };
+        let text = cargo_toml(&package);
+        assert!(text.contains("[lib]\nname = \"shop\"\npath = \"src/main.rs\"\ncrate-type = [\"cdylib\"]\n"));
+        assert!(!text.contains("missing_errors_doc"));
+        let world = world(&[Grant::Http], Shape::Server);
+        assert!(world.contains("  import wasi:http/types@0.2.12;\n"));
+        assert!(world.contains("  export wasi:http/incoming-handler@0.2.12;\n"));
+        assert!(!world.contains("wasi:cli/run"));
+        assert_eq!(
+            super::artifact("my-shop", Shape::Server),
+            "target/wasm32-wasip2/release/my_shop.wasm"
+        );
+        assert_eq!(
+            super::artifact("my-shop", Shape::Command),
+            "target/wasm32-wasip2/release/my-shop.wasm"
+        );
     }
 }

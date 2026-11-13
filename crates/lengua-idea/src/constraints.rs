@@ -1,12 +1,24 @@
 use crate::Sink;
 use crate::idea::IdeaKind;
 use crate::ste::Dictionary;
-use crate::text::{Line, backticked, relative_path, snake, split_key, tokenize};
+use crate::text::{Line, backticked, relative_path, snake, split_key, tokenize, upper_camel};
 
-const KEYS: &str = "`Reads`, `Writes`, `Connects to`, `Memory`, `Time`, `Modules`, `Exports`, `Uses` and `Uses crate`";
+const KEYS: &str = "`Reads`, `Writes`, `Connects to`, `Listens on`, `Serves`, `Memory`, `Time`, `Modules`, `Exports`, `Uses`, `Uses crate` and `Uses component`";
 const MAX_MEMORY: u64 = 4 << 30;
 const MAX_TIME_MS: u64 = 3_600_000;
 const RESERVED: [&str; 4] = ["main", "ui", "index", "log"];
+const TOP_ONLY: [&str; 10] = [
+    "Reads",
+    "Writes",
+    "Connects to",
+    "Listens on",
+    "Serves",
+    "Memory",
+    "Time",
+    "Modules",
+    "Exports",
+    "Uses component",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Grant {
@@ -16,6 +28,8 @@ pub(crate) enum Grant {
     Random,
     Files,
     Network,
+    Listen,
+    Http,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,18 +43,35 @@ pub(crate) struct CrateUse {
 pub(crate) struct Constraints {
     pub modules: Vec<(String, usize)>,
     pub uses: Vec<(String, usize)>,
+    pub libraries: Vec<(String, usize)>,
     pub grants: Vec<Grant>,
     pub folders: Vec<(String, bool)>,
     pub hosts: Vec<String>,
+    pub listens: Vec<u16>,
+    pub serves: Option<(u16, usize)>,
     pub memory: u64,
     pub time_ms: u64,
-    pub exports: bool,
+    pub exports: Vec<(String, usize)>,
     pub crates: Vec<CrateUse>,
+    pub components: Vec<(String, String, usize)>,
 }
 
 pub(crate) fn module_name(name: &str) -> bool {
     let plain = name.strip_prefix("ui/").unwrap_or(name);
     snake(plain) && !RESERVED.contains(&plain)
+}
+
+pub(crate) fn library_path(path: &str) -> bool {
+    let path = path.strip_suffix('/').unwrap_or(path);
+    path.contains('/')
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains(':')
+        && path.split('/').all(|segment| !segment.is_empty())
+        && path
+            .rsplit('/')
+            .next()
+            .is_some_and(|last| last != "." && last != "..")
 }
 
 fn names(value: &str) -> Option<Vec<String>> {
@@ -78,6 +109,32 @@ fn host_port(value: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
     host_ok && port.parse::<u16>().is_ok_and(|p| p > 0)
+}
+
+fn tcp_port(value: &str) -> Option<u16> {
+    value
+        .strip_prefix("TCP port ")
+        .and_then(|p| p.trim().parse::<u16>().ok())
+        .filter(|p| *p > 0)
+}
+
+fn component_line(
+    value: &str,
+    line: usize,
+    dictionary: &Dictionary,
+    sink: &mut Sink,
+) -> Option<(String, String)> {
+    let (file, words) = value.split_once(", built from ")?;
+    let mut tokens = Vec::new();
+    tokenize(words, line, &mut tokens);
+    dictionary.words(&tokens, sink);
+    let file = backticked(file).filter(|f| {
+        relative_path(f)
+            && std::path::Path::new(f)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("wasm"))
+    })?;
+    (!words.trim().is_empty()).then(|| (file.to_string(), words.trim().to_string()))
 }
 
 fn amount(value: &str, units: &[(&str, u64)], max: u64) -> Option<u64> {
@@ -182,11 +239,8 @@ pub(crate) fn parse(
 
 impl Reader<'_> {
     fn item(&mut self, key: &str, value: &str, line: usize, sink: &mut Sink) {
-        let grant = matches!(
-            key,
-            "Reads" | "Writes" | "Connects to" | "Memory" | "Time" | "Modules" | "Exports"
-        );
-        if grant && !self.top {
+        let library_use = key == "Uses" && value.contains('/');
+        if (TOP_ONLY.contains(&key) || library_use) && !self.top {
             sink.add(
                 line,
                 "constraint-not-here",
@@ -196,6 +250,7 @@ impl Reader<'_> {
         let again = match key {
             "Memory" => std::mem::replace(&mut self.memory, true),
             "Time" => std::mem::replace(&mut self.time, true),
+            "Serves" => self.out.serves.is_some(),
             _ => false,
         };
         if again {
@@ -205,7 +260,10 @@ impl Reader<'_> {
                 format!("the idea has two `- {key}:` lines"),
             );
         }
-        let Some((good, form)) = self.value(key, value, line, sink) else {
+        let found = self
+            .value(key, value, line, sink)
+            .or_else(|| self.reach(key, value, line));
+        let Some((good, form)) = found else {
             sink.add(
                 line,
                 "constraint-unknown",
@@ -220,6 +278,53 @@ impl Reader<'_> {
                 format!("the value of `{key}` is {form}"),
             );
         }
+    }
+
+    fn reach(&mut self, key: &str, value: &str, line: usize) -> Option<(bool, &'static str)> {
+        Some(match key {
+            "Connects to" => {
+                let good = host_port(value);
+                if good {
+                    self.out.grants.push(Grant::Network);
+                    if let Some(host) = backticked(value) {
+                        self.out.hosts.push(host.to_string());
+                    }
+                }
+                (good, "`` `host:port` ``")
+            }
+            "Listens on" => {
+                let found = tcp_port(value);
+                if let Some(port) = found {
+                    self.out.grants.push(Grant::Listen);
+                    self.out.listens.push(port);
+                }
+                (found.is_some(), "`TCP port <number>`, from 1 to 65535")
+            }
+            "Serves" => {
+                let found = value.strip_prefix("HTTP on ").and_then(tcp_port);
+                if let Some(port) = found {
+                    self.out.grants.push(Grant::Http);
+                    self.out.serves = Some((port, line));
+                }
+                (found.is_some(), "`HTTP on TCP port <number>`")
+            }
+            "Exports" => {
+                let list = names(value);
+                let good = list
+                    .as_ref()
+                    .is_some_and(|l| l.iter().all(|n| snake(n) || upper_camel(n)));
+                if good {
+                    self.out
+                        .exports
+                        .extend(list.into_iter().flatten().map(|n| (n, line)));
+                }
+                (
+                    good,
+                    "function and type names in backticks, with commas between them",
+                )
+            }
+            _ => return None,
+        })
     }
 
     fn value(
@@ -249,16 +354,6 @@ impl Reader<'_> {
                 }
                 (good, "``files in `folder` ``")
             }
-            "Connects to" => {
-                let good = host_port(value);
-                if good {
-                    self.out.grants.push(Grant::Network);
-                    if let Some(host) = backticked(value) {
-                        self.out.hosts.push(host.to_string());
-                    }
-                }
-                (good, "`` `host:port` ``")
-            }
             "Memory" => {
                 let found = amount(
                     value,
@@ -280,27 +375,7 @@ impl Reader<'_> {
                 }
                 (found.is_some(), "a number and `ms` or `s`, up to 3600 s")
             }
-            "Modules" | "Uses" => {
-                let list = names(value);
-                let good = list
-                    .as_ref()
-                    .is_some_and(|l| l.iter().all(|n| module_name(n)));
-                let target = if key == "Modules" {
-                    &mut self.out.modules
-                } else {
-                    &mut self.out.uses
-                };
-                target.extend(list.into_iter().flatten().map(|n| (n, line)));
-                (good, "module names in backticks, with commas between them")
-            }
-            "Exports" => {
-                let good = names(value).is_some_and(|l| l.iter().all(|n| snake(n)));
-                self.out.exports |= good;
-                (
-                    good,
-                    "function names in backticks, with commas between them",
-                )
-            }
+            "Modules" | "Uses" => self.listed(key, value, line),
             "Uses crate" => {
                 let found = crate_line(value, line, self.dictionary, sink);
                 let good = found.is_some();
@@ -313,8 +388,42 @@ impl Reader<'_> {
                 }
                 (good, "`` `name` 1.2.3, for <reason> ``")
             }
+            "Uses component" => {
+                let found = component_line(value, line, self.dictionary, sink);
+                let good = found.is_some();
+                if let Some((file, built)) = found {
+                    self.out.components.push((file, built, line));
+                }
+                (
+                    good,
+                    "`` `<file>.wasm`, built from <what built it> ``, with the file inside the folder",
+                )
+            }
             _ => return None,
         })
+    }
+
+    fn listed(&mut self, key: &str, value: &str, line: usize) -> (bool, &'static str) {
+        let list = names(value).unwrap_or_default();
+        let mut good = !list.is_empty();
+        for name in list {
+            if key == "Uses" && name.contains('/') {
+                good &= library_path(&name);
+                self.out.libraries.push((name, line));
+            } else {
+                good &= module_name(&name);
+                let target = if key == "Modules" {
+                    &mut self.out.modules
+                } else {
+                    &mut self.out.uses
+                };
+                target.push((name, line));
+            }
+        }
+        (
+            good,
+            "module names, or library folders such as `../libraries/json`, in backticks, with commas between them",
+        )
     }
 
     fn grant(&mut self, value: &str) {
@@ -363,7 +472,7 @@ mod tests {
                 Grant::Network
             ]
         );
-        assert!(out.exports);
+        assert_eq!(out.exports, [("count".to_string(), 9)]);
         assert_eq!(
             out.folders,
             [("data".to_string(), false), ("out".to_string(), true)]
@@ -418,5 +527,51 @@ mod tests {
         assert!(!module_name("Cart"));
         assert!(!module_name("main"));
         assert!(!module_name("ui/ui"));
+    }
+
+    #[test]
+    fn network_server_library_and_component_lines_are_read() {
+        let text = "- Connects to: `127.0.0.1:7878`\n- Listens on: TCP port 7879\n- Serves: HTTP on TCP port 8080\n- Memory: 16 MiB\n- Time: 2 s\n- Uses: `../../libraries/json`, `cart`\n- Exports: `parse`, `Value`\n- Uses component: `components/tax.wasm`, built from C by `wasi-sdk`\n";
+        let (codes, out) = run(IdeaKind::Program, text);
+        assert_eq!(codes, Vec::<&str>::new());
+        assert_eq!(out.hosts, ["127.0.0.1:7878"]);
+        assert_eq!(out.listens, [7879]);
+        assert_eq!(out.serves, Some((8080, 4)));
+        assert_eq!(out.libraries, [("../../libraries/json".to_string(), 7)]);
+        assert_eq!(out.uses, [("cart".to_string(), 7)]);
+        assert_eq!(
+            out.exports,
+            [("parse".to_string(), 8), ("Value".to_string(), 8)]
+        );
+        assert_eq!(
+            out.components,
+            [(
+                "components/tax.wasm".to_string(),
+                "C by `wasi-sdk`".to_string(),
+                9
+            )]
+        );
+        assert_eq!(
+            out.grants,
+            [Grant::Network, Grant::Listen, Grant::Http]
+        );
+    }
+
+    #[test]
+    fn bad_network_and_library_lines_are_findings() {
+        let text = "- Listens on: port 80\n- Serves: HTTPS on 443\n- Uses: `/etc/json`\n- Uses component: `tax.c`, built from C\n- Memory: 16 MiB\n- Time: 2 s\n";
+        let (codes, _) = run(IdeaKind::Program, text);
+        assert_eq!(codes.len(), 4, "{codes:?}");
+        assert!(codes.iter().all(|c| *c == "constraint-value"), "{codes:?}");
+        let (module, _) = run(
+            IdeaKind::Module,
+            "- Uses: `../json`\n- Uses component: `a.wasm`, built from C\n",
+        );
+        assert_eq!(module, ["constraint-not-here", "constraint-not-here"]);
+        assert!(super::library_path("../libraries/json"));
+        assert!(super::library_path("libraries/json/"));
+        assert!(!super::library_path("json"));
+        assert!(!super::library_path("../.."));
+        assert!(!super::library_path("c:/json"));
     }
 }

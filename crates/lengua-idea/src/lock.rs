@@ -11,9 +11,11 @@ pub const KEY_BYTES: usize = 32;
 const HEADER: &str = "lengua-lock 1";
 const SIGNATURE: &str = "hmac-sha256 ";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Kind {
+    #[default]
     Program,
+    Library,
     Test,
 }
 
@@ -22,13 +24,14 @@ impl Kind {
     pub fn name(self) -> &'static str {
         match self {
             Self::Program => "program",
+            Self::Library => "library",
             Self::Test => "test",
         }
     }
 
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
-        [Self::Program, Self::Test]
+        [Self::Program, Self::Library, Self::Test]
             .into_iter()
             .find(|k| k.name() == text)
     }
@@ -57,6 +60,7 @@ pub struct Verified {
     pub label: String,
     pub files: Vec<String>,
     sealed: Option<Sealed>,
+    trusted: Vec<Sealed>,
 }
 
 impl Verified {
@@ -64,28 +68,34 @@ impl Verified {
     pub fn sealed(&self) -> Option<&Sealed> {
         self.sealed.as_ref()
     }
+
+    #[must_use]
+    pub fn trusted(&self) -> &[Sealed] {
+        &self.trusted
+    }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Facts {
     pub kind: Kind,
     pub toolchain: String,
     pub trust: Trust,
     pub files: Vec<String>,
+    pub libraries: Vec<String>,
+    pub trusted: Vec<String>,
     pub component: Option<String>,
     pub sealed: Option<String>,
+    pub sealed_trusted: Vec<String>,
 }
 
 impl Facts {
     #[must_use]
-    pub fn test(sealed: &str) -> Self {
+    pub fn test(sealed: &str, trusted: &[String]) -> Self {
         Self {
             kind: Kind::Test,
-            toolchain: String::new(),
-            trust: Trust::default(),
-            files: Vec::new(),
-            component: None,
             sealed: Some(sealed.to_string()),
+            sealed_trusted: trusted.to_vec(),
+            ..Self::default()
         }
     }
 }
@@ -296,7 +306,7 @@ pub fn text(folder: &Path, facts: &Facts, key: &Key) -> Result<String, String> {
         facts.kind.name(),
         env!("CARGO_PKG_VERSION")
     );
-    if facts.kind == Kind::Program {
+    if facts.kind != Kind::Test {
         let score = match facts.trust.score {
             Some((caught, counted)) => format!("{caught} of {counted}"),
             None => "none".to_string(),
@@ -309,8 +319,16 @@ pub fn text(folder: &Path, facts: &Facts, key: &Key) -> Result<String, String> {
         );
     }
     let mut entries: Vec<(&str, &str)> = facts.files.iter().map(|f| ("file", f.as_str())).collect();
+    entries.extend(facts.libraries.iter().map(|l| ("library", l.as_str())));
+    entries.extend(facts.trusted.iter().map(|t| ("trusted", t.as_str())));
     entries.extend(facts.component.as_deref().map(|c| ("component", c)));
     entries.extend(facts.sealed.as_deref().map(|s| ("sealed", s)));
+    entries.extend(
+        facts
+            .sealed_trusted
+            .iter()
+            .map(|s| ("sealed-trusted", s.as_str())),
+    );
     for (tag, path) in entries {
         if path.contains(['\r', '\n']) || path.is_empty() {
             return Err(format!(
@@ -355,13 +373,14 @@ fn signed<'a>(text: &'a str, key: &Key) -> Option<&'a str> {
 
 fn check_entry(
     folder: &Path,
-    tag: &str,
-    rest: &str,
+    (tag, rest): (&str, &str),
+    key: &Key,
     changed: &mut Vec<String>,
 ) -> Option<(String, Option<Sealed>)> {
     let (hash, path) = rest.split_once(' ')?;
+    let keep = tag == "sealed" || tag == "sealed-trusted";
     let sealed = match fs::read(folder.join(path)) {
-        Ok(bytes) if sha256::hex(&bytes) == hash => (tag == "sealed").then_some(Sealed { bytes }),
+        Ok(bytes) if sha256::hex(&bytes) == hash => keep.then_some(Sealed { bytes }),
         Ok(_) => {
             changed.push(format!("`{path}` changed"));
             None
@@ -371,7 +390,56 @@ fn check_entry(
             None
         }
     };
+    if tag == "library" && changed.is_empty() {
+        let lock = folder.join(path);
+        let place = lock.parent().unwrap_or(folder);
+        if let Err(message) = verify(place, &lock, Kind::Library, key) {
+            changed.push(format!("the library of `{path}` is not as its lock signed it ({message})"));
+        }
+    }
     Some((path.to_string(), sealed))
+}
+
+struct Reading {
+    found: Option<Kind>,
+    label: String,
+    files: Vec<String>,
+    sealed: Option<Sealed>,
+    trusted: Vec<Sealed>,
+    changed: Vec<String>,
+}
+
+fn read_lines(folder: &Path, body: &str, key: &Key) -> Reading {
+    let mut out = Reading {
+        found: None,
+        label: String::new(),
+        files: Vec::new(),
+        sealed: None,
+        trusted: Vec::new(),
+        changed: Vec::new(),
+    };
+    for line in body.lines().skip(1) {
+        let (tag, rest) = line.split_once(' ').unwrap_or((line, ""));
+        match tag {
+            "kind" => out.found = Kind::parse(rest),
+            "label" => out.label = rest.to_string(),
+            "file" | "component" | "sealed" | "library" | "trusted" | "sealed-trusted" => {
+                match check_entry(folder, (tag, rest), key, &mut out.changed) {
+                    Some((path, code)) => {
+                        out.files.push(path);
+                        if tag == "sealed-trusted" {
+                            out.trusted.extend(code);
+                        } else {
+                            out.sealed = code.or(out.sealed.take());
+                        }
+                    }
+                    None => out.changed.push(format!("the line `{line}` of the lock")),
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 pub fn verify(folder: &Path, lock: &Path, kind: Kind, key: &Key) -> Result<Verified, String> {
@@ -386,58 +454,40 @@ pub fn verify(folder: &Path, lock: &Path, kind: Kind, key: &Key) -> Result<Verif
             "the lock `{name}` is not signed with this user's key, or it was changed by hand; run `check` to sign it again"
         ));
     };
-    let mut lines = body.lines();
-    if lines.next() != Some(HEADER) {
+    if body.lines().next() != Some(HEADER) {
         return Err(format!(
             "the lock `{name}` is not a lock this lengua reads; run `check`"
         ));
     }
-    let mut found = None;
-    let mut label = String::new();
-    let mut files = Vec::new();
-    let mut sealed = None;
-    let mut changed = Vec::new();
-    for line in lines {
-        let (tag, rest) = line.split_once(' ').unwrap_or((line, ""));
-        match tag {
-            "kind" => found = Kind::parse(rest),
-            "label" => label = rest.to_string(),
-            "file" | "component" | "sealed" => match check_entry(folder, tag, rest, &mut changed) {
-                Some((path, code)) => {
-                    files.push(path);
-                    sealed = code.or(sealed);
-                }
-                None => changed.push(format!("the line `{line}` of the lock")),
-            },
-            _ => {}
-        }
-    }
-    if found != Some(kind) {
+    let mut read = read_lines(folder, body, key);
+    if read.found != Some(kind) {
         return Err(format!(
             "the lock `{name}` is not a {} lock; run `check`",
             kind.name()
         ));
     }
-    if kind == Kind::Program {
+    if kind != Kind::Test {
         let mut now = ideas(folder);
         now.extend(sources(folder));
-        changed.extend(
+        let files = &read.files;
+        read.changed.extend(
             now.into_iter()
                 .filter(|path| !files.contains(path))
                 .map(|path| format!("`{path}` is new")),
         );
     }
-    if !changed.is_empty() {
+    if !read.changed.is_empty() {
         return Err(format!(
             "the files are not as the lock `{name}` signed them: {}; run `check`",
-            changed.join(", ")
+            read.changed.join(", ")
         ));
     }
     Ok(Verified {
         kind,
-        label,
-        files,
-        sealed,
+        label: read.label,
+        files: read.files,
+        sealed: read.sealed,
+        trusted: read.trusted,
     })
 }
 
@@ -481,6 +531,7 @@ mod tests {
             files: super::program_files(path),
             component: Some("program.wasm".to_string()),
             sealed: Some("program.cwasm".to_string()),
+            ..Facts::default()
         }
     }
 
@@ -595,11 +646,49 @@ mod tests {
         let _ = program(&path);
         let key = create_key(&path.join("home"), [4; KEY_BYTES]).expect("a key");
         let lock = path.join("test.lock");
-        write(&path, &lock, &Facts::test("program.cwasm"), &key).expect("a lock");
+        write(&path, &lock, &Facts::test("program.cwasm", &[]), &key).expect("a lock");
         let verified = verify(&path, &lock, Kind::Test, &key).expect("a good lock");
         assert_eq!(verified.files, ["program.cwasm"]);
         fs::write(path.join("program.cwasm"), "other code").expect("a change");
         let refused = verify(&path, &lock, Kind::Test, &key).expect_err("tampered code");
         assert!(refused.contains("`program.cwasm` changed"), "{refused}");
+    }
+
+    #[test]
+    fn a_program_lock_names_its_library_and_its_trusted_parts() {
+        let path = folder("library");
+        let library = path.join("libraries/json");
+        let _ = program(&library);
+        let key = create_key(&path.join("home"), [5; KEY_BYTES]).expect("a key");
+        let library_facts = Facts {
+            kind: Kind::Library,
+            files: super::program_files(&library),
+            component: Some("program.wasm".to_string()),
+            ..Facts::default()
+        };
+        write(&library, &library.join("lengua.lock"), &library_facts, &key).expect("a lock");
+        let app = path.join("app");
+        let mut facts = program(&app);
+        fs::write(app.join("tax.wasm"), "a trusted part").expect("a part");
+        fs::write(app.join("tax.cwasm"), "its sealed code").expect("sealed");
+        facts.libraries = vec!["../libraries/json/lengua.lock".to_string()];
+        facts.trusted = vec!["tax.wasm".to_string()];
+        facts.sealed_trusted = vec!["tax.cwasm".to_string()];
+        let lock = app.join("lengua.lock");
+        write(&app, &lock, &facts, &key).expect("a lock");
+        let text = fs::read_to_string(&lock).expect("the lock");
+        assert!(text.contains(" ../libraries/json/lengua.lock\n"), "{text}");
+        assert!(text.contains("\ntrusted "), "{text}");
+        assert!(text.contains("\nsealed-trusted "), "{text}");
+        let verified = verify(&app, &lock, Kind::Program, &key).expect("a good lock");
+        assert_eq!(verified.trusted().len(), 1);
+        assert_eq!(verified.trusted()[0].bytes(), b"its sealed code");
+        fs::write(library.join("src/main.rs"), "pub fn changed() {}\n").expect("a change");
+        let refused = verify(&app, &lock, Kind::Program, &key).expect_err("a changed library");
+        assert!(
+            refused.contains("the library of `../libraries/json/lengua.lock`")
+                && refused.contains("`src/main.rs` changed"),
+            "{refused}"
+        );
     }
 }

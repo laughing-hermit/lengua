@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use std::thread;
 use std::time::Duration;
 
-use lengua_host::{Ending, Host, Input, Streams};
+use lengua_host::{Ending, Host, Input, Program, Streams};
 use lengua_idea::Reach;
 use lengua_idea::lock::{self, Kind};
 
@@ -74,6 +74,28 @@ fn run(folder: &Path, arguments: &[String]) -> ExitCode {
         Ok(component) => component,
         Err(message) => return refuse(&message),
     };
+    let trusted = match verified
+        .trusted()
+        .iter()
+        .map(|part| lengua_seal::load(host.engine(), part))
+        .collect::<Result<Vec<_>, String>>()
+    {
+        Ok(trusted) => trusted,
+        Err(message) => return refuse(&message),
+    };
+    let program = Program {
+        folder,
+        component: &component,
+        trusted: &trusted,
+        build: &build,
+    };
+    if let Some(port) = build.grants.server {
+        eprintln!("lengua-run: serving HTTP on 127.0.0.1:{port}");
+        return match host.serve(&program, port, false) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => refuse(&message),
+        };
+    }
     watch(Duration::from_millis(
         build.grants.time_ms.saturating_add(GRACE_MS),
     ));
@@ -83,7 +105,7 @@ fn run(folder: &Path, arguments: &[String]) -> ExitCode {
         fixed: false,
         root: None,
     };
-    let outcome = host.run(folder, &component, &build, &input, Streams::Inherit);
+    let outcome = host.run(&program, &input, Streams::Inherit);
     let _ = std::io::stdout().flush();
     match outcome.ending {
         Ending::Exited(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),

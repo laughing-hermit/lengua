@@ -12,6 +12,8 @@ lengua-idea = { path = "../lengua-idea" }
 wasmtime = { version = "=50.0.1", default-features = false, features = ["runtime", "std", "component-model"] }
 wasmtime-wasi = { version = "=50.0.1", default-features = false, features = ["p2"] }
 wasmtime-wasi-io = { version = "=50.0.1", default-features = false, features = ["std"] }
+wasmtime-wasi-http = { version = "=50.0.1", default-features = false, features = ["p2"] }
+hyper = { version = "1", default-features = false }
 
 [lints]
 workspace = true

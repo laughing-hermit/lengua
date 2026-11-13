@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::Path;
 
-use crate::Finding;
+use crate::idea::IdeaKind;
+use crate::{Finding, Library};
 use crate::constraints::Constraints;
 use crate::wiki::Page;
 
@@ -43,6 +44,7 @@ pub(crate) fn lint(
     pages: &[Page],
     structures: &[Vec<(usize, String)>],
     constraints: &[Constraints],
+    libraries: &[Library],
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut sources = Vec::new();
@@ -89,10 +91,12 @@ pub(crate) fn lint(
             "a `build.rs` runs code at build time that no idea documents; remove it".to_string(),
         ));
     }
-    let crates: Vec<String> = constraints
+    let mut crates: Vec<String> = constraints
         .iter()
         .flat_map(|c| c.crates.iter().map(|k| k.name.clone()))
         .collect();
+    crates.extend(libraries.iter().map(|l| l.crate_name.clone()));
+    findings.extend(declarations(folder, pages, constraints.first()));
     findings.extend(
         lengua_lint::lint(&sources, &crates)
             .into_iter()
@@ -103,5 +107,40 @@ pub(crate) fn lint(
                 message: f.message,
             }),
     );
+    findings
+}
+
+fn declarations(folder: &Path, pages: &[Page], top: Option<&Constraints>) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let text = fs::read_to_string(folder.join("src/main.rs")).unwrap_or_default();
+    let declared = lengua_lint::declared(&text.replace("\r\n", "\n"));
+    for page in pages.iter().filter(|p| p.kind == IdeaKind::Module) {
+        if !declared.iter().any(|d| d.kind == "mod" && d.name == page.name) {
+            findings.push(finding(
+                "src/main.rs",
+                "module-undeclared",
+                format!(
+                    "the module `{}` has an idea and a file, and `src/main.rs` has no `mod {};` line, so Rust does not build it; add the line",
+                    page.name, page.name
+                ),
+            ));
+        }
+    }
+    let glob = declared
+        .iter()
+        .any(|d| d.public && d.kind == "use" && d.name == "*");
+    for (name, line) in top.map_or(&[][..], |t| t.exports.as_slice()) {
+        let found = glob || declared.iter().any(|d| d.public && d.name == *name);
+        if !found {
+            findings.push(Finding {
+                file: "idea.md".to_string(),
+                line: *line,
+                code: "export-missing",
+                message: format!(
+                    "`{name}` is in `- Exports:`, and `src/main.rs` has no `pub` item `{name}` and no `pub use` of it; write it, or remove it from the line"
+                ),
+            });
+        }
+    }
     findings
 }

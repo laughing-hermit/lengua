@@ -1021,3 +1021,42 @@ fn a_program_that_waits_in_the_host_is_stopped_at_its_time() {
     assert!(seconds < 10.0, "{seconds}");
     assert!(String::from_utf8_lossy(&output.stderr).contains("out of time"));
 }
+
+#[test]
+fn an_application_of_three_modules_is_checked_as_one_file() {
+    let (mut server, folder, reply) = built("tally", "tally");
+    assert_eq!(reply["ok"], true, "{reply:#}");
+    assert_eq!(reply["label"], "checked", "{reply:#}");
+    assert_eq!(reply["build"]["tests"]["failed"], 0, "{reply:#}");
+    assert!(
+        reply["build"]["tests"]["total"]
+            .as_u64()
+            .is_some_and(|n| n >= 6),
+        "{reply:#}"
+    );
+    let lock = fs::read_to_string(folder.join("lengua.lock")).expect("the lock");
+    for file in [
+        "idea.md",
+        "ideas/lines.md",
+        "ideas/report.md",
+        "ideas/words.md",
+        "src/main.rs",
+        "src/lines.rs",
+        "src/report.rs",
+        "src/words.rs",
+    ] {
+        assert!(lock.contains(&format!(" {file}\n")), "{file} in {lock}");
+    }
+    assert_eq!(
+        lock.matches("\ncomponent ").count(),
+        1,
+        "one component: {lock}"
+    );
+    let run = server.run_to_end(5000, &folder, &json!({"stdin": "one two\nthree\n"}));
+    assert_eq!(run["stdout"], "lines 2, words 3, maximum 5\n", "{run:#}");
+    fs::write(folder.join("src/extra.rs"), "\n").expect("a file of no idea");
+    let refused = server.check(6000, &folder);
+    assert_eq!(codes(&refused), ["rule-12-source-unlisted"], "{refused:#}");
+    let run = server.run(6001, &folder, &json!({"stdin": "a\n"}));
+    refused_for(&run, "`src/extra.rs` is new");
+}

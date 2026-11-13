@@ -1,5 +1,7 @@
 mod build;
 mod doctor;
+mod fixtures;
+mod harness;
 mod host;
 mod mutation;
 mod runs;
@@ -119,6 +121,16 @@ struct BuildReply {
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 #[serde(crate = "rmcp::serde")]
 #[schemars(crate = "rmcp::schemars")]
+struct PartReply {
+    #[schemars(description = "The folder of a library or the file of a component, relative to the program's folder")]
+    path: String,
+    #[schemars(description = "Its trust label: checked or tested for a lengua library, trusted for a component lengua did not build")]
+    label: String,
+}
+
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+#[serde(crate = "rmcp::serde")]
+#[schemars(crate = "rmcp::schemars")]
 struct CheckReply {
     #[schemars(
         description = "True when there are no problems; while the state of the build is building, testing or mutating, call check again to get its result"
@@ -144,6 +156,14 @@ struct CheckReply {
         description = "When done: the mutation score in percent, the mutants caught of those counted; none when no mutant counted"
     )]
     score: Option<usize>,
+    #[schemars(
+        description = "The lengua libraries the program uses, each with its folder and its own label"
+    )]
+    libraries: Vec<PartReply>,
+    #[schemars(
+        description = "The components from other languages the program uses, each with its file and the label trusted"
+    )]
+    components: Vec<PartReply>,
     #[schemars(description = "The build, when the ideas have no problems")]
     build: Option<BuildReply>,
 }
@@ -254,7 +274,10 @@ fn ungranted_input(grants: &lengua_idea::Grants, params: &RunParams) -> Option<S
             "the idea does not grant `- Reads: arguments`, so the program gets no arguments; add the grant, or call run with none".to_string(),
         );
     }
-    if params.stdin.is_some() && !grants.reach(lengua_idea::Reach::StandardInput) {
+    if params.stdin.is_some()
+        && !grants.reach(lengua_idea::Reach::StandardInput)
+        && grants.server.is_none()
+    {
         return Some(
             "the idea does not grant `- Reads: standard input`, so the program gets an empty standard input; add the grant, or call run with no stdin".to_string(),
         );
@@ -275,13 +298,21 @@ fn seal_program(
     let Some(component) = status.component.as_ref().filter(|_| done) else {
         return;
     };
+    let library = plan.library;
     let facts = Facts {
-        kind: Kind::Program,
+        kind: if library { Kind::Library } else { Kind::Program },
         toolchain: status.toolchain.clone(),
         trust: report.trust,
         files: lock::program_files(folder),
+        libraries: plan.libraries.iter().map(|l| l.lock.clone()).collect(),
+        trusted: plan.components.iter().map(|c| c.file.clone()).collect(),
         component: Some(plan.artifact.clone()),
-        sealed: component.seal.as_ref().map(|s| s.sealed.clone()),
+        sealed: component
+            .seal
+            .as_ref()
+            .filter(|_| !library)
+            .map(|s| s.sealed.clone()),
+        sealed_trusted: component.trusted.clone(),
     };
     match lock::write(folder, &folder.join(lock::LOCK), &facts, key) {
         Ok(()) => report.written.push(lock::LOCK.to_string()),
@@ -374,6 +405,38 @@ impl Lengua {
                 message: n.message,
             })
             .collect();
+        let (libraries, components) = report.build.as_ref().map_or_else(
+            || (Vec::new(), Vec::new()),
+            |plan| {
+                let libraries = plan
+                    .libraries
+                    .iter()
+                    .map(|l| PartReply {
+                        path: l.path.clone(),
+                        label: l.label.clone(),
+                    })
+                    .collect();
+                let components: Vec<PartReply> = plan
+                    .components
+                    .iter()
+                    .map(|c| PartReply {
+                        path: c.file.clone(),
+                        label: "trusted".to_string(),
+                    })
+                    .collect();
+                (libraries, components)
+            },
+        );
+        if let Some(part) = components.first() {
+            notes.push(NoteReply {
+                file: "idea.md".to_string(),
+                line: None,
+                message: format!(
+                    "the program uses a trusted component, `{}`: lengua did not build it or check its code, and it runs under the program's grants",
+                    part.path
+                ),
+            });
+        }
         let build = report.build.map(|plan| {
             if plan.code {
                 let status = snapshot
@@ -403,6 +466,8 @@ impl Lengua {
             findings,
             notes,
             written: report.written,
+            libraries,
+            components,
             label: report.trust.label.name().to_string(),
             score,
             build,
