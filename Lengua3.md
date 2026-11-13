@@ -38,6 +38,9 @@ What that means for lengua 3:
 - **One application, one file.** A whole application, however many modules it has, server and
   front end, compiles from Rust into one `.wasm` file, signed by one lock. Its idea files are
   that file's documentation, and the lock keeps them current with it.
+- **Maximum compatibility, few dependencies.** One WebAssembly file runs on any computer,
+  whatever its operating system and CPU. Always minimise external dependencies: the standard
+  library first, and an external crate only when it merits it (section 4).
 - **The machine checks the AI's work.** The AI is fast and tireless but makes mistakes, so
   nothing it writes is trusted because it wrote it. Trust comes from the compiler, the rules,
   the tests and the host, and lengua says plainly how far each check went.
