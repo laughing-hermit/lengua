@@ -34,7 +34,7 @@ resolves, is in [Lengua3.md](../../Lengua3.md), section 5.
   `ident`, `name`, `segment`, `after_dot`, `after_path`, `path`, `angle_end`, `names`,
   `macro_call`, `split`, `find`, `len`) read it; `keyword` and `closer` help.
 - `model.rs`: `read` and the `Reader` (`items`, `item`, `function`, `type_def`, `trait_def`,
-  `impl_def`, `module`, `use_item`, `alias`, `macro_def`, `macro_item`, `to_semicolon`,
+  `impl_def`, `module`, `use_item`, `alias`, `macro_def`, `macro_item`, `past_semicolon`,
   `brace`, `finding`, `unreadable`) find the items: `Function`, `Owner`, `TypeDef`, `Macro`,
   `Use`, in a `Model`; `skip_attributes`, `skip_qualifiers`, `qualifier_then_item`,
   `generic_names`, `segment_end`, `named_fields`, `tuple_fields`, `variant_types`,

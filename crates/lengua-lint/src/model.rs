@@ -161,7 +161,7 @@ fn named_fields(code: &Code, open: usize) -> Vec<(String, Vec<String>)> {
             }
         }
         let end = segment_end(code, at, close);
-        let name = code.name(at).map(str::to_string).unwrap_or_default();
+        let name = code.name(at).unwrap_or_default().to_string();
         let types = if code.colon(at + 1) {
             code.names(at + 2, end)
         } else {
@@ -253,7 +253,7 @@ impl Reader<'_> {
             "impl" => self.impl_def(at, to),
             "mod" => self.module(at, to),
             "use" => self.use_item(at, to),
-            "static" | "const" => self.to_semicolon(at, to),
+            "static" | "const" => self.past_semicolon(at, to),
             "type" => self.alias(at, to),
             "macro_rules" if code.is(at + 1, "!") => self.macro_def(at, to),
             "extern" => self.unreadable(at, to, "an `extern` item"),
@@ -263,7 +263,7 @@ impl Reader<'_> {
         }
     }
 
-    fn to_semicolon(&mut self, at: usize, to: usize) -> usize {
+    fn past_semicolon(&mut self, at: usize, to: usize) -> usize {
         match self.code.find(at, to, ";") {
             Some(end) => end + 1,
             None => self.unreadable(at, to, "an item with no `;` at its end"),

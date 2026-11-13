@@ -130,14 +130,12 @@ impl Code {
     }
 
     pub(crate) fn single_eq(&self, at: usize) -> bool {
-        self.is(at, "=")
-            && !self.joint(at, "=", "=")
-            && !self.joint(at, "=", ">")
-            && !(at > 0
-                && self
-                    .tokens
-                    .get(at - 1)
-                    .is_some_and(|t| t.joint && t.kind == Kind::Punct))
+        let compound = at > 0
+            && self
+                .tokens
+                .get(at - 1)
+                .is_some_and(|t| t.joint && t.kind == Kind::Punct);
+        self.is(at, "=") && !self.joint(at, "=", "=") && !self.joint(at, "=", ">") && !compound
     }
 
     pub(crate) fn arrow_close(&self, at: usize) -> bool {
