@@ -222,7 +222,7 @@ pub(crate) fn format_problems(folder: &Path, text: &str) -> Vec<Problem> {
                 .or_else(|| place.rsplit_once(':'))?;
             let number: usize = number.trim().parse().ok()?;
             Some(problem(
-                &relative(folder, path.trim()),
+                &relative(folder, path.trim().trim_start_matches(r"\\?\")),
                 number,
                 "rust-format",
                 format!("the code is not as `rustfmt` writes it, from line {number}; run `cargo fmt` in the program's folder"),
@@ -451,7 +451,7 @@ mod tests {
 
     #[test]
     fn a_format_difference_gives_its_file_and_line() {
-        let text = "Diff in /work/hello/src/main.rs:3:\n     fn main() {\n-    let x=1;\n+    let x = 1;\nDiff in /work/hello/src/cart.rs at line 9:\nsome other line\n";
+        let text = "Diff in /work/hello/src/main.rs:3:\n     fn main() {\n-    let x=1;\n+    let x = 1;\nDiff in /work/hello/src/cart.rs at line 9:\nsome other line\nDiff in \\\\?\\/work/hello/src/ui/view.rs:2:\n";
         let found = format_problems(Path::new("/work/hello"), text);
         let places: Vec<(&str, usize, &str)> = found
             .iter()
@@ -461,7 +461,8 @@ mod tests {
             places,
             [
                 ("src/main.rs", 3, "rust-format"),
-                ("src/cart.rs", 9, "rust-format")
+                ("src/cart.rs", 9, "rust-format"),
+                ("src/ui/view.rs", 2, "rust-format")
             ]
         );
         assert_eq!(

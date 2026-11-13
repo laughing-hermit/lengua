@@ -224,7 +224,9 @@ next starts (Lengua3.md, section 8).
   of interior-mutability types, so a type lengua can't see into is refused.
 - **2026-11-13, L4: the build runs `cargo fmt --check`, then clippy, then the build**; a format
   difference is `rust-format`; clippy's errors are `rust-error` like the compiler's.
-  `doctor` checks `rustfmt` and `clippy` too.
+  `doctor` checks `rustfmt` and `clippy` too. Measured on all five runners (run 43397875153):
+  the format check and clippy add 0.1 to 0.5 s to hello world's build; clippy checks, it does
+  not compile, so it does not replace the build.
 - **2026-11-13, L4: the component checks**: at most 64 MiB (`component-size`); lengua's engine
   refuses relaxed SIMD and shared-everything threads, has no threads at all (Wasmtime's
   `threads` feature is off), and canonicalizes NaNs (`component-refused` when Wasmtime does not
@@ -265,6 +267,7 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-13 | [43394987867](https://github.com/laughing-hermit/lengua/actions/runs/43394987867) | wip/l4 d24d8cf | test, linux-x86_64 | Failed: 3 clippy findings in `lengua-lint` (`nonminimal_bool`, `map_unwrap_or`, `wrong_self_convention`) |
 | 2026-11-13 | [43395657235](https://github.com/laughing-hermit/lengua/actions/runs/43395657235) | wip/l4 735e028 | test, linux-x86_64 | Failed: clippy `assert_is_empty` in a test and `type_complexity` in `lengua-idea` |
 | 2026-11-13 | [43396401311](https://github.com/laughing-hermit/lengua/actions/runs/43396401311) | wip/l4 6891515 | test, linux-x86_64 | Green: 59 + 10 (`lengua-idea`: every example keeps every rule, broken code refused), 13 + 20 (`lengua-lint`: the tokenizer with random slices, then a test a rule), 10 + 20 + 2 + 2 (`lengua-mcp`: the lint, `rust-format` and clippy's `unwrap` refusals, both engine refusals, every example built); imports as Wasmtime reads them (Lengua3.md, section 10); hello world: clippy from clean 0.10 s, the build after it 0.46 s, the build alone 0.41 s, so clippy adds about 0.15 s |
+| 2026-11-13 | [43397875153](https://github.com/laughing-hermit/lengua/actions/runs/43397875153) | wip/l4 2003d94 | test, all five | Green on Linux x86-64, Linux ARM64 and macOS ARM64; failed on Windows x86-64 and Windows ARM64 only in `code_that_rustfmt_would_change_is_a_finding`: `rustfmt` names the file by its verbatim path (`\\?\D:\...`), so the `rust-format` finding's file was not relative (fixed, with a unit test). Hello world, in seconds, fmt check / clippy from clean / build after clippy / build alone: Linux x86-64 0.04 / 0.09 / 0.30 / 0.30; Linux ARM64 0.05 / 0.12 / 0.43 / 0.45; macOS ARM64 0.17 / 0.37 / 0.75 / 0.87; Windows x86-64 0.14 / 0.31 / 0.83 / 0.95; Windows ARM64 0.22 / 0.44 / 0.92 / 0.95. So fmt and clippy add 0.1 to 0.5 s to a small program's build |
 
 ## What the permission checks refused
 
