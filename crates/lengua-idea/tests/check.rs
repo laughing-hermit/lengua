@@ -134,12 +134,7 @@ fn a_bad_program_gives_every_problem_at_once_in_order() {
     let found: BTreeSet<&str> = report.findings.iter().map(|f| f.code).collect();
     let wanted: BTreeSet<&str> = EVERY_KIND.into_iter().collect();
     let missing: Vec<&&str> = wanted.difference(&found).collect();
-    assert_eq!(
-        missing,
-        Vec::<&&str>::new(),
-        "in {:#?}",
-        report.findings
-    );
+    assert_eq!(missing, Vec::<&&str>::new(), "in {:#?}", report.findings);
     let places: Vec<(&str, usize)> = report
         .findings
         .iter()

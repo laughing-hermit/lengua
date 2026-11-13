@@ -115,6 +115,7 @@ impl Lengua {
     name = "lengua-mcp",
     instructions = "lengua checks idea files. Call check with the absolute path of a program's folder."
 )]
+#[allow(clippy::unused_async_trait_impl)]
 impl ServerHandler for Lengua {}
 
 #[tokio::main(flavor = "current_thread")]

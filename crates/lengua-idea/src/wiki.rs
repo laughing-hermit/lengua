@@ -31,9 +31,7 @@ impl Page {
     }
 
     fn previous_source(&self) -> Option<&str> {
-        self.front
-            .value("source_sha256")
-            .filter(|v| *v != "none")
+        self.front.value("source_sha256").filter(|v| *v != "none")
     }
 }
 

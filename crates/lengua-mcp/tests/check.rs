@@ -66,7 +66,7 @@ impl Server {
         let reply = server.call(
             1,
             "initialize",
-            json!({
+            &json!({
                 "protocolVersion": "2025-11-25",
                 "capabilities": {},
                 "clientInfo": {"name": "lengua-test", "version": "0.1.0"}
@@ -82,7 +82,7 @@ impl Server {
         self.input.flush().expect("a flush");
     }
 
-    fn call(&mut self, id: u64, method: &str, params: Value) -> Value {
+    fn call(&mut self, id: u64, method: &str, params: &Value) -> Value {
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
         loop {
             let line = self
@@ -100,7 +100,7 @@ impl Server {
         let reply = self.call(
             id,
             "tools/call",
-            json!({"name": "check", "arguments": {"folder": folder.to_string_lossy()}}),
+            &json!({"name": "check", "arguments": {"folder": folder.to_string_lossy()}}),
         );
         reply["result"]["structuredContent"].clone()
     }
@@ -125,7 +125,7 @@ fn codes(reply: &Value) -> Vec<String> {
 #[test]
 fn the_server_lists_the_check_tool() {
     let mut server = Server::start();
-    let reply = server.call(2, "tools/list", json!({}));
+    let reply = server.call(2, "tools/list", &json!({}));
     let tools = reply["result"]["tools"]
         .as_array()
         .expect("a list of tools");
@@ -203,7 +203,7 @@ fn a_folder_that_is_not_there_is_a_tool_error() {
     let reply = server.call(
         2,
         "tools/call",
-        json!({"name": "check", "arguments": {"folder": "/no/such/lengua/folder"}}),
+        &json!({"name": "check", "arguments": {"folder": "/no/such/lengua/folder"}}),
     );
     assert_eq!(reply["result"]["isError"], true, "{reply:#}");
 }

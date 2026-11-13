@@ -88,6 +88,9 @@ next starts (Lengua3.md, section 8).
   `--version` still prints it. `plugin/mcp.json` starts `./bin/lengua-mcp` (Agent Plugins
   1.0.0: a `./` command is resolved against the plugin root). Putting the binary in
   `plugin/bin/` is for a later milestone (the release and `doctor`).
+- **2026-11-13, L1: one lint allowed, `clippy::unused_async_trait_impl`, on `impl ServerHandler
+  for Lengua`** only: `rmcp`'s `#[tool_handler]` macro generates async trait methods with no
+  `.await`, which lengua can't change; writing the handler by hand would copy the macro.
 
 ## Runs
 
