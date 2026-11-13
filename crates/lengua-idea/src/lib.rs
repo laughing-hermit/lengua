@@ -1,6 +1,7 @@
 mod behaviours;
 mod constraints;
 mod frontmatter;
+mod generate;
 mod idea;
 mod sha256;
 mod ste;
@@ -29,11 +30,27 @@ pub struct Note {
     pub message: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Build {
+    pub package: String,
+    pub artifact: String,
+    pub target: &'static str,
+    pub crates: usize,
+    pub code: bool,
+    pub inputs: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Report {
     pub findings: Vec<Finding>,
     pub notes: Vec<Note>,
     pub written: Vec<String>,
+    pub build: Option<Build>,
+}
+
+#[must_use]
+pub fn sha256_hex(data: &[u8]) -> String {
+    sha256::hex(data)
 }
 
 pub(crate) struct Sink {
@@ -186,6 +203,7 @@ fn read_page(
         front,
         source: source_path,
         source_hash,
+        generated: Vec::new(),
     };
     Some((page, idea.constraints))
 }
@@ -299,11 +317,30 @@ pub fn check(folder: &Path, now: u64) -> Report {
         link(&mut pages, &constraints, &mut report.findings);
     }
     report.findings.sort();
+    if !report.findings.is_empty() {
+        return report;
+    }
+    let plan = generate::plan(folder, &title, &pages, &constraints, &mut report.findings);
+    report.findings.sort();
+    if !report.findings.is_empty() {
+        return report;
+    }
+    if let Some(top) = pages.first_mut() {
+        top.generated.clone_from(&plan.stamps);
+    }
+    let written = wiki::write(folder, &pages, &plan.texts, now);
+    report.written = written.files;
+    report.notes = written.notes;
+    report.findings = written.findings;
     if report.findings.is_empty() {
-        let written = wiki::write(folder, &pages, now);
-        report.written = written.files;
-        report.notes = written.notes;
-        report.findings = written.findings;
+        report.build = Some(Build {
+            artifact: generate::artifact(&plan.package, plan.library),
+            package: plan.package,
+            target: generate::TARGET,
+            crates: plan.crates,
+            code: folder.join("src/main.rs").is_file(),
+            inputs: generate::inputs(folder),
+        });
     }
     report
 }

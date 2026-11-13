@@ -45,12 +45,21 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
             "ideas/words.md",
             "ideas/ui/summary.md",
             "index.md",
-            "log.md"
+            "log.md",
+            "Cargo.toml",
+            "wit/world.wit"
         ]
     );
     let top = read(&folder, "idea.md");
     assert!(top.starts_with("---\ntype: lengua Program\ndescription: \"The program counts the words in a text.\"\nmodule: main\nsource: src/main.rs\nuses: [ideas/words, ideas/ui/summary]\nused_by: []\nlabel: unchecked\nidea_sha256: "));
-    assert!(top.contains("\nsource_sha256: none\n---\n\n# Purpose\n"));
+    assert!(top.contains("\nsource_sha256: none\ncargo_sha256: "));
+    assert!(top.contains("\nworld_sha256: "));
+    assert!(top.contains("\n---\n\n# Purpose\n"));
+    let cargo = read(&folder, "Cargo.toml");
+    assert!(cargo.starts_with("[package]\nname = \"lengua-idea-"));
+    assert!(cargo.contains("[[bin]]\n"));
+    assert!(read(&folder, "wit/world.wit").contains("  import wasi:cli/stdin@0.2.12;\n"));
+    assert_eq!(report.build.as_ref().map(|b| b.code), Some(false));
     let words = read(&folder, "ideas/words.md");
     assert!(words.contains("type: lengua Module\n"));
     assert!(words.contains("used_by: [idea, ideas/ui/summary]\n"));
@@ -69,6 +78,8 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
         "# Log\n\n## 2026-11-13\n\n* **Check** at 00:00:00Z: no problems; label `unchecked`.\n"
     ));
     assert!(log.contains("  * Idea [words](ideas/words.md), new: `"));
+    assert!(log.contains("  * Generated `Cargo.toml`, new: `"));
+    assert!(log.contains("  * Generated `wit/world.wit`, new: `"));
 }
 
 #[test]
@@ -81,6 +92,34 @@ fn a_second_check_changes_only_the_log() {
     assert_eq!(second.written, ["log.md"]);
     let log = read(&folder, "log.md");
     assert!(log.starts_with("# Log\n\n## 2026-11-13\n\n* **Check** at 00:01:00Z: no problems; label `unchecked`; nothing changed.\n* **Check** at 00:00:00Z"));
+}
+
+#[test]
+fn a_hand_edit_of_a_generated_file_is_a_finding() {
+    let folder = fixture("good", "held");
+    assert_eq!(lengua_idea::check(&folder, NOV_13_2026).findings, []);
+    let cargo = read(&folder, "Cargo.toml");
+    let edited = cargo.replace("opt-level = 3", "opt-level = \"z\"");
+    fs::write(folder.join("Cargo.toml"), &edited).expect("a file");
+    let report = lengua_idea::check(&folder, NOV_13_2026 + 1);
+    let found: Vec<(&str, usize, &str)> = report
+        .findings
+        .iter()
+        .map(|f| (f.file.as_str(), f.line, f.code))
+        .collect();
+    let line = cargo
+        .lines()
+        .position(|l| l == "opt-level = 3")
+        .expect("the line")
+        + 1;
+    assert_eq!(found, [("Cargo.toml", line, "generated-edited")]);
+    assert_eq!(report.written, Vec::<String>::new());
+    assert_eq!(report.build, None);
+    fs::remove_file(folder.join("Cargo.toml")).expect("the file removed");
+    let again = lengua_idea::check(&folder, NOV_13_2026 + 2);
+    assert_eq!(again.findings, []);
+    assert_eq!(again.written, ["log.md", "Cargo.toml"]);
+    assert_eq!(read(&folder, "Cargo.toml"), cargo);
 }
 
 #[test]
@@ -175,4 +214,25 @@ fn the_example_in_the_write_idea_skill_has_no_findings() {
     fs::create_dir_all(&folder).expect("a folder");
     fs::write(folder.join("idea.md"), format!("{idea}\n")).expect("the idea");
     assert_eq!(lengua_idea::check(&folder, NOV_13_2026).findings, []);
+}
+
+#[test]
+fn the_hello_example_has_no_findings_and_gets_its_build_files() {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello");
+    let to = std::env::temp_dir()
+        .join(format!("lengua-idea-{}-example", std::process::id()))
+        .join("hello");
+    if to.exists() {
+        fs::remove_dir_all(&to).expect("an old copy removed");
+    }
+    copy(&from, &to);
+    let report = lengua_idea::check(&to, NOV_13_2026);
+    assert_eq!(report.findings, []);
+    let build = report.build.expect("a build");
+    assert_eq!(build.package, "hello");
+    assert_eq!(build.artifact, "target/wasm32-wasip2/release/hello.wasm");
+    assert_eq!(build.crates, 0);
+    assert!(build.code);
+    assert!(read(&to, "Cargo.toml").starts_with("[package]\nname = \"hello\"\n"));
+    assert!(!read(&to, "wit/world.wit").contains("stdin"));
 }

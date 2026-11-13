@@ -7,6 +7,13 @@ use crate::{Finding, Note};
 
 pub(crate) const LABEL: &str = "unchecked";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Stamp {
+    pub key: &'static str,
+    pub file: &'static str,
+    pub hash: String,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Page {
     pub file: String,
@@ -19,6 +26,7 @@ pub(crate) struct Page {
     pub idea_hash: String,
     pub source: String,
     pub source_hash: Option<String>,
+    pub generated: Vec<Stamp>,
 }
 
 impl Page {
@@ -94,7 +102,7 @@ pub(crate) fn page_text(page: &Page, used_by: &[String]) -> String {
         .source_hash
         .clone()
         .unwrap_or_else(|| "none".to_string());
-    page.front.render(&[
+    let mut keys = vec![
         ("type", type_name(page.kind).to_string()),
         ("description", quoted(&page.description)),
         ("module", page.name.clone()),
@@ -104,7 +112,9 @@ pub(crate) fn page_text(page: &Page, used_by: &[String]) -> String {
         ("label", LABEL.to_string()),
         ("idea_sha256", page.idea_hash.clone()),
         ("source_sha256", source_hash),
-    ])
+    ];
+    keys.extend(page.generated.iter().map(|s| (s.key, s.hash.clone())));
+    page.front.render(&keys)
 }
 
 pub(crate) fn index_text(pages: &[Page]) -> String {
@@ -178,6 +188,14 @@ pub(crate) fn log_entry(pages: &[Page], now: u64) -> (String, Vec<Note>) {
                 message,
             });
         }
+        for stamp in &page.generated {
+            if let Some(what) = change(page.front.value(stamp.key), Some(stamp.hash.as_str())) {
+                lines.push(format!(
+                    "  * Generated `{}`, {what}: `{}`.\n",
+                    stamp.file, stamp.hash
+                ));
+            }
+        }
     }
     let nothing = if lines.is_empty() {
         "; nothing changed"
@@ -228,7 +246,8 @@ fn write_if_changed(
     if fs::read_to_string(&path).is_ok_and(|old| old == text) {
         return Ok(());
     }
-    fs::write(&path, text).map_err(|e| Finding {
+    let parent = path.parent().map_or(Ok(()), fs::create_dir_all);
+    parent.and_then(|()| fs::write(&path, text)).map_err(|e| Finding {
         file: file.to_string(),
         line: 1,
         code: "wiki-write",
@@ -244,7 +263,12 @@ pub(crate) struct Written {
     pub findings: Vec<Finding>,
 }
 
-pub(crate) fn write(folder: &Path, pages: &[Page], now: u64) -> Written {
+pub(crate) fn write(
+    folder: &Path,
+    pages: &[Page],
+    generated: &[(String, String)],
+    now: u64,
+) -> Written {
     let mut out = Written {
         files: Vec::new(),
         notes: Vec::new(),
@@ -266,6 +290,7 @@ pub(crate) fn write(folder: &Path, pages: &[Page], now: u64) -> Written {
         .unwrap_or_default()
         .replace("\r\n", "\n");
     texts.push(("log.md".to_string(), log_text(&previous, &entry, now)));
+    texts.extend(generated.iter().cloned());
     for (file, text) in texts {
         if let Err(finding) = write_if_changed(folder, &file, &text, &mut out.files) {
             out.findings.push(finding);

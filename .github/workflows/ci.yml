@@ -143,6 +143,13 @@ jobs:
       - name: tests run
         if: ${{ needs.plan.outputs.mode == 'test' }}
         run: cargo test --workspace --locked
+      - name: the imports of hello.wasm
+        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+        run: |
+          for f in $(find target/tmp -path '*wasm32-wasip2/release/hello.wasm'); do
+            echo "$f: $(wc -c < "$f") bytes"
+            grep -aoE 'wasi:[a-z-]+/[a-z-]+@[0-9.]+' "$f" | sort -u
+          done
       - name: lengua-mcp built
         run: |
           cargo build --release --locked -p lengua-mcp

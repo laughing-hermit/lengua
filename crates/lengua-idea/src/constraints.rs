@@ -8,10 +8,30 @@ const MAX_MEMORY: u64 = 4 << 30;
 const MAX_TIME_MS: u64 = 3_600_000;
 const RESERVED: [&str; 4] = ["main", "ui", "index", "log"];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Grant {
+    StandardInput,
+    Arguments,
+    Clock,
+    Random,
+    Files,
+    Network,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CrateUse {
+    pub name: String,
+    pub version: String,
+    pub line: usize,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Constraints {
     pub modules: Vec<(String, usize)>,
     pub uses: Vec<(String, usize)>,
+    pub grants: Vec<Grant>,
+    pub exports: bool,
+    pub crates: Vec<CrateUse>,
 }
 
 pub(crate) fn module_name(name: &str) -> bool {
@@ -73,21 +93,24 @@ fn semver(version: &str) -> bool {
             .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }
 
-fn crate_line(value: &str, line: usize, dictionary: &Dictionary, sink: &mut Sink) -> bool {
-    let Some((head, reason)) = value.split_once(", for ") else {
-        return false;
-    };
-    let Some((name, version)) = head.trim().rsplit_once(' ') else {
-        return false;
-    };
-    let name_ok = backticked(name).is_some_and(|n| {
-        n.chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-    });
+fn crate_line(
+    value: &str,
+    line: usize,
+    dictionary: &Dictionary,
+    sink: &mut Sink,
+) -> Option<(String, String)> {
+    let (head, reason) = value.split_once(", for ")?;
+    let (name, version) = head.trim().rsplit_once(' ')?;
     let mut tokens = Vec::new();
     tokenize(reason, line, &mut tokens);
     dictionary.words(&tokens, sink);
-    name_ok && semver(version) && !reason.trim().is_empty()
+    let name = backticked(name).filter(|n| {
+        !n.is_empty()
+            && n.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    })?;
+    (semver(version) && !reason.trim().is_empty())
+        .then(|| (name.to_string(), version.to_string()))
 }
 
 struct Reader<'d> {
@@ -203,12 +226,30 @@ impl Reader<'_> {
         sink: &mut Sink,
     ) -> Option<(bool, &'static str)> {
         Some(match key {
-            "Reads" => (
-                reads(value),
-                "`standard input`, `arguments`, `the clock`, `random numbers` or ``files in `folder` ``",
-            ),
-            "Writes" => (files_in(value), "``files in `folder` ``"),
-            "Connects to" => (host_port(value), "`` `host:port` ``"),
+            "Reads" => {
+                let good = reads(value);
+                if good {
+                    self.grant(value);
+                }
+                (
+                    good,
+                    "`standard input`, `arguments`, `the clock`, `random numbers` or ``files in `folder` ``",
+                )
+            }
+            "Writes" => {
+                let good = files_in(value);
+                if good {
+                    self.out.grants.push(Grant::Files);
+                }
+                (good, "``files in `folder` ``")
+            }
+            "Connects to" => {
+                let good = host_port(value);
+                if good {
+                    self.out.grants.push(Grant::Network);
+                }
+                (good, "`` `host:port` ``")
+            }
             "Memory" => (
                 amount(
                     value,
@@ -234,22 +275,41 @@ impl Reader<'_> {
                 target.extend(list.into_iter().flatten().map(|n| (n, line)));
                 (good, "module names in backticks, with commas between them")
             }
-            "Exports" => (
-                names(value).is_some_and(|l| l.iter().all(|n| snake(n))),
-                "function names in backticks, with commas between them",
-            ),
-            "Uses crate" => (
-                crate_line(value, line, self.dictionary, sink),
-                "`` `name` 1.2.3, for <reason> ``",
-            ),
+            "Exports" => {
+                let good = names(value).is_some_and(|l| l.iter().all(|n| snake(n)));
+                self.out.exports |= good;
+                (good, "function names in backticks, with commas between them")
+            }
+            "Uses crate" => {
+                let found = crate_line(value, line, self.dictionary, sink);
+                let good = found.is_some();
+                if let Some((name, version)) = found {
+                    self.out.crates.push(CrateUse {
+                        name,
+                        version,
+                        line,
+                    });
+                }
+                (good, "`` `name` 1.2.3, for <reason> ``")
+            }
             _ => return None,
         })
+    }
+
+    fn grant(&mut self, value: &str) {
+        self.out.grants.push(match value {
+            "standard input" => Grant::StandardInput,
+            "arguments" => Grant::Arguments,
+            "the clock" => Grant::Clock,
+            "random numbers" => Grant::Random,
+            _ => Grant::Files,
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{module_name, parse};
+    use super::{CrateUse, Grant, module_name, parse};
     use crate::Sink;
     use crate::idea::IdeaKind;
     use crate::ste::Dictionary;
@@ -268,6 +328,19 @@ mod tests {
         assert_eq!(codes, Vec::<&str>::new());
         let modules: Vec<&str> = out.modules.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(modules, ["words", "ui/summary"]);
+        assert_eq!(
+            out.grants,
+            [Grant::StandardInput, Grant::Files, Grant::Files, Grant::Network]
+        );
+        assert!(out.exports);
+        assert_eq!(
+            out.crates,
+            [CrateUse {
+                name: "gpui".to_string(),
+                version: "0.2.0".to_string(),
+                line: 10,
+            }]
+        );
     }
 
     #[test]
