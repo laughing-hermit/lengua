@@ -342,80 +342,12 @@ impl Builds {
     }
 }
 
-fn program_root(folder: &Path) -> PathBuf {
-    let mut root = folder.to_path_buf();
-    let mut seen = 0;
-    while seen < 8 {
-        if root.join("idea.md").is_file() {
-            return root;
-        }
-        if !root.pop() {
-            break;
-        }
-        seen += 1;
-    }
-    folder.to_path_buf()
-}
-
-fn lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for part in path.components() {
-        match part {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
-
-fn cargo_home() -> Option<PathBuf> {
-    std::env::var_os("CARGO_HOME")
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-                .map(|home| PathBuf::from(home).join(".cargo"))
-        })
-}
-
-pub(crate) fn remaps(folder: &Path) -> Vec<String> {
-    let root = program_root(folder);
-    let mut out = Vec::new();
-    if let Some(home) = cargo_home() {
-        out.push(format!("--remap-path-prefix={}=/cargo", home.display()));
-    }
-    let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
-    for line in manifest.lines() {
-        let Some((name, rest)) = line.split_once(" = { path = \"") else {
-            continue;
-        };
-        let place = lexical(&root.join(rest.trim_end_matches("\" }")));
-        out.push(format!("--remap-path-prefix={}=/{name}", place.display()));
-    }
-    out.push(format!("--remap-path-prefix={}=/app", root.display()));
-    out
-}
-
-fn encoded_flags(folder: &Path) -> String {
-    let mut flags: Vec<String> = std::env::var("RUSTFLAGS")
-        .unwrap_or_default()
-        .split_whitespace()
-        .map(str::to_string)
-        .collect();
-    flags.extend(remaps(folder));
-    flags.join("\u{1f}")
-}
-
 pub(crate) fn cargo(
     folder: &Path,
     args: &[&str],
     slot: &Mutex<Option<Child>>,
 ) -> Result<(bool, String), String> {
     let mut child = Command::new("cargo")
-        .env("CARGO_ENCODED_RUSTFLAGS", encoded_flags(folder))
         .env("CARGO_NET_RETRY", "10")
         .args(args)
         .current_dir(folder)
@@ -819,7 +751,7 @@ pub(crate) fn problems(folder: &Path, text: &str) -> Vec<Problem> {
 mod tests {
     use std::path::Path;
 
-    use super::{SIZE_LIMIT, format_problems, problems, remaps, too_large};
+    use super::{SIZE_LIMIT, format_problems, problems, too_large};
 
     #[test]
     fn each_error_gives_its_file_and_line() {
@@ -884,35 +816,5 @@ mod tests {
         let found = too_large(SIZE_LIMIT + 1, SIZE_LIMIT).expect("a problem");
         assert_eq!(found.code, "component-size");
         assert!(found.message.contains("64 MiB"), "{}", found.message);
-    }
-
-    #[test]
-    fn the_paths_of_a_build_are_remapped_to_fixed_names() {
-        let root = std::env::temp_dir().join(format!("lengua-mcp-{}-remap", std::process::id()));
-        let inner = root
-            .join("app")
-            .join("target")
-            .join("lengua")
-            .join("mutant");
-        std::fs::create_dir_all(&inner).expect("a folder");
-        let app = root.join("app");
-        std::fs::write(app.join("idea.md"), "# Purpose\n").expect("an idea");
-        std::fs::write(
-            app.join("Cargo.toml"),
-            "[dependencies]\njson = { path = \"../libraries/json\" }\nwasip2 = \"=2.0.1\"\n",
-        )
-        .expect("a manifest");
-        let found = remaps(&inner);
-        let library = root.join("libraries").join("json");
-        assert!(
-            found.contains(&format!("--remap-path-prefix={}=/json", library.display())),
-            "{found:?}"
-        );
-        assert!(
-            found.contains(&format!("--remap-path-prefix={}=/app", app.display())),
-            "{found:?}"
-        );
-        assert!(found.iter().any(|f| f.ends_with("=/cargo")), "{found:?}");
-        assert_eq!(found.len(), 3, "{found:?}");
     }
 }

@@ -1694,11 +1694,12 @@ Decided for lengua 3 at L7 (2026-11-13):
 
 Decided for lengua 3 at L8 (2026-11-13), the parts that do not depend on the front end:
 
-- **Builds hold no paths of one computer.** Every cargo call of the build job gets
-  `CARGO_ENCODED_RUSTFLAGS`: the `RUSTFLAGS` of its environment and `--remap-path-prefix` for
-  the Cargo home (`/cargo`), the program's folder (`/app`, the folder of `idea.md` above the
-  call's folder) and each path dependency of its `Cargo.toml` (`/<name>`). Cargo's network
-  retries are 10 (`CARGO_NET_RETRY`).
+- **No path remapping.** It was tried (`--remap-path-prefix` for the Cargo home, the folder and
+  the path dependencies, in `CARGO_ENCODED_RUSTFLAGS`) and taken back: the flags hold each
+  computer's own paths, Cargo hashes the flags into each crate's metadata, and so the crate hashes
+  in the mangled names of the component's `name` section differed between Linux x86-64 and Linux
+  ARM64, which matched without it (run 43524778056). `hello` and the shop hold no paths, so they
+  need none. Cargo's network retries are 10 (`CARGO_NET_RETRY`) in every cargo call of the job.
 - **CI holds `hello` and the shop to one SHA-256 on every runner** (the job `same-bytes`, from
   the components each check job uploads), and prints the bytes that differ when they do not.
 - **CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2`** on every runner, and a
@@ -1868,7 +1869,8 @@ Decided for lengua 3 at L8 (2026-11-13), the parts that do not depend on the fro
     typing into a text field, and the text of the last frame through a recording text system
     (2 min 16 s to build, 0.03 s to run).
   - **Paths:** the browser's `.wasm` held the absolute paths of the Cargo home in its panic
-    messages; this led to the remapping of L8 (section 9).
+    messages, so two computers build different files; remapping them was tried at L8 and taken
+    back (section 9).
   - **How far the whole application got** (an example of three screens, runs 43496636597 to
     43508359575): the front end built, `wasm-bindgen` ran and the one file was made; the screens'
     tests, their mutants, the serving by `lengua-run` and the browser test never passed before

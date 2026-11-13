@@ -420,11 +420,11 @@ next starts (Lengua3.md, section 8).
   day the owner chose Leptos for the front end and Tauri for the desktop; GPUI, GPUI Kit, Next.js
   and Electron are dropped, and the front end comes at the next milestone from a new brief. What
   was found: Lengua3.md, section 10, "History: GPUI's web target".
-- **2026-11-13, L8: builds hold no paths of one computer**: every cargo call of the build job gets
-  `--remap-path-prefix` for the Cargo home, the program's folder and each path dependency
-  (through `CARGO_ENCODED_RUSTFLAGS`, with the environment's `RUSTFLAGS` kept), and
-  `CARGO_NET_RETRY=10`. Reason: a `.wasm` with panic messages holds the paths of the crates it was
-  built from (found in GPUI's).
+- **2026-11-13, L8: no path remapping.** `--remap-path-prefix` (Cargo home, folder, path
+  dependencies, in `CARGO_ENCODED_RUSTFLAGS`) was tried and taken back: the flags carry each
+  computer's paths into Cargo's crate metadata, so the crate hashes in the mangled names of the
+  shop's `name` section differed between Linux x86-64 and ARM64, which matched without it (run
+  43524778056). The build job keeps `CARGO_NET_RETRY=10`.
 - **2026-11-13, L8: CI holds `hello` and the shop to one SHA-256 on every runner** (job
   `same-bytes`); L7's landing run had the shop at 98,722 bytes on four systems and 98,725 on
   Windows ARM64, and `greet` 87,311 and 87,281.
