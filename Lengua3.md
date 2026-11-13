@@ -224,6 +224,36 @@ and random numbers come from a seed, so every run gives the same output on every
 - **A component built from another language** (C, Go, anything with a WASI 0.2 target) is linked
   through the component model. lengua did not build or check it, so it is labelled `trusted`.
 
+### Crates: few, and only ones that build for WebAssembly
+
+The whole Rust ecosystem is open, but every external crate is code lengua didn't write and
+can't hold to its rules, so lengua keeps them few. The `build` skill chooses in this order:
+
+1. **A lengua library** already in the bundle, or in lengua's own shared libraries (section
+   below). Written to the same rules, checked and tested like the application.
+2. **A crate from crates.io that builds for both targets**, `wasm32-wasip2` and, for the front
+   end, `wasm32-unknown-unknown`. Pure-Rust crates usually do.
+3. **If no such crate exists**, or the one that exists pulls in much more than it is worth, the
+   agent writes its own as a lengua library: its own idea, its own tests, no comments, the
+   Power of 10. It then serves every later application too.
+
+What `check` does with each external crate:
+- It must be declared in the idea with `- Uses crate: <name> <version>, for <what>`. The reason
+  is part of the documentation.
+- It must build for each target the application needs. A crate that needs threads, a C library
+  or one operating system's own calls fails, and the reply names the crate and the reason.
+- It is pinned by checksum in `Cargo.lock` and signed in the lock.
+- The reply counts the external crates, the crates they bring in with them, and which of them
+  use `unsafe`. That count is in `index.md`, so it can be watched as the application grows.
+
+### lengua's shared libraries
+
+lengua ships a small set of its own libraries, written as lengua programs, so the common needs
+of an application don't send it to crates.io: reading and writing JSON, parsing and building
+HTTP messages, decimal numbers, text and lines, sorting, CRC and hashes, dates and times. Each
+has its own idea, tests and lock, and builds for both targets. GPUI and GPUI Kit stay external:
+writing a UI framework is not lengua's work.
+
 ### The lock
 
 The lock is what keeps every document current. `lengua.lock` holds, signed together with an
@@ -287,7 +317,7 @@ Added for an AI language:
 |---|---|---|
 | 11 | No comments and no doc comments in code files. The idea is the documentation. | lengua's lint |
 | 12 | Every function is named in its module's `# Structure`, and nothing else is. | `check` |
-| 13 | Any crate from the Rust ecosystem, if the idea declares it (`- Uses crate:`) and it builds for the targets. Each is pinned by checksum in `Cargo.lock`, signed in the lock, and named in the reply with whether it uses `unsafe`. A crate in the code that the idea does not declare is a finding. | The generated `Cargo.toml`, `Cargo.lock` and the lock |
+| 13 | Few external crates: a lengua library first; a crate from the ecosystem only if the idea declares it (`- Uses crate: name version, for what`) and it builds for every target the application needs; otherwise the agent writes its own as a lengua library. Each is pinned by checksum, signed in the lock, and counted in the reply with whether it uses `unsafe`. | The generated `Cargo.toml`, `Cargo.lock`, the lock and the reply |
 
 And on the built component: imports only from the world; no threads, no relaxed SIMD and no other
 feature whose result can differ between machines; a size limit.
@@ -330,7 +360,7 @@ Each one is green on all five runners before the next starts.
 | L4 | The Power of 10 lint and the component checks | Each rule has a test that a program breaking it is refused |
 | L5 | Tests from the idea, generated cases, mutation score, trust labels | A program goes from idea to `checked` |
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | A changed idea or file is refused at run |
-| L7 | Applications of several modules; network and HTTP grants; lengua libraries; a component from another language | An application of several module ideas builds to one file; it uses a library and a C component, each labelled |
+| L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries (JSON, HTTP, decimal, text, sorting, hashes, dates); a component from another language | An application of several module ideas builds to one file; it uses a library and a C component, each labelled |
 | L8 | The GPUI front end: screens built for the browser, embedded in the one file, their behaviours tested | A web application with a GPUI screen ships as one file and opens in a browser |
 | L9 | The skills rewritten for Rust and GPUI; a product test in an interactive session | An agent goes from a request to a `checked` web application with the plugin alone |
 | L10 | The scale test: a web application, server and GPUI front end, in one file, built and then changed three times | A report of cycles and breakages, next to lengua 2's 3,638-line record |
