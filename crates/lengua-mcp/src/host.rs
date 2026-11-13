@@ -322,7 +322,11 @@ fn ending(result: &wasmtime::Result<Result<(), ()>>, memory_hit: bool) -> Ending
 impl Host {
     pub(crate) fn new() -> Result<Self, String> {
         let mut config = Config::new();
-        config.epoch_interruption(true);
+        config
+            .epoch_interruption(true)
+            .wasm_relaxed_simd(false)
+            .wasm_shared_everything_threads(false)
+            .cranelift_nan_canonicalization(true);
         let engine = Engine::new(&config).map_err(|e| format!("{e:#}"))?;
         let ticker = engine.clone();
         thread::spawn(move || {
@@ -432,7 +436,42 @@ impl Host {
 
 #[cfg(test)]
 mod tests {
-    use super::{grant_for, outside, seeded};
+    use super::{Host, grant_for, outside, seeded};
+
+    const HEADER: [u8; 8] = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+
+    fn module(sections: &[u8]) -> Vec<u8> {
+        let mut bytes = HEADER.to_vec();
+        bytes.extend_from_slice(sections);
+        bytes
+    }
+
+    #[test]
+    fn the_engine_refuses_relaxed_simd() {
+        let relaxed = module(&[
+            0x01, 0x07, 0x01, 0x60, 0x02, 0x7b, 0x7b, 0x01, 0x7b, 0x03, 0x02, 0x01, 0x00, 0x0a,
+            0x0b, 0x01, 0x09, 0x00, 0x20, 0x00, 0x20, 0x01, 0xfd, 0x80, 0x02, 0x0b,
+        ]);
+        let plain = wasmtime::Engine::default();
+        assert!(wasmtime::Module::new(&plain, &relaxed).is_ok());
+        let host = Host::new().expect("a host");
+        let refused = wasmtime::Module::new(&host.engine, &relaxed).expect_err("refused");
+        assert!(format!("{refused:#}").contains("relaxed"), "{refused:#}");
+    }
+
+    #[test]
+    fn the_engine_refuses_shared_memory() {
+        let host = Host::new().expect("a host");
+        let unshared = module(&[0x05, 0x04, 0x01, 0x01, 0x01, 0x01]);
+        assert!(wasmtime::Module::new(&host.engine, &unshared).is_ok());
+        let shared = module(&[0x05, 0x04, 0x01, 0x03, 0x01, 0x01]);
+        let refused = wasmtime::Module::new(&host.engine, &shared).expect_err("refused");
+        let message = format!("{refused:#}").to_lowercase();
+        assert!(
+            message.contains("thread") || message.contains("shared"),
+            "{message}"
+        );
+    }
 
     #[test]
     fn imports_outside_the_world_are_named_and_any_0_2_version_is_taken() {

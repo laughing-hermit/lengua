@@ -556,3 +556,56 @@ fn the_clock_and_random_numbers_are_fixed_for_tests_and_real_when_granted() {
         .expect("the seconds of the clock");
     assert!(seconds > 1_767_225_600, "{live:#}");
 }
+
+#[test]
+fn code_that_breaks_a_rule_of_lengua_s_lint_is_refused_before_the_build() {
+    let folder = example("lint");
+    fs::write(
+        folder.join("src/main.rs"),
+        "// a note\nfn main() {\n    println!(\"Hello, world!\");\n}\n",
+    )
+    .expect("a file");
+    let mut server = Server::start();
+    let reply = server.check(2, &folder);
+    assert_eq!(reply["ok"], false, "{reply:#}");
+    assert_eq!(codes(&reply), ["rule-11-comment"], "{reply:#}");
+    assert_eq!(reply["findings"][0]["file"], "src/main.rs");
+    assert_eq!(reply["findings"][0]["line"], 1);
+    assert!(reply["build"].is_null(), "{reply:#}");
+}
+
+#[test]
+fn code_that_rustfmt_would_change_is_a_finding() {
+    let folder = example("format");
+    fs::write(
+        folder.join("src/main.rs"),
+        "fn main() {\n    println!(\"Hello, world!\") ;\n}\n",
+    )
+    .expect("a file");
+    let mut server = Server::start();
+    let reply = until_built(&mut server, &folder, 10);
+    assert_eq!(reply["build"]["state"], "build_failed", "{reply:#}");
+    assert_eq!(codes(&reply), ["rust-format"], "{reply:#}");
+    assert_eq!(reply["findings"][0]["file"], "src/main.rs", "{reply:#}");
+}
+
+#[test]
+fn clippy_holds_rule_7_and_its_errors_are_findings() {
+    let folder = example("clippy");
+    fs::write(
+        folder.join("src/main.rs"),
+        "fn main() {\n    let text = std::env::args().next();\n    println!(\"{}\", text.unwrap());\n}\n",
+    )
+    .expect("a file");
+    let mut server = Server::start();
+    let reply = until_built(&mut server, &folder, 10);
+    assert_eq!(reply["build"]["state"], "build_failed", "{reply:#}");
+    let findings = reply["findings"].as_array().expect("a list of findings");
+    assert!(
+        findings.iter().any(|f| f["file"] == "src/main.rs"
+            && f["line"] == 3
+            && f["code"] == "rust-error"
+            && f["message"].as_str().is_some_and(|m| m.contains("unwrap"))),
+        "{reply:#}"
+    );
+}

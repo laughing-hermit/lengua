@@ -1,7 +1,7 @@
 # Purpose
 
-The program counts without end, so it never stops. The time limit of its idea stops it, and
-the host gives the state `out_of_time`.
+The program counts to the largest 64-bit number, so it does not stop in the time of its idea.
+The time limit of its idea stops it, and the host gives the state `out_of_time`.
 
 # Behaviours
 
@@ -22,4 +22,4 @@ Then the host stops it.
 
 # Structure
 
-- `main`: counts without end.
+- `main`: counts to the largest 64-bit number.

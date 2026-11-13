@@ -3,6 +3,7 @@ mod constraints;
 mod frontmatter;
 mod generate;
 mod idea;
+mod rust;
 mod sha256;
 mod ste;
 mod structure;
@@ -223,7 +224,7 @@ fn read_page(
     title: &str,
     dictionary: &Dictionary,
     findings: &mut Vec<Finding>,
-) -> Option<(Page, constraints::Constraints)> {
+) -> Option<(Page, constraints::Constraints, Vec<(usize, String)>)> {
     let mut sink = Sink::new(&source.file);
     let text = match fs::read(folder.join(&source.file)).map(String::from_utf8) {
         Ok(Ok(text)) => text.replace("\r\n", "\n"),
@@ -268,7 +269,7 @@ fn read_page(
         source_hash,
         generated: Vec::new(),
     };
-    Some((page, idea.constraints))
+    Some((page, idea.constraints, idea.structure))
 }
 
 fn link(pages: &mut [Page], constraints: &[constraints::Constraints], findings: &mut Vec<Finding>) {
@@ -380,13 +381,14 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
         .unwrap_or_else(|| "program".to_string());
     let mut pages = Vec::new();
     let mut constraints = Vec::new();
+    let mut structures = Vec::new();
     for source in &sources {
         let page_title = if source.kind == IdeaKind::Program {
             title.as_str()
         } else {
             source.name.as_str()
         };
-        if let Some((page, constraint)) = read_page(
+        if let Some((page, constraint, structure)) = read_page(
             folder,
             source,
             page_title,
@@ -395,10 +397,16 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
         ) {
             pages.push(page);
             constraints.push(constraint);
+            structures.push(structure);
         }
     }
     if pages.first().is_some_and(|p| p.kind == IdeaKind::Program) {
         link(&mut pages, &constraints, &mut report.findings);
+    }
+    if folder.join("src/main.rs").is_file() {
+        report
+            .findings
+            .extend(rust::lint(folder, &pages, &structures, &constraints));
     }
     report.findings.sort();
     if !report.findings.is_empty() {

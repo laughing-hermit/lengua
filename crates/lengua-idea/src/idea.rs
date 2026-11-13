@@ -18,6 +18,7 @@ pub(crate) const SECTIONS: [&str; 4] = ["Purpose", "Behaviours", "Constraints", 
 pub(crate) struct Idea {
     pub description: String,
     pub constraints: Constraints,
+    pub structure: Vec<(usize, String)>,
 }
 
 type Section<'l> = Option<(usize, &'l [Line])>;
@@ -151,7 +152,7 @@ pub(crate) fn parse(
         idea.constraints = constraints::parse(kind, heading, lines, dictionary, sink);
     }
     if let Some((heading, lines)) = sections[3] {
-        structure::parse(kind, heading, lines, dictionary, sink);
+        idea.structure = structure::parse(kind, heading, lines, dictionary, sink);
     }
     idea
 }

@@ -40,8 +40,8 @@ pub(crate) fn parse(
     lines: &[Line],
     dictionary: &Dictionary,
     sink: &mut Sink,
-) -> Vec<String> {
-    let mut names: Vec<String> = Vec::new();
+) -> Vec<(usize, String)> {
+    let mut names: Vec<(usize, String)> = Vec::new();
     for (line, text) in entries(lines, sink) {
         let parsed = text
             .strip_prefix('`')
@@ -64,14 +64,14 @@ pub(crate) fn parse(
                 ),
             );
         }
-        if names.iter().any(|n| n == name) {
+        if names.iter().any(|(_, n)| n == name) {
             sink.add(
                 line,
                 "structure-duplicate",
                 format!("`{name}` is in the structure two times"),
             );
         }
-        names.push(name.to_string());
+        names.push((line, name.to_string()));
         let mut tokens = Vec::new();
         tokenize(sentence, line, &mut tokens);
         let count = sentences(&tokens).len();
@@ -97,7 +97,7 @@ pub(crate) fn parse(
             "the structure is empty; name every function of the module".to_string(),
         );
     }
-    if kind == IdeaKind::Program && !names.iter().any(|n| n == "main") {
+    if kind == IdeaKind::Program && !names.iter().any(|(_, n)| n == "main") {
         sink.add(
             heading,
             "structure-main-missing",
@@ -118,7 +118,7 @@ mod tests {
     fn run(kind: IdeaKind, text: &str) -> (Vec<&'static str>, Vec<String>) {
         let mut sink = Sink::new("idea.md");
         let names = parse(kind, 1, &lines(text, 2), &Dictionary::load(), &mut sink);
-        (sink.findings.iter().map(|f| f.code).collect(), names)
+        (sink.findings.iter().map(|f| f.code).collect(), names.into_iter().map(|(_, n)| n).collect())
     }
 
     #[test]

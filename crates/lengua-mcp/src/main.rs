@@ -374,6 +374,27 @@ fn run_doctor() -> ExitCode {
     }
 }
 
+fn print_imports(path: &str) -> ExitCode {
+    let found = Host::new().and_then(|host| {
+        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let component = host.component(&bytes, &lengua_idea::sha256_hex(&bytes))?;
+        Ok(host.imports(&component))
+    });
+    match found {
+        Ok(mut names) => {
+            names.sort();
+            for name in names {
+                println!("{name}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{}: {error}", env!("CARGO_PKG_NAME"));
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args == ["--version"] {
@@ -382,6 +403,11 @@ fn main() -> ExitCode {
     }
     if args == ["doctor"] {
         return run_doctor();
+    }
+    if let [command, path] = args.as_slice()
+        && command == "imports"
+    {
+        return print_imports(path);
     }
     if !args.is_empty() {
         eprintln!("usage: {} [--version | doctor]", env!("CARGO_PKG_NAME"));

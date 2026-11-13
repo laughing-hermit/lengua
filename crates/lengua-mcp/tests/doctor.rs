@@ -14,6 +14,8 @@ fn doctor_finds_the_toolchain_and_both_targets() {
     for part in [
         "ok       cargo: cargo ",
         "ok       rustc 1.85 or later: rustc ",
+        "ok       rustfmt: rustfmt ",
+        "ok       clippy: clippy ",
         "ok       the target wasm32-wasip2: installed",
         "ok       the target wasm32-unknown-unknown: installed",
     ] {

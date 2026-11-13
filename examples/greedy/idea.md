@@ -1,7 +1,7 @@
 # Purpose
 
-The program keeps blocks of memory without end. The memory limit of its idea stops it, and the
-host gives the state `out_of_memory`.
+The program keeps many blocks of memory, more than the memory of its idea. The memory limit of
+its idea stops it, and the host gives the state `out_of_memory`.
 
 # Behaviours
 
@@ -22,4 +22,4 @@ Then the host stops it.
 
 # Structure
 
-- `main`: keeps blocks of 1 MiB of memory without end.
+- `main`: keeps many blocks of 1 MiB of memory.

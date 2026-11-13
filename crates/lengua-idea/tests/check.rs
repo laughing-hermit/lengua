@@ -245,3 +245,65 @@ fn the_hello_example_has_no_findings_and_gets_its_build_files() {
         assert!(!world.contains(ungranted), "{ungranted} in {world}");
     }
 }
+
+#[test]
+fn every_example_keeps_every_rule() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let mut names: Vec<String> = fs::read_dir(&examples)
+        .expect("the examples")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    names.sort();
+    assert!(names.len() >= 8, "{names:?}");
+    for name in names {
+        let to = std::env::temp_dir()
+            .join(format!("lengua-idea-{}-rules", std::process::id()))
+            .join(&name);
+        if to.exists() {
+            fs::remove_dir_all(&to).expect("an old copy removed");
+        }
+        copy(&examples.join(&name), &to);
+        let report = lengua_idea::program(&to);
+        assert_eq!(report.findings, [], "{name}");
+    }
+}
+
+#[test]
+fn code_that_breaks_the_rules_is_refused_with_the_idea_s_findings() {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello");
+    let to = std::env::temp_dir()
+        .join(format!("lengua-idea-{}-broken", std::process::id()))
+        .join("hello");
+    if to.exists() {
+        fs::remove_dir_all(&to).expect("an old copy removed");
+    }
+    copy(&from, &to);
+    fs::write(
+        to.join("src/main.rs"),
+        "// a comment\nfn main() {\n    helper();\n}\n\nfn helper() {\n    main();\n}\n",
+    )
+    .expect("the code");
+    fs::write(to.join("src/extra.rs"), "fn extra() {}\n").expect("a file");
+    fs::write(to.join("build.rs"), "fn main() {}\n").expect("a build script");
+    let report = lengua_idea::check(&to, NOV_13_2026);
+    let found: Vec<(&str, usize, &str)> = report
+        .findings
+        .iter()
+        .map(|f| (f.file.as_str(), f.line, f.code))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("build.rs", 1, "rule-8-build-script"),
+            ("src/extra.rs", 1, "rule-12-source-unlisted"),
+            ("src/main.rs", 1, "rule-11-comment"),
+            ("src/main.rs", 2, "rule-1-recursion"),
+            ("src/main.rs", 6, "rule-1-recursion"),
+            ("src/main.rs", 6, "rule-12-unnamed"),
+            ("src/main.rs", 6, "rule-5-assertions"),
+        ]
+    );
+    assert_eq!(report.written, Vec::<String>::new());
+    assert_eq!(report.build, None);
+}

@@ -77,6 +77,21 @@ pub(crate) fn examine(folder: &Path) -> Doctor {
         found: rustc,
         fix,
     });
+    for component in ["rustfmt", "clippy"] {
+        let command = if component == "rustfmt" {
+            "fmt"
+        } else {
+            component
+        };
+        let found = output("cargo", &[command, "--version"], folder);
+        items.push(Item {
+            name: component.to_string(),
+            fix: found
+                .is_none()
+                .then(|| format!("rustup component add {component}")),
+            found,
+        });
+    }
     let installed = installed_targets(folder);
     for target in TARGETS {
         let have = installed.iter().any(|t| t == target);

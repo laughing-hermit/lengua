@@ -143,13 +143,30 @@ jobs:
       - name: tests run
         if: ${{ needs.plan.outputs.mode == 'test' }}
         run: cargo test --workspace --locked
-      - name: the imports of the built examples
+      - name: the imports of the built examples, as Wasmtime reads them
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |
-          for f in $(find target/tmp -path '*wasm32-wasip2/release/*.wasm' -not -path '*/deps/*'); do
+          for f in $(find target/tmp -path '*wasm32-wasip2/release/*.wasm' -not -path '*/deps/*' | sort); do
             echo "$f: $(wc -c < "$f") bytes"
-            grep -aoE 'wasi:[a-z-]+/[a-z-]+@[0-9.]+' "$f" | sort -u
+            cargo run --locked -q -p lengua-mcp -- imports "$f"
           done
+      - name: the time clippy adds to the build of hello world
+        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+        run: |
+          d=target/tmp/lengua-mcp-hello/hello
+          if [ ! -f "$d/Cargo.toml" ]; then
+            echo "no built hello world"
+            exit 0
+          fi
+          cd "$d"
+          cargo clean -q
+          TIMEFORMAT='clippy, from clean: %R s'
+          time cargo clippy -q --release --target wasm32-wasip2 --offline -- -D warnings
+          TIMEFORMAT='build, after clippy: %R s'
+          time cargo build -q --release --target wasm32-wasip2 --offline
+          cargo clean -q
+          TIMEFORMAT='build alone, from clean: %R s'
+          time cargo build -q --release --target wasm32-wasip2 --offline
       - name: lengua-mcp built
         run: |
           cargo build --release --locked -p lengua-mcp

@@ -160,25 +160,32 @@ fn cargo(
         .current_dir(folder)
         .env("CARGO_TERM_COLOR", "never")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("lengua could not start cargo: {e}"))?;
-    let pipe = child.stderr.take();
+    let out_pipe = child.stdout.take();
+    let err_pipe = child.stderr.take();
     *lock(slot) = Some(child);
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = out_pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        bytes
+    });
     let mut bytes = Vec::new();
-    if let Some(mut pipe) = pipe {
+    if let Some(mut pipe) = err_pipe {
         let _ = pipe.read_to_end(&mut bytes);
     }
+    let mut all = reader.join().unwrap_or_default();
+    all.extend_from_slice(&bytes);
     let taken = lock(slot).take();
     let status = taken
         .ok_or_else(|| "the build was stopped".to_string())?
         .wait()
         .map_err(|e| format!("lengua could not wait for cargo: {e}"))?;
-    Ok((
-        status.success(),
-        String::from_utf8_lossy(&bytes).to_string(),
-    ))
+    Ok((status.success(), String::from_utf8_lossy(&all).to_string()))
 }
 
 fn fetch_stamp(folder: &Path) -> PathBuf {
@@ -203,27 +210,84 @@ fn fetch(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> Result<()
     }
 }
 
+pub(crate) fn format_problems(folder: &Path, text: &str) -> Vec<Problem> {
+    text.lines()
+        .filter_map(|line| {
+            let place = line
+                .trim()
+                .strip_prefix("Diff in ")?
+                .trim_end_matches(':');
+            let (path, number) = place
+                .split_once(" at line ")
+                .or_else(|| place.rsplit_once(':'))?;
+            let number: usize = number.trim().parse().ok()?;
+            Some(problem(
+                &relative(folder, path.trim()),
+                number,
+                "rust-format",
+                format!("the code is not as `rustfmt` writes it, from line {number}; run `cargo fmt` in the program's folder"),
+            ))
+        })
+        .collect()
+}
+
+fn step(folder: &Path, args: &[&str], slot: &Mutex<Option<Child>>) -> Result<(), Vec<Problem>> {
+    match cargo(folder, args, slot) {
+        Ok((true, _)) => Ok(()),
+        Ok((false, text)) => Err(problems(folder, &text)),
+        Err(message) => Err(vec![problem("Cargo.toml", 1, "build-error", message)]),
+    }
+}
+
 fn run(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>, host: &Host) -> State {
     if let Err(problems) = fetch(folder, build, slot) {
         return State::Failed { problems };
     }
-    let args = [
+    if let Ok((false, text)) = cargo(folder, &["fmt", "--check"], slot) {
+        let found = format_problems(folder, &text);
+        if !found.is_empty() {
+            return State::Failed { problems: found };
+        }
+    }
+    let target = build.target;
+    let clippy = [
+        "clippy",
+        "--release",
+        "--target",
+        target,
+        "--offline",
+        "--message-format=short",
+        "--",
+        "-D",
+        "warnings",
+    ];
+    let compile = [
         "build",
         "--release",
         "--target",
-        build.target,
+        target,
         "--offline",
         "--message-format=short",
     ];
-    match cargo(folder, &args, slot) {
-        Ok((true, _)) => built(folder, build, host),
-        Ok((false, text)) => State::Failed {
-            problems: problems(folder, &text),
-        },
-        Err(message) => State::Failed {
-            problems: vec![problem("Cargo.toml", 1, "build-error", message)],
-        },
+    for args in [&clippy[..], &compile[..]] {
+        if let Err(problems) = step(folder, args, slot) {
+            return State::Failed { problems };
+        }
     }
+    built(folder, build, host)
+}
+
+pub(crate) const SIZE_LIMIT: usize = 64 << 20;
+
+pub(crate) fn too_large(size: usize, limit: usize) -> Option<Problem> {
+    (size > limit).then(|| {
+        problem(
+            "Cargo.toml",
+            1,
+            "component-size",
+            format!("the component has {size} bytes, and lengua's limit is {limit} bytes ({} MiB); make the program smaller", limit >> 20),
+        )
+    })
 }
 
 fn ungranted(bytes: &[u8], sha256: &str, build: &Build, host: &Host) -> Vec<Problem> {
@@ -233,14 +297,17 @@ fn ungranted(bytes: &[u8], sha256: &str, build: &Build, host: &Host) -> Vec<Prob
     if !wasm {
         return Vec::new();
     }
+    if let Some(found) = too_large(bytes.len(), SIZE_LIMIT) {
+        return vec![found];
+    }
     let component = match host.component(bytes, sha256) {
         Ok(component) => component,
         Err(error) => {
             return vec![problem(
                 "Cargo.toml",
                 1,
-                "build-error",
-                format!("wasmtime could not compile the component: {error}"),
+                "component-refused",
+                format!("wasmtime did not take the component: {error}; lengua's host refuses threads, shared memory and relaxed SIMD, whose results can differ between machines"),
             )];
         }
     };
@@ -343,7 +410,7 @@ pub(crate) fn problems(folder: &Path, text: &str) -> Vec<Problem> {
 mod tests {
     use std::path::Path;
 
-    use super::problems;
+    use super::{SIZE_LIMIT, format_problems, problems, too_large};
 
     #[test]
     fn each_error_gives_its_file_and_line() {
@@ -378,5 +445,31 @@ mod tests {
         assert_eq!(found[0].code, "build-error");
         let silent = problems(Path::new("/w"), "something went wrong\n");
         assert!(silent[0].message.contains("something went wrong"));
+    }
+
+    #[test]
+    fn a_format_difference_gives_its_file_and_line() {
+        let text = "Diff in /work/hello/src/main.rs:3:\n     fn main() {\n-    let x=1;\n+    let x = 1;\nDiff in /work/hello/src/cart.rs at line 9:\nsome other line\n";
+        let found = format_problems(Path::new("/work/hello"), text);
+        let places: Vec<(&str, usize, &str)> = found
+            .iter()
+            .map(|p| (p.file.as_str(), p.line, p.code.as_str()))
+            .collect();
+        assert_eq!(
+            places,
+            [
+                ("src/main.rs", 3, "rust-format"),
+                ("src/cart.rs", 9, "rust-format")
+            ]
+        );
+        assert!(format_problems(Path::new("/w"), "error: expected `;`\n").is_empty());
+    }
+
+    #[test]
+    fn a_component_past_the_size_limit_is_refused() {
+        assert!(too_large(SIZE_LIMIT, SIZE_LIMIT).is_none());
+        let found = too_large(SIZE_LIMIT + 1, SIZE_LIMIT).expect("a problem");
+        assert_eq!(found.code, "component-size");
+        assert!(found.message.contains("64 MiB"), "{}", found.message);
     }
 }
