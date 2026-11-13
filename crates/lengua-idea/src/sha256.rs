@@ -85,16 +85,25 @@ pub(crate) fn hex(data: &[u8]) -> String {
     }
     message.extend_from_slice(&bits.to_be_bytes());
     let mut state = START;
-    for block in message.chunks_exact(64) {
+    let (blocks, _) = message.as_chunks::<64>();
+    for block in blocks {
         compress(&mut state, block);
     }
-    state.iter().map(|word| format!("{word:08x}")).collect()
+    let mut out = String::with_capacity(64);
+    for word in state {
+        for shift in (0..8).rev() {
+            let digit = (word >> (shift * 4)) & 0xf;
+            out.push(char::from_digit(digit, 16).unwrap_or('0'));
+        }
+    }
+    out
 }
 
-fn compress(state: &mut [u32; 8], block: &[u8]) {
+fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
     let mut w = [0u32; 64];
-    for (slot, chunk) in w.iter_mut().zip(block.chunks_exact(4)) {
-        *slot = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    let (words, _) = block.as_chunks::<4>();
+    for (slot, chunk) in w.iter_mut().zip(words) {
+        *slot = u32::from_be_bytes(*chunk);
     }
     for i in 16..64 {
         let low = w[i - 15];

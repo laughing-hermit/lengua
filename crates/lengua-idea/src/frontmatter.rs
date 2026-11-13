@@ -155,10 +155,10 @@ mod tests {
     fn no_frontmatter_keeps_the_whole_text() {
         let mut sink = Sink::new("a.md");
         let front = split("# Purpose\n", &mut sink);
-        assert!(front.entries.is_empty());
+        assert_eq!(front.entries, []);
         assert_eq!(front.body, "# Purpose\n");
         assert_eq!(front.body_line, 1);
-        assert!(sink.findings.is_empty());
+        assert_eq!(sink.findings, []);
     }
 
     #[test]
@@ -166,7 +166,7 @@ mod tests {
         let mut sink = Sink::new("a.md");
         let text = "---\ntitle: Words\ntags:\n  - text\nlabel: checked\n---\n# Purpose\n";
         let front = split(text, &mut sink);
-        assert!(sink.findings.is_empty());
+        assert_eq!(sink.findings, []);
         assert_eq!(front.value("label"), Some("checked"));
         assert_eq!(front.body_line, 7);
         let out = front.render(&[("label", "unchecked".to_string())]);

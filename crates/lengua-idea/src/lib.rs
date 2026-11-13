@@ -194,8 +194,7 @@ fn link(pages: &mut [Page], constraints: &[constraints::Constraints], findings: 
     let names: Vec<String> = pages.iter().map(|p| p.name.clone()).collect();
     let listed: Vec<(String, usize)> = constraints
         .first()
-        .map(|c| c.modules.clone())
-        .unwrap_or_default();
+        .map_or_else(Vec::new, |c| c.modules.clone());
     for (k, (name, line)) in listed.iter().enumerate() {
         if listed[..k].iter().any(|(n, _)| n == name) {
             findings.push(Finding {

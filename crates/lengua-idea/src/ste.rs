@@ -32,7 +32,7 @@ pub(crate) struct Dictionary {
 }
 
 enum Look {
-    Found(u16),
+    Found,
     Replace(&'static str),
     Ing,
     Unknown,
@@ -138,10 +138,10 @@ impl Dictionary {
 
     fn look(&self, word: &str) -> Look {
         if let Some(with) = self.replace.get(word) {
-            return Look::Replace(*with);
+            return Look::Replace(with);
         }
-        if let Some(found) = self.exact(word).or_else(|| self.inflected(word)) {
-            return Look::Found(found);
+        if self.exact(word).or_else(|| self.inflected(word)).is_some() {
+            return Look::Found;
         }
         if let Some(stem) = word.strip_suffix("ing")
             && self.verb_stem(stem)
@@ -186,7 +186,7 @@ impl Dictionary {
             return;
         }
         match self.look(&word.to_lowercase()) {
-            Look::Found(_) => {}
+            Look::Found => {}
             Look::Replace(with) => sink.add(
                 line,
                 "ste-word-unapproved",

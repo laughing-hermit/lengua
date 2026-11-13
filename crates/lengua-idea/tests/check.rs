@@ -134,9 +134,10 @@ fn a_bad_program_gives_every_problem_at_once_in_order() {
     let found: BTreeSet<&str> = report.findings.iter().map(|f| f.code).collect();
     let wanted: BTreeSet<&str> = EVERY_KIND.into_iter().collect();
     let missing: Vec<&&str> = wanted.difference(&found).collect();
-    assert!(
-        missing.is_empty(),
-        "missing {missing:?} in {:#?}",
+    assert_eq!(
+        missing,
+        Vec::<&&str>::new(),
+        "in {:#?}",
         report.findings
     );
     let places: Vec<(&str, usize)> = report
@@ -147,7 +148,7 @@ fn a_bad_program_gives_every_problem_at_once_in_order() {
     let mut sorted = places.clone();
     sorted.sort_unstable();
     assert_eq!(places, sorted);
-    assert!(report.written.is_empty());
+    assert_eq!(report.written, Vec::<String>::new());
     assert!(!folder.join("index.md").exists());
     assert!(!folder.join("log.md").exists());
 }

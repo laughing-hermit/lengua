@@ -30,10 +30,10 @@ impl Page {
         self.front.value("idea_sha256")
     }
 
-    fn previous_source(&self) -> Option<Option<&str>> {
+    fn previous_source(&self) -> Option<&str> {
         self.front
             .value("source_sha256")
-            .map(|v| (v != "none").then_some(v))
+            .filter(|v| *v != "none")
     }
 }
 
@@ -128,17 +128,20 @@ pub(crate) fn index_text(pages: &[Page]) -> String {
             })
             .collect();
         if !lines.is_empty() {
-            out.push_str(&format!("\n# {heading}\n\n{}", lines.concat()));
+            out.push_str("\n# ");
+            out.push_str(heading);
+            out.push_str("\n\n");
+            out.push_str(&lines.concat());
         }
     }
     out
 }
 
-fn change(previous: Option<Option<&str>>, now: Option<&str>) -> Option<&'static str> {
+fn change(previous: Option<&str>, now: Option<&str>) -> Option<&'static str> {
     match (previous, now) {
-        (None | Some(None), Some(_)) => Some("new"),
-        (Some(Some(_)), None) => Some("removed"),
-        (Some(Some(a)), Some(b)) if a != b => Some("changed"),
+        (None, Some(_)) => Some("new"),
+        (Some(_), None) => Some("removed"),
+        (Some(a), Some(b)) if a != b => Some("changed"),
         _ => None,
     }
 }
@@ -147,10 +150,7 @@ pub(crate) fn log_entry(pages: &[Page], now: u64) -> (String, Vec<Note>) {
     let mut lines = Vec::new();
     let mut notes = Vec::new();
     for page in pages {
-        let idea = change(
-            page.previous_idea().map(Some),
-            Some(page.idea_hash.as_str()),
-        );
+        let idea = change(page.previous_idea(), Some(page.idea_hash.as_str()));
         let code = change(page.previous_source(), page.source_hash.as_deref());
         if let Some(what) = idea {
             lines.push(format!(
