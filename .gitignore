@@ -1,2 +1,3 @@
 /target/
 /plugin/bin/
+/examples/shop/components/tax.wasm

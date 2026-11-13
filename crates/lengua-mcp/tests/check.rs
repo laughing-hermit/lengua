@@ -1253,3 +1253,112 @@ fn a_server_answers_in_its_tests_with_run_and_with_lengua_run() {
     assert!(answer.ends_with("Hello, Ada!"), "{answer}");
     assert!(missing.starts_with("HTTP/1.1 404 "), "{missing}");
 }
+
+#[test]
+fn a_shared_library_that_breaks_a_rule_is_refused() {
+    let root = bundle("lib-broken", &["libraries/text"]);
+    let folder = root.join("libraries/text");
+    let code = fs::read_to_string(folder.join("src/main.rs")).expect("the code");
+    fs::write(folder.join("src/main.rs"), format!("// a note\n{code}")).expect("a comment");
+    let mut server = Server::start();
+    let reply = server.check(2, &folder);
+    assert_eq!(codes(&reply), ["rule-11-comment"], "{reply:#}");
+    assert!(reply["build"].is_null(), "{reply:#}");
+}
+
+#[test]
+fn the_shop_is_one_file_of_three_modules_two_libraries_and_a_c_component() {
+    let root = bundle(
+        "shop",
+        &["libraries/json", "libraries/decimal", "examples/shop"],
+    );
+    let shop = root.join("examples/shop");
+    assert!(
+        shop.join("components/tax.wasm").is_file(),
+        "the CI job `component` builds components/tax.wasm with wasi-sdk"
+    );
+    let mut server = Server::start();
+    done(&mut server, &root.join("libraries/json"), 10);
+    done(&mut server, &root.join("libraries/decimal"), 3000);
+    let reply = done(&mut server, &shop, 6000);
+    assert_eq!(reply["label"], "checked", "{reply:#}");
+    assert_eq!(
+        reply["libraries"],
+        json!([
+            {"path": "../../libraries/json", "label": "checked"},
+            {"path": "../../libraries/decimal", "label": "checked"}
+        ]),
+        "{reply:#}"
+    );
+    assert_eq!(
+        reply["components"],
+        json!([{"path": "components/tax.wasm", "label": "trusted"}]),
+        "{reply:#}"
+    );
+    assert!(
+        !notes_with(&reply, "uses a trusted component").is_empty(),
+        "{reply:#}"
+    );
+    let lock = fs::read_to_string(shop.join("lengua.lock")).expect("the lock");
+    for line in [
+        "\ncomponent ",
+        "\nsealed ",
+        "\ntrusted ",
+        "\nsealed-trusted ",
+        " ../../libraries/json/lengua.lock\n",
+        " ../../libraries/decimal/lengua.lock\n",
+        " ideas/basket.md\n",
+        " src/pages.rs\n",
+    ] {
+        assert!(lock.contains(line), "{line} in {lock}");
+    }
+    assert_eq!(lock.matches("\ncomponent ").count(), 1, "{lock}");
+    let index = fs::read_to_string(shop.join("index.md")).expect("the index");
+    for part in [
+        "# Program",
+        "# Modules",
+        "# Libraries",
+        "# Components",
+        "Label: `trusted`.",
+        "Label: `checked`.",
+    ] {
+        assert!(index.contains(part), "{part} in {index}");
+    }
+    let run = server.run_to_end(
+        9000,
+        &shop,
+        &json!({"stdin": "GET /total?tea=2&cake=1 HTTP/1.1\r\nhost: x\r\n\r\n"}),
+    );
+    let answer = run["stdout"].as_str().expect("an answer");
+    assert!(
+        answer.ends_with("{\"net\":\"8.20\",\"tax\":\"0.66\",\"total\":\"8.86\"}"),
+        "{run:#}"
+    );
+    let mut child = Command::new(lengua_run())
+        .arg(&shop)
+        .env("LENGUA_HOME", home())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("lengua-run starts");
+    let started = Instant::now();
+    let served = http_get(7811, "/total?tea=1");
+    let milliseconds = started.elapsed().as_millis();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        served.ends_with("{\"net\":\"2.50\",\"tax\":\"0.20\",\"total\":\"2.70\"}"),
+        "{served}"
+    );
+    let log = Path::new(env!("CARGO_TARGET_TMPDIR")).join("lengua-timings.txt");
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(log) {
+        let size = reply["build"]["size"].as_u64().unwrap_or(0);
+        let _ = writeln!(
+            file,
+            "shop: one file of {size} bytes; lengua-run's first answer {milliseconds} ms after its start"
+        );
+    }
+    fs::remove_file(shop.join("components/tax.wasm")).expect("the component removed");
+    let refused = server.check(10_000, &shop);
+    assert_eq!(codes(&refused), ["component-missing"], "{refused:#}");
+}

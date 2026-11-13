@@ -112,6 +112,7 @@ cannot m
 carriage n
 cart n
 case n
+catalog n
 cause nv
 cell n
 cent n
@@ -453,6 +454,7 @@ necessary a
 need v
 negative a
 neither dc
+net a
 network n
 never r
 new a

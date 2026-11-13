@@ -61,6 +61,51 @@ line of the block, with a line end, is the string:
   ```
 ````
 
+
+## The network: a test server and a test client
+
+A program that connects to a server (`- Connects to:`) or listens on a port (`- Listens on:`)
+is tested with a local server or client that lengua starts for the run:
+
+| Key | Value |
+|---|---|
+| ``Server `127.0.0.1:7801` `` | a string: a server at that address, which sends the string to each client and reads to the end |
+| ``Client `7803` `` | a string: a client that connects to that port on `127.0.0.1`, sends the string, and reads the answer |
+| `Expect answer` | a string: what the client got, compared exactly (with one `Client` item) |
+
+The host refuses every address and port the idea does not grant, even when a test server is
+there; an example can show it.
+
+## An example of a library (an idea with `- Exports:`)
+
+A library has no entry of its own, so each example is a call of its functions in Rust:
+
+| Key | Value |
+|---|---|
+| `Call` | a Rust expression in backticks: `` `parse("[1]")` ``; a block `` `{ let mut v = vec![2, 1]; sort(&mut v); v }` `` too |
+| `Expect value` | the value as Rust's `{:?}` writes it, in backticks or as a string |
+
+lengua writes a harness program that calls each example with the library's exports in scope
+(`use <library>::*`), builds it with the library, and compares what `{:?}` gives. An example
+has no exit code. In a Cases block, write `{{` and `}}` for the braces of Rust.
+
+## An example of a server (an idea with `- Serves:`)
+
+| Key | Value |
+|---|---|
+| `Request` | the method and the path in backticks: `` `GET /items?a=1` `` |
+| ``Request header `name` `` | a string |
+| `Request body` | a string |
+| `Expect status` | a number from 100 to 599; every request example has it |
+| ``Expect header `name` `` | a string, compared exactly; the name in any case |
+| `Expect body` | a string, compared exactly (not compared when absent) |
+
+A server example has no exit code. A module of a server is tested through requests too.
+
+## The examples of a module
+
+A module of a program is tested through the program's own entry: its examples give the
+program's input and expect the program's output, and they run against the one component.
 ## Cases: many runs from ranges
 
 ```

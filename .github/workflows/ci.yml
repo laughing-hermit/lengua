@@ -107,8 +107,42 @@ jobs:
           name: cargo-lock-${{ github.run_number }}
           path: Cargo.lock
 
+  component:
+    runs-on: ubuntu-24.04
+    env:
+      WASI_SDK: wasi-sdk-34.0-x86_64-linux
+      WASI_SDK_SHA256: b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4
+      WIT_BINDGEN: wit-bindgen-0.62.0-x86_64-linux
+      WIT_BINDGEN_SHA256: 3e81cc6523729f7532b4aa7968648a04abf0c711b7d1677150e9121f4e6458fe
+    steps:
+      - uses: actions/checkout@v5
+      - name: wasi-sdk 34 and wit-bindgen 0.62.0, pinned by SHA-256
+        run: |
+          curl -sSfL -o sdk.tar.gz "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/$WASI_SDK.tar.gz"
+          echo "$WASI_SDK_SHA256  sdk.tar.gz" | sha256sum -c
+          curl -sSfL -o bindgen.tar.gz "https://github.com/bytecodealliance/wit-bindgen/releases/download/v0.62.0/$WIT_BINDGEN.tar.gz"
+          echo "$WIT_BINDGEN_SHA256  bindgen.tar.gz" | sha256sum -c
+          mkdir -p tools
+          tar xzf sdk.tar.gz -C tools
+          tar xzf bindgen.tar.gz -C tools
+          ls tools
+      - name: the C component of examples/shop
+        run: |
+          tools_dir="$PWD/tools"
+          cd examples/shop/components
+          mkdir -p build
+          "$tools_dir/$WIT_BINDGEN/wit-bindgen" c tax.wit --out-dir build
+          ls build
+          "$tools_dir/$WASI_SDK/bin/clang" --target=wasm32-wasip2 -mexec-model=reactor -O2 -Ibuild \
+            -o tax.wasm rates.c build/tax.c build/tax_component_type.o
+          echo "tax.wasm: $(wc -c < tax.wasm) bytes, sha256 $(sha256sum tax.wasm | cut -d' ' -f1)"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: components
+          path: examples/shop/components/tax.wasm
+
   check:
-    needs: plan
+    needs: [plan, component]
     name: ${{ needs.plan.outputs.mode }} (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -118,6 +152,10 @@ jobs:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: components
+          path: examples/shop/components
       - name: rustup
         run: |
           if ! command -v rustup > /dev/null; then
@@ -150,6 +188,21 @@ jobs:
             echo "$f: $(wc -c < "$f") bytes"
             cargo run --locked -q -p lengua-mcp -- imports "$f"
           done
+      - name: the shared libraries, checked by the tests, built for wasm32-unknown-unknown too
+        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+        run: |
+          found=0
+          for d in target/tmp/lengua-mcp-lib-*/libraries/*/; do
+            if [ ! -f "$d/Cargo.toml" ]; then
+              continue
+            fi
+            found=$((found + 1))
+            echo "== $d"
+            (cd "$d" && cargo build -q --release --target wasm32-unknown-unknown --offline)
+            ls -l "$d"target/wasm32-unknown-unknown/release/*.rlib
+          done
+          echo "$found shared libraries built for wasm32-unknown-unknown"
+          test "$found" -ge 7
       - name: the time of each check, from the first call to the end of its job
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |
