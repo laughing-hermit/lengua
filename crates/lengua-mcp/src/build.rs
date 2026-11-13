@@ -226,8 +226,11 @@ fn run(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>, host: &Host) -
     }
 }
 
-fn ungranted(bytes: &[u8], sha256: &str, build: &Build, host: &Host) -> Vec<Problem> {
-    if !Path::new(&build.artifact).extension().is_some_and(|e| e == "wasm") {
+    let wasm = Path::new(&build.artifact)
+        .extension()
+        .is_some_and(|e| e == "wasm");
+    if !wasm {
+    {
         return Vec::new();
     }
     let component = match host.component(bytes, sha256) {
