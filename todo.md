@@ -50,8 +50,12 @@ next starts (Lengua3.md, section 8).
 
 ## Runs
 
+The five-runner run a landing rests on is at the head it tests, so it is named in the landing report and added here at the next milestone.
+
 | Date | Run | Ref and sha | Mode, targets | Result |
 |---|---|---|---|---|
+| 2026-11-13 | [43370086686](https://github.com/laughing-hermit/lengua/actions/runs/43370086686) | wip/l0 8b596f9 | test, linux-x86_64 | Failed: clippy `single_match_else` (pedantic) in `main` |
+| 2026-11-13 | [43370623006](https://github.com/laughing-hermit/lengua/actions/runs/43370623006) | wip/l0 3db4778 | test, linux-x86_64 | Green: format, clippy, 1 test passed, binary built and printed `lengua-mcp 0.1.0` |
 
 ## What the permission checks refused
 
