@@ -414,6 +414,7 @@ fn every_example_keeps_every_rule() {
     let mut names: Vec<String> = fs::read_dir(&examples)
         .expect("the examples")
         .flatten()
+        .filter(|e| e.path().join("idea.md").is_file())
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
     names.sort();
