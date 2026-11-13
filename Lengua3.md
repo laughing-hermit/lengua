@@ -81,7 +81,7 @@ What that means for lengua 3:
 ## 2. What lengua 3 keeps from lengua 2, as ideas
 
 Kept as ideas only, never as code. lengua 3 is written new, from this document (see "A fresh
-start" below).
+start" above).
 
 - **The idea file:** a purpose, behaviours, and grants. Behaviours are written the
   Behaviour-Driven way, as Given/When/Then with their examples, and each one is a test. The
