@@ -92,7 +92,10 @@ fn type_name(kind: IdeaKind) -> &'static str {
 }
 
 pub(crate) fn page_text(page: &Page, used_by: &[String]) -> String {
-    let source_hash = page.source_hash.clone().unwrap_or_else(|| "none".to_string());
+    let source_hash = page
+        .source_hash
+        .clone()
+        .unwrap_or_else(|| "none".to_string());
     page.front.render(&[
         ("type", type_name(page.kind).to_string()),
         ("description", quoted(&page.description)),
@@ -144,7 +147,10 @@ pub(crate) fn log_entry(pages: &[Page], now: u64) -> (String, Vec<Note>) {
     let mut lines = Vec::new();
     let mut notes = Vec::new();
     for page in pages {
-        let idea = change(page.previous_idea().map(Some), Some(page.idea_hash.as_str()));
+        let idea = change(
+            page.previous_idea().map(Some),
+            Some(page.idea_hash.as_str()),
+        );
         let code = change(page.previous_source(), page.source_hash.as_deref());
         if let Some(what) = idea {
             lines.push(format!(
@@ -214,7 +220,12 @@ pub(crate) fn log_text(previous: &str, entry: &str, now: u64) -> String {
     }
 }
 
-fn write_if_changed(folder: &Path, file: &str, text: &str, written: &mut Vec<String>) -> Result<(), Finding> {
+fn write_if_changed(
+    folder: &Path,
+    file: &str,
+    text: &str,
+    written: &mut Vec<String>,
+) -> Result<(), Finding> {
     let path = folder.join(file);
     if fs::read_to_string(&path).is_ok_and(|old| old == text) {
         return Ok(());

@@ -153,13 +153,23 @@ fn read_page(
             return None;
         }
         Err(error) => {
-            sink.add(1, "file-unreadable", format!("lengua could not read the file: {error}"));
+            sink.add(
+                1,
+                "file-unreadable",
+                format!("lengua could not read the file: {error}"),
+            );
             findings.append(&mut sink.findings);
             return None;
         }
     };
     let front = frontmatter::split(&text, &mut sink);
-    let idea = idea::parse(source.kind, &front.body, front.body_line, dictionary, &mut sink);
+    let idea = idea::parse(
+        source.kind,
+        &front.body,
+        front.body_line,
+        dictionary,
+        &mut sink,
+    );
     let source_path = source_file(source);
     let source_hash = fs::read(folder.join(&source_path))
         .ok()
@@ -199,7 +209,10 @@ fn link(pages: &mut [Page], constraints: &[constraints::Constraints], findings: 
                 file: "idea.md".to_string(),
                 line: *line,
                 code: "module-missing",
-                message: format!("the module `{name}` has no idea file, `{}.md`", concept(name)),
+                message: format!(
+                    "the module `{name}` has no idea file, `{}.md`",
+                    concept(name)
+                ),
             });
         }
     }
@@ -272,9 +285,13 @@ pub fn check(folder: &Path, now: u64) -> Report {
         } else {
             source.name.as_str()
         };
-        if let Some((page, constraint)) =
-            read_page(folder, source, page_title, &dictionary, &mut report.findings)
-        {
+        if let Some((page, constraint)) = read_page(
+            folder,
+            source,
+            page_title,
+            &dictionary,
+            &mut report.findings,
+        ) {
             pages.push(page);
             constraints.push(constraint);
         }

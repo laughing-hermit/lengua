@@ -21,10 +21,7 @@ fn fixture(name: &str, test: &str) -> PathBuf {
     let from = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name);
-    let to = std::env::temp_dir().join(format!(
-        "lengua-idea-{}-{test}-{name}",
-        std::process::id()
-    ));
+    let to = std::env::temp_dir().join(format!("lengua-idea-{}-{test}-{name}", std::process::id()));
     if to.exists() {
         fs::remove_dir_all(&to).expect("an old copy removed");
     }
@@ -43,7 +40,13 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
     assert_eq!(report.findings, []);
     assert_eq!(
         report.written,
-        ["idea.md", "ideas/words.md", "ideas/ui/summary.md", "index.md", "log.md"]
+        [
+            "idea.md",
+            "ideas/words.md",
+            "ideas/ui/summary.md",
+            "index.md",
+            "log.md"
+        ]
     );
     let top = read(&folder, "idea.md");
     assert!(top.starts_with("---\ntype: lengua Program\ndescription: \"The program counts the words in a text.\"\nmodule: main\nsource: src/main.rs\nuses: [ideas/words, ideas/ui/summary]\nused_by: []\nlabel: unchecked\nidea_sha256: "));
@@ -55,11 +58,16 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
     assert!(!words.contains("label: checked"));
     let index = read(&folder, "index.md");
     assert!(index.starts_with("---\nokf_version: \"0.2\"\n---\n\n# Program\n\n* ["));
-    assert!(index.contains("](idea.md) - The program counts the words in a text. Label: `unchecked`.\n"));
+    assert!(
+        index
+            .contains("](idea.md) - The program counts the words in a text. Label: `unchecked`.\n")
+    );
     assert!(index.contains("\n# Modules\n\n* [words](ideas/words.md) - The module finds the words in a text. Label: `unchecked`.\n"));
     assert!(index.contains("\n# Screens\n\n* [ui/summary](ideas/ui/summary.md) - "));
     let log = read(&folder, "log.md");
-    assert!(log.starts_with("# Log\n\n## 2026-11-13\n\n* **Check** at 00:00:00Z: no problems; label `unchecked`.\n"));
+    assert!(log.starts_with(
+        "# Log\n\n## 2026-11-13\n\n* **Check** at 00:00:00Z: no problems; label `unchecked`.\n"
+    ));
     assert!(log.contains("  * Idea [words](ideas/words.md), new: `"));
 }
 
@@ -126,7 +134,11 @@ fn a_bad_program_gives_every_problem_at_once_in_order() {
     let found: BTreeSet<&str> = report.findings.iter().map(|f| f.code).collect();
     let wanted: BTreeSet<&str> = EVERY_KIND.into_iter().collect();
     let missing: Vec<&&str> = wanted.difference(&found).collect();
-    assert!(missing.is_empty(), "missing {missing:?} in {:#?}", report.findings);
+    assert!(
+        missing.is_empty(),
+        "missing {missing:?} in {:#?}",
+        report.findings
+    );
     let places: Vec<(&str, usize)> = report
         .findings
         .iter()
@@ -147,4 +159,24 @@ fn a_folder_without_an_idea_is_one_finding() {
     let report = lengua_idea::check(&folder, NOV_13_2026);
     assert_eq!(report.findings.len(), 1);
     assert_eq!(report.findings[0].code, "idea-missing");
+}
+
+#[test]
+fn the_example_in_the_write_idea_skill_has_no_findings() {
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugin/skills/write-idea/SKILL.md"),
+    )
+    .expect("the skill")
+    .replace("\r\n", "\n");
+    let idea = skill
+        .split("\n````\n")
+        .nth(1)
+        .expect("an idea between two four-backtick lines");
+    let folder = std::env::temp_dir().join(format!("lengua-idea-{}-skill", std::process::id()));
+    if folder.exists() {
+        fs::remove_dir_all(&folder).expect("an old copy removed");
+    }
+    fs::create_dir_all(&folder).expect("a folder");
+    fs::write(folder.join("idea.md"), format!("{idea}\n")).expect("the idea");
+    assert_eq!(lengua_idea::check(&folder, NOV_13_2026).findings, []);
 }

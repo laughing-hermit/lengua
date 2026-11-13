@@ -113,8 +113,7 @@ pub(crate) fn split(text: &str, sink: &mut Sink) -> Front {
                 sink.add(
                     number,
                     "frontmatter-line",
-                    "this frontmatter line continues a key, but no key comes before it"
-                        .to_string(),
+                    "this frontmatter line continues a key, but no key comes before it".to_string(),
                 );
             }
             continue;

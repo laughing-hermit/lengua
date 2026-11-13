@@ -182,6 +182,170 @@ okf: ...                      Open Knowledge Format frontmatter
 function in a module's Rust file and every name in that module's `# Structure`, and each must
 have the other.
 
+### The idea file's grammar
+
+Decided at L1 (2026-11-13). `check` reads every idea to this grammar and reports every place
+that breaks it, all in one reply (see "What `check` replies" below).
+
+**Files.** An application folder has one top idea, `idea.md` (kind *program*), and may have
+module ideas, `ideas/<name>.md` (kind *module*), and screen ideas, `ideas/ui/<name>.md` (kind
+*screen*). A module's name is `snake_case` and not `main`, `ui`, `index` or `log`; a screen's
+name is `ui/<name>`. Any other folder under `ideas/` is a finding. Every file is UTF-8; a
+carriage return before a line end is read as a line end.
+
+**The frontmatter** is optional for the agent: an idea can start at `# Purpose`. When it is
+there, it opens with `---` on line 1 and closes with `---`; each line between is `key: value`
+(a key of letters, digits, `_` and `-`), a line that continues the key above (it starts with a
+space or `-`), a blank line or a `#` comment. A key may be there one time only.
+
+- **lengua writes these keys**, and overwrites any value the agent gave them: `type`
+  (`lengua Program`, `lengua Module` or `lengua Screen`), `description` (the first sentence of
+  `# Purpose`), `module` (`main` for the top idea), `source` (`src/main.rs`, `src/<name>.rs`,
+  `src/ui/<name>.rs`), `uses` and `used_by` (OKF concept ids, the file without `.md`: `idea`,
+  `ideas/cart`, `ideas/ui/basket`), `label` (`unchecked` until the tests run at L5),
+  `idea_sha256` (the SHA-256 of the idea's text after the frontmatter, blank lines at its
+  start left out) and `source_sha256` (of the Rust file, or `none`).
+- **The agent may write any other key**, and lengua keeps it byte for byte: OKF's `title`,
+  `tags`, `status`, `sources`, `generated`, `verified`, `stale_after`, `resource`, or a key of
+  its own. lengua does not check their values.
+
+**The sections** are level-1 headings, in this order, each one time: `# Purpose`,
+`# Behaviours`, `# Constraints`, `# Structure`. Every idea has Purpose, Behaviours and
+Structure; the top idea has Constraints too, and a module or screen idea may have them. Only
+blank lines come before `# Purpose`. A heading inside a fenced block is not a section.
+
+**`# Purpose`**: one paragraph or more of description in STE, with no headings and no fenced
+blocks. A list item (`- ` or `* `) counts as its own paragraph. Its first sentence is the
+idea's `description` in the frontmatter and in `index.md`.
+
+**`# Behaviours`**: one behaviour or more. Each is:
+
+```
+## <name>                         a name, different from the other behaviours' names
+
+Given <clause>                    one line, or more lines that continue it
+And <clause>                      optional, after any of the three
+When <clause>
+Then <clause>
+
+### Example: <name>               one block or more: Example or Cases
+- <Key>: <value>
+```
+
+`Given`, `When` and `Then` are each there one time, in that order; `And` adds to the one above
+it. Each clause is checked as an STE description. A behaviour has one `### Example:` or
+`### Cases:` block or more. A block has only list items, each `- <Key>: <value>`; a value can
+continue on lines indented under its item.
+
+The keys of a program or module example (the program runs once, with nothing else on its
+standard input, no arguments and no files unless the example gives them):
+
+| Key | Value | Means |
+|---|---|---|
+| `Standard input` | a string | the bytes on standard input |
+| `Arguments` | strings with spaces between them | the arguments after the program's name |
+| ``File `<path>` `` | a string | a file that is there before the run |
+| `Expect standard output` | a string | standard output, compared exactly |
+| `Expect standard error` | a string | standard error, compared exactly; not compared when absent |
+| `Expect exit code` | a number from 0 to 255 | the exit code; every example has it |
+| ``Expect file `<path>` `` | a string | a file's content after the run, compared exactly |
+
+The keys of a screen example (state and text are compared; pixels are not, section 7):
+
+| Key | Value | Means |
+|---|---|---|
+| ``State `<field>` `` | a string, an integer, `true` or `false` | the screen's state before |
+| `Click` | `` `<element>` `` | the user clicks the element |
+| ``Type into `<element>` `` | a string | the user types the text into the element |
+| ``Expect state `<field>` `` | a string, an integer, `true` or `false` | the state after |
+| `Expect text` | a string | text the screen shows |
+
+A screen example has one `Expect` item or more. A key is in a block one time only. A path is
+relative, with `/` between names, and stays inside the folder (no `..`, no `:`, no `\`).
+
+A **string** is in double quotes, with the escapes `\n`, `\t`, `\r`, `\0`, `\\`, `\"` and
+`\u{<hex>}`. A long string can instead be a fenced block on the lines below an item whose value
+is empty; its lines, less the fence's indent, each with a line end, are the string:
+
+~~~
+- Expect standard output:
+  ```
+  2
+  ```
+~~~
+
+A **`### Cases:` block** is an example that lengua draws many runs from (section 7). It has one
+range or more:
+
+- ``- Range `<name>`: integers from <low> to <high>``, with low not greater than high;
+- ``- Range `<name>`: text of <low> to <high> characters from "<characters>"``, lengths from 0 to
+  65536, with one character or more.
+
+Its other items are the example keys, and a string there can name a range as `{<name>}`
+(`{{` and `}}` are braces). Every name must be a range of the block, and every range must be
+used. Ranges and `{...}` are only in Cases blocks; in an Example, a brace is a brace. lengua
+draws boundary values first, then values from a fixed seed (at L5).
+
+**`# Constraints`**: only list items, one line each, `- <Key>: <value>`:
+
+| Key | Value | Where |
+|---|---|---|
+| `Reads` | `standard input`, `arguments`, `the clock`, `random numbers` or ``files in `<folder>` `` | top idea |
+| `Writes` | ``files in `<folder>` `` | top idea |
+| `Connects to` | `` `<host>:<port>` `` | top idea |
+| `Memory` | a number and `KiB`, `MiB` or `GiB`, up to 4 GiB; required | top idea |
+| `Time` | a number and `ms` or `s`, up to 3600 s; required | top idea |
+| `Modules` | module names in backticks, commas between them | top idea |
+| `Exports` | function names in backticks, commas between them | top idea |
+| `Uses` | module names in backticks, commas between them | any idea |
+| `Uses crate` | `` `<name>` <major.minor.patch>, for <reason> `` | any idea |
+
+Standard output and standard error are always granted. Every file in `ideas/` must be in
+`- Modules:`, and every name there must have its file. A `Uses` name must be a module of the
+program (lengua libraries come at L7). The same line two times is a finding.
+
+**`# Structure`**: only list items, ``- `<name>`: <one sentence>.``, where the name is a
+function, `snake_case`, or a method, `Type::snake_case` with the type in `UpperCamelCase`. The
+sentence may continue on indented lines; it is one STE sentence and ends with a full stop. A
+name is there one time only. The top idea's structure has `main`. At L2 and L4 `check` holds
+these names to the functions of the Rust file (rule 12).
+
+**What `check` replies.** One pass reads every idea file and collects every finding of every
+kind: the frontmatter, the sections, the behaviours and their blocks, the constraints, the
+structure, the modules, and STE. Each finding has the file (relative to the folder, `/`
+between names), the line (from 1), a code (for example `ste-word` or
+`example-exit-code-missing`) and a plain message. The findings are sorted by file, then line,
+then code. With no findings, the reply also lists the files `check` wrote and its notes.
+
+### What the STE check holds
+
+[ASD-STE100](https://www.asd-ste100.org/) Simplified Technical English is a controlled
+language: a dictionary of approved words, each with one meaning and one part of speech, and
+writing rules. `check` holds the rules a machine can check, with its own code and its own word
+list, no external crate:
+
+| Rule | How `check` holds it | Code |
+|---|---|---|
+| Approved words only | every word must be in lengua's dictionary (`crates/lengua-idea/src/ste-words.txt`), as itself or as a regular form: `-s`, `-es`, `-ies`, `-ed`, `-d`, a doubled last letter and `-ed` | `ste-word` |
+| Unapproved words have approved ones | a short list (`ste-replace.txt`) names the word to use: `utilize` gives `use` | `ste-word-unapproved` |
+| No `-ing` verbs | a word that is a dictionary verb plus `-ing` is refused, unless it is listed as a noun (`string`, `warning`) | `ste-word-ing` |
+| Technical names are allowed | words in backticks, strings in quotes, numbers, words with a digit or `_`, words with a capital after the first letter (`WebAssembly`), and capitalized words that do not start the sentence (`Rust`) | — |
+| A procedure has 20 words or fewer | a sentence that starts with a dictionary verb is an instruction | `ste-sentence-length` |
+| A description has 25 words or fewer | every other sentence; a word in backticks, a string and a number count as one word | `ste-sentence-length` |
+| A paragraph has six sentences or fewer | in `# Purpose` | `ste-paragraph-length` |
+| One instruction in a sentence | an instruction with `and` before a second verb | `ste-one-instruction` |
+| The active voice | in an instruction, a form of *be* and a past participle; in a description, the same followed by `by` | `ste-passive` |
+| Simple tenses only | *has*, *have* or *had* and a past participle | `ste-tense` |
+| Noun clusters of three words or fewer | four words in a row that the dictionary knows only as nouns | `ste-noun-cluster` |
+
+What it does not check: that a word has its one approved meaning and part of speech; the full
+official dictionary (it is the ASD's, so lengua's list is its own, of the general words STE
+approves that lengua knows, the words of programs, and their forms); missing articles; vague
+words and the rules of style. The agent writes to those; `check` holds the rest. The texts
+checked are the purpose, the clauses of the behaviours, the names of behaviours and blocks
+(words only), the structure's sentences and the reasons of `Uses crate` (words only).
+Constraints, keys and values are not prose and are not checked.
+
 ### Web applications: the server and the GPUI front end
 
 A web application has two halves, and both are in the one file:
@@ -340,6 +504,54 @@ Three things stop the documentation drifting from the code:
    `run` refuses a program whose files no longer match.
 3. **The log:** the history of when each idea and each file changed, so anyone can see they
    moved together.
+
+#### The wiki's formats
+
+Decided at L1 (2026-11-13). The folder is an OKF v0.2 bundle: every idea is a concept, and
+`index.md` and `log.md` at the folder's root are OKF's reserved files (OKF sections 8 and 9).
+
+- **When `check` writes it:** only when the check finds no problems, in the same step for all
+  three (the frontmatter of every idea, `index.md`, `log.md`), so the wiki never shows a state
+  the checks refused. A file whose text did not change is not written again. At L6 the lock is
+  written in the same step.
+- **The frontmatter** of each idea: the keys lengua writes come first, in the order of "The
+  idea file's grammar", then the agent's keys as they were. An example:
+
+  ```
+  ---
+  type: lengua Module
+  description: "The module finds the words in a text."
+  module: words
+  source: src/words.rs
+  uses: []
+  used_by: [idea, ideas/ui/summary]
+  label: unchecked
+  idea_sha256: 3b0f…
+  source_sha256: none
+  title: Words
+  ---
+  ```
+
+- **`index.md`** is written new by every check. It has `okf_version: "0.2"` as its only
+  frontmatter (OKF allows this key in the root index), then up to three sections, `# Program`,
+  `# Modules` and `# Screens`, with one line per idea: ``* [<title>](<file>) - <description>
+  Label: `<label>`.`` The program's title is the folder's name; a module's or a screen's is its
+  name.
+- **`log.md`** starts with `# Log`. OKF orders a log newest first, under `## YYYY-MM-DD`
+  headings, so a check puts its entry at the top of today's heading, or adds today's heading
+  above the older ones. "Append-only" means that no entry already there is changed or removed.
+  An entry is:
+
+  ```
+  * **Check** at 14:02:11Z: no problems; label `unchecked`.
+    * Idea [words](ideas/words.md), changed: `<sha256>`.
+    * Code `src/words.rs`, new: `<sha256>`.
+    * Note: the code `src/words.rs` changed and its idea `ideas/words.md` did not.
+  ```
+
+  An idea or a code file is *new* when the frontmatter had no hash for it, *changed* when the
+  hash differs, and *removed* when its code file is gone. A check that changed nothing ends
+  its first line with `; nothing changed`. Each *Note* is also in the reply's `notes`.
 
 ## 5. The Power of 10, for Rust compiled to WebAssembly
 

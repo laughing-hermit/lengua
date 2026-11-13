@@ -125,8 +125,7 @@ fn number_end(chars: &[char], start: usize) -> usize {
     let mut i = start;
     while i < chars.len() {
         let c = chars[i];
-        let joined =
-            (c == '.' || c == ',') && chars.get(i + 1).is_some_and(char::is_ascii_digit);
+        let joined = (c == '.' || c == ',') && chars.get(i + 1).is_some_and(char::is_ascii_digit);
         if c.is_alphanumeric() || c == '_' || joined {
             i += 1;
         } else {
@@ -201,7 +200,9 @@ pub(crate) fn split_key(text: &str) -> Option<(&str, &str)> {
 
 pub(crate) fn snake(name: &str) -> bool {
     let mut chars = name.chars();
-    chars.next().is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
@@ -239,7 +240,11 @@ pub(crate) fn literal(text: &str) -> Result<(String, &str), String> {
                     Some('\\') => out.push('\\'),
                     Some('"') => out.push('"'),
                     Some('u') => {
-                        let rest: String = chars.by_ref().map(|(_, h)| h).take_while(|&h| h != '}').collect();
+                        let rest: String = chars
+                            .by_ref()
+                            .map(|(_, h)| h)
+                            .take_while(|&h| h != '}')
+                            .collect();
                         let code = rest
                             .strip_prefix('{')
                             .and_then(|hex| u32::from_str_radix(hex, 16).ok())
@@ -313,7 +318,10 @@ mod tests {
 
     #[test]
     fn key_split_ignores_colons_in_code() {
-        assert_eq!(split_key("File `a:b`: \"x\""), Some(("File `a:b`", "\"x\"")));
+        assert_eq!(
+            split_key("File `a:b`: \"x\""),
+            Some(("File `a:b`", "\"x\""))
+        );
         assert_eq!(split_key("no colon"), None);
     }
 

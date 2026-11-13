@@ -9,7 +9,8 @@ use crate::text::{
 
 const KEYWORDS: [&str; 4] = ["Given", "When", "Then", "And"];
 const PROGRAM_KEYS: &str = "`Standard input`, `Arguments`, `File `path``, `Expect standard output`, `Expect standard error`, `Expect exit code`, `Expect file `path``";
-const SCREEN_KEYS: &str = "`State `field``, `Click`, `Type into `element``, `Expect state `field``, `Expect text`";
+const SCREEN_KEYS: &str =
+    "`State `field``, `Click`, `Type into `element``, `Expect state `field``, `Expect text`";
 pub(crate) const MAX_TEXT_LENGTH: u64 = 65_536;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -276,7 +277,11 @@ fn integer_range(bounds: &str) -> Option<&'static str> {
     let Some((low, high)) = bounds.split_once(" to ") else {
         return Some(usage);
     };
-    let parsed = low.trim().parse::<i64>().ok().zip(high.trim().parse::<i64>().ok());
+    let parsed = low
+        .trim()
+        .parse::<i64>()
+        .ok()
+        .zip(high.trim().parse::<i64>().ok());
     let Some((low, high)) = parsed else {
         return Some(usage);
     };
@@ -291,12 +296,18 @@ fn text_range(bounds: &str) -> Option<&'static str> {
     let Some((high, alphabet)) = rest.split_once(" characters from ") else {
         return Some(usage);
     };
-    let parsed = low.trim().parse::<u64>().ok().zip(high.trim().parse::<u64>().ok());
+    let parsed = low
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .zip(high.trim().parse::<u64>().ok());
     let Some((low, high)) = parsed else {
         return Some(usage);
     };
     if low > high || high > MAX_TEXT_LENGTH {
-        return Some("the lengths are from 0 to 65536, and the first is not greater than the second");
+        return Some(
+            "the lengths are from 0 to 65536, and the first is not greater than the second",
+        );
     }
     let good = matches!(literal(alphabet.trim()), Ok((chars, rest)) if !chars.is_empty() && rest.trim().is_empty());
     (!good).then_some("the characters are one string in quotes, with one character or more")
@@ -467,7 +478,9 @@ fn templates(head: usize, ranges: &[(String, usize)], texts: &[(String, usize)],
             sink.add(
                 *line,
                 "case-range-unused",
-                format!("the range `{name}` is not used in a value; write `{{{name}}}` where it goes"),
+                format!(
+                    "the range `{name}` is not used in a value; write `{{{name}}}` where it goes"
+                ),
             );
         }
     }
@@ -578,7 +591,11 @@ pub(crate) fn parse(
         let head = behaviour.head;
         let name = head.text[3..].trim();
         if name.is_empty() {
-            sink.add(head.number, "behaviour-name-empty", "the behaviour has no name".to_string());
+            sink.add(
+                head.number,
+                "behaviour-name-empty",
+                "the behaviour has no name".to_string(),
+            );
         } else if names.contains(&name.to_lowercase()) {
             sink.add(
                 head.number,
@@ -612,7 +629,11 @@ pub(crate) fn parse(
                 continue;
             };
             if label.trim().is_empty() {
-                sink.add(part.head.number, "example-name-empty", "the block has no name".to_string());
+                sink.add(
+                    part.head.number,
+                    "example-name-empty",
+                    "the block has no name".to_string(),
+                );
             }
             name_words(part.head, label, dictionary, sink);
             block(kind, cases, part.body, part.head.number, sink);

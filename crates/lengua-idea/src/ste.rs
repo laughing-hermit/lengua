@@ -239,9 +239,9 @@ impl Dictionary {
         let Some(first) = counted.first() else {
             return;
         };
-        let procedural = sentence.first().is_some_and(|t| {
-            t.kind == Kind::Word && self.base_verb(&t.text.to_lowercase())
-        });
+        let procedural = sentence
+            .first()
+            .is_some_and(|t| t.kind == Kind::Word && self.base_verb(&t.text.to_lowercase()));
         let limit = if procedural {
             PROCEDURE_WORDS
         } else {
@@ -412,10 +412,7 @@ mod tests {
 
     #[test]
     fn the_passive_with_by_is_a_finding() {
-        assert_eq!(
-            codes("The text is read by the program."),
-            ["ste-passive"]
-        );
+        assert_eq!(codes("The text is read by the program."), ["ste-passive"]);
     }
 
     #[test]

@@ -126,7 +126,9 @@ fn codes(reply: &Value) -> Vec<String> {
 fn the_server_lists_the_check_tool() {
     let mut server = Server::start();
     let reply = server.call(2, "tools/list", json!({}));
-    let tools = reply["result"]["tools"].as_array().expect("a list of tools");
+    let tools = reply["result"]["tools"]
+        .as_array()
+        .expect("a list of tools");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0]["name"], "check");
     assert!(tools[0]["inputSchema"]["properties"]["folder"].is_object());

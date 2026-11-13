@@ -184,12 +184,16 @@ mod tests {
 
     #[test]
     fn a_program_needs_constraints() {
-        assert_eq!(codes(IdeaKind::Program, MODULE), ["section-missing", "structure-main-missing"]);
+        assert_eq!(
+            codes(IdeaKind::Program, MODULE),
+            ["section-missing", "structure-main-missing"]
+        );
     }
 
     #[test]
     fn sections_out_of_order_unknown_and_twice_are_findings() {
-        let body = "Hello.\n# Structure\n- `main`: runs.\n# Purpose\nIt runs.\n# Purpose\n# Extra\n";
+        let body =
+            "Hello.\n# Structure\n- `main`: runs.\n# Purpose\nIt runs.\n# Purpose\n# Extra\n";
         let found = codes(IdeaKind::Module, body);
         for code in [
             "text-outside-section",
