@@ -230,7 +230,6 @@ fn run(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>, host: &Host) -
         .extension()
         .is_some_and(|e| e == "wasm");
     if !wasm {
-    {
         return Vec::new();
     }
     let component = match host.component(bytes, sha256) {
