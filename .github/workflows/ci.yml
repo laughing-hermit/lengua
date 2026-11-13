@@ -85,6 +85,28 @@ jobs:
           name: fmt-patch-${{ github.run_number }}
           path: fmt.patch
 
+  lockfile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: toolchain
+        run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal
+      - name: Cargo.lock up to date
+        id: lock
+        run: |
+          if cargo metadata --locked --format-version 1 > /dev/null; then
+            exit 0
+          fi
+          cargo metadata --format-version 1 > /dev/null
+          git diff --stat -- Cargo.lock
+          echo "differs=true" >> "$GITHUB_OUTPUT"
+          exit 1
+      - if: ${{ failure() && steps.lock.outputs.differs == 'true' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: cargo-lock-${{ github.run_number }}
+          path: Cargo.lock
+
   check:
     needs: plan
     name: ${{ needs.plan.outputs.mode }} (${{ matrix.target }})
