@@ -684,7 +684,7 @@ look for a part first.
 so `examples/sum`; sort64 for two numbers in order, three tested; crc32 for a text of 2
 characters in five minutes, tested beyond, and so `examples/checksums`.
 
-*Since 2026-11-12, on `wip/proofs`:* a contract's item may state what its function gives, as a
+*Since 2026-11-12, on main since ff48a22:* a contract's item may state what its function gives, as a
 formula (`takes`, `holds` and `gives` clauses). `check` proves it of the function alone, and
 the proofs of a program that took the function use the formula at each call. crc32 states
 `crc32(at)` for a text of up to 64 bytes, and the model reads a CRC's step out of a program's

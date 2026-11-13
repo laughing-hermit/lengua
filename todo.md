@@ -733,13 +733,13 @@ Its runs, each a dispatch of ci.yml on the branch, on Linux on x86-64 unless it 
   in; the head they give is held by a compile run, as documents are.
 
 Still open from it, for the owner:
-- **A part's proof isn't used in the programs built on it.** (Since 2026-11-12, on `wip/proofs`: a
+- **A part's proof isn't used in the programs built on it.** (Since 2026-11-12, on main since ff48a22: a
   contract may state what a function gives, and the proofs use it; "Proof depth", below.)
   The prover follows each taken
   function again in each program. What it would take is with the decisions (W21's parts): a
   contract that states what a function computes, a proof of the body against it for every
   argument and every memory, and the prover's use of it at each call.
-- **crc32 is tested, not proven, past two characters.** (Since 2026-11-12, on `wip/proofs`: the
+- **crc32 is tested, not proven, past two characters.** (Since 2026-11-12, on main since ff48a22: the
   model reads the step, and the proof reaches 478 bytes in a minute; "Proof depth", below.)
   The program's CRC, made by shifts and
   xors, and the formula's, a chain of CRC steps, are two terms of one number, and each is
@@ -1528,7 +1528,7 @@ format job's layout is applied at 6860c47). The later runs are in the table belo
 
 ### Proof depth: a contract's formula, a server's wait, a CRC's step (2026-11-12)
 
-On the branch `wip/proofs`, not merged: the owner lands it. DESIGN.md has the design as built
+On main since ff48a22 (2026-11-13). DESIGN.md has the design as built
 and each soundness argument ("Parts", the proofs; "A CRC a bit at a time"; "A server's wait"),
 and the compile skill's parts.md what an agent writes. The task was W22's largest gap, in the
 order of its value: a part's proof carried into its taker, a proof that reaches a server, and
