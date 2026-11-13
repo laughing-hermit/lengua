@@ -264,6 +264,28 @@ The keys of a screen example (state and text are compared; pixels are not, secti
 | ``Expect state `<field>` `` | a string, an integer, `true` or `false` | the state after |
 | `Expect text` | a string | text the screen shows |
 
+The keys of a network fixture, a library call and a server request (since L7):
+
+| Key | Value | Means |
+|---|---|---|
+| ``Server `<host>:<port>` `` | a string | lengua listens at the address for the run, sends the string to each client and reads what it sends to the end |
+| ``Client `<port>` `` | a string | lengua connects to `127.0.0.1:<port>` while the program runs, sends the string and reads the answer |
+| `Expect answer` | a string | what the one client got, compared exactly |
+| `Call` | a Rust expression in backticks | a library's example: the harness evaluates it with the library's exports in scope |
+| `Expect value` | Rust's `{:?}` of the value, in backticks or a string | compared exactly; required with `Call` |
+| `Request` | `` `<METHOD> <path>` ``: `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `PATCH` or `OPTIONS`, and a path from `/` | a server's example: the request |
+| ``Request header `<name>` `` | a string | a header of the request |
+| `Request body` | a string | the body of the request, with its `content-length` |
+| `Expect status` | a number from 100 to 599 | the answer's status; required with `Request` |
+| ``Expect header `<name>` `` | a string | a header of the answer, the name in any case |
+| `Expect body` | a string | the answer's body, compared exactly; not compared when absent |
+
+A call or a request has no exit code (`example-exit-code-unused`); `Expect value` goes with
+`Call` (`example-call-missing`, `example-value-missing`), and the keys of a request with
+`Request` (`example-request-missing`, `example-status-missing`). A block is one of the three
+kinds (`example-mixed`). A server's address is `host:port`, a client's a port
+(`example-address`); `Expect answer` goes with one `Client` (`example-client-missing`).
+
 A screen example has one `Expect` item or more. A key is in a block one time only. A path is
 relative, with `/` between names, and stays inside the folder (no `..`, no `:`, no `\`).
 
@@ -297,17 +319,30 @@ run").
 |---|---|---|
 | `Reads` | `standard input`, `arguments`, `the clock`, `random numbers` or ``files in `<folder>` `` | top idea |
 | `Writes` | ``files in `<folder>` `` | top idea |
-| `Connects to` | `` `<host>:<port>` `` | top idea |
+| `Connects to` | `` `<host>:<port>` ``, a name or an IP address and a port (since L7) | top idea |
+| `Listens on` | `TCP port <number>`, 1 to 65535 (since L7) | top idea |
+| `Serves` | `HTTP on TCP port <number>`: the idea is a server (since L7) | top idea |
 | `Memory` | a number and `KiB`, `MiB` or `GiB`, up to 4 GiB; required | top idea |
 | `Time` | a number and `ms` or `s`, up to 3600 s; required | top idea |
 | `Modules` | module names in backticks, commas between them | top idea |
-| `Exports` | function names in backticks, commas between them | top idea |
-| `Uses` | module names in backticks, commas between them | any idea |
+| `Exports` | function and type names in backticks, commas between them: the idea is a library | top idea |
+| `Uses` | module names, or folders of lengua libraries (a name with a `/`, relative to the folder: `` `../../libraries/json` ``), in backticks, commas between them | any idea; a library only in the top idea |
 | `Uses crate` | `` `<name>` <major.minor.patch>, for <reason> `` | any idea |
+| `Uses component` | `` `<file>.wasm`, built from <words> ``: a component from another language, a file inside the folder (since L7) | top idea |
 
 Standard output and standard error are always granted. Every file in `ideas/` must be in
-`- Modules:`, and every name there must have its file. A `Uses` name must be a module of the
-program (lengua libraries come at L7). The same line two times is a finding.
+`- Modules:`, and every name there must have its file. A `Uses` name with no `/` must be a module
+of the program; one with a `/` is a lengua library (L7). The same line two times is a finding.
+
+**The shape of the top idea** (since L7). An idea is a *program* (it exports `wasi:cli/run`), a
+*server* (`- Serves:`; it exports `wasi:http/incoming-handler`) or a *library* (`- Exports:`; a
+Rust `[lib]`). Two of them at once is `constraint-kind`. A library has no grants of its own, no
+libraries and no components (`library-grant`): the program that uses it grants what it reaches,
+and its examples are calls (`example-library-call` otherwise). A server's examples are requests
+(`example-server-request`), and a server reads no standard input and no arguments
+(`server-input`). A server and a library need no `main` in `# Structure`. Each module must have
+its `mod <name>;` line in `src/main.rs` (`module-undeclared`), and each name of `- Exports:` a
+`pub` item or a `pub use` there (`export-missing`).
 
 **`# Structure`**: only list items, ``- `<name>`: <one sentence>.``, where the name is a
 function, `snake_case`, or a method, `Type::snake_case` with the type in `UpperCamelCase`. The
@@ -411,7 +446,8 @@ Two checks hold it:
 - **At run:** the host links only the world's interfaces, so a component that imports anything
   else fails to instantiate, and `run` replies `refused` with Wasmtime's message. On top of the
   world, lengua's policy: files only in the folders the idea names, memory and time limits from
-  the idea. (Connections only to the hosts and ports it names come at L7, with the network.)
+  the idea; since L7, connections only to the addresses it names and binds only on the ports it
+  names (section 4, "The host").
 
 ### The generated files, the build job and `doctor`
 
@@ -470,11 +506,15 @@ codegen-units = 1
 - `include` lists the Rust file of every idea, in the order of the ideas: `src/main.rs`, then
   `src/<module>.rs` and `src/ui/<screen>.rs`. Rust finds a module through its `mod` line, so
   this is the package's list of files, not how it is built.
-- A program is a `[[bin]]`. A program with `- Exports:` (a library, L7) is a `[lib]` instead,
-  with the name in `snake_case` and `path = "src/main.rs"`.
-- `[dependencies]` is there only when an idea has `- Uses crate:` lines: one line per crate,
-  ``<name> = "=<version>"``, pinned to the exact version, sorted by name. Every idea's crates
-  are the program's; the same crate at two versions is the finding `crate-version`.
+- A program is a `[[bin]]`. A library (`- Exports:`, L7) is a `[lib]` instead, with the name in
+  `snake_case` and `path = "src/main.rs"`, and its `[lints.clippy]` also allow
+  `missing_errors_doc` and `missing_panics_doc` (rule 11 forbids the doc comments they ask for).
+  A server (`- Serves:`, L7) is a `[lib]` with `crate-type = ["cdylib"]`, which the Rust
+  toolchain makes into a component: `target/wasm32-wasip2/release/<snake_case name>.wasm`.
+- `[dependencies]` is there only when an idea has `- Uses crate:` or library lines: one line per
+  crate, ``<name> = "=<version>"``, pinned to the exact version, and since L7 one line per
+  library, ``<name> = { path = "<folder>" }``, all sorted by name. Every idea's crates are the
+  program's; the same crate at two versions is the finding `crate-version`.
 - `[lints]` holds the rules of section 5 that Cargo's `[lints]` can hold (rules 6, 7, 9, 10).
   `cargo build` holds the `rust` lints; the `clippy` lints take effect when clippy runs, at L4.
 - `[profile.release]`: `panic = "abort"` (a panic stops the component, with no unwinding code);
@@ -513,8 +553,9 @@ world program {
 The world is a subset of WASI 0.2's `wasi:cli/command`
 ([command.wit](https://github.com/WebAssembly/WASI/blob/v0.2.12/proposals/cli/wit/command.wit),
 [imports.wit](https://github.com/WebAssembly/WASI/blob/v0.2.12/proposals/cli/wit/imports.wit)):
-one `import` line per interface, sorted, each once, and `export wasi:cli/run` for a program (not
-for a library). The interfaces of each grant, with the interfaces their types come from:
+one `import` line per interface, sorted, each once, and `export wasi:cli/run` for a program,
+`export wasi:http/incoming-handler` for a server (L7), and no export for a library. The interfaces
+of each grant, with the interfaces their types come from:
 
 | Grant | Interfaces |
 |---|---|
@@ -524,17 +565,25 @@ for a library). The interfaces of each grant, with the interfaces their types co
 | `- Reads: the clock` | `wasi:clocks/wall-clock`; the host gives its real clocks |
 | `- Reads: random numbers` | `wasi:random/random`, `insecure` (and `insecure-seed`, already in the always set) |
 | `- Reads:` or `- Writes: files in ...` | `wasi:filesystem/types`, `preopens`; `wasi:clocks/wall-clock` (for the type `datetime`) |
-| `- Connects to: ...` | `wasi:sockets/network`, `instance-network`, `tcp`, `tcp-create-socket`, `ip-name-lookup`; `wasi:clocks/monotonic-clock` (for the type `duration`) |
+| `- Connects to: ...` or `- Listens on: ...` | `wasi:sockets/network`, `instance-network`, `tcp`, `tcp-create-socket`, `ip-name-lookup`, and since L7 `udp` and `udp-create-socket`; `wasi:clocks/monotonic-clock` (for the type `duration`) |
+| `- Serves: HTTP on TCP port N` (L7) | `wasi:http/types` |
 
-UDP is in no grant. The version is `0.2.12`, the current WASI 0.2 release; at L3 the
+UDP is in no grant: since L7 the world of a network grant names `wasi:sockets/udp` and
+`udp-create-socket`, because `std`'s sockets (through `wasi-libc`) can import them with TCP, and
+the host links them with UDP off, so every UDP call fails. The version is `0.2.12`, the current WASI 0.2 release; at L3 the
 component's imports are held to the world by package and interface name, with any `0.2`
 version, since WASI 0.2 releases only add to the interfaces. The folders, hosts, memory and time
 are not in the world: the host reads them from the idea at L3.
 
 The world is not given to a binding generator. A `wasm32-wasip2` program that uses only the
 standard library needs no `wit-bindgen`: `std` reaches WASI 0.2 itself, and the Rust toolchain
-makes the component. So the world needs no `wit/deps/` folder until a program uses WASI's HTTP
-world (L7), and it is the statement the component is held to at L3.
+makes the component. So the world needs no `wit/deps/` folder, and it is the statement the
+component is held to at L3. Since L7 a server takes its bindings from the crate `wasip2`
+(`wasip2::http::proxy::export!`), which carries WASI 0.2.12's own WIT, and a program that uses a
+component from another language takes the bindings of its interface from `wit-bindgen`'s
+`generate!` with the interface written inline; neither needs `wit/deps/`. The interfaces a
+trusted component exports are not in `world.wit`: `check` reads them from the component and
+holds the program's imports to the world and to them.
 
 **The build job.** With no findings and a `src/main.rs`, `check` starts a build in the
 background, in the program's folder, on a thread with one child process:
@@ -625,7 +674,10 @@ How each grant maps to the host:
 | ``- Writes: files in `<folder>` `` | the folder, preopened read-write, made when it is not there |
 | `- Memory:` | a `ResourceLimiter` refuses to grow a memory past it; the program stops and `run` replies `out_of_memory` |
 | `- Time:` | the store's epoch deadline (the time over 10 ms, plus one); the program stops and `run` replies `out_of_time` |
-| `- Connects to:` | not linked yet (L7); a program that imports sockets is refused at run |
+| `- Connects to:` (L7) | TCP on and UDP off; each granted `host:port` resolved when the run starts; the socket address check of `wasmtime-wasi` permits a connection only to those addresses, and the bind of the wildcard address that a connection makes; name lookup only when a granted host is a name |
+| `- Listens on:` (L7) | TCP on; a bind and a listen only on the granted ports, of `127.0.0.1` or of any local address; every client accepted |
+| `- Serves: HTTP on TCP port N` (L7) | the server is a component that exports `wasi:http/incoming-handler`; `wasmtime-wasi-http`'s synchronous bindings give it each request, with hooks of lengua's own that refuse every outgoing request; `run` and the tests give one request on the standard input and get the answer as HTTP/1.1 bytes; `lengua-run` serves `127.0.0.1:N`, one request at a time, each under the idea's time and memory |
+| `- Uses component:` (L7) | the host instantiates the component first, in the same store and under the same grants, and links each function of each interface it exports into the program's imports |
 
 Wasmtime keeps a preopened folder's paths inside it: `..` out of it, an absolute path, and a
 symbolic link that points out of it are refused (tested at L3).
@@ -666,6 +718,63 @@ closed the finding of L3 (section 10).
   and tests stand.
 - **A component built from another language** (C, Go, anything with a WASI 0.2 target) is linked
   through the component model. lengua did not build or check it, so it is labelled `trusted`.
+
+#### As built at L7
+
+**Applications of several modules.** A module is an idea in `ideas/<name>.md`, named in
+`- Modules:`, with its Rust file `src/<name>.rs` and its `mod <name>;` line in `src/main.rs`.
+Every check of L1 to L6 holds per module: STE, `# Structure` (rule 12) and the lint on each file,
+the call graph across all files, the tests of every idea, the mutants of every file (40 at most,
+spread over the functions of all of them), and one lock over every idea and file. **A module's
+examples run through the program's own entry** (its standard input, arguments, files, requests),
+against the one component: a module of a program has no entry of its own, and a Rust binary
+can't be linked into a test harness. The example `tally` is a program of three modules.
+
+**Libraries and their harness.** A library's examples are calls (`- Call:` and `- Expect
+value:`). When the library builds, `check` writes a harness package in
+`target/lengua/harness`: a binary that depends on the library as a path crate, with `use
+<library>::*;` and one line per example that prints the call's value with `{:?}`; it builds it
+for `wasm32-wasip2` with the library's target folder, holds its imports to the always set, seals
+it, and runs each example as the harness with the example's number as its argument (granted to
+the harness only). A call that does not build is the finding `harness-error` at its example.
+The mutants of a library are built into a harness of their own (`target/lengua/mutant-harness`,
+the package `<name>-mutant` under the crate name `<name>`), so the score of a library is the
+score of its examples. A library's label is its own, and its lock is of kind `library`.
+
+**A program that uses a library** names its folder in `- Uses:`. `check` reads the library's
+`idea.md`, verifies its lock under the user's key (`library-lock` when it is missing or when a
+file changed, `library-missing` when there is no `idea.md`), links it as a path crate, adds the
+SHA-256 of its lock to the job's key (so a library checked again builds the program again), and
+names the crate in the lint's list of declared crates. The reply's `libraries` lists each one
+with its own label, `index.md` has a `# Libraries` section, and the lock a `library` line. The
+mutants of the program use the library at its absolute path.
+
+**Network grants and fixtures.** `- Connects to:` and `- Listens on:` give `wasi:sockets` and
+lengua's socket address check (section 4, "The host"). An example gives a test server with
+``- Server `<host>:<port>`: "<answer>"`` and a test client with ``- Client `<port>`: "<text>"``
+and `- Expect answer:`; the ports of the examples in the repository are fixed and different
+(7801 to 7811), and a test server waits up to 10 s for its port. The examples `fetch` and
+`upper` show a connection and a listen, each granted and refused.
+
+**The HTTP world.** A server's idea has `- Serves: HTTP on TCP port N`, its Rust implements
+`wasip2::exports::http::incoming_handler::Guest` and calls `wasip2::http::proxy::export!`, with
+`- Uses crate: `wasip2` 2.0.1` (the current WASI 0.2 bindings, 2.0.1+wasi-0.2.12; the older
+`wasi` crate stopped at 0.14.7 for WASI 0.2.4). The host serves it with `wasmtime-wasi-http`
+(section 4, "The host"). The examples `greet` and `shop` are servers.
+
+**A component from another language.** ``- Uses component: `components/tax.wasm`, built from
+...`` names a component file in the folder. `check` compiles it with lengua's engine, holds its
+imports to the program's world (`component-import-ungranted`), reads the interfaces it exports
+and holds the program's imports to the world and to them, and seals it next to the program
+(`sealed-trusted` in the locks). The program imports the interface with `wit-bindgen`'s
+`generate!` and the interface's WIT inline (`- Uses crate: `wit-bindgen` 0.62.0`, the version
+`wasip2` 2.0.1 uses, so one `wit-bindgen` is in the graph). The host instantiates the component
+first and links its exports into the program's imports (no `wac`: the host's own linker does
+it). The reply's `components` lists it with the label `trusted`, a note says the program uses a
+trusted component, and `index.md` has a `# Components` section. The example `shop` uses
+`components/tax.wasm`, which CI builds from `rates.c` and `tax.wit` with wasi-sdk 34 and the
+`wit-bindgen` 0.62.0 command line, both pinned by SHA-256 and downloaded in CI only; no binary
+is in the repository.
 
 ### Crates: few, and only ones that build for WebAssembly
 
@@ -724,6 +833,21 @@ of an application don't send it to crates.io: reading and writing JSON, parsing 
 HTTP messages, decimal numbers, text and lines, sorting, CRC and hashes, dates and times. Each
 has its own idea, tests and lock, and builds for both targets. GPUI and GPUI Kit stay external:
 writing a UI framework is not lengua's work.
+
+Built at L7, in `libraries/` at the repository's root. Each is a lengua library on the standard
+library alone, with no recursion, no `unsafe` and every rule of section 5, checked to the label
+`checked` by the tests, and built for `wasm32-unknown-unknown` too by CI. A program names one
+with ``- Uses: `<path>/libraries/<name>` ``; the `build` skill (L9) will point to them.
+
+| Library | Exports |
+|---|---|
+| `json` (modules `read`, `write`) | `Value` (`Null`, `Bool`, `Number(String)`: the number's text, `Text`, `List`, `Object(Vec<(String, Value)>)`: fields in order), `Error` (`End`, `Unexpected(position)`, `Escape(position)`, `Number(position)`, `Deep`), `parse(&str) -> Result<Value, Error>` (RFC 8259, a stack of at most 512 frames), `write(&Value) -> String` (no spaces), `get(&Value, &str) -> Option<&Value>` |
+| `http` | `Request` (`method`, `target`, `headers`, `body`), `Response` (`status`, `reason`, `headers`, `body`), `Error`, `parse_request(&[u8])`, `parse_response(&[u8])`, `write_request(&Request) -> Vec<u8>`, `write_response(&Response) -> Vec<u8>`, `header(&[(String, String)], &str) -> Option<&str>` (any case), `decode_chunked(&[u8]) -> Result<(Vec<u8>, usize), Error>`, `encode_chunked(&[u8], usize) -> Vec<u8>` (RFC 9112) |
+| `decimal` | `Error` (`Empty`, `Invalid(position)`, `Overflow`, `TooPrecise`), `parse_integer(&str) -> Result<i64, Error>`, `parse_fixed(&str, places) -> Result<i64, Error>` (a number of the smallest units), `format_integer(i64)`, `format_fixed(i64, places)`, `add` and `multiply` (`Overflow` past `i64`) |
+| `text` | `lines(&str) -> Vec<String>` (with `\n` or `\r\n`), `split(&str, char)`, `words(&str)`, `trim(&str) -> String` (space, tab, line end, carriage return), `check_utf8(&[u8]) -> Result<(), position>`, `is_utf8(&[u8]) -> bool` (lengua's own check, held to `std`'s) |
+| `sort` | `stable_sort(&mut [T])`, `stable_sort_by_key(&mut [T], key)` (a bottom-up merge sort with one buffer), `binary_search(&[T], &T) -> Option<usize>` (the first equal item) |
+| `hashes` | `sha256(&[u8]) -> [u8; 32]`, `sha256_hex(&[u8]) -> String` (FIPS 180-4), `crc32(&[u8]) -> u32` (ISO 3309, `zlib`) |
+| `dates` | `Date` (`year`, `month`, `day`), `Error` (`Form(position)`, `Month`, `Day`, `Time`), `is_leap`, `days_in_month`, `days_from_civil(Date) -> i64` and `civil_from_days(i64) -> Date` (day 0 is 1970-01-01, the Gregorian calendar), `days_between`, `parse_date` and `format_date` (`YYYY-MM-DD`), `parse_timestamp` and `format_timestamp` (`YYYY-MM-DDTHH:MM:SSZ`, seconds from 1970) |
 
 ### The lock
 
@@ -809,6 +933,16 @@ hmac-sha256 2c5d…
 
 The lock holds the front end's compiled part and the one file when there is a front end (L8);
 until then the component is the one file.
+
+**Since L7:** `kind` is also `library`, the lock of a lengua library: its files, its `component`
+(the `.rlib` Cargo made) and no `sealed` line. A program's lock has, after its files, one
+``library <sha256> <folder>/lengua.lock`` line for each library it uses, one
+``trusted <sha256> <file>`` line for each component from another language, and after its own
+`sealed` line one `sealed-trusted` line for the sealed code of each such component. `verify`
+checks each `library` line's hash and then the library's own lock (kind `library`, under the same
+key), so a library whose files changed after its check refuses the program at `check` and at
+`run`; and it gives the sealed code of the trusted components with the program's. The tests' locks
+(`kind test`) carry the `sealed-trusted` lines too.
 
 **When `check` writes it.** In the same `check` call as the wiki, right after it, and only
 when the build job is `done` for the same key (the label in the wiki and in the lock is the one

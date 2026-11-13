@@ -115,3 +115,7 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
   into a date.
 - `tests/check.rs` and `tests/fixtures/`: a good program and a program with problems of every
   kind.
+- `library.rs` (since L7): `resolve` reads each `- Uses:` folder of the top idea as a lengua
+  library: its `idea.md`, its folder's name as the package, its lock verified with
+  `lock::verify` (kind `library`), its label and the SHA-256 of its lock; `description` reads the
+  library's description from its frontmatter.

@@ -81,7 +81,9 @@ pub(crate) fn request_bytes(test: &Test) -> Vec<u8> {
     out.into_bytes()
 }
 
-pub(crate) fn parse_response(bytes: &[u8]) -> Option<(u16, Vec<(String, String)>, String)> {
+type Answer = (u16, Vec<(String, String)>, String);
+
+pub(crate) fn parse_response(bytes: &[u8]) -> Option<Answer> {
     let end = bytes.windows(4).position(|w| w == b"\r\n\r\n")?;
     let head = String::from_utf8_lossy(bytes.get(..end)?).to_string();
     let body = String::from_utf8_lossy(bytes.get(end + 4..)?).to_string();
@@ -244,7 +246,7 @@ fn answers(test: &Test, got: &[Option<Vec<u8>>], out: &mut Vec<String>) {
     };
     match got.first() {
         Some(Some(bytes)) => {
-            out.extend(diff("the answer", wanted, &String::from_utf8_lossy(bytes)))
+            out.extend(diff("the answer", wanted, &String::from_utf8_lossy(bytes)));
         }
         _ => out.push("the client did not reach the program".to_string()),
     }

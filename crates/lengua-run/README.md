@@ -39,3 +39,7 @@ error through. See [Lengua3.md](../../Lengua3.md), section 4, "The lock" and "`l
   `OUT_OF_TIME`, `OUT_OF_MEMORY`, `TRAPPED`).
 - `tests/usage.rs`: the version, the usage line, a folder with no key or lock. The runs of real
   programs are in `lengua-mcp`'s `tests/check.rs`, which checks them first.
+
+Since L7, `lengua-run` links the trusted components that the lock seals, and a server (an idea
+with `- Serves: HTTP on TCP port N`) is served on `127.0.0.1:N` until the process is stopped,
+each request under the idea's time and memory.

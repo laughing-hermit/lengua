@@ -55,10 +55,10 @@ fn serve(listener: &TcpListener, answer: &[u8], stop: &AtomicBool, deadline: Ins
     }
 }
 
-fn client(port: u16, sent: Vec<u8>, stop: &AtomicBool, deadline: Instant) -> Option<Vec<u8>> {
+fn client(port: u16, sent: &[u8], stop: &AtomicBool, deadline: Instant) -> Option<Vec<u8>> {
     while !stop.load(Ordering::Relaxed) && Instant::now() < deadline {
         if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
-            let _ = stream.write_all(&sent);
+            let _ = stream.write_all(sent);
             let _ = stream.flush();
             let _ = stream.shutdown(Shutdown::Write);
             return Some(read_all(&mut stream));
@@ -88,7 +88,7 @@ impl Fixtures {
                 let port = *port;
                 let sent = sent.clone().into_bytes();
                 let flag = Arc::clone(&stop);
-                thread::spawn(move || client(port, sent, &flag, deadline))
+                thread::spawn(move || client(port, &sent, &flag, deadline))
             })
             .collect();
         Ok(Self {

@@ -28,6 +28,18 @@ component that `lengua-seal` loaded from sealed precompiled code. The grants and
 - Given `fixed`, when the program reads the clocks or random numbers, then it gets the fixed
   wall clock, the stepped monotonic clock and random bytes from a fixed seed.
 
+- Given a program with trusted components (`Program::trusted`), when it runs, then the host
+  instantiates each component first, in the same store and under the same grants, and links
+  every function of every interface it exports into the program's imports (since L7).
+- Given `- Connects to:` or `- Listens on:`, when the program uses `wasi:sockets`, then TCP is on,
+  UDP is off, the host resolves each granted `host:port` when the run starts, and its socket
+  address check permits a connection only to those addresses and a bind or a listen only on the
+  granted ports of `127.0.0.1` or of any local address (since L7).
+- Given a server (`- Serves: HTTP on TCP port N`), when `Host::run` gets a request on its
+  standard input, then the host reads it, gives it to the component's `wasi:http/incoming-handler`
+  through `wasmtime-wasi-http` (its synchronous bindings, with lengua's own hooks that refuse
+  every outgoing request), and returns the answer as HTTP/1.1 bytes with a `content-length`;
+  `Host::serve` does the same for each connection on `127.0.0.1:N` (since L7).
 ## Structure
 
 - `config`: the engine's `wasmtime::Config`: epoch interruption on, relaxed SIMD and
@@ -41,3 +53,15 @@ component that `lengua-seal` loaded from sealed precompiled code. The grants and
   `ending` reads how the run ended.
 - `Input`, `Ending`, `Outcome` (with `Outcome::refused`), `Streams` and `OUTPUT` are its input
   and result.
+- `Program` is what runs: the folder, the component, the trusted components and the build;
+  `prepare` makes the linker and the store, `link_trusted` links the trusted components,
+  `link_sockets` adds a `wasi:sockets` or `wasi:http` interface, `streams_of` gives the
+  standard streams, `trap_ending` reads a trap, and `exported_interfaces` names the interfaces a
+  component exports.
+- `network.rs`: `allow` sets TCP, UDP, name lookup and the socket address check from the grants;
+  `granted_addresses` resolves the granted hosts; `permitted` decides each use of an address.
+- `http.rs`: `Refuse` is the hooks that refuse outgoing requests; `Whole` is a request body in
+  memory; `Unpark` wakes the thread that reads the answer's body; `parse`, `head_end`,
+  `content_length`, `chunked` and `dechunk` read a request; `collect` reads the answer's body;
+  `answer_bytes` and `response_bytes` write the answer; `Host::answer` and `Host::handle` serve
+  one request; `Host::serve` and `read_request` serve a TCP port.

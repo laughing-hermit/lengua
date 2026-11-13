@@ -67,3 +67,6 @@ the tests run".
   arguments of assertions (`assertion_spans`), and spreads the cap over the functions; `apply`
   makes a mutant's text from its `Edit`s; `Mutant`, `Mutation`, `Site`, `OPERATORS` and
   `DEFAULTS` are its data, `joined` and `line_start` its helpers.
+- `declared` (since L7): reads the top-level items of one Rust file (their kind, name, line and
+  whether they are `pub`), so that `lengua-idea` holds each module to a `mod` line in
+  `src/main.rs` and each name of `- Exports:` to a `pub` item.

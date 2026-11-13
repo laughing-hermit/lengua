@@ -179,3 +179,11 @@ and 7.
   refused, `lengua-run` on `hello`, `files` (arguments and folders) and `count` (standard
   input), and `sleepy` (a sleep past its time, stopped by `run` and by `lengua-run`);
   `until_built` writes how long each job took to `target/tmp/lengua-timings.txt`.
+- `harness.rs` (since L7): `write` makes the harness of a library in `target/lengua/harness`
+  (or, for a mutant, `target/lengua/mutant-harness`): a binary package whose `main.rs` calls the
+  `Call` of each example on its own line, with the library's exports in scope, and prints the
+  value with `{:?}`; `manifest` and `main_text` are its two files, and `mapped` turns an error
+  of the harness's build into the finding `harness-error` at the example.
+- `fixtures.rs` (since L7): `Fixtures::start` binds each `Server` of an example (waiting up to
+  10 s for the port) and starts each `Client`, which connects to the program's port; `finish`
+  stops them and gives what each client got.

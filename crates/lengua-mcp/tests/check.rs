@@ -1062,7 +1062,9 @@ fn an_application_of_three_modules_is_checked_as_one_file() {
 }
 
 fn repo(path: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(path)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(path)
 }
 
 fn bundle(test: &str, parts: &[&str]) -> PathBuf {
@@ -1094,7 +1096,9 @@ fn shared_library(name: &str) {
     assert!(
         reply["build"]["component"]
             .as_str()
-            .is_some_and(|c| c.ends_with(".rlib")),
+            .is_some_and(|c| Path::new(c)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("rlib"))),
         "{reply:#}"
     );
     let lock = fs::read_to_string(folder.join("lengua.lock")).expect("the lock");
@@ -1173,7 +1177,10 @@ fn a_program_uses_a_checked_library_and_refuses_one_that_changed() {
     let code = fs::read_to_string(library.join("src/main.rs")).expect("the code");
     fs::write(library.join("src/main.rs"), format!("{code}\n")).expect("a change");
     let refused = server.check(7000, &program);
-    assert!(codes(&refused).contains(&"library-lock".to_string()), "{refused:#}");
+    assert!(
+        codes(&refused).contains(&"library-lock".to_string()),
+        "{refused:#}"
+    );
     let run = server.run(7001, &program, &json!({"stdin": "1\n"}));
     refused_for(&run, "the library of `../../libraries/decimal/lengua.lock`");
 }
@@ -1342,13 +1349,13 @@ fn the_shop_is_one_file_of_three_modules_two_libraries_and_a_c_component() {
         .spawn()
         .expect("lengua-run starts");
     let started = Instant::now();
-    let served = http_get(7811, "/total?tea=1");
+    let answer_of_lengua_run = http_get(7811, "/total?tea=1");
     let milliseconds = started.elapsed().as_millis();
     let _ = child.kill();
     let _ = child.wait();
     assert!(
-        served.ends_with("{\"net\":\"2.50\",\"tax\":\"0.20\",\"total\":\"2.70\"}"),
-        "{served}"
+        answer_of_lengua_run.ends_with("{\"net\":\"2.50\",\"tax\":\"0.20\",\"total\":\"2.70\"}"),
+        "{answer_of_lengua_run}"
     );
     let log = Path::new(env!("CARGO_TARGET_TMPDIR")).join("lengua-timings.txt");
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(log) {
