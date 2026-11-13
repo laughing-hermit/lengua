@@ -1,7 +1,9 @@
 # lengua 3
 
-The design of lengua 3: a fresh start, in which the agent writes Rust, Rust is compiled to
-WebAssembly, and the idea file is the program's only documentation.
+The design of lengua 3: a fresh start, in which lengua is a full-stack framework and an AI
+language. The agent writes Rust for the back end, compiled to WebAssembly, and TypeScript for
+the Next.js front end, carried in the same one file; and the idea file is the program's only
+documentation.
 
 Decided by the owner on 2026-11-13. lengua 2 (hand-written WebAssembly text, `main.wat`) is
 finished and kept at the tag `lengua2-final`; main starts over from an empty tree.
@@ -68,14 +70,16 @@ What that means for lengua 3:
 
 - **A person writes what they want; the agent is the compiler.** The person states a request.
   The agent writes an idea file: what the program does, its behaviours as tests, and what it may
-  touch. Then the agent writes the Rust that does it. lengua checks the Rust against the idea
+  touch. Then the agent writes the code that does it: Rust for the back end, TypeScript for the
+  front end. lengua checks the code against the idea
   and runs it.
 - **The idea file is the source of truth and the only documentation.** Code files have no
   comments, in Rust and in TypeScript. Every function and component the code has is named and
   described in the idea, and nothing else is. `check` holds the two to each other, and the lock
   refuses one changed without the other.
 - **Runs anywhere.** What lengua builds is one WebAssembly component: the same bytes on every
-  CPU and every operating system.
+  CPU and every operating system. Its front end runs in any current browser, or in Electron for a
+  desktop app; only a part that truly needs it is native, declared and labelled.
 - **One application, one file.** A whole application, however many modules it has, compiles
   into one `.wasm` file, signed by one lock: the server from Rust, and the front end's static
   export carried inside it and served by it. Its idea files are that file's documentation, and
@@ -86,7 +90,8 @@ What that means for lengua 3:
   score, the lock.
 - **Maximum compatibility, few dependencies.** One WebAssembly file runs on any computer,
   whatever its operating system and CPU. Always minimise external dependencies: the standard
-  library first, and an external crate only when it merits it (section 4).
+  library first for Rust, the fewest npm packages (through pnpm) for the front end, each only when
+  it merits it, downloaded only when an app needs it, pinned, locked and counted (section 4).
 - **The machine checks the AI's work.** The AI is fast and tireless but makes mistakes, so
   nothing it writes is trusted because it wrote it. Trust comes from the compiler, the rules,
   the tests and the host, and lengua says plainly how far each check went.
@@ -163,12 +168,13 @@ libraries are also built for WebAssembly, so the checker could one day run as We
 3. **The watch list:** wasi-gfx and wasi-nn would let back-end GPU work return to the one
    WebAssembly file (section 10).
 
-The `vision` skill tells the person up front which of these an idea falls into.
+The `vision` skill tells the person up front which of these an idea falls into, and which row
+of "Which part does what" each part of it is.
 
 **Where it runs, said plainly.** The user is never surprised:
-- before any code is written, the `write-idea` skill says whether the request will be one
-  WebAssembly file or needs a native part, and why, and offers a WebAssembly alternative when
-  one exists;
+- before any code is written, the `vision` skill (and the `write-idea` skill for a small request
+  with no vision) says whether the request will be one WebAssembly file, a web app, a desktop
+  app, or needs a native part, and why, and offers a WebAssembly alternative when one exists;
 - the idea file says it (WebAssembly is the default; native parts are declared);
 - `check` refuses code that needs native without the idea declaring it, and says what needs it;
 - every reply and `index.md` start with a "Where it runs" line, for example "One WebAssembly
@@ -208,9 +214,9 @@ section to the same list, so they can't drift apart.
 
 | # | Principle | Do | Don't |
 |---|---|---|---|
-| 1 | An AI language | Write the idea as the source and the only documentation; let the AI compile it to Rust; let the machine verify it | Trust code because an AI wrote it; document anything outside the idea |
-| 2 | Maximum interoperability | Build one file that runs on any OS and CPU | Build per system when WebAssembly can do the job |
-| 3 | WebAssembly first | Make every back-end part WebAssembly; do GPU work for the screen (3D, charts, effects, small and medium AI models) in the front end with WebGPU; declare a native Rust part only for a named limit (large local models, training, heavy compute, shared-memory threads, a device), with its reason | Go native for speed, convenience, a window, front-end GPU work, or a crate that only builds natively when a WebAssembly path exists |
+| 1 | An AI language | Write the idea as the source and the only documentation; let the AI compile it to Rust for the back end and TypeScript for the front end; let the machine verify both | Trust code because an AI wrote it; document anything outside the idea |
+| 2 | Maximum interoperability | Build one file that runs on any OS and CPU, whose front end opens in any current browser and in Electron | Build per system when WebAssembly can do the job |
+| 3 | WebAssembly first | Make every back-end part WebAssembly; do GPU work for the screen (3D, charts, effects, small and medium AI models) in the front end with WebGPU; declare a native part only for a named limit (back-end GPU work: large local models, training, heavy compute; the Electron shell of a desktop app; shared-memory threads; a device), with its reason; say for each part which row of "Which part does what" it is | Go native for speed, convenience, front-end GPU work, or a crate that only builds natively when a WebAssembly path exists |
 | 4 | Nothing unless absolutely necessary | Use the standard library, then lengua's shared libraries, then the agent's own code; take a pure-Rust crate or an npm package only when it merits it, declared with its reason and pinned; download front-end tools only when the app needs them | Add a crate or a package to save a few hundred lines; take a crate that wraps C when a pure-Rust one exists; bundle tools an app does not use; grant access the program doesn't need |
 | 5 | Full stack, web first | Put the Next.js front end, the server, storage, logins and AI calls in the one file; keep AI keys on the back end | Split one application into separate deployables; use a Next.js feature that needs a Node server; call a model from the browser with a key |
 | 6 | The Power of 10 | Plan small functions, bounded loops, plain data, every error and promise handled, in Rust and in TypeScript | Plan recursion, unbounded loops, global state, `unwrap`, `unsafe`, `any`, casts, a floating promise |
@@ -231,7 +237,7 @@ code, and again whenever a change alters what the program does or may reach. It 
 4. When the person approves, the agent tells `check`, and `check` writes the hash of the
    approved ideas into the lock. Nothing else is asked of the person.
 5. The `build` skill starts only from an approved idea. If an idea's behaviours, grants, native
-   parts or crates change after approval, `check` refuses to build until the person approves
+   parts, crates or npm packages change after approval, `check` refuses to build until the person approves
    again; a change to wording or `# Structure` alone does not need it.
 
 What lengua can't do: it can't prove a person, and not the agent, said yes. The skill asks,
@@ -263,6 +269,10 @@ In lengua it is a grant like any other.
   refuses anything else); the Power of 10's "every result handled" applies.
 - **Still one WebAssembly file.** The interface is a WIT interface the host links only with
   the grant. (`wasi-nn` is for running a model inside the program; it is on the watch list.)
+- **The front end never holds a key.** Its AI UI (json-render, section 4) calls the back end,
+  and the back end asks a cloud or local model under this grant, so AI keys never reach the
+  browser. A small model that runs inside the browser on WebGPU ("Which part does what") needs no
+  key and no grant.
 - **A shared library, `ai`,** on the standard library alone: prompt templates, structured
   replies, retries, and steps chained one after another.
 - **Where it runs and what it costs are said plainly:** the "Where it runs" line names the
@@ -279,17 +289,18 @@ One principle runs through lengua:
    pinned in the app's `pnpm-lock.yaml`, signed in the lock and cached for later builds.
 2. No native builds unless absolutely necessary.
 3. No access unless the idea grants it.
-4. No `unsafe` code: lengua's single `unsafe` call runs only after verification.
-5. No randomness or real time unless granted.
-6. No memory or time beyond what the idea declares.
+4. No `unsafe` code, and in TypeScript none of the ways a page runs text as code: lengua's
+   single `unsafe` call runs only after verification.
+5. No randomness or real time unless granted (on the back end; the browser holds the front end).
+6. No memory or time beyond what the idea declares (on the back end).
 7. No unchecked code unless it is labelled `trusted`.
 8. No new grammar in the idea file unless something can't be said without it.
 9. No human steps unless only a person can take them.
 
-And three with no exceptions: no comments in code; no code without its idea and no idea without
-its code; no change without a new check.
+And three with no exceptions: no comments in code, Rust or TypeScript; no code without its idea
+and no idea without its code; no change without a new check.
 
-### Why Rust compiled to WebAssembly
+### Why Rust compiled to WebAssembly, and Next.js for the front end
 
 - **The AI knows Rust well**, far better than WebAssembly text. lengua 2's scale test (a web
   server of 3,638 lines of WebAssembly text) showed the AI could write it, but the bookkeeping
@@ -304,6 +315,10 @@ its code; no change without a new check.
 - **Interoperability.** WASI is a standard interface and the component model is a standard way
   to link components. A component built from another language can be linked with a lengua
   program, and a lengua program can be used by other hosts.
+- **TypeScript and Next.js are where AI front ends are made.** The AI knows them as well as Rust;
+  shadcn/ui and Vercel's AI-UI tools are made for them; and a static export is plain files that
+  the one WebAssembly file can carry and serve, so the front end costs no second deployable.
+  `tsc` at its strictest and lengua's own TypeScript checks give it the same bar as the Rust.
 
 ## 2. What lengua 3 keeps from lengua 2, as ideas
 
@@ -318,7 +333,7 @@ start" above).
 - **Trust labels:** every result says how far the checks went.
 - **The lock:** one file ties the idea, the code and the build together, signed with the user's
   key.
-- **The wiki and the log** (Karpathy's LLM wiki): every idea, the top one and each module's, is a
+- **The wiki and the log** (Karpathy's LLM wiki): every idea, the top one, each module's and each screen's, is a
   page; `check` keeps an `index.md` and an append-only `log.md`, so the documentation can't
   drift from the code.
 - **Open Knowledge Format** frontmatter on every idea, module ideas included, so programs and
@@ -349,14 +364,15 @@ start" above).
 
 ### The plugin
 
-lengua is an Agent Plugin: skills and one Rust MCP server, nothing else.
+lengua is an Agent Plugin: three skills (`vision`, `write-idea`, `build`) and one Rust MCP server
+(`lengua-mcp`), with the lean runner `lengua-run`; nothing else.
 
 | Part | What it does |
 |---|---|
 | Skill `vision` | Turns what a person wants to build into `vision.md`: the best lengua solution for it, judged against lengua's principles and their do's and don'ts |
 | Skill `write-idea` | Turns an approved `vision.md` (or a small request) into `idea.md` |
-| Skill `build` | Turns `idea.md` into Rust in `src/` |
-| MCP tool `check` | Checks the idea, generates the build files, builds, checks the rules, runs the tests, writes the lock and the wiki |
+| Skill `build` | Turns the ideas into code: Rust in `src/` for the back end, TSX in `web/screens/` for the front end |
+| MCP tool `check` | Checks the ideas, generates the build files (Rust and front end), builds, checks the rules on Rust and TypeScript, runs the tests, writes the lock and the wiki |
 | MCP tool `run` | Runs a checked program under its grants |
 | `lengua-run` | The lean runner, for running a checked program from a shell |
 
@@ -427,11 +443,13 @@ okf: ...                      Open Knowledge Format frontmatter
 # Behaviours                  Given / When / Then, each with its examples; each is a test
 # Constraints                 grants (- Reads: files in ..., - Connects to: ...),
                               memory, time, exports, modules
-# Structure                   every function of the module, one sentence each
+# Structure                   every function (and, in a screen, component), one sentence each
+# Links                       written by check (since L8): the ideas, routes and screens it meets
 ```
 
 `# Structure` is new. It is how the ideas become the documentation: `check` reads every
-function in a module's Rust file and every name in that module's `# Structure`, and each must
+function in a module's Rust file, and every function and component in a screen's TSX file, and
+every name in that idea's `# Structure`, and each must
 have the other.
 
 ### The idea file's grammar
@@ -468,7 +486,9 @@ space or `-`), a blank line or a `#` comment. A key may be there one time only.
 **The sections** are level-1 headings, in this order, each one time: `# Purpose`,
 `# Behaviours`, `# Constraints`, `# Structure`. Every idea has Purpose, Behaviours and
 Structure; the top idea has Constraints too, and a module or screen idea may have them. Only
-blank lines come before `# Purpose`. A heading inside a fenced block is not a section.
+blank lines come before `# Purpose`. A heading inside a fenced block is not a section. Since L8
+a last section, `# Links`, is written by `check` and read by nothing: it is left out of the idea's
+hash and its checks, like the frontmatter.
 
 **`# Purpose`**: one paragraph or more of description in STE, with no headings and no fenced
 blocks. A list item (`- ` or `* `) counts as its own paragraph. Its first sentence is the
@@ -922,9 +942,17 @@ background, in the program's folder, on a thread with one child process:
   (section 5);
 - then `cargo build --release --target wasm32-wasip2 --offline --message-format=short`;
 - since L5, when the component checks pass, the tests (`testing`), then the mutants
-  (`mutating`), on the same thread (section 7).
+  (`mutating`), on the same thread (section 7);
+- since L8, for an application with screens, before the steps above and in the state
+  `building`: the front end in `target/lengua/web/` (a copy of `web/` without `node_modules`),
+  with `pnpm install --frozen-lockfile` (or `pnpm install` when there is no
+  `web/pnpm-lock.yaml` yet, whose lock is then copied back to `web/`), `tsc --noEmit`, the screen
+  tests, `next build` (the export in `target/lengua/web/out`), and the crate `lengua_web` written
+  in `target/lengua/assets`; a failure is a finding (`ts-error`, `test-failed`, `web-build`) and
+  the state `build_failed` or `tests_failed`; the screens' mutants run with the Rust ones.
 
-The job's key is the SHA-256 of `Cargo.toml`, `wit/world.wit`, every file in `src/` and,
+The job's key is the SHA-256 of `Cargo.toml`, `wit/world.wit`, every file in `src/`, since L8
+every file of `web/` (but `node_modules`, `.next` and `out`), and,
 since L5, the tests of every idea with the grants (so a change of an example runs the tests
 again, and a change of the purpose alone does not). A
 `check` with the same key replies with the job's state and starts nothing; a `check` with a
@@ -1434,7 +1462,8 @@ Decided at L1 (2026-11-13). The folder is an OKF v0.2 bundle: every idea is a co
   frontmatter (OKF allows this key in the root index), then up to three sections, `# Program`,
   `# Modules` and `# Screens`, with one line per idea: ``* [<title>](<file>) - <description>
   Label: `<label>`.`` The program's title is the folder's name; a module's or a screen's is its
-  name.
+  name. Since L8 the sections are those of "The two sides in one wiki" below: `# Back end`, `# Front
+  end`, `# Interface` and `# Dependencies`.
 - **`log.md`** starts with `# Log`. OKF orders a log newest first, under `## YYYY-MM-DD`
   headings, so a check puts its entry at the top of today's heading, or adds today's heading
   above the older ones. "Append-only" means that no entry already there is changed or removed.
@@ -1490,10 +1519,11 @@ it reads any code.
 - **OKF conformance** covers the screens and `api.md` (both have frontmatter with a `type`), and
   the tree check of L13 covers the `web/` side too.
 
-## 5. The Power of 10, for Rust compiled to WebAssembly
+## 5. The Power of 10, for Rust and TypeScript
 
 NASA's [Power of 10](https://en.wikipedia.org/wiki/The_Power_of_10:_Rules_for_Developing_Safety-Critical_Code),
-adapted for Rust that runs as a WebAssembly component and is written by an AI.
+adapted for Rust that runs as a WebAssembly component and is written by an AI, and held the same
+way on the TypeScript of the front end (below, "The same checks for Rust and TypeScript").
 
 | # | NASA's rule | lengua 3's rule | Held by |
 |---|---|---|---|
@@ -1659,8 +1689,10 @@ NaNs are canonical.
 | `checked` | Built by lengua, every rule holds, every test passes, and the mutation score is at or above the threshold, 80% |
 | `tested` | Built by lengua, every rule holds and every test passes, but the tests are weak: the mutation score is under 80% |
 | `trusted` | A component lengua did not build; it runs under the grants, and its tests run, but nothing about its code is checked (L7) |
+| `native` | A part that runs outside the sandbox (back-end GPU work, the Electron shell, a device, shared-memory threads), declared with `- Native:`; the same checks hold, and it can do what the user's account can (L10) |
 
-`check`'s reply and the wiki show the label of every program. A program that uses a `trusted`
+`check`'s reply and the wiki show the label of every program, its Rust and its TypeScript
+together. A program that uses a `trusted`
 component says so.
 
 Decided at L5 (2026-11-13):
@@ -1860,8 +1892,8 @@ Each one is green on all five runners before the next starts.
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | A changed idea or file is refused at run |
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries (JSON, HTTP, decimal, text, sorting, hashes, dates); a component from another language | An application of several module ideas builds to one file; it uses a library and a C component, each labelled |
 | L8 | The Next.js front end: screens in TSX with shadcn/ui, built with pnpm and Turbopack, exported statically and embedded in the one file; the generated `web/` files held; TypeScript checked to the same rules as Rust (`oxc_parser`), `tsc` at its strictest; a typed client generated from the server's routes; several screens with navigation and forms, their behaviours as component tests, a real browser and its accessibility tree in CI; the mutation score over both languages; one AI-UI component from Vercel's tools (json-render) wired to the back end; `doctor` checks Node.js and pnpm | A web application with Next.js screens ships as one file, is `checked`, and opens in a browser |
-| L9 | Full stack: programs that ask AI models (`- Asks: an AI model`, with call and token limits; the host's interface to a cloud or local model, structured and streamed replies; model answers given in the tests; the `ai` shared library; json-render's answers made by a real model); storage granted by the idea; outgoing HTTP calls (other services and AI models, with streaming replies); secrets given by the host and never written to the lock or logs; logins (sessions, password hashing, tokens) as a shared library; logs and errors of a running app; an embeddings and vector-search shared library; a tested way to deploy | A full-stack application (front end, server, storage, logins, an AI call) is `checked` and runs as one file |
-| L10 | Native parts and desktop apps: `- Native:` with a named reason (large local models, training, heavy compute on the GPU; shared-memory threads; a device), built for the user's system and on five runners, the same checks, the `native` label, the "Where it runs" line; desktop apps in Electron (downloaded only for them), showing the same front end with the same WebAssembly back end run by `lengua-run` beside it, and a native part started beside it when the idea has one; what a native part can reach, written down | A native part is built, checked and labelled; an undeclared native need is refused; an example desktop app runs on five |
+| L9 | Full stack: programs that ask AI models (`- Asks: an AI model`, with call and token limits; the host's interface to a cloud or local model, structured and streamed replies; model answers given in the tests; the `ai` shared library; json-render's answers made by a real model); storage granted by the idea; outgoing HTTP calls (other services and AI models, with streaming replies); secrets given by the host and never written to the lock or logs; logins (sessions, password hashing, tokens) as a shared library; the front end and the back end sharing more types (the generated client grown to every route and error shape); logs and errors of a running app; an embeddings and vector-search shared library; a tested way to deploy; lengua libraries that use other lengua libraries; a server that answers requests at the same time (concurrent serving) | A full-stack application (front end, server, storage, logins, an AI call) is `checked` and runs as one file |
+| L10 | Native parts and desktop apps: `- Native:` with a named reason (large local models, training, heavy compute on the GPU; the Electron shell of a desktop app; shared-memory threads; a device), built for the user's system and on five runners, the same checks, the `native` label, the "Where it runs" line; desktop apps in Electron (downloaded only for them), showing the same front end with the same WebAssembly back end run by `lengua-run` beside it, and a native part started beside it when the idea has one; what a native part can reach, written down | A native part is built, checked and labelled; an undeclared native need is refused; an example desktop app runs on five |
 | L11 | The skills: a new `vision` skill (the best lengua solution for an idea, `vision.md`, the principles with their do's and don'ts in `references/principles.md`, the GPU case said up front, approved by the person) and `write-idea` and `build` rewritten for Rust, Next.js, full stack, desktop and native parts; the person reads the idea and approves it in their own words before any code, and again for changes (the approved hash in the lock, `build` refused without it); "Where it runs" before any code, pure Rust first, the merit test for crates and npm packages, crates that aren't pure Rust flagged; the Agent Plugins version settled; a product test in an interactive session | An agent goes from a request to a `checked` full-stack application with the plugin alone |
 | L12 | The scale test: a full-stack application (Next.js front end, server, storage, logins, an AI call) in one file, built and then changed three times | A report of cycles and breakages, next to lengua 2's 3,638-line record |
 | L13 | The finish line: trace and profile; a bench of lengua's overhead; release archives for the five systems with install steps; every path a milestone listed as never exercised, now exercised or its reason written; WASI 0.3 checked again; every document current; a short guide to the owner's own steps (publishing, loading the plugin, branch protection) | The finish-line run green on five; only main and tags remain |
