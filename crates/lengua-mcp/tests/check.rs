@@ -166,10 +166,16 @@ fn the_server_lists_the_check_tool() {
         .find(|t| t["name"] == "run")
         .expect("the run tool");
     for name in ["folder", "arguments", "stdin", "fixed"] {
-        assert!(run["inputSchema"]["properties"][name].is_object(), "{run:#}");
+        assert!(
+            run["inputSchema"]["properties"][name].is_object(),
+            "{run:#}"
+        );
     }
     for name in ["state", "exit_code", "stdout", "stderr", "message"] {
-        assert!(run["outputSchema"]["properties"][name].is_object(), "{run:#}");
+        assert!(
+            run["outputSchema"]["properties"][name].is_object(),
+            "{run:#}"
+        );
     }
 }
 
@@ -538,7 +544,10 @@ fn the_clock_and_random_numbers_are_fixed_for_tests_and_real_when_granted() {
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 2, "{text}");
     assert_eq!(lines.first().copied(), Some("1767225600"), "{text}");
-    assert!(lines.get(1).is_some_and(|l| l.parse::<u64>().is_ok()), "{text}");
+    assert!(
+        lines.get(1).is_some_and(|l| l.parse::<u64>().is_ok()),
+        "{text}"
+    );
     let live = server.run_to_end(7000, &folder, &json!({}));
     let seconds: u64 = live["stdout"]
         .as_str()

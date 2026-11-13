@@ -9,8 +9,8 @@ next starts (Lengua3.md, section 8).
 |---|---|---|
 | L0 | Tag `lengua2-final`; empty main; a new Cargo workspace; CI on five runners | Landed on main at bd29290 (run 43371160450, green on five) |
 | L1 | The idea file: reader, STE check, test format, `# Structure`, OKF, the wiki | Landed on main at c3d1db1 (run 43376901162, green on five) |
-| L2 | Generate `Cargo.toml` and the world; build in the background; `doctor` | Done on `wip/l2`; the five-runner landing run is named in the landing report |
-| L3 | The host on the component model: standard input and output, arguments, files, clock, random | Not started |
+| L2 | Generate `Cargo.toml` and the world; build in the background; `doctor` | Landed on main at a9aad3e (run 43380465318, green on five) |
+| L3 | The host on the component model: standard input and output, arguments, files, clock, random | Done on `wip/l3`; the five-runner landing run is named in the landing report |
 | L4 | The Power of 10 lint and the component checks | Not started |
 | L5 | Tests from the idea, generated cases, mutation score, trust labels | Not started |
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | Not started |
@@ -140,6 +140,51 @@ next starts (Lengua3.md, section 8).
 - **2026-11-13, L2: CI lists the imports of the built `hello.wasm`** (the `wasi:` names in the
   binary) after the tests, as evidence for L3's import check.
 
+- **2026-11-13, L3: a grant controls what a program can reach, not what `std` imports.** The
+  world's always set holds what Rust 1.100's `std` imports with no grant (`wasi:cli/environment`,
+  `stdin`, `terminal-input`, `terminal-stdin`, `wasi:clocks/monotonic-clock`), and the host
+  links them with nothing behind them unless granted: no arguments, no environment variables,
+  an empty standard input, no terminal, a monotonic clock that moves 1 ms at each read.
+  `- Reads: standard input` and `- Reads: arguments` now add no interface; `- Reads: the
+  clock` adds `wasi:clocks/wall-clock`. Every other interface is refused at check
+  (`import-ungranted`) and not linked at run. Details: Lengua3.md, section 4.
+- **2026-11-13, L3: Wasmtime 50.0.1, pinned `=50.0.1`** (still the latest 50.x; 51.0.0 is at
+  rc.1). Lengua's dependencies grow by three, each with its reason:
+  - `wasmtime` 50.0.1, default features off, `cranelift`, `runtime`, `std`,
+    `component-model`: the host, the component model and the compiler. No cache, Winch,
+    parallel compilation (`rayon`), GC, `wat` or profiling.
+  - `wasmtime-wasi` 50.0.1, default features off, `p2`: WASI 0.2 (no `p1`, no `p3`); it brings
+    `tokio` (with `rt-multi-thread`, `time`, `net`, `io-util`, `io-std`, `sync`), `bytes`,
+    `futures`, `async-trait`, `tracing`, `bitflags`, `url`, `rand`, `thiserror`, `rustix` and,
+    on Windows, `windows-sys`.
+  - `wasmtime-wasi-io` 50.0.1, `std`: already brought by `wasmtime-wasi`; named because
+    `wasi:io/error`'s `add_to_linker` is only there.
+  - What they bring, counted in the `Cargo.lock` that the lockfile job resolved (run
+    43383628628): the lock grows from 93 packages to 208, 115 new, for every target together.
+    Wasmtime's own (`wasmtime-environ`, `wasmtime-internal-*` for the core, Cranelift, fibers,
+    the unwinder, the component macros and `wit-bindgen`), Cranelift's 12 crates and
+    `regalloc2`, `pulley-interpreter`, `wasmparser`, `wasm-encoder`, `wit-parser`,
+    `wit-component`, `object`, `gimli`, `addr2line`, `postcard`, `semver`, `encoding_rs`,
+    `rustix`, `memfd`, `mach2`, `rand` with `chacha20`, `url` with the `icu_*` and `zero*`
+    crates of `idna`, `sha2`, `anyhow`, and smaller ones.
+- **2026-11-13, L3: the host is a module of `lengua-mcp`** (`host.rs`, `runs.rs`): one engine
+  with epoch interruption and a 10 ms ticker thread; a linker per run with only the world;
+  a `ResourceLimiter` of lengua's own for `- Memory:`; the epoch deadline for `- Time:`.
+  No `unsafe`.
+- **2026-11-13, L3: `run {folder, arguments?, stdin?, fixed?}`.** `fixed` is a fourth input,
+  not in the plan, so the determinism the tests need is there and tested now. Input that the
+  idea does not grant is refused, not dropped. A run waits up to 30 s, then replies `running`;
+  the same input waits for the same run.
+- **2026-11-13, L3: files are preopened under the folder's own name**, read-only for
+  `- Reads:`, read-write for `- Writes:` (made when missing); a read folder that is not there
+  is a refusal.
+- **2026-11-13, L3: the component check is in the build job** (Wasmtime compiles the
+  component once, by SHA-256, and `run` reuses it); a library (`.rlib`, L7) is not checked.
+- **2026-11-13, L3: seven examples**, each with its own idea: `echo` (arguments), `count`
+  (standard input), `files` (a read and a write folder), `clock` (clock and random numbers),
+  `ungranted` (a file and random numbers with no grant), `forever` (the time limit), `greedy`
+  (the memory limit).
+
 ## Runs
 
 The five-runner run a landing rests on is at the head it tests, so it is named in the landing report and added here at the next milestone.
@@ -156,9 +201,13 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-13 | [43376901162](https://github.com/laughing-hermit/lengua/actions/runs/43376901162) | wip/l1 c3d1db1 | test, all five | Green on five: the L1 landing run |
 | 2026-11-13 | [43379311761](https://github.com/laughing-hermit/lengua/actions/runs/43379311761) | wip/l2 371f8dc | test, linux-x86_64 | Failed only on format (a patch, applied); tests green: 58 + 8 + 4 + 9 + 2 + 2 passed, hello world built in about 2 s; `hello.wasm` imports listed (Lengua3.md, section 10) |
 | 2026-11-13 | [43379930462](https://github.com/laughing-hermit/lengua/actions/runs/43379930462) | wip/l2 e340eb0 | test, linux-x86_64 | Green: format, lockfile, clippy, the tests (hello world built, a compile error mapped to `src/main.rs` line 2, a rebuild after a change, a hand-edited `Cargo.toml`, no toolchain, `doctor`), binary built |
+| 2026-11-13 | [43380465318](https://github.com/laughing-hermit/lengua/actions/runs/43380465318) | wip/l2 a9aad3e | test, all five | Green on five: the L2 landing run |
 
 ## What the permission checks refused
 
 - **2026-11-13, L2:** a shell command of the builder that ended in `python3 --version` was
   refused. It was a mistake: this computer runs no interpreter, not even for a version. Nothing
   needed it; the work went on with the editor's tools and `sed`.
+- **2026-11-13, L3:** a shell command of the builder that began with `python3 --help` (a slip,
+  before a `grep`) was refused. Again a mistake, not a need: the edit went on with the editor's
+  tools.

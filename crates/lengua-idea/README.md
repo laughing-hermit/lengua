@@ -31,11 +31,16 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
 
 ## Structure
 
-- `check` (`lib.rs`): finds the idea files, reads each one, links the modules, sorts the
-  findings and, with none, makes the generated files and writes them with the wiki.
-- `Finding`, `Note`, `Report` (`lib.rs`): the reply of `check`.
+- `check` (`lib.rs`): with `prepare`, finds the idea files, reads each one, links the modules,
+  sorts the findings and, with none, makes the generated files; then writes them with the wiki.
+- `program` (`lib.rs`): does what `check` does without writing anything, for the host's `run`.
+- `Finding`, `Note`, `Report` (`lib.rs`): the reply of `check` and `program`.
 - `Sink::new`, `Sink::add` (`lib.rs`): collect the findings of one file.
-- `Build`, `sha256_hex` (`lib.rs`): what `check` gives the build job, and the SHA-256 of bytes.
+- `Build`, `build`, `sha256_hex` (`lib.rs`): what `check` gives the build job and the host,
+  and the SHA-256 of bytes.
+- `Grants`, `Folder`, `grants` (`lib.rs`): the top idea's grants as the host reads them: standard
+  input, arguments, the clock, random numbers, the folders (read or read-write), the hosts, the
+  memory in bytes and the time in milliseconds.
 - `markdown_files`, `discover`, `source_file`, `concept`, `read_page`, `link` (`lib.rs`): find
   the ideas, read one, and hold the `- Modules:` and `- Uses:` lines to the files.
 - `frontmatter.rs`: `split` reads the frontmatter and `Front::render` writes it back with
@@ -46,10 +51,12 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
   `state_value`, `values`, `key_place`, `range`, `integer_range`, `text_range`,
   `template_names` and `templates` their items.
 - `constraints.rs`: `parse` and `Reader::item` read the constraints; `module_name`, `names`,
-  `reads`, `files_in`, `host_port`, `amount`, `semver` and `crate_line` check their values.
+  `reads`, `files_in` (with `folder`), `host_port`, `amount`, `semver` and `crate_line` check
+  their values, and keep the folders, the hosts, the memory and the time.
 - `structure.rs`: `parse` reads the structure; `function_name` checks a name.
 - `generate.rs`: `plan` makes the text of `Cargo.toml` (`cargo_toml`, `Package`) and of
-  `wit/world.wit` (`world`, with the interfaces of each grant from `interfaces`), checks the
+  `wit/world.wit` (`world` and `world_names`: the always set, then the interfaces of each
+  grant from `interfaces`), checks the
   package's name (`package_name`) and the crates (`crates`), and holds the files there
   (`held`, `first_difference`); `artifact` names the built file and `inputs` (with `collect`)
   gives the build's key.

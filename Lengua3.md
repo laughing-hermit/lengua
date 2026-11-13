@@ -387,16 +387,24 @@ The user needs Rust and its `wasm32-wasip2` and `wasm32-unknown-unknown` targets
 
 ### Grants become the component's world
 
-The idea's grants generate the WIT world in `wit/world.wit`. The world imports only the WASI
-interfaces the grants allow: standard output always; standard input, arguments, the clock,
-random numbers, files and sockets only when granted.
+The idea's grants generate the WIT world in `wit/world.wit`. **A grant controls what a program
+can reach, not what the standard library imports** (decided at L3, 2026-11-13). Rust's `std`
+imports `wasi:cli/environment`, `stdin`, `terminal-input`, `terminal-stdin` and
+`wasi:clocks/monotonic-clock` even for hello world (section 10), so the world has an *always*
+set that holds them, and the host links them with nothing behind them unless the idea grants
+them: no arguments and no environment variables, an empty standard input, no terminal, and a
+monotonic clock that only moves forward, 1 ms at each read. Every other interface (files,
+sockets, random numbers, the wall clock, HTTP) is in the world only when granted.
 
 Two checks hold it:
-- **At check:** the built component's imports must all be in the world. Anything else is
-  refused.
-- **At run:** the host links only the world's interfaces, with lengua's policy on top: files only
-  in the folders the idea names, connections only to the hosts and ports it names, memory and
-  time limits from the idea.
+- **At check:** when the build ends, `check` compiles the component with Wasmtime and reads its
+  imports (`Component::component_type().imports()`). Each import must be an interface of the
+  world, at any WASI `0.2` version; anything else is the finding `import-ungranted` on
+  `idea.md`, with the grant that would allow it, and the build is `build_failed`.
+- **At run:** the host links only the world's interfaces, so a component that imports anything
+  else fails to instantiate, and `run` replies `refused` with Wasmtime's message. On top of the
+  world, lengua's policy: files only in the folders the idea names, memory and time limits from
+  the idea. (Connections only to the hosts and ports it names come at L7, with the network.)
 
 ### The generated files, the build job and `doctor`
 
@@ -475,12 +483,17 @@ codegen-units = 1
 package lengua:program;
 
 world program {
+  import wasi:cli/environment@0.2.12;
   import wasi:cli/exit@0.2.12;
   import wasi:cli/stderr@0.2.12;
+  import wasi:cli/stdin@0.2.12;
   import wasi:cli/stdout@0.2.12;
+  import wasi:cli/terminal-input@0.2.12;
   import wasi:cli/terminal-output@0.2.12;
   import wasi:cli/terminal-stderr@0.2.12;
+  import wasi:cli/terminal-stdin@0.2.12;
   import wasi:cli/terminal-stdout@0.2.12;
+  import wasi:clocks/monotonic-clock@0.2.12;
   import wasi:io/error@0.2.12;
   import wasi:io/poll@0.2.12;
   import wasi:io/streams@0.2.12;
@@ -497,10 +510,10 @@ for a library). The interfaces of each grant, with the interfaces their types co
 
 | Grant | Interfaces |
 |---|---|
-| always (standard output, standard error, the exit code) | `wasi:cli/exit`, `stdout`, `stderr`, `terminal-output`, `terminal-stdout`, `terminal-stderr`; `wasi:io/error`, `poll`, `streams` |
-| `- Reads: standard input` | `wasi:cli/stdin`, `terminal-input`, `terminal-stdin` |
-| `- Reads: arguments` | `wasi:cli/environment` (the arguments and the environment variables are in one interface; at L3 the host is to give no variables) |
-| `- Reads: the clock` | `wasi:clocks/monotonic-clock`, `wall-clock` |
+| always (standard output, standard error, the exit code, and what `std` imports with no grant, since L3) | `wasi:cli/environment`, `exit`, `stdin`, `stdout`, `stderr`, `terminal-input`, `terminal-output`, `terminal-stdin`, `terminal-stdout`, `terminal-stderr`; `wasi:clocks/monotonic-clock`; `wasi:io/error`, `poll`, `streams` |
+| `- Reads: standard input` | none more: the host gives the input (below) |
+| `- Reads: arguments` | none more: the host gives the arguments, and never environment variables |
+| `- Reads: the clock` | `wasi:clocks/wall-clock`; the host gives its real clocks |
 | `- Reads: random numbers` | `wasi:random/random`, `insecure`, `insecure-seed` |
 | `- Reads:` or `- Writes: files in ...` | `wasi:filesystem/types`, `preopens`; `wasi:clocks/wall-clock` (for the type `datetime`) |
 | `- Connects to: ...` | `wasi:sockets/network`, `instance-network`, `tcp`, `tcp-create-socket`, `ip-name-lookup`; `wasi:clocks/monotonic-clock` (for the type `duration`) |
@@ -559,6 +572,55 @@ add <target>` for a target.
 
 Wasmtime with the component model and its WASI 0.2 implementation. In tests the clock is fixed
 and random numbers come from a seed, so every run gives the same output on every system.
+
+Built at L3 (2026-11-13), in `crates/lengua-mcp/src/host.rs`, on Wasmtime 50.0.1 (`wasmtime`
+with only `cranelift`, `runtime`, `std` and `component-model`; `wasmtime-wasi` with only `p2`;
+`wasmtime-wasi-io`), with no `unsafe` in lengua's code. One engine serves the server, with
+epoch interruption on and a thread that moves the epoch every 10 ms. Each run has its own store
+and a linker that holds the world's interfaces and nothing else, each added by its own
+`add_to_linker` (the synchronous bindings of `wasmtime_wasi::p2`).
+
+How each grant maps to the host:
+
+| Grant | The host |
+|---|---|
+| always | standard output and standard error to memory (16 MiB each, returned by `run`); standard input empty; no terminal; the exit code |
+| none for the environment | no environment variables, ever; no arguments unless granted |
+| `- Reads: standard input` | the `stdin` of the `run` call as the standard input; without the grant, `run` with `stdin` is refused |
+| `- Reads: arguments` | the folder's name and the `arguments` of the `run` call; without the grant, `run` with arguments is refused |
+| `- Reads: the clock` | the real wall clock and monotonic clock; without it, the monotonic clock moves 1 ms at each read, and the wall clock (there only for the files' type `datetime`) reads 2026-01-01T00:00:00Z |
+| `- Reads: random numbers` | Wasmtime's random number generators |
+| ``- Reads: files in `<folder>` `` | the folder, preopened under its own name (`data/...` in the program), read-only; a folder that is not there is a refusal |
+| ``- Writes: files in `<folder>` `` | the folder, preopened read-write, made when it is not there |
+| `- Memory:` | a `ResourceLimiter` refuses to grow a memory past it; the program stops and `run` replies `out_of_memory` |
+| `- Time:` | the store's epoch deadline (the time over 10 ms, plus one); the program stops and `run` replies `out_of_time` |
+| `- Connects to:` | not linked yet (L7); a program that imports sockets is refused at run |
+
+Wasmtime keeps a preopened folder's paths inside it: `..` out of it, an absolute path, and a
+symbolic link that points out of it are refused (tested at L3).
+
+**Fixed runs.** `run` with `fixed: true`, as the tests of L5 will run, gives the wall clock
+2026-01-01T00:00:00Z, the stepped monotonic clock, and random numbers from a fixed seed
+(Wasmtime's `Deterministic` over 4,096 bytes made by SplitMix64), so two runs give the same
+output on every system.
+
+**The `run` tool.** `run {folder, arguments?, stdin?, fixed?}` reads the ideas without writing
+anything (`lengua_idea::program`), refuses a folder whose ideas have findings, and runs the
+built component from `target/` (the lock and sealed code are L6) on its own thread. It waits up
+to 30 seconds; a run that is still going then replies `running`, and a `run` with the same
+folder, component and input waits for the same run. The reply:
+
+| `state` | Means | Also |
+|---|---|---|
+| `running` | the run goes on; call `run` again with the same input | `milliseconds` |
+| `exited` | the program ended | `exit_code`, `stdout`, `stderr` |
+| `out_of_time` | the program ran past its idea's `- Time:` | `message`, `stdout`, `stderr` |
+| `out_of_memory` | the program grew its memory past its idea's `- Memory:` | `message`, `stdout`, `stderr` |
+| `trapped` | the program stopped with a trap (a panic aborts with one) | `message`, the trap's text |
+| `refused` | the host did not start it: ideas with findings, input not granted, no component, an import the world lacks | `message` |
+
+A host call that blocks (a long sleep) is not stopped by the epoch; `run` stops waiting for it
+two seconds past the time and replies `out_of_time` (section 10).
 
 ### Libraries and other languages
 
@@ -832,6 +894,23 @@ Decided for lengua 3 at L2 (2026-11-13):
   The tests copy them to Cargo's test folder and check the copy, so the generated files, the
   wiki and `target/` are never in the repository.
 
+Decided for lengua 3 at L3 (2026-11-13):
+
+- **Wasmtime 50.0.1 is the host**, pinned exactly (`=50.0.1`; 50.0.1 is still the latest 50.x
+  on its releases page, with 51.0.0 only at rc.1). Default features off: `cranelift`,
+  `runtime`, `std` and `component-model` for `wasmtime`, `p2` for `wasmtime-wasi`, and
+  `wasmtime-wasi-io` for `wasi:io/error`, whose `add_to_linker` `wasmtime-wasi` does not
+  export. No cache, no Winch, no parallel compilation, no GC. It merits being a dependency:
+  it is the host. The crates it brings are counted in `todo.md`.
+- **The host is in `lengua-mcp`** (`host.rs`, `runs.rs`), not a crate of its own yet; at L6
+  the lean runner `lengua-run` takes it with the sealed code.
+- **A grant controls what a program can reach, not what `std` imports**: the always set
+  (section 4, "Grants become the component's world").
+- **`run` has a fourth input, `fixed`**, so that the determinism the tests of L5 need is
+  there and tested now.
+- **WASI 0.3 looked at again**: `wasmtime-wasi` 50.0.1 still has `p3` as a feature of its own
+  with the 0.2 module as its stable side, so lengua stays on 0.2.
+
 ## 10. Risks and open questions
 
 - **WASI 0.2, decided at L0 (2026-11-13): lengua 3 targets WASI 0.2, `wasm32-wasip2`.**
@@ -872,12 +951,25 @@ Decided for lengua 3 at L2 (2026-11-13):
   `terminal-input`, `terminal-output`, `terminal-stderr`, `terminal-stdin`,
   `terminal-stdout`; `wasi:clocks/monotonic-clock`; `wasi:io/error`, `poll`, `streams`; and it
   exports `wasi:cli/run`. So `std` imports `environment`, `stdin` (with its terminal
-  interfaces) and `monotonic-clock` even when the program does not use them. L3 must decide:
-  either a grant's absence is held by the host (it links these interfaces with nothing behind
-  them: no arguments, no variables, an empty standard input, a fixed clock) and the check at
-  check time refuses only interfaces outside this set, or the world's "always" set grows to
-  them. Files, random numbers and sockets were not imported by hello world, so for those the
-  world's rule holds as written.
+  interfaces) and `monotonic-clock` even when the program does not use them. **Decided at
+  L3:** both halves: the world's always set grows to them, and the host holds the grant's
+  absence by linking them with nothing behind them (section 4). Files, random numbers, the
+  wall clock and sockets were not imported by hello world, so for those the world's rule holds
+  as written.
+- **Found at L3: a host call that blocks is not stopped by the time limit.** The epoch stops
+  WebAssembly code, not Wasmtime's host code: a program that sleeps (`wasi:clocks` subscribe and
+  `wasi:io/poll`) sleeps for real, even with the stepped clock. `run` stops waiting two
+  seconds past the time and replies `out_of_time`, but the run's thread goes on until the
+  sleep ends. To close at L6 with the lean runner (a pollable of lengua's own, or the
+  runner's process stopped).
+- **Found at L3: the test format has no key for how a run ends.** An example must give `Expect
+  exit code`, but a program stopped at its time or memory limit has none. The examples
+  `forever` and `greedy` write `Expect exit code: 1` for now; L5 needs a key such as `Expect
+  end: out of time`.
+- **Open at L3: what more `std` imports.** The CI step "the imports of the built examples" lists
+  every example's imports. If a common part of `std` (`HashMap`'s random keys, for one) imports
+  `wasi:random`, a program that uses it needs `- Reads: random numbers`; to decide with that
+  evidence whether such an import joins the always set with a fixed seed behind it.
 - **Build time:** a cold `cargo build` can take longer than one tool call; the background job
   and a kept build folder per program must hide it.
 - **The user must have Rust installed**, with its two WebAssembly targets. lengua 2 needed nothing

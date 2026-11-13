@@ -269,12 +269,7 @@ fn context(
         };
         builder
             .preopened_dir(&place, &granted.path, perms)
-            .map_err(|e| {
-                format!(
-                    "lengua could not open the folder `{}`: {e:#}",
-                    granted.path
-                )
-            })?;
+            .map_err(|e| format!("lengua could not open the folder `{}`: {e:#}", granted.path))?;
     }
     Ok(builder.build())
 }
