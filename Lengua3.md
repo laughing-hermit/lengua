@@ -1484,6 +1484,48 @@ Each one is green on all five runners before the next starts.
 
 The watch list (section 10) is not a milestone: each item waits on a standard.
 
+### The LLM wiki and OKF, by milestone
+
+A review on 2026-11-13 against
+[OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md) and
+[Karpathy's LLM wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) found the
+structure sound (concept ids, `index.md`, `log.md`) and these gaps. Each is part of the
+milestone named:
+
+- **L9, in `check`:**
+  - OKF's trust fields on every page: `generated` (by `lengua-mcp/<version>`, at), `verified` by
+    `process:lengua-check` on every passing check, and `status` (`draft` until approved);
+    agent-written values of these checked, not only kept.
+  - `title` written when absent, and used by `index.md`.
+  - A `# Links` section that `check` writes at the end of each idea, with real markdown links
+    (uses, used by, libraries, vision), kept out of the idea's hash like the frontmatter.
+  - Libraries in `uses`, with `used_by` written back; a concept page for each component
+    (`components/<name>.md`) in place of a link to a `.wasm` file.
+  - The crate count in `index.md`.
+  - A conformance pass: every `.md` in the folder other than `index.md` and `log.md` has
+    frontmatter with a `type`.
+  - No log entry when a check changes nothing.
+  - The type list in this document matches the code (`lengua Server`, `lengua Library` added).
+  - A finding when an idea's Purpose names a module or library its Constraints don't list.
+  - Secrets never written to the frontmatter, the index or the log.
+- **L10:** the "Where it runs" line first in `index.md`.
+- **L11, the query path and the person's part:**
+  - `vision.md` as an OKF page (`type: lengua Vision`), first in `index.md`, quoting the
+    person's request, linked from every idea's `sources`, and in the lock's file list.
+  - Every skill's first step: read `index.md`, then the pages it names, before any code; a
+    design answer goes back into `vision.md`.
+  - On approval, `verified` gains `human:<id>` and `status` becomes `stable`; `log.md` gets an
+    `**Approval**` entry with the person's words, plus entries for the vision and for lint.
+  - `check` holds the ideas to `vision.md` and says when they grow past it.
+  - The idea grammar ships in the skill's references, so an agent needs nothing outside the
+    plugin.
+- **L13, one wiki across the repository:**
+  - The generated frontmatter, `index.md` and `log.md` of `libraries/*` and `examples/*`
+    committed (not the per-user lock), so the shared libraries are a browsable wiki.
+  - Root `index.md` files for the repository, `libraries/` and `examples/`.
+  - A CI test that checks the whole tree against OKF.
+  - A decision on OKF's Attested Computation, which fits a locked program.
+
 ## 9. How the work is done
 
 Unchanged from lengua 2:
