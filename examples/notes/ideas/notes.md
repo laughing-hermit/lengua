@@ -43,7 +43,7 @@ Then the answer is 422 with the error.
 - Request: `POST /api/notes`
 - Request body: "{{\"title\":\"{t}\",\"text\":\"x\"}}"
 - Expect status: 422
-- Expect body: "{\"error\":\"The title is too long.\"}"
+- Expect body: "{{\"error\":\"The title is too long.\"}}"
 
 ## Accept a title of 40 characters at most
 
