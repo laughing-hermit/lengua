@@ -183,7 +183,9 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
         section(
             &mut out,
             "# Interface",
-            &[format!("* [api](api.md) - {API_DESCRIPTION} Label: `{label}`.\n")],
+            &[format!(
+                "* [api](api.md) - {API_DESCRIPTION} Label: `{label}`.\n"
+            )],
         );
     }
     let packages = parts.interface.packages;
@@ -203,8 +205,7 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
     out
 }
 
-pub(crate) const API_DESCRIPTION: &str =
-    "The routes of the back end that the front end calls, with the shapes of their requests and answers.";
+pub(crate) const API_DESCRIPTION: &str = "The routes of the back end that the front end calls, with the shapes of their requests and answers.";
 
 fn section(out: &mut String, heading: &str, lines: &[String]) {
     if !lines.is_empty() {
@@ -251,7 +252,11 @@ pub(crate) fn api_text(pages: &[Page], label: &str, interface: &Interface) -> St
             .body
             .as_ref()
             .map_or("none".to_string(), |b| format!("`{}`", render(b)));
-        let served: Vec<String> = route.served_by.iter().map(|f| idea_link(pages, f)).collect();
+        let served: Vec<String> = route
+            .served_by
+            .iter()
+            .map(|f| idea_link(pages, f))
+            .collect();
         let called: Vec<String> = callers(pages, interface, &route.function)
             .iter()
             .map(|p| format!("[{}]({})", p.title, p.file))
@@ -273,13 +278,24 @@ pub(crate) fn api_text(pages: &[Page], label: &str, interface: &Interface) -> St
     out
 }
 
-pub(crate) fn links_text(page: &Page, pages: &[Page], used_by: &[String], interface: &Interface) -> String {
+pub(crate) fn links_text(
+    page: &Page,
+    pages: &[Page],
+    used_by: &[String],
+    interface: &Interface,
+) -> String {
     let mut lines: Vec<String> = Vec::new();
     for used in &page.uses {
-        lines.push(format!("* Uses {}.\n", idea_link(pages, &format!("{used}.md"))));
+        lines.push(format!(
+            "* Uses {}.\n",
+            idea_link(pages, &format!("{used}.md"))
+        ));
     }
     for user in used_by {
-        lines.push(format!("* Used by {}.\n", idea_link(pages, &format!("{user}.md"))));
+        lines.push(format!(
+            "* Used by {}.\n",
+            idea_link(pages, &format!("{user}.md"))
+        ));
     }
     for route in interface.routes {
         let name = format!("`{} {}`", route.method, route.path);
@@ -288,7 +304,11 @@ pub(crate) fn links_text(page: &Page, pages: &[Page], used_by: &[String], interf
             .iter()
             .any(|(s, c)| *s == page.source && c.iter().any(|f| *f == route.function));
         if calls {
-            let served: Vec<String> = route.served_by.iter().map(|f| idea_link(pages, f)).collect();
+            let served: Vec<String> = route
+                .served_by
+                .iter()
+                .map(|f| idea_link(pages, f))
+                .collect();
             lines.push(format!(
                 "* Calls [{name}](api.md), served by {}.\n",
                 served.join(", ")

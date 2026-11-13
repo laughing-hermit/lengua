@@ -127,7 +127,12 @@ fn counter(it: &ForStatement) -> Option<String> {
         return None;
     }
     let declarator = declaration.declarations.first()?;
-    let name = declarator.id.get_binding_identifier()?.name.as_str().to_string();
+    let name = declarator
+        .id
+        .get_binding_identifier()?
+        .name
+        .as_str()
+        .to_string();
     if !matches!(declarator.init, Some(Expression::NumericLiteral(_))) {
         return None;
     }
@@ -502,7 +507,10 @@ pub(crate) fn structure(context: &Context, items: &[Item], findings: &mut Vec<Fi
                 &screen.idea,
                 *line,
                 "rule-12-unknown",
-                format!("`{name}` is in `# Structure`, and `{}` has no function or component of that name", screen.file),
+                format!(
+                    "`{name}` is in `# Structure`, and `{}` has no function or component of that name",
+                    screen.file
+                ),
             );
         }
     }

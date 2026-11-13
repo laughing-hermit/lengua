@@ -13,8 +13,7 @@ const PROGRAM_KEYS: &str = "`Standard input`, `Arguments`, `File `path``, `Serve
 type Make = fn(String) -> Key;
 
 const METHODS: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
-const SCREEN_KEYS: &str =
-    "`State `field``, `Click`, `Type into `element``, `Expect state `field``, `Expect text`, `Expect label`";
+const SCREEN_KEYS: &str = "`State `field``, `Click`, `Type into `element``, `Expect state `field``, `Expect text`, `Expect label`";
 pub(crate) const MAX_TEXT_LENGTH: u64 = 65_536;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -336,12 +336,7 @@ fn the_label_and_the_score_go_into_the_wiki() {
     });
     assert_eq!(
         tested.written,
-        [
-            "idea.md",
-            "ideas/words.md",
-            "index.md",
-            "log.md"
-        ]
+        ["idea.md", "ideas/words.md", "index.md", "log.md"]
     );
     assert!(read(&folder, "log.md").starts_with("# Log\n\n## 2026-11-13\n\n* **Check** at 00:00:01Z: no problems; label `tested`, mutation score 1 of 4 (25%); nothing changed.\n"));
 }
@@ -365,10 +360,7 @@ fn the_build_carries_every_test_of_every_idea() {
             ("ideas/words.md", "two words", false)
         ]
     );
-    assert_eq!(
-        build.sources,
-        ["src/main.rs", "src/words.rs"]
-    );
+    assert_eq!(build.sources, ["src/main.rs", "src/words.rs"]);
     assert_eq!(build.tests[1].ranges.len(), 1);
     assert_eq!(build.tests[2].stdout.as_deref(), Some("0\n"));
     assert_eq!(build.tests_hash.len(), 64);

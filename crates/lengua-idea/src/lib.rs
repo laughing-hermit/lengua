@@ -4,16 +4,16 @@ mod constraints;
 mod frontmatter;
 mod generate;
 mod idea;
+mod json;
 mod library;
 pub mod lock;
 mod rust;
 mod sha256;
 mod ste;
-mod json;
-mod types;
-mod web;
 mod structure;
 mod text;
+mod types;
+mod web;
 mod wiki;
 
 use std::fs;
@@ -24,9 +24,11 @@ use crate::ste::Dictionary;
 use crate::wiki::Page;
 
 pub use crate::cases::{CASES_DRAWN, Case, End, Range, StateValue, Test, cases};
-pub use crate::library::Library;
-pub use crate::web::{CLIENT, Front, PNPM, SUM, ScreenRun, component_name, screen_route, screen_runs};
 pub use crate::generate::ASSETS;
+pub use crate::library::Library;
+pub use crate::web::{
+    CLIENT, Front, PNPM, SUM, ScreenRun, component_name, screen_route, screen_runs,
+};
 pub use lengua_lint::{Edit, Mutant, Mutation, apply, choose};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -705,8 +707,8 @@ fn screen_rules(read: &Read, shape: Shape, findings: &mut Vec<Finding>) {
             "an idea with screens is a server, since its back end serves the front end; add `- Serves: HTTP on TCP port <number>`".to_string(),
         ));
     }
-    let front_keys = !top.shadcn.is_empty()
-        || read.constraints.iter().any(|c| !c.packages.is_empty());
+    let front_keys =
+        !top.shadcn.is_empty() || read.constraints.iter().any(|c| !c.packages.is_empty());
     if front_keys && !screens {
         findings.push(top_finding(
             1,

@@ -12,7 +12,8 @@ pub(crate) fn function_name(name: &str) -> bool {
 
 pub(crate) fn script_name(name: &str) -> bool {
     let mut chars = name.chars();
-    chars.next().is_some_and(|c| c.is_ascii_alphabetic()) && chars.all(|c| c.is_ascii_alphanumeric())
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric())
 }
 
 fn name_ok(kind: IdeaKind, name: &str) -> bool {

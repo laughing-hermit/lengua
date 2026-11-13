@@ -37,7 +37,13 @@ pub(crate) struct Item {
     pub refs: Vec<String>,
 }
 
-pub(crate) fn add(findings: &mut Vec<Finding>, file: &str, line: usize, code: &'static str, message: String) {
+pub(crate) fn add(
+    findings: &mut Vec<Finding>,
+    file: &str,
+    line: usize,
+    code: &'static str,
+    message: String,
+) {
     findings.push(Finding {
         file: file.to_string(),
         line,
@@ -141,9 +147,14 @@ fn comments(file: &str, text: &str, lines: &Lines, program: &Program, findings: 
         let body = text
             .get(usize::try_from(span.start).unwrap_or(0)..usize::try_from(span.end).unwrap_or(0))
             .unwrap_or("");
-        let ignore = ["@ts-ignore", "@ts-expect-error", "@ts-nocheck", "eslint-disable"]
-            .iter()
-            .find(|w| body.contains(**w));
+        let ignore = [
+            "@ts-ignore",
+            "@ts-expect-error",
+            "@ts-nocheck",
+            "eslint-disable",
+        ]
+        .iter()
+        .find(|w| body.contains(**w));
         match ignore {
             Some(word) => add(
                 findings,
@@ -201,7 +212,13 @@ pub fn lint(input: &WebLintInput) -> WebLintOutput {
         }
         let program = parsed.program;
         let lines = Lines::new(&screen.text);
-        comments(&screen.file, &screen.text, &lines, &program, &mut output.findings);
+        comments(
+            &screen.file,
+            &screen.text,
+            &lines,
+            &program,
+            &mut output.findings,
+        );
         global_rules(&screen.file, &lines, &program, &mut output.findings);
         let context = check::Context {
             screen,

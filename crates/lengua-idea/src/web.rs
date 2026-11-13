@@ -14,7 +14,11 @@ pub const SUM: &str = "web/lengua.sum";
 pub const CLIENT: &str = "web/lib/lengua.ts";
 pub const PNPM: &str = "12.18.0";
 
-const BASE: [(&str, &str); 3] = [("next", "16.4.6"), ("react", "19.3.1"), ("react-dom", "19.3.1")];
+const BASE: [(&str, &str); 3] = [
+    ("next", "16.4.6"),
+    ("react", "19.3.1"),
+    ("react-dom", "19.3.1"),
+];
 const DEV: [(&str, &str); 11] = [
     ("@tailwindcss/postcss", "4.3.5"),
     ("@testing-library/dom", "10.4.2"),
@@ -35,11 +39,20 @@ const SCRIPT_EXTENSIONS: [&str; 8] = ["ts", "tsx", "js", "jsx", "mjs", "mts", "c
 const CORE: &str = include_str!("front/lengua-core.ts");
 const HELPER: &str = include_str!("front/test-helper.tsx");
 const STATIC: [(&str, &str); 6] = [
-    ("web/pnpm-workspace.yaml", include_str!("front/pnpm-workspace.yaml")),
+    (
+        "web/pnpm-workspace.yaml",
+        include_str!("front/pnpm-workspace.yaml"),
+    ),
     ("web/next.config.mjs", include_str!("front/next.config.mjs")),
     ("web/tsconfig.json", include_str!("front/tsconfig.json")),
-    ("web/vitest.config.mts", include_str!("front/vitest.config.mts")),
-    ("web/postcss.config.mjs", include_str!("front/postcss.config.mjs")),
+    (
+        "web/vitest.config.mts",
+        include_str!("front/vitest.config.mts"),
+    ),
+    (
+        "web/postcss.config.mjs",
+        include_str!("front/postcss.config.mjs"),
+    ),
     ("web/app/globals.css", include_str!("front/globals.css")),
 ];
 const SHADCN_FILES: [(&str, &str); 5] = [
@@ -301,8 +314,12 @@ fn route_code(route: &Route, out: &mut String) {
         quoted(&route.method),
         path_expression(route),
         route.json,
-        quoted(&format!("the answer of {label} does not have the shape of its examples")),
-        quoted(&format!("the failure of {label} does not have the shape of its examples")),
+        quoted(&format!(
+            "the answer of {label} does not have the shape of its examples"
+        )),
+        quoted(&format!(
+            "the failure of {label} does not have the shape of its examples"
+        )),
     );
 }
 
@@ -566,8 +583,15 @@ fn texts(
     tests: &[Test],
     dependencies: &[(String, String)],
 ) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = vec![("web/package.json".to_string(), package_json(title, dependencies))];
-    out.extend(STATIC.iter().map(|(f, t)| ((*f).to_string(), (*t).to_string())));
+    let mut out: Vec<(String, String)> = vec![(
+        "web/package.json".to_string(),
+        package_json(title, dependencies),
+    )];
+    out.extend(
+        STATIC
+            .iter()
+            .map(|(f, t)| ((*f).to_string(), (*t).to_string())),
+    );
     out.push(("web/app/layout.tsx".to_string(), layout(title)));
     for screen in screens {
         let file = if screen == "home" {
@@ -578,7 +602,10 @@ fn texts(
         out.push((file, route_page(screen)));
     }
     if !top.shadcn.is_empty() {
-        out.push(("web/lib/utils.ts".to_string(), include_str!("front/utils.ts").to_string()));
+        out.push((
+            "web/lib/utils.ts".to_string(),
+            include_str!("front/utils.ts").to_string(),
+        ));
     }
     for (name, text) in SHADCN_FILES {
         if top.shadcn.iter().any(|(n, _)| n == name) {
@@ -592,7 +619,10 @@ fn texts(
     for screen in screens {
         let mine: Vec<&ScreenRun> = runs.iter().filter(|r| r.screen == *screen).collect();
         if !mine.is_empty() {
-            out.push((format!("web/tests/{screen}.test.tsx"), screen_test(screen, &mine)));
+            out.push((
+                format!("web/tests/{screen}.test.tsx"),
+                screen_test(screen, &mine),
+            ));
         }
     }
     out
@@ -621,7 +651,10 @@ pub(crate) fn plan(
     let previous = previous_sums(folder, stamp);
     let mut sum = String::new();
     for (file, text) in &made {
-        let last = previous.iter().find(|(p, _)| p == file).map(|(_, h)| h.as_str());
+        let last = previous
+            .iter()
+            .find(|(p, _)| p == file)
+            .map(|(_, h)| h.as_str());
         findings.extend(held(folder, file, text, last));
         let _ = writeln!(sum, "{}  {file}", sha256::hex(text.as_bytes()));
     }

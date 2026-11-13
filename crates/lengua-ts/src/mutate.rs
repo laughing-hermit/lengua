@@ -104,7 +104,11 @@ impl<'a> Visit<'a> for Finder<'_> {
 
     fn visit_boolean_literal(&mut self, it: &BooleanLiteral) {
         if self.types == 0 {
-            let (from, to) = if it.value { ("true", "false") } else { ("false", "true") };
+            let (from, to) = if it.value {
+                ("true", "false")
+            } else {
+                ("false", "true")
+            };
             self.sites.push(Site {
                 start: offset(it.span.start),
                 end: offset(it.span.end),

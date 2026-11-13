@@ -66,7 +66,11 @@ pub(crate) fn without_links(body: &str) -> String {
             fence = !fence;
         }
         if !fence && line.trim_end() == "# Links" {
-            let mut kept = body.get(..at).unwrap_or(body).trim_end_matches('\n').to_string();
+            let mut kept = body
+                .get(..at)
+                .unwrap_or(body)
+                .trim_end_matches('\n')
+                .to_string();
             kept.push('\n');
             return kept;
         }

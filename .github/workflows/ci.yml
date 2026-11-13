@@ -176,6 +176,14 @@ jobs:
             --profile minimal --component rustfmt,clippy --target wasm32-wasip2,wasm32-unknown-unknown
           rustc --version
           cargo --version
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+      - name: pnpm, the version the generated package.json names
+        run: |
+          npm install --global pnpm@12.18.0
+          node --version
+          pnpm --version
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked
       - name: tests built

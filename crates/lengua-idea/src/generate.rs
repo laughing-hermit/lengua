@@ -377,7 +377,9 @@ pub(crate) fn plan(
         .map(|p| p.source.clone())
         .filter(|s| Path::new(s).extension().is_some_and(|e| e == "rs"))
         .collect();
-    let web = pages.iter().any(|p| p.kind == crate::idea::IdeaKind::Screen);
+    let web = pages
+        .iter()
+        .any(|p| p.kind == crate::idea::IdeaKind::Screen);
     let linked: Vec<(String, String)> = libraries
         .iter()
         .map(|l| (l.name.clone(), l.path.clone()))

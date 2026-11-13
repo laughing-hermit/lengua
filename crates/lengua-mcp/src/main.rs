@@ -104,7 +104,6 @@ struct ExportReply {
     bytes: u64,
 }
 
-
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 #[serde(crate = "rmcp::serde")]
 #[schemars(crate = "rmcp::schemars")]
@@ -127,7 +126,9 @@ struct BuildReply {
     tests: Option<TestsReply>,
     #[schemars(description = "From mutating on: the mutants")]
     mutants: Option<MutantsReply>,
-    #[schemars(description = "For an application with screens, once built: the front end's static export, its files and bytes")]
+    #[schemars(
+        description = "For an application with screens, once built: the front end's static export, its files and bytes"
+    )]
     export: Option<ExportReply>,
 }
 
@@ -519,18 +520,23 @@ impl Lengua {
         })?;
         let mut snapshot: Option<(String, Status)> = None;
         let lint: lengua_idea::WebLint = lengua_ts::lint;
-        let mut report = lengua_idea::check_web(&folder, now(), |plan| {
-            snapshot = if plan.code {
-                self.builds
-                    .snapshot(&folder, plan)
-                    .map(|status| (plan.inputs.clone(), status))
-            } else {
-                None
-            };
-            snapshot
-                .as_ref()
-                .map_or_else(Trust::default, |(_, status)| status.trust())
-        }, Some(lint));
+        let mut report = lengua_idea::check_web(
+            &folder,
+            now(),
+            |plan| {
+                snapshot = if plan.code {
+                    self.builds
+                        .snapshot(&folder, plan)
+                        .map(|status| (plan.inputs.clone(), status))
+                } else {
+                    None
+                };
+                snapshot
+                    .as_ref()
+                    .map_or_else(Trust::default, |(_, status)| status.trust())
+            },
+            Some(lint),
+        );
         seal_program(&folder, &mut report, snapshot.as_ref(), &key);
         Ok(Json(self.reply(&folder, report, snapshot)))
     }

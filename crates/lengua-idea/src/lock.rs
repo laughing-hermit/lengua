@@ -474,19 +474,17 @@ fn read_lines(folder: &Path, body: &str, key: &Key) -> Reading {
             "kind" => out.found = Kind::parse(rest),
             "label" => out.label = rest.to_string(),
             "file" | "component" | "sealed" | "library" | "trusted" | "sealed-trusted"
-            | "export" => {
-                match check_entry(folder, (tag, rest), key, &mut out.changed) {
-                    Some((path, code)) => {
-                        out.files.push(path);
-                        if tag == "sealed-trusted" {
-                            out.trusted.extend(code);
-                        } else {
-                            out.sealed = code.or(out.sealed.take());
-                        }
+            | "export" => match check_entry(folder, (tag, rest), key, &mut out.changed) {
+                Some((path, code)) => {
+                    out.files.push(path);
+                    if tag == "sealed-trusted" {
+                        out.trusted.extend(code);
+                    } else {
+                        out.sealed = code.or(out.sealed.take());
                     }
-                    None => out.changed.push(format!("the line `{line}` of the lock")),
                 }
-            }
+                None => out.changed.push(format!("the line `{line}` of the lock")),
+            },
             _ => {}
         }
     }

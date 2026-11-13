@@ -18,10 +18,16 @@ type Failure = (Stage, Vec<Problem>);
 
 pub(crate) fn plain(path: &Path) -> String {
     let text = path.to_string_lossy().to_string();
-    text.strip_prefix(r"\\?\").map_or_else(|| text.clone(), str::to_string)
+    text.strip_prefix(r"\\?\")
+        .map_or_else(|| text.clone(), str::to_string)
 }
 
-fn pnpm(worker: &Worker, args: &[&str], dir: &Path, envs: &[(&str, String)]) -> Result<(bool, String), String> {
+fn pnpm(
+    worker: &Worker,
+    args: &[&str],
+    dir: &Path,
+    envs: &[(&str, String)],
+) -> Result<(bool, String), String> {
     let path = doctor::find("pnpm").ok_or_else(|| "pnpm is not on the PATH".to_string())?;
     let mut command = Command::new(path);
     command
@@ -93,7 +99,11 @@ fn install(worker: &Worker, stage: &Path) -> Result<(), Failure> {
     match pnpm(worker, args, stage, &[]) {
         Ok((true, _)) => {}
         Ok((false, text)) => {
-            let file = if frozen { "web/pnpm-lock.yaml" } else { "web/package.json" };
+            let file = if frozen {
+                "web/pnpm-lock.yaml"
+            } else {
+                "web/package.json"
+            };
             let hint = if frozen {
                 "; when `web/package.json` changed, remove `web/pnpm-lock.yaml` so that pnpm resolves it again"
             } else {
@@ -106,7 +116,14 @@ fn install(worker: &Worker, stage: &Path) -> Result<(), Failure> {
                 format!("`pnpm install` failed{hint}:\n{}", tail(&text, 20)),
             ));
         }
-        Err(message) => return Err(failed(Stage::BuildFailed, "web/package.json", "web-install", message)),
+        Err(message) => {
+            return Err(failed(
+                Stage::BuildFailed,
+                "web/package.json",
+                "web-install",
+                message,
+            ));
+        }
     }
     if !frozen {
         fs::copy(stage.join("pnpm-lock.yaml"), &locked).map_err(|e| {
@@ -139,7 +156,12 @@ pub(crate) fn type_problems(text: &str) -> Vec<Problem> {
 }
 
 fn typecheck(worker: &Worker, stage: &Path) -> Result<(), Failure> {
-    match pnpm(worker, &["exec", "tsc", "--noEmit", "--pretty", "false"], stage, &[]) {
+    match pnpm(
+        worker,
+        &["exec", "tsc", "--noEmit", "--pretty", "false"],
+        stage,
+        &[],
+    ) {
         Ok((true, _)) => Ok(()),
         Ok((false, text)) => {
             let found = type_problems(&text);
@@ -154,7 +176,12 @@ fn typecheck(worker: &Worker, stage: &Path) -> Result<(), Failure> {
                 Err((Stage::BuildFailed, found))
             }
         }
-        Err(message) => Err(failed(Stage::BuildFailed, "web/tsconfig.json", "ts-error", message)),
+        Err(message) => Err(failed(
+            Stage::BuildFailed,
+            "web/tsconfig.json",
+            "ts-error",
+            message,
+        )),
     }
 }
 
@@ -170,9 +197,15 @@ fn first_message(result: &Value) -> String {
 
 pub(crate) fn test_problems(front: &Front, report: &Value) -> Vec<Problem> {
     let mut out = Vec::new();
-    let files = report["testResults"].as_array().cloned().unwrap_or_default();
+    let files = report["testResults"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     for file in &files {
-        let results = file["assertionResults"].as_array().cloned().unwrap_or_default();
+        let results = file["assertionResults"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
         for result in results.iter().filter(|r| r["status"] == "failed") {
             let title = result["title"].as_str().unwrap_or("");
             let index: Option<usize> = title.split(' ').next().and_then(|n| n.parse().ok());
@@ -188,7 +221,11 @@ pub(crate) fn test_problems(front: &Front, report: &Value) -> Vec<Problem> {
                 &run.file,
                 run.line,
                 code,
-                format!("the screen example `{}` failed: {}", run.name, first_message(result)),
+                format!(
+                    "the screen example `{}` failed: {}",
+                    run.name,
+                    first_message(result)
+                ),
             ));
         }
     }
@@ -208,7 +245,14 @@ fn tests(worker: &Worker, front: &Front, stage: &Path) -> Result<usize, Failure>
     );
     let text = match ran {
         Ok((_, text)) => text,
-        Err(message) => return Err(failed(Stage::BuildFailed, "web/vitest.config.mts", "web-test", message)),
+        Err(message) => {
+            return Err(failed(
+                Stage::BuildFailed,
+                "web/vitest.config.mts",
+                "web-test",
+                message,
+            ));
+        }
     };
     let read = fs::read_to_string(&report)
         .ok()
@@ -243,7 +287,12 @@ fn next_build(worker: &Worker, stage: &Path) -> Result<(), Failure> {
             "web-build",
             format!("`next build` failed:\n{}", tail(&text, 30)),
         )),
-        Err(message) => Err(failed(Stage::BuildFailed, "web/package.json", "web-build", message)),
+        Err(message) => Err(failed(
+            Stage::BuildFailed,
+            "web/package.json",
+            "web-build",
+            message,
+        )),
     }
 }
 
@@ -292,10 +341,7 @@ fn exported(dir: &Path, prefix: &str, out: &mut Vec<(String, u64)>) {
 }
 
 pub(crate) fn assets_text(files: &[(String, u64)]) -> String {
-    let mut out = format!(
-        "const FILES: [(&str, &str, &[u8]); {}] = [\n",
-        files.len()
-    );
+    let mut out = format!("const FILES: [(&str, &str, &[u8]); {}] = [\n", files.len());
     for (name, _) in files {
         let _ = writeln!(
             out,
@@ -358,7 +404,12 @@ pub(crate) fn judge(worker: &Worker, mutant: &Mutant) -> Option<bool> {
         ("LENGUA_MUTANT_FROM", plain(&original)),
         ("LENGUA_MUTANT_TO", plain(&place)),
     ];
-    let ran = pnpm(worker, &["exec", "vitest", "run", "--reporter=dot"], &stage, &envs);
+    let ran = pnpm(
+        worker,
+        &["exec", "vitest", "run", "--reporter=dot"],
+        &stage,
+        &envs,
+    );
     if worker.stopped() {
         return None;
     }
@@ -393,7 +444,10 @@ mod tests {
 
     #[test]
     fn the_export_becomes_a_crate_that_finds_each_file() {
-        let text = assets_text(&[("index.html".to_string(), 10), ("_next/static/a.js".to_string(), 5)]);
+        let text = assets_text(&[
+            ("index.html".to_string(), 10),
+            ("_next/static/a.js".to_string(), 5),
+        ]);
         assert!(text.starts_with("const FILES: [(&str, &str, &[u8]); 2] = [\n"));
         assert!(text.contains("include_bytes!(\"../../web/out/_next/static/a.js\")"));
         assert!(text.contains("\"text/javascript; charset=utf-8\""));
