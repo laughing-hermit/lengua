@@ -4,7 +4,12 @@ use std::path::Path;
 
 pub(crate) const TARGET: &str = "wasm32-unknown-unknown";
 pub(crate) const WASM_BINDGEN: &str = "0.2.130";
-pub(crate) const REQUIRED: [&str; 4] = ["gpui-pre", "gpui-pre-platform", "gpui-pre-web", "wasm-bindgen"];
+pub(crate) const REQUIRED: [&str; 4] = [
+    "gpui-pre",
+    "gpui-pre-platform",
+    "gpui-pre-web",
+    "wasm-bindgen",
+];
 pub(crate) const KIT: &str = "gpui-component";
 pub(crate) const APP_CARGO: &str = "web/app/Cargo.toml";
 pub(crate) const APP_LIB: &str = "web/app/lib.rs";
@@ -78,9 +83,7 @@ pub(crate) fn app_cargo(plan: &Plan) -> String {
         .map(|(crate_name, version)| {
             (
                 crate_name.clone(),
-                format!(
-                    "{crate_name} = {{ version = \"={version}\", default-features = false }}"
-                ),
+                format!("{crate_name} = {{ version = \"={version}\", default-features = false }}"),
             )
         })
         .collect();
@@ -203,10 +206,7 @@ pub(crate) fn assets(folder: &Path) -> Vec<String> {
     crate::generate::collect(folder, ASSETS, &mut found);
     found
         .into_iter()
-        .filter_map(|(path, _)| {
-            path.strip_prefix(&format!("{ASSETS}/"))
-                .map(str::to_string)
-        })
+        .filter_map(|(path, _)| path.strip_prefix(&format!("{ASSETS}/")).map(str::to_string))
         .filter(|path| {
             !path.contains(['"', '\\', '#', '\n', '\r'])
                 && fs::metadata(folder.join(ASSETS).join(path)).is_ok()
@@ -240,9 +240,14 @@ mod tests {
         let libraries = [("json".to_string(), "../../libraries/json".to_string())];
         with_library.libraries = &libraries;
         let text = app_cargo(&with_library);
-        assert!(text.starts_with("[package]\nname = \"notes-app\"\n"), "{text}");
         assert!(
-            text.contains("[lib]\nname = \"notes_app\"\npath = \"lib.rs\"\ncrate-type = [\"cdylib\"]\n"),
+            text.starts_with("[package]\nname = \"notes-app\"\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "[lib]\nname = \"notes_app\"\npath = \"lib.rs\"\ncrate-type = [\"cdylib\"]\n"
+            ),
             "{text}"
         );
         assert!(
@@ -269,20 +274,28 @@ mod tests {
         let mut with_fonts = plan(&screens, &[]);
         with_fonts.assets = &fonts;
         let text = app_lib(&with_fonts);
-        assert!(text.contains("include_bytes!(\"../../assets/fonts/Plex.ttf\").as_slice()"), "{text}");
+        assert!(
+            text.contains("include_bytes!(\"../../assets/fonts/Plex.ttf\").as_slice()"),
+            "{text}"
+        );
         assert!(!text.contains("logo.png"), "{text}");
         assert!(text.contains("WebPlatform::new(false)"), "{text}");
     }
 
     #[test]
     fn the_files_serve_the_page_the_code_and_each_asset() {
-        let text = files_lib("notes", &["logo.png".to_string(), "fonts/a.ttf".to_string()]);
+        let text = files_lib(
+            "notes",
+            &["logo.png".to_string(), "fonts/a.ttf".to_string()],
+        );
         assert!(!text.contains("a.ttf"), "{text}");
         assert!(text.contains("<title>notes</title>"), "{text}");
         assert!(text.contains("include_bytes!(\"../../target/lengua/web/app_bg.wasm\")"));
         assert!(text.contains("const ASSET_0: &[u8] = include_bytes!(\"../../assets/logo.png\");"));
         assert!(text.contains("\"/assets/logo.png\" => Some((\"image/png\", ASSET_0)),"));
-        assert!(text.contains("\"/\" | \"/index.html\" => Some((\"text/html; charset=utf-8\", PAGE.as_bytes())),"));
+        assert!(text.contains(
+            "\"/\" | \"/index.html\" => Some((\"text/html; charset=utf-8\", PAGE.as_bytes())),"
+        ));
         assert_eq!(media_type("a/b.WOFF2"), "font/woff2");
         assert_eq!(media_type("none"), "application/octet-stream");
     }

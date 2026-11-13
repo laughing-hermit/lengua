@@ -405,6 +405,9 @@ mod tests {
         assert!(text.contains("wasip2 = \"=2.0.1\"\n"), "{text}");
         assert!(text.contains("path = \"src/main.rs\"\n"), "{text}");
         assert!(!text.contains("members"), "{text}");
-        assert!(text.contains("web-files = { path = \"/work/shop/web/files\" }"), "{text}");
+        assert!(
+            text.contains("web-files = { path = \"/work/shop/web/files\" }"),
+            "{text}"
+        );
     }
 }

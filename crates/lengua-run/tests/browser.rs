@@ -39,7 +39,8 @@ fn chrome() -> Option<PathBuf> {
 
 fn http(port: u16, path: &str) -> Option<Vec<u8>> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
-    let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    let request =
+        format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
     stream.write_all(request.as_bytes()).ok()?;
     let mut answer = Vec::new();
     stream.read_to_end(&mut answer).ok()?;
@@ -76,7 +77,9 @@ impl Socket {
         let mut head = Vec::new();
         let mut byte = [0u8; 1];
         while !head.ends_with(b"\r\n\r\n") {
-            stream.read_exact(&mut byte).expect("the handshake's answer");
+            stream
+                .read_exact(&mut byte)
+                .expect("the handshake's answer");
             head.push(byte[0]);
         }
         assert!(
@@ -267,7 +270,11 @@ fn serve_the_notes(folder: &Path) -> Killed {
     assert!(page.contains("<title>notes</title>"), "{page}");
     let code = http(PAGE_PORT, "/app_bg.wasm").expect("the code");
     assert!(code.starts_with(b"\0asm"), "{} bytes", code.len());
-    println!("the page: {} bytes; the code: {} bytes", page.len(), code.len());
+    println!(
+        "the page: {} bytes; the code: {} bytes",
+        page.len(),
+        code.len()
+    );
     server
 }
 
@@ -275,7 +282,9 @@ fn serve_the_notes(folder: &Path) -> Killed {
 #[ignore = "needs a checked examples/notes folder (LENGUA_NOTES) and Chrome; CI runs it after the tests"]
 fn the_notes_open_in_a_browser() {
     let folder = PathBuf::from(std::env::var("LENGUA_NOTES").expect("LENGUA_NOTES"));
-    let out = PathBuf::from(std::env::var("LENGUA_BROWSER_OUT").unwrap_or_else(|_| "browser".to_string()));
+    let out = PathBuf::from(
+        std::env::var("LENGUA_BROWSER_OUT").unwrap_or_else(|_| "browser".to_string()),
+    );
     fs::create_dir_all(&out).expect("the output folder");
     let Some(chrome) = chrome() else {
         println!("no Chrome on this system; the browser test did not run");
@@ -287,35 +296,68 @@ fn the_notes_open_in_a_browser() {
     socket.call("Runtime.enable", json!({}));
     socket.call("Network.enable", json!({}));
     let started = wait_for(90, || {
-        let state = socket.evaluate("document.body.dataset.lengua + ' ' + document.querySelectorAll('canvas').length");
+        let state = socket.evaluate(
+            "document.body.dataset.lengua + ' ' + document.querySelectorAll('canvas').length",
+        );
         let text = state.as_str().unwrap_or_default().to_string();
         (text == "started 1" || text.starts_with("failed")).then_some(text)
     });
-    assert_eq!(started.as_deref(), Some("started 1"), "{:#?}", socket.events);
+    assert_eq!(
+        started.as_deref(),
+        Some("started 1"),
+        "{:#?}",
+        socket.events
+    );
     thread::sleep(Duration::from_secs(5));
     let png = screenshot(&mut socket);
     fs::write(out.join("notes.png"), &png).expect("the screenshot");
     socket.call("Accessibility.enable", json!({}));
     let read = names(&socket.call("Accessibility.getFullAXTree", json!({})));
     fs::write(out.join("notes-accessibility.txt"), read.join("\n")).expect("the tree");
-    println!("what a screen reader can read ({} nodes):\n{}", read.len(), read.join("\n"));
+    println!(
+        "what a screen reader can read ({} nodes):\n{}",
+        read.len(),
+        read.join("\n")
+    );
     socket.call("Page.navigate", json!({"url": "about:blank"}));
     thread::sleep(Duration::from_secs(2));
     let blank = screenshot(&mut socket);
-    let mut console = events(&socket, "Runtime.consoleAPICalled", |e| e["params"]["args"].to_string());
-    console.extend(events(&socket, "Runtime.exceptionThrown", |e| e["params"].to_string()));
+    let mut console = events(&socket, "Runtime.consoleAPICalled", |e| {
+        e["params"]["args"].to_string()
+    });
+    console.extend(events(&socket, "Runtime.exceptionThrown", |e| {
+        e["params"].to_string()
+    }));
     let fetched = events(&socket, "Network.responseReceived", |e| {
         let response = &e["params"]["response"];
-        format!("{} {}", response["status"], response["url"].as_str().unwrap_or_default())
+        format!(
+            "{} {}",
+            response["status"],
+            response["url"].as_str().unwrap_or_default()
+        )
     });
     println!("the console:\n{}", console.join("\n"));
     println!("the answers the page got:\n{}", fetched.join("\n"));
-    println!("the screenshot: {} bytes; a blank page: {} bytes", png.len(), blank.len());
+    println!(
+        "the screenshot: {} bytes; a blank page: {} bytes",
+        png.len(),
+        blank.len()
+    );
     assert!(png.starts_with(b"\x89PNG"), "a PNG");
-    assert!(png.len() > blank.len() * 3 / 2, "the screen is drawn: {} and {}", png.len(), blank.len());
-    assert!(!console.iter().any(|c| c.contains("panicked")), "{console:#?}");
     assert!(
-        fetched.iter().any(|f| f.starts_with("200 ") && f.ends_with("/api/notes")),
+        png.len() > blank.len() * 3 / 2,
+        "the screen is drawn: {} and {}",
+        png.len(),
+        blank.len()
+    );
+    assert!(
+        !console.iter().any(|c| c.contains("panicked")),
+        "{console:#?}"
+    );
+    assert!(
+        fetched
+            .iter()
+            .any(|f| f.starts_with("200 ") && f.ends_with("/api/notes")),
         "the screens asked their server for the notes: {fetched:#?}"
     );
     assert!(!read.is_empty(), "the accessibility tree");

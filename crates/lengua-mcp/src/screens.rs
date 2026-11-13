@@ -336,10 +336,18 @@ pub(crate) fn main_text(front: &Front, ui: &str, cases: &[Case]) -> Text {
         "#![allow(unused_imports, unused_braces, unused_mut, dead_code, clippy::all, clippy::pedantic)]\n",
     );
     for screen in &front.screens {
-        let _ = writeln!(text, "#[path = \"{ui}/{}.rs\"]\nmod {};", screen.name, screen.name);
+        let _ = writeln!(
+            text,
+            "#[path = \"{ui}/{}.rs\"]\nmod {};",
+            screen.name, screen.name
+        );
     }
     text.push_str(SUPPORT);
-    text.push_str(if front.kit() { KIT_WINDOW } else { PLAIN_WINDOW });
+    text.push_str(if front.kit() {
+        KIT_WINDOW
+    } else {
+        PLAIN_WINDOW
+    });
     let _ = writeln!(
         text,
         "\nconst CASES: [fn() -> Result<(), String>; {}] = [{}];",
@@ -385,7 +393,8 @@ pub(crate) fn write(
     cases: &[Case],
 ) -> Result<Vec<usize>, String> {
     let place = folder.join(dir);
-    let fail = |e: std::io::Error| format!("lengua could not write the screens' harness `{dir}`: {e}");
+    let fail =
+        |e: std::io::Error| format!("lengua could not write the screens' harness `{dir}`: {e}");
     fs::create_dir_all(&place).map_err(fail)?;
     fs::write(place.join("Cargo.toml"), manifest(front, spec)).map_err(fail)?;
     let main = main_text(front, spec.ui, cases);
@@ -418,9 +427,10 @@ pub(crate) fn placed(folder: &Path, dir: &Path, found: Vec<Problem>) -> Vec<Prob
         .map(|p| {
             if p.file.starts_with("../") || p.file.starts_with("..\\") {
                 let whole = tidy(&dir.join(&p.file));
-                let inside = whole
-                    .strip_prefix(tidy(folder))
-                    .map_or_else(|_| p.file.clone(), |r| r.to_string_lossy().replace('\\', "/"));
+                let inside = whole.strip_prefix(tidy(folder)).map_or_else(
+                    |_| p.file.clone(),
+                    |r| r.to_string_lossy().replace('\\', "/"),
+                );
                 Problem { file: inside, ..p }
             } else {
                 p
@@ -472,7 +482,10 @@ fn fetched(folder: &Path, dir: &Path, worker: &Worker) -> Result<(), Vec<Problem
 
 pub(crate) fn binary(folder: &Path, package: &str) -> PathBuf {
     let exe = if cfg!(windows) { ".exe" } else { "" };
-    folder.join("target").join("debug").join(format!("{package}{exe}"))
+    folder
+        .join("target")
+        .join("debug")
+        .join(format!("{package}{exe}"))
 }
 
 pub(crate) fn build(
@@ -516,7 +529,8 @@ pub(crate) fn run(binary: &Path, count: usize) -> Vec<Option<String>> {
     let text = output
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
-    let mut results: Vec<Option<String>> = vec![Some("the screen's test did not report".to_string()); count];
+    let mut results: Vec<Option<String>> =
+        vec![Some("the screen's test did not report".to_string()); count];
     for line in text.lines() {
         let Some(rest) = line.strip_prefix(MARK) else {
             continue;
@@ -613,7 +627,10 @@ mod tests {
         assert!(text.contains("gpui-pre = { version = \"=0.3.12\", default-features = false, features = [\"test-support\"] }"), "{text}");
         assert!(text.contains("gpui-component = { version = \"=0.9.1\", default-features = false, features = [\"test-support\"] }"), "{text}");
         assert!(!text.contains("gpui-pre-platform"), "{text}");
-        assert!(text.contains("json = { path = \"../../../../../libraries/json\" }"), "{text}");
+        assert!(
+            text.contains("json = { path = \"../../../../../libraries/json\" }"),
+            "{text}"
+        );
         assert!(text.ends_with("[workspace]\n"), "{text}");
     }
 
@@ -638,19 +655,44 @@ mod tests {
         };
         let made = main_text(&front(false), "../../../src/ui", &[case]);
         let text = &made.text;
-        assert!(text.contains("#[path = \"../../../src/ui/list.rs\"]\nmod list;\n"), "{text}");
-        assert!(text.contains("let mut run = Run::open(|window, cx| list::List::new(window, cx));"), "{text}");
-        assert!(text.contains("    run.state(|s| s.title = \"Milk\".into());\n"), "{text}");
+        assert!(
+            text.contains("#[path = \"../../../src/ui/list.rs\"]\nmod list;\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("let mut run = Run::open(|window, cx| list::List::new(window, cx));"),
+            "{text}"
+        );
+        assert!(
+            text.contains("    run.state(|s| s.title = \"Milk\".into());\n"),
+            "{text}"
+        );
         assert!(text.contains("    run.state(|s| s.count = 2);\n"), "{text}");
         assert!(text.contains("    run.click(\"add\")?;\n"), "{text}");
-        assert!(text.contains("    run.type_into(\"name\", \"tea\")?;\n"), "{text}");
-        assert!(text.contains("    run.expect_state(\"count\", |s| s.count.to_string(), \"3\")?;\n"), "{text}");
-        assert!(text.contains("    run.expect_text(\"3 notes\")?;\n"), "{text}");
-        assert!(text.contains("const CASES: [fn() -> Result<(), String>; 1] = [case_0];"), "{text}");
+        assert!(
+            text.contains("    run.type_into(\"name\", \"tea\")?;\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("    run.expect_state(\"count\", |s| s.count.to_string(), \"3\")?;\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("    run.expect_text(\"3 notes\")?;\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("const CASES: [fn() -> Result<(), String>; 1] = [case_0];"),
+            "{text}"
+        );
         assert!(text.contains("struct Holder"), "{text}");
         let line = text.lines().nth(made.starts[0] - 1).unwrap_or_default();
         assert!(line.starts_with("fn case_0()"), "{line}");
-        assert!(main_text(&front(true), "u", &[]).text.contains("gpui_component::Root::new"));
+        assert!(
+            main_text(&front(true), "u", &[])
+                .text
+                .contains("gpui_component::Root::new")
+        );
     }
 
     #[test]
@@ -660,7 +702,12 @@ mod tests {
         let found = placed(
             folder,
             &dir,
-            vec![problem("../../../src/ui/list.rs", 3, "rust-error", "no".to_string())],
+            vec![problem(
+                "../../../src/ui/list.rs",
+                3,
+                "rust-error",
+                "no".to_string(),
+            )],
         );
         assert_eq!(found[0].file, "src/ui/list.rs");
     }

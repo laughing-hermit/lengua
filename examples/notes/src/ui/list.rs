@@ -32,7 +32,10 @@ pub fn start(cx: &mut App) {
     debug_assert!(!cx.windows().is_empty());
 }
 
-fn follow<T: EventEmitter<Move> + 'static>(cx: &mut Context<List>, entity: &Entity<T>) -> Subscription {
+fn follow<T: EventEmitter<Move> + 'static>(
+    cx: &mut Context<List>,
+    entity: &Entity<T>,
+) -> Subscription {
     debug_assert!(entity.entity_id().as_u64() > 0);
     debug_assert!(cx.entity_id().as_u64() > 0);
     cx.subscribe(entity, |list: &mut List, _, event: &Move, cx| {

@@ -129,7 +129,9 @@ struct BuildReply {
 struct FrontReply {
     #[schemars(description = "The target the front end is built for, wasm32-unknown-unknown")]
     target: String,
-    #[schemars(description = "The absolute path of the front end's WebAssembly, as wasm-bindgen made it")]
+    #[schemars(
+        description = "The absolute path of the front end's WebAssembly, as wasm-bindgen made it"
+    )]
     path: String,
     #[schemars(description = "Its size in bytes")]
     size: u64,
@@ -363,7 +365,10 @@ fn seal_program(
             .map(|s| s.sealed.clone()),
         sealed_trusted: component.trusted.clone(),
         front: plan.front.as_ref().map_or_else(Vec::new, |f| {
-            vec![format!("{}/app_bg.wasm", f.out), format!("{}/app.js", f.out)]
+            vec![
+                format!("{}/app_bg.wasm", f.out),
+                format!("{}/app.js", f.out),
+            ]
         }),
     };
     match lock::write(folder, &folder.join(lock::LOCK), &facts, key) {

@@ -472,8 +472,84 @@ images, and serves them itself. One file to ship, one lock, two compiled parts i
 - The front end reaches only its own server. lengua's grants hold the server; the browser's
   sandbox holds the front end.
 - Limits, from GPUI's web target: one window per page; WebGPU preferred, WebGL2 when not; the
-  fonts are shipped in the file, since a browser gives a canvas no fonts. To verify at the
-  milestone.
+  fonts are shipped in the file, since a browser gives a canvas no fonts. Verified at L8 (below
+  and section 10).
+
+#### As built at L8
+
+**The pinned versions.** GPUI is taken from the `gpui-pre` crates on crates.io, the snapshots
+of Zed's crates that GPUI Kit is built against: `gpui-pre` 0.3.12 (whose library is named
+`gpui`), `gpui-pre-platform`, `gpui-pre-web` (Zed's `gpui_web`) and `gpui-pre-http-client`, all
+0.3.12, the snapshot of **Zed commit `d2a4fb6ded7c470be25d1541281da3882495b65b`** (2026-11-08;
+the crates' own description names `zed@d2a4fb6`). GPUI Kit is **`gpui-component` 0.9.1**
+(2026-11-09), the component library of longbridge/gpui-component, which itself requires
+`gpui-pre` `=0.3.12`. One Zed commit is pinned this way, by exact version and by checksum in
+`Cargo.lock`, not by a `git` dependency with `rev =`: GPUI Kit 0.9.1 depends on the crates.io
+snapshot, and a `git` GPUI next to it would be a second, incompatible `gpui` in the graph
+(section 10). The loader is made by **`wasm-bindgen` 0.2.130**, the crate and its command
+line at the same version (`doctor` checks the command, and `check` holds the crate to it).
+
+**The files.** An application with screens is a server (`- Serves:`, L7) with screen ideas in
+`ideas/ui/`, each named in `- Modules:` as `ui/<name>`. The first `ui/` name in `- Modules:` is
+the start screen. `check` generates four more files from the ideas, held like `Cargo.toml`
+(`generated-edited` for a hand edit; the stamps `app_cargo_sha256`, `app_lib_sha256`,
+`files_cargo_sha256` and `files_lib_sha256` on the top idea):
+
+| File | What it is |
+|---|---|
+| `web/app/Cargo.toml` | the front end's package, `<name>-app`, a `cdylib` for `wasm32-unknown-unknown`; the crates of the screen ideas, each at its exact version with `default-features = false`, and the program's lengua libraries; the lints of section 5 (with `missing_errors_doc` and `missing_panics_doc` allowed, as for a library) |
+| `web/app/lib.rs` | one `#[path = "../../src/ui/<screen>.rs"] pub mod <screen>;` per screen, and the `#[wasm_bindgen(start)]` function: `gpui_platform::web_init()`, a single-threaded `gpui_web::WebPlatform`, the browser's `fetch` as GPUI's HTTP client, every font of `assets/fonts/` added to GPUI's text system, then `<start>::start(cx)` |
+| `web/files/Cargo.toml` | the package `web-files`, a path dependency of the server |
+| `web/files/lib.rs` | `asset(path) -> Option<(media type, bytes)>`: the page `/` (a small HTML page that imports the loader and marks `data-lengua="started"` on its body), `/app.js` (the loader), `/app_bg.wasm` (the front end) and `/assets/<file>` for every file of `assets/` but the fonts, each with `include_bytes!` |
+
+The generated `Cargo.toml` makes the folder a workspace of three packages (`members =
+["web/app", "web/files"]`), so one `Cargo.lock` pins the server's and the front end's crates
+together, and the lock signs it.
+
+**The build job**, for a program with screens, after the fetch (now for both targets):
+`cargo fmt --check -p <name>` and `rustfmt --check --edition 2024` on each screen file; `cargo
+clippy -p <name>-app --release --target wasm32-unknown-unknown -- -D warnings` and `cargo build
+-p <name>-app`; `wasm-bindgen <the app's .wasm> --target web --no-typescript --out-dir
+target/lengua/web --out-name app` (the finding `front-bindgen` if it fails); then the server's
+clippy and build, which embed the front end through `web-files`; then the component checks,
+the seal, the tests (the screens' among them, section 7) and the mutants. The reply's `build`
+has `front`: the target, the path, size and SHA-256 of `app_bg.wasm`, and the screens.
+
+**What a server with screens writes.** Its own code serves the files: `web_files::asset(path)`
+gives the bytes and the media type of each file of the front end, and the server sends them
+with its other answers (`examples/notes`). The front end reaches its own server with relative
+URLs through GPUI's HTTP client (`cx.http_client()`), which the generated start sets to the
+browser's `fetch`.
+
+**The rules for a screen's code** (the harness of the tests and the generated start need
+them; a broken one is a build error at the screen's file):
+- `src/ui/<name>.rs` has `pub struct <Name>` (the name in `UpperCamelCase`), with a `pub`
+  field for each state the examples set or expect (`screen-field` when the file has no `pub
+  <field>:`), and `pub fn make(window: &mut Window, cx: &mut Context<Self>) -> Self`, and
+  `impl Render for <Name>`. The start screen also has `pub fn start(cx: &mut App)`, which opens
+  the window.
+- The constructor is `make`, not `new`: lengua's call graph reads a method call on a parameter
+  of type `Context<Self>` as a call to the method of that name on `Self`, so `cx.new(...)`
+  inside a `Self::new` would be a false recursion (rule 1).
+- An element that an example clicks or types into has `.debug_selector(|| "<element>".to_string())`
+  (`screen-element` when no screen file names it; `note-1` is also found as `"note-{`). GPUI
+  records these selectors only in a debug build with its `test-support` feature, so the
+  browser's build carries none of them.
+- The crates the screens use are declared in the screen ideas: `gpui-pre`, `gpui-pre-platform`,
+  `gpui-pre-web` and `wasm-bindgen` are required (`front-crate-missing`), `wasm-bindgen` at
+  0.2.130 (`front-wasm-bindgen`), and at least one font in `assets/fonts/` (`front-font`): GPUI's
+  web text system has no fonts of its own and falls back to IBM Plex Sans.
+- Screens are refused in a program that is not a server, once its code is there
+  (`screen-server`).
+
+**Rule 1 and GPUI's API.** GPUI's own types use trait objects (`AnyView`, `Box<dyn Fn>`
+listeners, `Arc<dyn HttpClient>`), but a screen never names one: it passes closures
+(`cx.listener(|this, event, window, cx| ...)`, `cx.subscribe(...)`, `.on_click(...)`) and
+`impl IntoElement`, and receives values whose type it does not write. So rule 1 stays exactly
+as strict for screens as for the server: no `dyn` and no `fn(` type in the program's code, and
+closures are allowed as everywhere. What rule 1 can't see is the same as for any crate (section
+5): calls GPUI makes back into a screen (`render`, the listeners) are not edges of the call
+graph.
 
 ### The build
 
@@ -483,8 +559,11 @@ images, and serves them itself. One file to ship, one lock, two compiled parts i
 goes on. The result is one WebAssembly component, the one file. The job, its states and the
 reply are in "The generated files, the build job and `doctor`" below.
 
-The user needs Rust and its `wasm32-wasip2` and `wasm32-unknown-unknown` targets installed.
-`lengua-mcp doctor` checks both and says the one command to run if either is missing.
+The user needs Rust and its `wasm32-wasip2` and `wasm32-unknown-unknown` targets installed,
+and, for a front end, the `wasm-bindgen` command at 0.2.130 (since L8). `lengua-mcp doctor`
+checks them and says the one command to run if one is missing (`cargo install wasm-bindgen-cli
+--version 0.2.130 --locked`); a missing `wasm-bindgen` stops only the build of a program with
+screens.
 
 ### Grants become the component's world
 
@@ -994,8 +1073,11 @@ hmac-sha256 2c5d…
   byte before that line. lengua's own SHA-256 and HMAC, on the standard library, are tested
   with the vectors of RFC 4231.
 
-The lock holds the front end's compiled part and the one file when there is a front end (L8);
-until then the component is the one file.
+**Since L8**, a program with screens adds the generated `web/app/Cargo.toml`, `web/app/lib.rs`,
+`web/files/Cargo.toml` and `web/files/lib.rs` and every file of `assets/` to its `file` lines,
+and two `front` lines before its `component` line, the front end's compiled part and its
+loader, `front <sha256> target/lengua/web/app_bg.wasm` and `front <sha256>
+target/lengua/web/app.js`; the `component` line is the one file, which embeds both.
 
 **Since L7:** `kind` is also `library`, the lock of a lengua library: its files, its `component`
 (the `.rlib` Cargo made) and no `sealed` line. A program's lock has, after its files, one
@@ -1316,7 +1398,8 @@ drawing of cases in `crates/lengua-idea/src/cases.rs` and the mutator in
 **Which tests.** Every `### Example:` and `### Cases:` block of every idea, the top one and
 each module's, in the order of the ideas and then of the file, runs against the program's one
 component: a module's examples are examples of the program. A screen's examples
-(`ideas/ui/`) run at L8 with GPUI's test context; until then each is a note, "it was not run".
+(`ideas/ui/`) run with GPUI's test context, natively, after the program's (below, "The
+screens' tests").
 
 **One run.** For each run, lengua makes a new empty folder under the system's temporary folder,
 makes in it every folder the idea grants (read and write), writes each ``File `<path>` `` of
@@ -1403,6 +1486,57 @@ the bodies of some functions change, a later check builds the mutants of those f
 and takes the others from the cache (the reply's `cached`); a change outside the bodies (a
 type, a `use`, a constant), of the tests, of the grants or of lengua measures them all again.
 The file keeps only the mutants of the last check.
+
+### The screens' tests
+
+Decided at L8 (2026-11-13), in `crates/lengua-mcp/src/screens.rs`.
+
+**Where they run.** A screen's examples run natively on the system that checks, not in a
+browser: the same Rust files of `src/ui/`, compiled for the host with GPUI's `test-support`
+feature, under GPUI's own test platform (`gpui::TestAppContext` and `VisualTestContext`), which
+has no window, no GPU and no fonts. The browser's build is the same code, and the browser test
+of CI (below) shows that it starts; the examples are what holds its behaviour.
+
+**The harness.** `check` writes a package in `target/lengua/screens` (`<name>-screens`, a
+binary with its own `[workspace]` and a copy of the program's `Cargo.lock`): the screen
+crates of the ideas with `default-features = false`, `test-support` on for `gpui-pre` and
+`gpui-component`, the browser's platform crates (`gpui-pre-platform`, `gpui-pre-web`) left out,
+and the program's libraries. Its `main.rs` holds each screen file as a module by
+`#[path]`, and one function per example and per drawn case. It is fetched once for its
+manifest (`target/lengua/screens-fetched`), built with `--offline` in the debug profile into the
+program's `target/`, and run once; it prints `lengua-screen <n> ok` or `lengua-screen <n> failed
+<message>` for each case, with every panic of a case caught and reported as its failure.
+
+**One case.** A new `TestAppContext` (seed 0) whose platform text system is lengua's: GPUI's
+`NoopTextSystem`, which also records the text of every line GPUI lays out. GPUI Kit is set up
+(`gpui_component::init`) when the screens use it. One window holds the screen, made by
+`<Screen>::make`, inside a probe view that can hide it, and, with GPUI Kit, inside GPUI Kit's
+`Root`. Then, in the order of the example's items:
+
+| Key | What the harness does |
+|---|---|
+| ``State `<field>` `` | sets the field (`"text".into()`, an integer or a boolean) and redraws |
+| `Click` | finds the element's bounds by its debug selector in the last frame, and simulates a left click at its centre |
+| ``Type into `<element>` `` | clicks the element, so that it takes the focus, and simulates typing the text (`simulate_input`) |
+| ``Expect state `<field>` `` | compares the field's `to_string()` with the value |
+| `Expect text` | hides the screen for one frame (so GPUI's cache of laid-out lines is empty), shows it again, and looks for the text in the lines laid out in that last frame |
+
+Every step waits until GPUI is idle (`run_until_parked`) and redraws. A screen's HTTP client in
+the tests is GPUI's fake, which answers 404 to every request, so a screen's own requests do
+nothing in a test; its state is given by `State` instead.
+
+**The findings.** A failed case is `test-failed` (or `case-failed`, with its drawn values) at
+the example's heading, with the message of its first failed step, for example ``state `error`:
+expected "The title is too long." and got ""``. A harness that does not build is
+`harness-error` at the example whose function has the error, or the compiler's error at the
+screen's file. The tests' `total` counts the screens' cases with the program's.
+
+**Mutants of the screens.** The 40 mutants are spread over every function of the program,
+screens included. A mutant of a file in `src/ui/` is built into a harness of its own
+(`target/lengua/mutant-screens`, the package `<name>-screens-mutant`, whose `#[path]`s point to
+the mutated copy in `target/lengua/mutant/src/ui/`) and judged by the screens' cases: `caught`
+when one fails, `survived` when all pass, `unbuilt` when it does not build. A screen's mutant is
+not compared for `same`, since the harness is a native binary with the package's name in it.
 
 ## 8. Milestones
 

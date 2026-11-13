@@ -491,9 +491,7 @@ fn state(value: &str, first: Option<String>) -> Option<Value> {
 fn screen_step(key: &Key, value: &str, first: Option<String>) -> Option<Step> {
     match key {
         Key::State(field) => state(value, first).map(|v| Step::State(field.clone(), v)),
-        Key::ExpectState(field) => {
-            state(value, first).map(|v| Step::ExpectState(field.clone(), v))
-        }
+        Key::ExpectState(field) => state(value, first).map(|v| Step::ExpectState(field.clone(), v)),
         Key::Click => backticked(value).map(|e| Step::Click(e.to_string())),
         Key::TypeInto(element) => first.map(|t| Step::Type(element.clone(), t)),
         Key::ExpectText => first.map(Step::ExpectText),
@@ -533,11 +531,9 @@ fn record(key: &Key, value: &str, found: &[String], test: &mut Test) {
             .expect_headers
             .push((name.to_lowercase(), first.unwrap_or_default())),
         Key::ExpectBody => test.expect_body = first,
-        Key::State(_)
-        | Key::Click
-        | Key::TypeInto(_)
-        | Key::ExpectState(_)
-        | Key::ExpectText => test.steps.extend(screen_step(key, value, first)),
+        Key::State(_) | Key::Click | Key::TypeInto(_) | Key::ExpectState(_) | Key::ExpectText => {
+            test.steps.extend(screen_step(key, value, first))
+        }
         Key::Range(_) => {}
     }
 }
@@ -940,8 +936,8 @@ pub(crate) fn parse(
 #[cfg(test)]
 mod tests {
     use super::{parse, template_names};
-    use crate::cases::{Step, Value};
     use crate::Sink;
+    use crate::cases::{Step, Value};
     use crate::idea::IdeaKind;
     use crate::ste::Dictionary;
     use crate::text::lines;

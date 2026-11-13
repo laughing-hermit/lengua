@@ -983,6 +983,7 @@ dependencies = [
  "lengua-host",
  "lengua-idea",
  "lengua-seal",
+ "serde_json",
 ]
 
 [[package]]

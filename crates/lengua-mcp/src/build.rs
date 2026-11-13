@@ -194,7 +194,11 @@ impl Worker {
     }
 
     pub(crate) fn screen_spec(&self, mutant: bool) -> screens::Spec<'static> {
-        let suffix = if mutant { "-screens-mutant" } else { "-screens" };
+        let suffix = if mutant {
+            "-screens-mutant"
+        } else {
+            "-screens"
+        };
         screens::Spec {
             package: format!("{}{suffix}", self.build.package),
             ui: if mutant {
@@ -551,7 +555,11 @@ fn step(folder: &Path, args: &[&str], slot: &Mutex<Option<Child>>) -> Result<(),
     }
 }
 
-fn formatted(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> Result<(), Vec<Problem>> {
+fn formatted(
+    folder: &Path,
+    build: &Build,
+    slot: &Mutex<Option<Child>>,
+) -> Result<(), Vec<Problem>> {
     let mut found = Vec::new();
     let package = build.package.as_str();
     let whole: Vec<&str> = if build.front.is_some() {
@@ -571,7 +579,11 @@ fn formatted(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> Resul
     if found.is_empty() { Ok(()) } else { Err(found) }
 }
 
-fn front_end(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> Result<(), Vec<Problem>> {
+fn front_end(
+    folder: &Path,
+    build: &Build,
+    slot: &Mutex<Option<Child>>,
+) -> Result<(), Vec<Problem>> {
     let Some(front) = &build.front else {
         return Ok(());
     };
@@ -621,7 +633,10 @@ fn front_end(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> Resul
             "Cargo.toml",
             1,
             "front-bindgen",
-            format!("`wasm-bindgen` could not make the browser's loader: {}", text.trim()),
+            format!(
+                "`wasm-bindgen` could not make the browser's loader: {}",
+                text.trim()
+            ),
         )]),
         Err(message) => Err(vec![problem("Cargo.toml", 1, "front-bindgen", message)]),
     }
@@ -644,7 +659,13 @@ fn compile(
         clippy.extend(["-p", package]);
         building.extend(["-p", package]);
     }
-    let common = ["--release", "--target", target, "--offline", "--message-format=short"];
+    let common = [
+        "--release",
+        "--target",
+        target,
+        "--offline",
+        "--message-format=short",
+    ];
     clippy.extend(common);
     clippy.extend(["--", "-D", "warnings"]);
     building.extend(common);
@@ -1018,15 +1039,25 @@ mod tests {
     #[test]
     fn a_path_through_a_member_is_the_file_in_the_folder() {
         let folder = Path::new("/work/notes");
-        assert_eq!(relative(folder, "web/app/../../src/ui/list.rs"), "src/ui/list.rs");
+        assert_eq!(
+            relative(folder, "web/app/../../src/ui/list.rs"),
+            "src/ui/list.rs"
+        );
         assert_eq!(relative(folder, "/work/notes/src/main.rs"), "src/main.rs");
-        assert_eq!(relative(folder, "../json/src/read.rs"), "../json/src/read.rs");
+        assert_eq!(
+            relative(folder, "../json/src/read.rs"),
+            "../json/src/read.rs"
+        );
     }
 
     #[test]
     fn the_paths_of_a_build_are_remapped_to_fixed_names() {
         let root = std::env::temp_dir().join(format!("lengua-mcp-{}-remap", std::process::id()));
-        let inner = root.join("app").join("target").join("lengua").join("screens");
+        let inner = root
+            .join("app")
+            .join("target")
+            .join("lengua")
+            .join("screens");
         std::fs::create_dir_all(&inner).expect("a folder");
         let app = root.join("app");
         std::fs::write(app.join("idea.md"), "# Purpose\n").expect("an idea");

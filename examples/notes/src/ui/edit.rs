@@ -43,18 +43,24 @@ impl Edit {
         let title_input = cx.new(|cx| InputState::new(window, cx).placeholder("Title"));
         let text_input = cx.new(|cx| InputState::new(window, cx).placeholder("Text"));
         let changes = vec![
-            cx.subscribe(&title_input, |edit: &mut Self, input, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) {
-                    edit.title = input.read(cx).value().to_string();
-                    cx.notify();
-                }
-            }),
-            cx.subscribe(&text_input, |edit: &mut Self, input, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) {
-                    edit.text = input.read(cx).value().to_string();
-                    cx.notify();
-                }
-            }),
+            cx.subscribe(
+                &title_input,
+                |edit: &mut Self, input, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        edit.title = input.read(cx).value().to_string();
+                        cx.notify();
+                    }
+                },
+            ),
+            cx.subscribe(
+                &text_input,
+                |edit: &mut Self, input, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        edit.text = input.read(cx).value().to_string();
+                        cx.notify();
+                    }
+                },
+            ),
         ];
         debug_assert_eq!(changes.len(), 2);
         debug_assert!(title_input.entity_id() != text_input.entity_id());

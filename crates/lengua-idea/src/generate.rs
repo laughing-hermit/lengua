@@ -3,10 +3,10 @@ use std::fs;
 use std::path::Path;
 
 use crate::constraints::{Constraints, Grant};
-use crate::sha256;
-use crate::wiki::{Page, Stamp};
 use crate::front;
 use crate::idea::IdeaKind;
+use crate::sha256;
+use crate::wiki::{Page, Stamp};
 use crate::{Finding, Front, Library, Screen, Shape};
 
 pub(crate) const CARGO_TOML: &str = "Cargo.toml";
@@ -548,7 +548,11 @@ pub(crate) fn plan(
         };
         files.push(("app_cargo_sha256", front::APP_CARGO, front::app_cargo(&web)));
         files.push(("app_lib_sha256", front::APP_LIB, front::app_lib(&web)));
-        files.push(("files_cargo_sha256", front::FILES_CARGO, front::files_cargo()));
+        files.push((
+            "files_cargo_sha256",
+            front::FILES_CARGO,
+            front::files_cargo(),
+        ));
         files.push((
             "files_lib_sha256",
             front::FILES_LIB,
@@ -830,8 +834,14 @@ world program {
             "[lib]\nname = \"shop\"\npath = \"src/main.rs\"\ncrate-type = [\"cdylib\"]\n"
         ));
         assert!(!text.contains("missing_errors_doc"));
-        assert!(text.contains("web-files = { path = \"web/files\" }\n"), "{text}");
-        assert!(text.ends_with("[workspace]\nmembers = [\"web/app\", \"web/files\"]\n"), "{text}");
+        assert!(
+            text.contains("web-files = { path = \"web/files\" }\n"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("[workspace]\nmembers = [\"web/app\", \"web/files\"]\n"),
+            "{text}"
+        );
         assert_eq!(super::type_name("edit_note"), "EditNote");
         let world = world(&[Grant::Http], Shape::Server);
         assert!(world.contains("  import wasi:http/types@0.2.12;\n"));

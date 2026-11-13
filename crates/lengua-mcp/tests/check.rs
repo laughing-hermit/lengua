@@ -1402,11 +1402,18 @@ fn the_notes_are_one_file_with_gpui_screens_built_for_the_browser_and_tested() {
     assert_eq!(reply["build"]["tests"]["failed"], 0, "{reply:#}");
     let front = &reply["build"]["front"];
     assert_eq!(front["target"], "wasm32-unknown-unknown", "{reply:#}");
-    assert_eq!(front["screens"], json!(["list", "note", "edit"]), "{reply:#}");
+    assert_eq!(
+        front["screens"],
+        json!(["list", "note", "edit"]),
+        "{reply:#}"
+    );
     let front_size = front["size"].as_u64().unwrap_or(0);
     let size = reply["build"]["size"].as_u64().unwrap_or(0);
     assert!(front_size > 1 << 20, "{reply:#}");
-    assert!(size > front_size, "the one file holds the front end: {reply:#}");
+    assert!(
+        size > front_size,
+        "the one file holds the front end: {reply:#}"
+    );
     for file in [
         "web/app/Cargo.toml",
         "web/app/lib.rs",
@@ -1447,12 +1454,19 @@ fn the_notes_are_one_file_with_gpui_screens_built_for_the_browser_and_tested() {
     let _ = child.kill();
     let _ = child.wait();
     assert!(page.contains("<title>notes</title>"), "{page}");
-    assert!(list.ends_with("\"text\":\"Call the shop at noon.\"}]"), "{list}");
+    assert!(
+        list.ends_with("\"text\":\"Call the shop at noon.\"}]"),
+        "{list}"
+    );
     let body = code
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .map_or(0, |at| code.len() - at - 4);
-    assert_eq!(u64::try_from(body).unwrap_or(0), front_size, "the front end as served");
+    assert_eq!(
+        u64::try_from(body).unwrap_or(0),
+        front_size,
+        "the front end as served"
+    );
     let log = Path::new(env!("CARGO_TARGET_TMPDIR")).join("lengua-timings.txt");
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(log) {
         let _ = writeln!(

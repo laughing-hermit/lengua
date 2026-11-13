@@ -108,7 +108,8 @@ pub(crate) fn examine(folder: &Path) -> Doctor {
         .is_some_and(|v| v.split_whitespace().nth(1) == Some(wanted));
     items.push(Item {
         name: format!("wasm-bindgen {wanted}, for a front end"),
-        fix: (!right).then(|| format!("cargo install wasm-bindgen-cli --version {wanted} --locked")),
+        fix: (!right)
+            .then(|| format!("cargo install wasm-bindgen-cli --version {wanted} --locked")),
         found: bindgen,
     });
     Doctor { items }
