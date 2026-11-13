@@ -651,6 +651,15 @@ Decided for lengua 3 at L0 (2026-11-13):
 - **Agent Plugins 1.0.0** is the plugin format: agent-plugins.org publishes 1.0.0 as its
   current version, with its schemas under `schemas/1.0.0/` (there is no 1.1.0 there).
 
+Decided for lengua 3 at L1 (2026-11-13):
+
+- **lengua's own code has two crates so far.** `crates/lengua-idea` is the idea reader, the
+  STE check and the wiki writer, on the standard library alone (with its own SHA-256).
+  `crates/lengua-mcp` is the server; its only dependencies are `rmcp` (the MCP Rust SDK,
+  features `server`, `macros` and `transport-io`) and `tokio` (`macros` and `rt`, which
+  `rmcp` already brings), and it reaches `serde` and `schemars` through `rmcp`'s re-exports.
+  Each dependency and its reason is in `todo.md`.
+
 ## 10. Risks and open questions
 
 - **WASI 0.2, decided at L0 (2026-11-13): lengua 3 targets WASI 0.2, `wasm32-wasip2`.**

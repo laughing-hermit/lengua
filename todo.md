@@ -8,7 +8,7 @@ next starts (Lengua3.md, section 8).
 | # | Milestone | State |
 |---|---|---|
 | L0 | Tag `lengua2-final`; empty main; a new Cargo workspace; CI on five runners | Landed on main at bd29290 (run 43371160450, green on five) |
-| L1 | The idea file: reader, STE check, test format, `# Structure`, OKF, the wiki | In progress on `wip/l1` |
+| L1 | The idea file: reader, STE check, test format, `# Structure`, OKF, the wiki | Done on `wip/l1`, green on linux-x86_64; the five-runner landing run is named in the landing report |
 | L2 | Generate `Cargo.toml` and the world; build in the background; `doctor` | Not started |
 | L3 | The host on the component model: standard input and output, arguments, files, clock, random | Not started |
 | L4 | The Power of 10 lint and the component checks | Not started |
@@ -101,6 +101,10 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-13 | [43370086686](https://github.com/laughing-hermit/lengua/actions/runs/43370086686) | wip/l0 8b596f9 | test, linux-x86_64 | Failed: clippy `single_match_else` (pedantic) in `main` |
 | 2026-11-13 | [43370623006](https://github.com/laughing-hermit/lengua/actions/runs/43370623006) | wip/l0 3db4778 | test, linux-x86_64 | Green: format, clippy, 1 test passed, binary built and printed `lengua-mcp 0.1.0` |
 | 2026-11-13 | [43371160450](https://github.com/laughing-hermit/lengua/actions/runs/43371160450) | wip/l0 bd29290 | test, all five | Green on five: the L0 landing run |
+| 2026-11-13 | [43374442504](https://github.com/laughing-hermit/lengua/actions/runs/43374442504) | wip/l1 b26624a | test, linux-x86_64 | Failed as planned: `Cargo.lock` out of date (the lockfile job uploaded the resolved lock) and a format patch |
+| 2026-11-13 | [43374878743](https://github.com/laughing-hermit/lengua/actions/runs/43374878743) | wip/l1 9293f97 | test, linux-x86_64 | Failed: 12 clippy findings in `lengua-idea` (`chunks_exact`, `format_collect`, `option_option`, `format_push_string`, ...) |
+| 2026-11-13 | [43375624971](https://github.com/laughing-hermit/lengua/actions/runs/43375624971) | wip/l1 c62a402 | test, linux-x86_64 | Failed: 2 clippy findings in `lengua-mcp` (`needless_pass_by_value`, `unused_async_trait_impl` from `rmcp`'s macro) and a format patch |
+| 2026-11-13 | [43376326657](https://github.com/laughing-hermit/lengua/actions/runs/43376326657) | wip/l1 79fbe14 | test, linux-x86_64 | Green: format, lockfile, clippy, 63 tests passed (51 unit, 6 + 4 integration, 2 version), binary built |
 
 ## What the permission checks refused
 
