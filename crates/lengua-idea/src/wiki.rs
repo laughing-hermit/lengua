@@ -247,12 +247,14 @@ fn write_if_changed(
         return Ok(());
     }
     let parent = path.parent().map_or(Ok(()), fs::create_dir_all);
-    parent.and_then(|()| fs::write(&path, text)).map_err(|e| Finding {
-        file: file.to_string(),
-        line: 1,
-        code: "wiki-write",
-        message: format!("lengua could not write the file: {e}"),
-    })?;
+    parent
+        .and_then(|()| fs::write(&path, text))
+        .map_err(|e| Finding {
+            file: file.to_string(),
+            line: 1,
+            code: "wiki-write",
+            message: format!("lengua could not write the file: {e}"),
+        })?;
     written.push(file.to_string());
     Ok(())
 }

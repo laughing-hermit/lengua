@@ -204,7 +204,9 @@ space or `-`), a blank line or a `#` comment. A key may be there one time only.
   `src/ui/<name>.rs`), `uses` and `used_by` (OKF concept ids, the file without `.md`: `idea`,
   `ideas/cart`, `ideas/ui/basket`), `label` (`unchecked` until the tests run at L5),
   `idea_sha256` (the SHA-256 of the idea's text after the frontmatter, blank lines at its
-  start left out) and `source_sha256` (of the Rust file, or `none`).
+  start left out) and `source_sha256` (of the Rust file, or `none`); on the top idea only,
+  `cargo_sha256` and `world_sha256`, the SHA-256 of the `Cargo.toml` and `wit/world.wit` that
+  check wrote (since L2, see "The generated files" below).
 - **The agent may write any other key**, and lengua keeps it byte for byte: OKF's `title`,
   `tags`, `status`, `sources`, `generated`, `verified`, `stale_after`, `resource`, or a key of
   its own. lengua does not check their values.
@@ -307,7 +309,7 @@ program (lengua libraries come at L7). The same line two times is a finding.
 **`# Structure`**: only list items, ``- `<name>`: <one sentence>.``, where the name is a
 function, `snake_case`, or a method, `Type::snake_case` with the type in `UpperCamelCase`. The
 sentence may continue on indented lines; it is one STE sentence and ends with a full stop. A
-name is there one time only. The top idea's structure has `main`. At L2 and L4 `check` holds
+name is there one time only. The top idea's structure has `main`. At L4 `check` holds
 these names to the functions of the Rust file (rule 12).
 
 **What `check` replies.** One pass reads every idea file and collects every finding of every
@@ -375,12 +377,13 @@ images, and serves them itself. One file to ship, one lock, two compiled parts i
 ### The build
 
 `check` runs `cargo build --offline --release` on the user's machine as a background job: for
-`wasm32-unknown-unknown` first when the application has a front end, then for `wasm32-wasip2`
-with the front end embedded. It replies `building` until the build ends, then goes on. The
-result is one WebAssembly component, the one file.
+`wasm32-unknown-unknown` first when the application has a front end (L8), then for
+`wasm32-wasip2` with the front end embedded. It replies `building` until the build ends, then
+goes on. The result is one WebAssembly component, the one file. The job, its states and the
+reply are in "The generated files, the build job and `doctor`" below.
 
-The user needs Rust and its `wasm32-wasip2` and `wasm32-unknown-unknown` targets installed. `lengua-mcp doctor` checks both
-and says the one command to run if either is missing.
+The user needs Rust and its `wasm32-wasip2` and `wasm32-unknown-unknown` targets installed.
+`lengua-mcp doctor` checks both and says the one command to run if either is missing.
 
 ### Grants become the component's world
 
@@ -394,6 +397,163 @@ Two checks hold it:
 - **At run:** the host links only the world's interfaces, with lengua's policy on top: files only
   in the folders the idea names, connections only to the hosts and ports it names, memory and
   time limits from the idea.
+
+### The generated files, the build job and `doctor`
+
+Decided at L2 (2026-11-13).
+
+**When `check` writes them.** After the idea checks of L1 pass, `check` makes the text of
+`Cargo.toml` and `wit/world.wit` from the ideas, holds the files already there to it (below),
+and, with no findings, writes them in the same step as the wiki. A file whose text did not
+change is not written again. The top idea's frontmatter records the SHA-256 of each
+(`cargo_sha256`, `world_sha256`), and the log has a line for each one that is new or changed:
+``* Generated `Cargo.toml`, changed: `<sha256>`.``
+
+**How they are held.** A generated file that is there is accepted when its SHA-256 is that of
+the text `check` makes now, or the one in the frontmatter (the text the last check wrote, so a
+change of the ideas, or a newer lengua, simply writes it again). Any other text is a hand edit:
+the finding `generated-edited`, at the first line that differs, and nothing is written or
+built. To fix it, remove the file (or undo the edit) and change the ideas instead.
+
+**`Cargo.toml`**, for the folder `hello` with no crates:
+
+```toml
+[package]
+name = "hello"
+version = "0.1.0"
+edition = "2024"
+publish = false
+include = ["src/main.rs"]
+
+[[bin]]
+name = "hello"
+path = "src/main.rs"
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+
+[profile.release]
+opt-level = 3
+panic = "abort"
+lto = true
+codegen-units = 1
+
+[workspace]
+```
+
+- `name` is the folder's name. It must start with a lowercase letter and have only lowercase
+  letters, digits, `-` and `_`, and not be a Rust keyword or a name Cargo keeps (`std`, `test`,
+  `build`, `deps`, `examples`, `con`, ...); otherwise the finding `package-name`.
+- `include` lists the Rust file of every idea, in the order of the ideas: `src/main.rs`, then
+  `src/<module>.rs` and `src/ui/<screen>.rs`. Rust finds a module through its `mod` line, so
+  this is the package's list of files, not how it is built.
+- A program is a `[[bin]]`. A program with `- Exports:` (a library, L7) is a `[lib]` instead,
+  with the name in `snake_case` and `path = "src/main.rs"`.
+- `[dependencies]` is there only when an idea has `- Uses crate:` lines: one line per crate,
+  ``<name> = "=<version>"``, pinned to the exact version, sorted by name. Every idea's crates
+  are the program's; the same crate at two versions is the finding `crate-version`.
+- `[lints]` holds the rules of section 5 that Cargo's `[lints]` can hold (rules 6, 7, 9, 10).
+  `cargo build` holds the `rust` lints; the `clippy` lints take effect when clippy runs, at L4.
+- `[profile.release]`: `panic = "abort"` (a panic stops the component, with no unwinding code);
+  `opt-level = 3`, the speed setting, since lengua is to be faster than C, C++ and Rust, not the
+  smallest; `lto = true` and `codegen-units = 1`, so the whole program is optimized as one unit,
+  which gives smaller and faster code at a longer build, which the background job hides.
+- `[workspace]`, empty, makes the folder its own Cargo workspace, so a program inside another
+  workspace (as `examples/hello` is inside lengua's) builds alone.
+
+**`wit/world.wit`**, for hello world:
+
+```wit
+package lengua:program;
+
+world program {
+  import wasi:cli/exit@0.2.12;
+  import wasi:cli/stderr@0.2.12;
+  import wasi:cli/stdout@0.2.12;
+  import wasi:cli/terminal-output@0.2.12;
+  import wasi:cli/terminal-stderr@0.2.12;
+  import wasi:cli/terminal-stdout@0.2.12;
+  import wasi:io/error@0.2.12;
+  import wasi:io/poll@0.2.12;
+  import wasi:io/streams@0.2.12;
+
+  export wasi:cli/run@0.2.12;
+}
+```
+
+The world is a subset of WASI 0.2's `wasi:cli/command`
+([command.wit](https://github.com/WebAssembly/WASI/blob/v0.2.12/proposals/cli/wit/command.wit),
+[imports.wit](https://github.com/WebAssembly/WASI/blob/v0.2.12/proposals/cli/wit/imports.wit)):
+one `import` line per interface, sorted, each once, and `export wasi:cli/run` for a program (not
+for a library). The interfaces of each grant, with the interfaces their types come from:
+
+| Grant | Interfaces |
+|---|---|
+| always (standard output, standard error, the exit code) | `wasi:cli/exit`, `stdout`, `stderr`, `terminal-output`, `terminal-stdout`, `terminal-stderr`; `wasi:io/error`, `poll`, `streams` |
+| `- Reads: standard input` | `wasi:cli/stdin`, `terminal-input`, `terminal-stdin` |
+| `- Reads: arguments` | `wasi:cli/environment` (the arguments and the environment variables are in one interface; at L3 the host is to give no variables) |
+| `- Reads: the clock` | `wasi:clocks/monotonic-clock`, `wall-clock` |
+| `- Reads: random numbers` | `wasi:random/random`, `insecure`, `insecure-seed` |
+| `- Reads:` or `- Writes: files in ...` | `wasi:filesystem/types`, `preopens`; `wasi:clocks/wall-clock` (for the type `datetime`) |
+| `- Connects to: ...` | `wasi:sockets/network`, `instance-network`, `tcp`, `tcp-create-socket`, `ip-name-lookup`; `wasi:clocks/monotonic-clock` (for the type `duration`) |
+
+UDP is in no grant. The version is `0.2.12`, the current WASI 0.2 release; at L3 the
+component's imports are held to the world by package and interface name, with any `0.2`
+version, since WASI 0.2 releases only add to the interfaces. The folders, hosts, memory and time
+are not in the world: the host reads them from the idea at L3.
+
+The world is not given to a binding generator. A `wasm32-wasip2` program that uses only the
+standard library needs no `wit-bindgen`: `std` reaches WASI 0.2 itself, and the Rust toolchain
+makes the component. So the world needs no `wit/deps/` folder until a program uses WASI's HTTP
+world (L7), and it is the statement the component is held to at L3.
+
+**The build job.** With no findings and a `src/main.rs`, `check` starts a build in the
+background, in the program's folder, on a thread with one child process:
+
+- `cargo fetch --target wasm32-wasip2`, only when the ideas use crates and `Cargo.toml` changed
+  since the last fetch (the folder `target/lengua/` keeps the SHA-256 of the last one);
+- then `cargo build --release --target wasm32-wasip2 --offline --message-format=short`.
+
+The job's key is the SHA-256 of `Cargo.toml`, `wit/world.wit` and every file in `src/`. A
+`check` with the same key replies with the job's state and starts nothing; a `check` with a
+new key stops the job that runs (if one does) and starts a new one. A built component that is
+no longer there is built again. Before a new job, `check` runs `doctor`'s checks; when a part
+is missing, the build is `build_failed` with one finding, `toolchain-missing`, whose message is
+`doctor`'s lines for the missing parts.
+
+**The reply.** With no idea findings, `check`'s reply has `build`:
+
+| `state` | Means | Also in `build` |
+|---|---|---|
+| `no_code` | there is no `src/main.rs` yet; nothing is built | `target` |
+| `building` | the build runs; call `check` again | `seconds` so far, `target` |
+| `built` | the build passed | `seconds` it took, `target`, `component` (its absolute path), `size` (bytes), `sha256` |
+| `build_failed` | the build failed | `seconds`, `target`; the errors are in `findings` |
+
+The compiler's errors and warnings become findings, all of them, in the format of L1: the
+file relative to the folder (with `/`), the line, the code `rust-error` or `rust-warning`, and
+the message `column <n>: <the compiler's line>`, for example ``column 22: error[E0308]:
+mismatched types``. An error with no place (Cargo's own) is `build-error` on `Cargo.toml`, line
+1. `ok` is true when there are no findings, so it is also true while the build runs.
+
+**`lengua-mcp doctor`** checks, in the current folder (so a `rust-toolchain.toml` there
+counts), that `cargo` and `rustc` run, that `rustc` is 1.85 or later (edition 2024), and that
+the targets `wasm32-wasip2` and `wasm32-unknown-unknown` are installed: by `rustup target list
+--installed` when `rustup` is there, otherwise by `rustc --print sysroot` and the target's
+folder under `lib/rustlib/`. It writes one line per part, `ok       <part>: <version>` or
+`missing  <part>: not found; to install it, run: <command>`, then one line that says whether
+lengua can build, and stops with exit code 0, or 1 when a part is missing. The commands:
+`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` (on Windows `winget install
+--id Rustlang.Rustup`) for Rust, `rustup update stable` for an old `rustc`, and `rustup target
+add <target>` for a target.
 
 ### The host
 
@@ -659,6 +819,18 @@ Decided for lengua 3 at L1 (2026-11-13):
   features `server`, `macros` and `transport-io`) and `tokio` (`macros` and `rt`, which
   `rmcp` already brings), and it reaches `serde` and `schemars` through `rmcp`'s re-exports.
   Each dependency and its reason is in `todo.md`.
+
+Decided for lengua 3 at L2 (2026-11-13):
+
+- **The generators are in `lengua-idea`** (`generate.rs`, the standard library only), since
+  they read the ideas; **the build job and `doctor` are in `lengua-mcp`** (`build.rs`,
+  `doctor.rs`), on a standard-library thread and child process. No new crates.
+- **No `wit-bindgen` for a standard-library program**; the world is a statement, held at L3.
+- **Rule 12 (the structure held to the Rust functions) comes at L4** with lengua's lint, which
+  reads the Rust source; L2 does not read the Rust.
+- **`examples/` holds example programs** as the agent writes them: `idea.md` and `src/` only.
+  The tests copy them to Cargo's test folder and check the copy, so the generated files, the
+  wiki and `target/` are never in the repository.
 
 ## 10. Risks and open questions
 

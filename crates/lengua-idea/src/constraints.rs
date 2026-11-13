@@ -109,8 +109,7 @@ fn crate_line(
             && n.chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
     })?;
-    (semver(version) && !reason.trim().is_empty())
-        .then(|| (name.to_string(), version.to_string()))
+    (semver(version) && !reason.trim().is_empty()).then(|| (name.to_string(), version.to_string()))
 }
 
 struct Reader<'d> {
@@ -278,7 +277,10 @@ impl Reader<'_> {
             "Exports" => {
                 let good = names(value).is_some_and(|l| l.iter().all(|n| snake(n)));
                 self.out.exports |= good;
-                (good, "function names in backticks, with commas between them")
+                (
+                    good,
+                    "function names in backticks, with commas between them",
+                )
             }
             "Uses crate" => {
                 let found = crate_line(value, line, self.dictionary, sink);
@@ -330,7 +332,12 @@ mod tests {
         assert_eq!(modules, ["words", "ui/summary"]);
         assert_eq!(
             out.grants,
-            [Grant::StandardInput, Grant::Files, Grant::Files, Grant::Network]
+            [
+                Grant::StandardInput,
+                Grant::Files,
+                Grant::Files,
+                Grant::Network
+            ]
         );
         assert!(out.exports);
         assert_eq!(

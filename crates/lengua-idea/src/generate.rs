@@ -526,8 +526,7 @@ world program {
 
     #[test]
     fn a_hand_edit_is_a_finding_and_the_text_check_wrote_is_not() {
-        let folder =
-            std::env::temp_dir().join(format!("lengua-idea-{}-held", std::process::id()));
+        let folder = std::env::temp_dir().join(format!("lengua-idea-{}-held", std::process::id()));
         fs::create_dir_all(&folder).expect("a folder");
         let _ = fs::remove_file(folder.join("Cargo.toml"));
         assert_eq!(held(&folder, "Cargo.toml", "a\n", None), None);

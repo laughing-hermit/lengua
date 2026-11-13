@@ -34,7 +34,13 @@ fn doctor_without_rust_says_how_to_install_it_and_fails() {
         .expect("lengua-mcp runs");
     let text = String::from_utf8_lossy(&output.stdout);
     assert_eq!(output.status.code(), Some(1), "{text}");
-    assert!(text.contains("missing  cargo: not found; to install it, run: "), "{text}");
+    assert!(
+        text.contains("missing  cargo: not found; to install it, run: "),
+        "{text}"
+    );
     assert!(text.contains("rustup target add wasm32-wasip2"), "{text}");
-    assert!(text.ends_with("until the missing parts are installed.\n"), "{text}");
+    assert!(
+        text.ends_with("until the missing parts are installed.\n"),
+        "{text}"
+    );
 }

@@ -8,8 +8,8 @@ next starts (Lengua3.md, section 8).
 | # | Milestone | State |
 |---|---|---|
 | L0 | Tag `lengua2-final`; empty main; a new Cargo workspace; CI on five runners | Landed on main at bd29290 (run 43371160450, green on five) |
-| L1 | The idea file: reader, STE check, test format, `# Structure`, OKF, the wiki | Done on `wip/l1`, green on linux-x86_64; the five-runner landing run is named in the landing report |
-| L2 | Generate `Cargo.toml` and the world; build in the background; `doctor` | Not started |
+| L1 | The idea file: reader, STE check, test format, `# Structure`, OKF, the wiki | Landed on main at c3d1db1 (run 43376901162, green on five) |
+| L2 | Generate `Cargo.toml` and the world; build in the background; `doctor` | Done on `wip/l2`; the five-runner landing run is named in the landing report |
 | L3 | The host on the component model: standard input and output, arguments, files, clock, random | Not started |
 | L4 | The Power of 10 lint and the component checks | Not started |
 | L5 | Tests from the idea, generated cases, mutation score, trust labels | Not started |
@@ -92,6 +92,54 @@ next starts (Lengua3.md, section 8).
   for Lengua`** only: `rmcp`'s `#[tool_handler]` macro generates async trait methods with no
   `.await`, which lengua can't change; writing the handler by hand would copy the macro.
 
+- **2026-11-13, L2: `check` generates `Cargo.toml` and `wit/world.wit` and holds them.** Their
+  exact shapes, the grant-to-interface table, the build job, its states and `doctor` are in
+  Lengua3.md, section 4, "The generated files, the build job and `doctor`".
+- **2026-11-13, L2: a hand edit is told from an idea change by a stamp.** The top idea's
+  frontmatter gets two lengua keys, `cargo_sha256` and `world_sha256`, the hashes of what the
+  last check wrote. A file with that hash, or with the hash of the new text, is lengua's; any
+  other text is `generated-edited`. Without the stamp, a change of the ideas or a newer lengua
+  would look like a hand edit. At L6 the lock holds the same hashes.
+- **2026-11-13, L2: the release profile** is `opt-level = 3`, `panic = "abort"`, `lto = true`,
+  `codegen-units = 1`: speed first (the performance vision), whole-program optimization for
+  smaller and faster code; the longer build is hidden by the background job. Not `opt-level =
+  "z"` or `"s"`: size is second to speed.
+- **2026-11-13, L2: `[workspace]` in every generated `Cargo.toml`**, so a program folder
+  inside another Cargo workspace (as `examples/hello` is in lengua's) is its own root.
+- **2026-11-13, L2: crates are pinned exactly** (`name = "=1.2.3"`), the version the idea
+  names; the same crate at two versions in two ideas is the finding `crate-version`.
+- **2026-11-13, L2: `include` lists the ideas' Rust files** (the "module files from
+  `- Modules:`"). It is the package's list of files; Rust still finds modules by `mod`.
+- **2026-11-13, L2: a program with `- Exports:` is a `[lib]`** with `path = "src/main.rs"`;
+  libraries come at L7 and may change this.
+- **2026-11-13, L2: no `wit-bindgen`.** A `wasm32-wasip2` program on the standard library
+  reaches WASI 0.2 through `std`, and the toolchain makes the component; the world is the
+  statement the component is held to at L3. `wit-bindgen` or `wasi` comes with the HTTP world
+  (L7), declared with `- Uses crate:`.
+- **2026-11-13, L2: the world names WASI 0.2.12** (the current 0.2 release, read from
+  `WebAssembly/WASI` at the tag `v0.2.12`); L3 compares by interface name with any 0.2
+  version. An interface's type dependencies come with it: files bring `wasi:clocks/wall-clock`
+  (`datetime`), sockets bring `wasi:clocks/monotonic-clock` (`duration`). UDP is in no grant.
+- **2026-11-13, L2: the build runs only when `src/main.rs` is there**; without it the state is
+  `no_code`, so an agent can check an idea before it writes the code.
+- **2026-11-13, L2: the wiki and the generated files are written before the build**, when the
+  ideas pass; a failed build does not take them back (the label stays `unchecked` until L5).
+- **2026-11-13, L2: a failed build with the same key is not run again**; the reply repeats the
+  failure until a file changes. A built component that was removed is built again; a missing
+  toolchain is checked again on every `check`.
+- **2026-11-13, L2: the compiler's lines are read in `--message-format=short`**, one line per
+  error with `file:line:column:`, so no JSON reader is needed; the column goes in the message.
+- **2026-11-13, L2: `doctor` needs `rustc` 1.85 or later** (edition 2024) and is run in the
+  current folder, so a `rust-toolchain.toml` there counts. The commands it gives: the rustup
+  installer (`winget install --id Rustlang.Rustup` on Windows), `rustup update stable`,
+  `rustup target add <target>`.
+- **2026-11-13, L2: no new crates.** The build job is a standard-library thread and child
+  process; the generators are on the standard library.
+- **2026-11-13, L2: rule 12 waits for L4.** Lengua3.md said "at L2 and L4"; holding the
+  structure to the Rust functions needs a reader of Rust source, which is lengua's lint (L4).
+- **2026-11-13, L2: CI lists the imports of the built `hello.wasm`** (the `wasi:` names in the
+  binary) after the tests, as evidence for L3's import check.
+
 ## Runs
 
 The five-runner run a landing rests on is at the head it tests, so it is named in the landing report and added here at the next milestone.
@@ -105,7 +153,11 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-13 | [43374878743](https://github.com/laughing-hermit/lengua/actions/runs/43374878743) | wip/l1 9293f97 | test, linux-x86_64 | Failed: 12 clippy findings in `lengua-idea` (`chunks_exact`, `format_collect`, `option_option`, `format_push_string`, ...) |
 | 2026-11-13 | [43375624971](https://github.com/laughing-hermit/lengua/actions/runs/43375624971) | wip/l1 c62a402 | test, linux-x86_64 | Failed: 2 clippy findings in `lengua-mcp` (`needless_pass_by_value`, `unused_async_trait_impl` from `rmcp`'s macro) and a format patch |
 | 2026-11-13 | [43376326657](https://github.com/laughing-hermit/lengua/actions/runs/43376326657) | wip/l1 79fbe14 | test, linux-x86_64 | Green: format, lockfile, clippy, 63 tests passed (51 unit, 6 + 4 integration, 2 version), binary built |
+| 2026-11-13 | [43376901162](https://github.com/laughing-hermit/lengua/actions/runs/43376901162) | wip/l1 c3d1db1 | test, all five | Green on five: the L1 landing run |
+| 2026-11-13 | [43379311761](https://github.com/laughing-hermit/lengua/actions/runs/43379311761) | wip/l2 371f8dc | test, linux-x86_64 | Failed only on format (a patch, applied); tests green: 58 + 8 + 4 + 9 + 2 + 2 passed, hello world built in about 2 s; `hello.wasm` imports listed (Lengua3.md, section 10) |
 
 ## What the permission checks refused
 
-Nothing yet.
+- **2026-11-13, L2:** a shell command of the builder that ended in `python3 --version` was
+  refused. It was a mistake: this computer runs no interpreter, not even for a version. Nothing
+  needed it; the work went on with the editor's tools and `sed`.

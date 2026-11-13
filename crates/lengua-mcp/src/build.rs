@@ -165,18 +165,17 @@ fn cargo(
         .ok_or_else(|| "the build was stopped".to_string())?
         .wait()
         .map_err(|e| format!("lengua could not wait for cargo: {e}"))?;
-    Ok((status.success(), String::from_utf8_lossy(&bytes).to_string()))
+    Ok((
+        status.success(),
+        String::from_utf8_lossy(&bytes).to_string(),
+    ))
 }
 
 fn fetch_stamp(folder: &Path) -> PathBuf {
     folder.join("target").join("lengua").join("fetched")
 }
 
-fn fetch(
-    folder: &Path,
-    build: &Build,
-    slot: &Mutex<Option<Child>>,
-) -> Result<(), Vec<Problem>> {
+fn fetch(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> Result<(), Vec<Problem>> {
     let manifest = fs::read(folder.join("Cargo.toml")).unwrap_or_default();
     let hash = lengua_idea::sha256_hex(&manifest);
     let stamp = fetch_stamp(folder);

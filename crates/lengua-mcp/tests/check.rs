@@ -261,7 +261,10 @@ fn hello_world_builds_to_a_component() {
         bytes.get(..8),
         Some(&[0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00][..])
     );
-    assert_eq!(reply["build"]["size"].as_u64(), u64::try_from(bytes.len()).ok());
+    assert_eq!(
+        reply["build"]["size"].as_u64(),
+        u64::try_from(bytes.len()).ok()
+    );
     let sha = reply["build"]["sha256"].as_str().expect("a hash");
     assert_eq!(sha, lengua_idea::sha256_hex(&bytes));
     let again = server.check(2000, &folder);
@@ -317,8 +320,11 @@ fn a_hand_edited_cargo_toml_is_a_finding_and_nothing_is_built() {
     let first = server.check(2, &folder);
     assert_eq!(first["build"]["state"], "no_code", "{first:#}");
     let cargo = fs::read_to_string(folder.join("Cargo.toml")).expect("Cargo.toml");
-    fs::write(folder.join("Cargo.toml"), cargo.replace("lto = true", "lto = false"))
-        .expect("an edit");
+    fs::write(
+        folder.join("Cargo.toml"),
+        cargo.replace("lto = true", "lto = false"),
+    )
+    .expect("an edit");
     let reply = server.check(3, &folder);
     assert_eq!(reply["ok"], false);
     assert_eq!(codes(&reply), ["generated-edited"]);
