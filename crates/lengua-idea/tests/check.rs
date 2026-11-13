@@ -725,3 +725,19 @@ fn a_library_that_is_not_checked_is_refused_by_the_program_that_uses_it() {
     fs::remove_dir_all(&library).expect("removed");
     assert!(codes_of(&program).contains(&("idea.md".to_string(), "library-missing")));
 }
+
+#[test]
+fn the_label_in_the_frontmatter_does_not_change_the_build_s_inputs() {
+    use lengua_idea::{Label, Trust};
+    let folder = fixture("good", "inputs");
+    let first = lengua_idea::check(&folder, NOV_13_2026);
+    let before = first.build.expect("a build").inputs;
+    let checked = lengua_idea::check_with(&folder, NOV_13_2026 + 1, |_| {
+        Some(Trust {
+            label: Label::Checked,
+            score: Some((9, 10)),
+        })
+    });
+    assert!(read(&folder, "idea.md").contains("\nverified:\n"));
+    assert_eq!(checked.build.expect("a build").inputs, before);
+}

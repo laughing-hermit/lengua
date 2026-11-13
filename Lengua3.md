@@ -357,7 +357,8 @@ space or `-`), a blank line or a `#` comment. A key may be there one time only.
 
 - **lengua writes these keys**, and overwrites any value the agent gave them: `type`
   (`lengua Program`, `lengua Server` or `lengua Library` for the top idea, by its shape, since
-  L7; `lengua Module` or `lengua Screen`), `description` (the first sentence of
+  L7; `lengua Module` or `lengua Screen`; a component page, not an idea, is `lengua Component`,
+  since L9), `description` (the first sentence of
   `# Purpose`), `module` (`main` for the top idea), `source` (`src/main.rs`, `src/<name>.rs`,
   `src/ui/<name>.rs`), `uses` and `used_by` (OKF concept ids, the file without `.md`: `idea`,
   `ideas/cart`, `ideas/ui/basket`; since L9 a library's id too, its folder and `/idea`:
@@ -1249,7 +1250,9 @@ the folder's root are OKF's reserved files (OKF sections 8 and 9).
   every file as it is: the same ideas, code and generated files keep the label they were
   checked to, so a new session or a new clone does not write `unchecked` and then `checked`
   again. When anything changed, the label is `unchecked` until the job ends. A job that ends
-  `build_failed` or `tests_failed` writes `unchecked`, and `done` writes its label.
+  `build_failed` or `tests_failed` writes `unchecked`, and `done` writes its label. The job's
+  inputs count an example's line from the start of its idea's text, not of the file, so the
+  lines `verified` adds to the frontmatter do not start the job again.
 - **The frontmatter** of each idea: the keys lengua writes come first, in the order of "The
   idea file's grammar", then the agent's keys as they were, then `title` and `status` when
   they were absent. An example:

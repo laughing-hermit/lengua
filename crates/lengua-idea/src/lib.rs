@@ -589,7 +589,22 @@ fn outside_inputs(folder: &Path, prepared: &Prepared) -> Vec<(String, Vec<u8>)> 
 fn build(folder: &Path, prepared: &Prepared) -> Build {
     let plan = &prepared.plan;
     let grants = grants(&prepared.top);
-    let tests_hash = tests_hash(&prepared.tests, &grants);
+    let placed: Vec<Test> = prepared
+        .tests
+        .iter()
+        .map(|t| {
+            let start = prepared
+                .pages
+                .iter()
+                .find(|p| p.file == t.file)
+                .map_or(1, |p| p.front.body_line);
+            Test {
+                line: t.line.saturating_sub(start),
+                ..t.clone()
+            }
+        })
+        .collect();
+    let tests_hash = tests_hash(&placed, &grants);
     let extra = outside_inputs(folder, prepared);
     Build {
         artifact: generate::artifact(&plan.package, prepared.shape),
@@ -876,10 +891,7 @@ pub fn check_with(folder: &Path, now: u64, trust: impl FnOnce(&Build) -> Option<
     let planned = build(folder, &prepared);
     let given = trust(&planned);
     report.trust = given.unwrap_or_default();
-    let title = prepared
-        .pages
-        .first()
-        .map_or_default(|p| p.title.clone());
+    let title = prepared.pages.first().map_or_default(|p| p.title.clone());
     let parts = wiki::Parts {
         title: &title,
         shape: prepared.shape,
