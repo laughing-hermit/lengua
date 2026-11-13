@@ -146,7 +146,7 @@ jobs:
       - name: the imports of the built examples, as Wasmtime reads them
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |
-          for f in $(find target/tmp -path '*wasm32-wasip2/release/*.wasm' -not -path '*/deps/*' | sort); do
+          for f in $(find target/tmp -path '*wasm32-wasip2/release/*.wasm' -not -path '*/deps/*' -not -path '*/build/*' | sort); do
             echo "$f: $(wc -c < "$f") bytes"
             cargo run --locked -q -p lengua-mcp -- imports "$f"
           done
@@ -160,6 +160,8 @@ jobs:
           fi
           cd "$d"
           cargo clean -q
+          TIMEFORMAT='fmt --check: %R s'
+          time cargo fmt --check
           TIMEFORMAT='clippy, from clean: %R s'
           time cargo clippy -q --release --target wasm32-wasip2 --offline -- -D warnings
           TIMEFORMAT='build, after clippy: %R s'

@@ -998,6 +998,18 @@ Decided for lengua 3 at L3 (2026-11-13):
 - **WASI 0.3 looked at again**: `wasmtime-wasi` 50.0.1 still has `p3` as a feature of its own
   with the 0.2 module as its stable side, so lengua stays on 0.2.
 
+Decided for lengua 3 at L4 (2026-11-13):
+
+- **lengua reads Rust itself**: `crates/lengua-lint`, on the standard library alone, used by
+  `lengua-idea`; no `syn` (section 5, "What each rule accepts and refuses").
+- **The lint runs with the idea checks**, when `src/main.rs` is there; the build job runs
+  `cargo fmt --check`, then clippy, then `cargo build`; the component checks follow it.
+- **Rule 5 does not count `main`**; rule 10 refuses `#[allow]`, `#[warn]` and `#[expect]`;
+  the call graph errs towards a false recursion, never a missed one, for the calls it reads,
+  and does not read the calls Rust makes on its own (section 5).
+- **The size limit is 64 MiB**, and lengua's engine refuses relaxed SIMD and threads and
+  canonicalizes NaNs.
+
 ## 10. Risks and open questions
 
 - **WASI 0.2, decided at L0 (2026-11-13): lengua 3 targets WASI 0.2, `wasm32-wasip2`.**
@@ -1062,6 +1074,14 @@ Decided for lengua 3 at L3 (2026-11-13):
   `wasi:random`, a program that uses it needs `- Reads: random numbers`; to decide then whether
   such an import joins the always set with a fixed seed behind it. To make the evidence exact,
   L4's component checks can print the imports that Wasmtime reads.
+- **Found at L4: what `std` imports, as Wasmtime reads it** (`lengua-mcp imports`, CI run
+  43396401311, Rust 1.100.0). `hello`, `echo` and `count` import the always set only. `files`
+  adds `wasi:clocks/wall-clock`, `wasi:filesystem/preopens` and `types`, and no `wasi:random`.
+  `clock` adds `wasi:clocks/wall-clock` and `wasi:random/insecure-seed`, and not
+  `wasi:random/random` or `insecure`: `std`'s `RandomState`, the hasher of every `HashMap` and
+  `HashSet`, takes its keys from `insecure-seed`. So a program with a `HashMap` needs `- Reads:
+  random numbers` today. Still open (for L5, whose tests need it): to put `insecure-seed` in the
+  always set with a fixed seed behind it unless random numbers are granted, as the clock is.
 - **Build time:** a cold `cargo build` can take longer than one tool call; the background job
   and a kept build folder per program must hide it.
 - **The user must have Rust installed**, with its two WebAssembly targets. lengua 2 needed nothing
