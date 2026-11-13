@@ -275,3 +275,74 @@ jobs:
           time (for i in $(seq 20); do ./target/release/lengua-run --version > /dev/null; done)
           TIMEFORMAT='lengua-mcp --version, 20 runs: %R s'
           time (for i in $(seq 20); do ./target/release/lengua-mcp --version > /dev/null; done)
+
+  gpui-risk:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v5
+      - name: toolchain
+        run: |
+          rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal --component clippy --target wasm32-unknown-unknown
+          rustc --version
+      - name: wasm-bindgen 0.2.130, pinned by SHA-256
+        run: |
+          curl -sSfL -o wb.tar.gz https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.130/wasm-bindgen-0.2.130-x86_64-unknown-linux-musl.tar.gz
+          echo "9687f3bb551b9f66f37ed32a40d7913a00f7962db653054e56857bc306c3227f  wb.tar.gz" | sha256sum -c
+          tar xzf wb.tar.gz
+          echo "$PWD/wasm-bindgen-0.2.130-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+      - name: resolve
+        working-directory: spike/gpui
+        run: |
+          cargo generate-lockfile
+          cargo tree --target wasm32-unknown-unknown -e normal --prefix none | sort -u | wc -l
+          cargo tree --target wasm32-unknown-unknown -e normal -i parking_lot || true
+      - name: the screen for wasm32-unknown-unknown, on stable
+        id: wasm
+        working-directory: spike/gpui
+        run: |
+          time cargo build --release --target wasm32-unknown-unknown --lib 2>&1 | tail -80
+          ls -l target/wasm32-unknown-unknown/release/*.wasm
+      - name: clippy of the screen for the browser
+        if: ${{ !cancelled() }}
+        working-directory: spike/gpui
+        run: cargo clippy --release --target wasm32-unknown-unknown --lib 2>&1 | tail -40
+      - name: wasm-bindgen
+        if: ${{ !cancelled() }}
+        working-directory: spike/gpui
+        run: |
+          mkdir -p out
+          wasm-bindgen target/wasm32-unknown-unknown/release/spike.wasm --target web --no-typescript --out-dir out
+          cp index.html out/
+          ls -l out
+          sha256sum out/*
+      - name: the screen in headless Chrome
+        if: ${{ !cancelled() }}
+        working-directory: spike/gpui/out
+        run: |
+          which google-chrome chromium chromium-browser chromedriver || true
+          google-chrome --version || true
+          (python3 -m http.server 8099 > ../server.log 2>&1 &)
+          sleep 2
+          for flags in "--use-angle=swiftshader --enable-unsafe-swiftshader" "--use-angle=swiftshader --enable-unsafe-swiftshader --enable-unsafe-webgpu --enable-features=Vulkan"; do
+            echo "== $flags"
+            timeout 60 google-chrome --headless=new --no-sandbox $flags --window-size=800,600 --virtual-time-budget=20000 --enable-logging=stderr --v=0 --dump-dom http://127.0.0.1:8099/index.html 2> chrome.log | head -c 3000
+            echo
+            grep -i 'console\|error\|webgl\|webgpu\|gpui' chrome.log | head -40
+            timeout 60 google-chrome --headless=new --no-sandbox $flags --window-size=800,600 --virtual-time-budget=20000 --screenshot="$PWD/shot-$(echo $flags | wc -c).png" http://127.0.0.1:8099/index.html 2>/dev/null || true
+          done
+          ls -l *.png || true
+      - uses: actions/upload-artifact@v5
+        if: ${{ !cancelled() }}
+        with:
+          name: gpui-risk-${{ github.run_number }}
+          path: |
+            spike/gpui/out/*.png
+            spike/gpui/Cargo.lock
+      - name: the screen's test, natively, with GPUI's test context
+        if: ${{ !cancelled() }}
+        working-directory: spike/gpui
+        run: time cargo test --test screen -- --nocapture 2>&1 | tail -80

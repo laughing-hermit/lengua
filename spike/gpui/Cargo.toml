@@ -1,0 +1,27 @@
+[package]
+name = "spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+gpui-component = { version = "=0.9.1", default-features = false }
+gpui-pre = { version = "=0.3.12", default-features = false }
+gpui-pre-platform = { version = "=0.3.12", default-features = false }
+wasm-bindgen = { version = "=0.2.130", default-features = false }
+
+[dev-dependencies]
+gpui-component = { version = "=0.9.1", default-features = false, features = ["test-support"] }
+gpui-pre = { version = "=0.3.12", default-features = false, features = ["test-support"] }
+
+[profile.release]
+opt-level = 3
+panic = "abort"
+lto = true
+codegen-units = 1
+
+[workspace]
