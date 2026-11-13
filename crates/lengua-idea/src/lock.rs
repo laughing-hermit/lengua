@@ -488,20 +488,20 @@ mod tests {
     fn a_key_is_made_once_and_read_back() {
         let path = folder("key");
         let home = path.join("home");
-        let made = create_key(&home, [7; KEY_BYTES]).expect("a key");
+        let first = create_key(&home, [7; KEY_BYTES]).expect("a key");
         let again = create_key(&home, [9; KEY_BYTES]).expect("the same key");
-        assert!(made == again);
-        assert!(read_key(&home).expect("a key") == made);
+        assert!(first == again);
+        assert!(read_key(&home).expect("a key") == first);
         let text = fs::read_to_string(key_file(&home)).expect("the file");
         assert_eq!(text, format!("{}\n", "07".repeat(KEY_BYTES)));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(key_file(&home))
+            let key_mode = fs::metadata(key_file(&home))
                 .expect("a file")
                 .permissions()
                 .mode();
-            assert_eq!(mode & 0o777, 0o600);
+            assert_eq!(key_mode & 0o777, 0o600);
             let folder_mode = fs::metadata(&home).expect("a folder").permissions().mode();
             assert_eq!(folder_mode & 0o777, 0o700);
         }
