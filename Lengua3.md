@@ -167,6 +167,37 @@ code, and again whenever a change alters what the program does or may reach. It 
 What lengua can't do: it can't prove a person, and not the agent, said yes. The skill asks,
 and the lock and the log record when and what was approved.
 
+### Programs that ask AI models
+
+An AI language's programs can ask an AI model as part of their own work: classify this,
+summarise that, extract these fields, then carry on with the answer, the way LangChain does.
+In lengua it is a grant like any other.
+
+- **The idea declares it:** `- Asks: an AI model, for <what>`, with limits:
+  `up to N calls, M tokens` per run. Without the grant, the program can't ask.
+- **One interface, provided by the host:** send a prompt, get a reply; or ask for a structured
+  reply that must match a shape, which the host checks. Streaming replies too. The program
+  never holds an API key.
+- **The person running it chooses the model**, outside the program:
+  - a cloud API (such as Anthropic's), with its key held by the host;
+  - a local model (such as Ollama or llama.cpp), so nothing leaves the machine;
+  - the agent's own model through MCP sampling, when the program runs from an agent that
+    supports it. Claude Code does not support sampling yet
+    ([issue #1785](https://github.com/anthropics/claude-code/issues/1785),
+    [MCP sampling](https://modelcontextprotocol.io/specification/2025-11-25/client/sampling)),
+    so this path waits; cloud and local work now.
+- **Tests stay exact and free.** An example gives the model's answer:
+  ``Given the model answers `urgent` ``. A separate, optional live run asks the real model and
+  is never part of the label.
+- **AI output is untrusted input.** The program checks every answer (parses it into a shape,
+  refuses anything else); the Power of 10's "every result handled" applies.
+- **Still one WebAssembly file.** The interface is a WIT interface the host links only with
+  the grant. (`wasi-nn` is for running a model inside the program; it is on the watch list.)
+- **A shared library, `ai`,** on the standard library alone: prompt templates, structured
+  replies, retries, and steps chained one after another.
+- **Where it runs and what it costs are said plainly:** the "Where it runs" line names the
+  model's kind (cloud, local), and the reply shows the call and token limits.
+
 ### Nothing unless absolutely necessary
 
 One principle runs through lengua:
@@ -1612,7 +1643,7 @@ Each one is green on all five runners before the next starts.
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | A changed idea or file is refused at run |
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries (JSON, HTTP, decimal, text, sorting, hashes, dates); a component from another language | An application of several module ideas builds to one file; it uses a library and a C component, each labelled |
 | L8 | The GPUI front end: screens built for the browser, embedded in the one file; several screens with navigation and forms; their behaviours tested; what a screen reader can read, tested and written down; one Zed commit pinned; lengua's own std-only crates also built for WebAssembly in CI | A web application with GPUI screens ships as one file and opens in a browser |
-| L9 | Full stack: storage granted by the idea; outgoing HTTP calls (other services and AI models, with streaming replies); secrets given by the host and never written to the lock or logs; logins (sessions, password hashing, tokens) as a shared library; the front end calling its own server with shared Rust types; logs and errors of a running app; an embeddings and vector-search shared library; a tested way to deploy | A full-stack application (front end, server, storage, logins, an AI call) is `checked` and runs as one file |
+| L9 | Full stack: programs that ask AI models (`- Asks: an AI model`, with call and token limits; the host's interface to a cloud or local model, structured and streamed replies; model answers given in the tests; the `ai` shared library); storage granted by the idea; outgoing HTTP calls (other services and AI models, with streaming replies); secrets given by the host and never written to the lock or logs; logins (sessions, password hashing, tokens) as a shared library; the front end calling its own server with shared Rust types; logs and errors of a running app; an embeddings and vector-search shared library; a tested way to deploy | A full-stack application (front end, server, storage, logins, an AI call) is `checked` and runs as one file |
 | L10 | Native parts: `- Native:` with a named reason, built for the user's system and on five runners, the same checks, the `native` label, the "Where it runs" line; an example desktop app with its own GPUI window whose logic stays WebAssembly; what a native part can reach, written down | A native part is built, checked and labelled; an undeclared native need is refused |
 | L11 | The skills: a new `vision` skill (the best lengua solution for an idea, `vision.md`, the principles with their do's and don'ts in `references/principles.md`, approved by the person) and `write-idea` and `build` rewritten for Rust, GPUI, full stack and native parts; the person reads the idea and approves it in their own words before any code, and again for changes (the approved hash in the lock, `build` refused without it); "Where it runs" before any code, pure Rust first, the merit test for crates, crates that aren't pure Rust flagged; the Agent Plugins version settled; a product test in an interactive session | An agent goes from a request to a `checked` full-stack application with the plugin alone |
 | L12 | The scale test: a full-stack application (GPUI front end, server, storage, logins, an AI call) in one file, built and then changed three times | A report of cycles and breakages, next to lengua 2's 3,638-line record |
