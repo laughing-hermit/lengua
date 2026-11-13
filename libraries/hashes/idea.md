@@ -1,3 +1,22 @@
+---
+type: lengua Library
+description: "The library gives the SHA - 256 hash and the CRC - 32 value of bytes."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: checked
+idea_sha256: baddaca4c73ce45ebeeab840ea91609fda77131a8b5bdb4abc027836dc5c1d46
+source_sha256: a3905c876e2530a6623fc371bf3ca67c3ab6bf0eb307dd0141bf332b6268936e
+cargo_sha256: 9dc51bc59e4c7bbba0894b17f63c474786238e039f4cf65b6b7bc66c49477c45
+world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T22:56:05Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T22:56:05Z }
+title: hashes
+status: draft
+---
+
 # Purpose
 
 The library gives the SHA-256 hash and the CRC-32 value of bytes. It is a `lengua` library on the
@@ -91,3 +110,7 @@ Then it gives the check value of CRC-32, 3421780262.
 - `schedule`: gives the 64 words of the schedule of one block.
 - `compress`: adds one block of 64 bytes to the state of the hash.
 - `crc32`: gives the CRC-32 value of bytes, with the polynomial `0xedb88320`.
+
+# Links
+
+* Index: [hashes](index.md).

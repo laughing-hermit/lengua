@@ -1661,8 +1661,9 @@ A review on 2026-11-13 against
 structure sound (concept ids, `index.md`, `log.md`) and these gaps. Each is part of the
 milestone named:
 
-- **L9, in `check`:** all done ahead of L9, on 2026-11-13, on `wip/wiki` (run RUN_ID, five
-  runners); "The idea file's grammar" and "The wiki's formats" say how each works.
+- **L9, in `check`:** all done ahead of L9, on 2026-11-13, on `wip/wiki` (the five-runner
+  landing run is named in the landing report); "The idea file's grammar" and "The wiki's formats"
+  say how each works.
   - Done: OKF's trust fields on every page: `generated` (by `lengua-mcp/<version>`, at),
     `verified` by `process:lengua-check` while the label is `checked` or `tested`, and `status`
     (`draft` until approved); agent-written values of these checked, not only kept
@@ -1698,10 +1699,10 @@ milestone named:
   - `check` holds the ideas to `vision.md` and says when they grow past it.
   - The idea grammar ships in the skill's references, so an agent needs nothing outside the
     plugin.
-- **L13, one wiki across the repository:** done ahead of L13, on 2026-11-13 (run RUN_ID, five
-  runners), as "One wiki across the repository" says.
+- **L13, one wiki across the repository:** done ahead of L13, on 2026-11-13 (the five-runner
+  landing run is named in the landing report), as "One wiki across the repository" says.
   - Done: the generated frontmatter, `# Links`, component pages, `index.md` and `log.md` of
-    `libraries/*` and `examples/*` committed from the CI mode `wiki` (run WIKI_RUN), not the
+    `libraries/*` and `examples/*` committed from the CI mode `wiki` (run 43522428412), not the
     per-user lock, so the shared libraries are a browsable wiki.
   - Done: root `index.md` files for the repository, `libraries/` and `examples/`, written by
     `lengua-mcp wiki <root>`.

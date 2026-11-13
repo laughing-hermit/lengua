@@ -1,3 +1,22 @@
+---
+type: lengua Program
+description: "The program waits for 30 seconds in a call to the host, and then it writes `awake`."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: tested
+idea_sha256: 31dc4f05bfe0015d00134d877996229503c8761f8eea0444c6a1c82cd99559ac
+source_sha256: 039de563daabc89903b33f74dffea24bf15e09126f26f83e5f8ff3aa5fbe75d2
+cargo_sha256: 36eae84f67e68b9ee45400e27117ac8a3d065dd2f67ccd26e7c6c68f23f1b46f
+world_sha256: 0a7313a3dd0aa5c41e90b244f039886104d47ce35544350dbfa738da23ba0d2c
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:03:01Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:03:01Z }
+title: sleepy
+status: draft
+---
+
 # Purpose
 
 The program waits for 30 seconds in a call to the host, and then it writes `awake`. The time of
@@ -23,3 +42,7 @@ Then the host stops it at the time limit, and the standard output is empty.
 # Structure
 
 - `main`: waits for 30 seconds, and then writes `awake` and a line end.
+
+# Links
+
+* Index: [sleepy](index.md).

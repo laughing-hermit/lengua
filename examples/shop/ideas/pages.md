@@ -1,3 +1,20 @@
+---
+type: lengua Module
+description: "The module sends each path to its page, and writes the answers and the errors as JSON."
+module: pages
+source: src/pages.rs
+uses: []
+used_by: [idea]
+label: checked
+idea_sha256: bab1901d5e1eb171ee3ea46595bbf5dacf94a4a260a93a132a8e9bd0d4d2560f
+source_sha256: 937471c53a73b8b82088aab4a4ea03c181eb11294ca830c5d47cc451d8692e3a
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:02:53Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:02:53Z }
+title: pages
+status: draft
+---
+
 # Purpose
 
 The module sends each path to its page, and writes the answers and the errors as JSON. The
@@ -22,3 +39,8 @@ Then the tax is 0.20 and the total is 2.70.
 - `route`: gives the status and the body of the page of a path.
 - `total`: gives the net sum, the tax and the total of a basket, or an error.
 - `error`: gives a status and a JSON object with the error.
+
+# Links
+
+* Used by: [shop](../idea.md).
+* Index: [shop](../index.md).

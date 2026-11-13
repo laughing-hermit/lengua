@@ -1,3 +1,22 @@
+---
+type: lengua Library
+description: "The library reads and writes whole numbers and decimal numbers with a fixed number of places, as `i64` values."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: checked
+idea_sha256: 6f8b62af5416cdfc6cdcd57e2e1ea9c60faf0e7ae3f54731b9ad647d8b06abd3
+source_sha256: 0aa2edc6181445c8fbdac7134d55ba2356ab1459260b66676e3dbdb1055d9e1b
+cargo_sha256: ccf407feb8f49854dfd01f4a44c8e8268dab795251bb09f5213b8b08bbd11b9e
+world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T22:55:09Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T22:55:09Z }
+title: decimal
+status: draft
+---
+
 # Purpose
 
 The library reads and writes whole numbers and decimal numbers with a fixed number of places,
@@ -222,3 +241,7 @@ Then it gives the result, or the error `Overflow` when the result is past the ra
 - `format_fixed`: writes a number of the smallest units as a decimal number.
 - `add`: adds two numbers, or reports an overflow.
 - `multiply`: multiplies two numbers, or reports an overflow.
+
+# Links
+
+* Index: [decimal](index.md).

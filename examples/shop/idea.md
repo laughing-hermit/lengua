@@ -1,3 +1,22 @@
+---
+type: lengua Server
+description: "The program is the HTTP server of a small shop."
+module: main
+source: src/main.rs
+uses: [ideas/catalog, ideas/basket, ideas/pages, ../../libraries/json/idea, ../../libraries/decimal/idea]
+used_by: []
+label: checked
+idea_sha256: 6de32c9b2b4463dab867da9b9c30f2638a936a30e00c516da32ea4ddb76f9640
+source_sha256: 25e2f5222330b87373e03f87e859b22c7ac993a9749041af007aed87e655128a
+cargo_sha256: f7b773c3760b61aa4beea51fb797c12b4ad6c86367254af5b78f70e520143f15
+world_sha256: 6aa2f03d29a6dae284b24b3801913f715788aad0e8f74739ae1fde5efab7af5d
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:02:53Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:02:53Z }
+title: shop
+status: draft
+---
+
 # Purpose
 
 The program is the HTTP server of a small shop. It lists the items of its catalog with their
@@ -65,3 +84,9 @@ Then the answer is 404 with an error in JSON.
 
 - `Shop::handle`: answers a request with the status and the JSON body that the pages give.
 - `tax_for`: gives the tax of a number of cents, from the component in C.
+
+# Links
+
+* Uses: [catalog](ideas/catalog.md), [basket](ideas/basket.md), [pages](ideas/pages.md), [json](../../libraries/json/idea.md), [decimal](../../libraries/decimal/idea.md).
+* Components: [tax](components/tax.md).
+* Index: [shop](index.md).
