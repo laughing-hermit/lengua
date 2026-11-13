@@ -1541,6 +1541,25 @@ Decided for lengua 3 at L6 (2026-11-13):
 - **`lengua-run`** is a new binary crate; its exit codes are the program's, or 124, 125, 126 and
   134 for lengua-run's own endings.
 
+Decided for lengua 3 at L7 (2026-11-13):
+
+- **A module's examples run through the program's entry**; a library's through a generated
+  harness of calls (section 4, "As built at L7"). Each module has its `mod` line.
+- **An idea has a shape**: a program, a server (`- Serves:`) or a library (`- Exports:`); a
+  library reaches nothing of its own, and its lock is of kind `library`.
+- **A program names a library by its folder** in `- Uses:`; its lock is verified at `check` and
+  at `run`, and recorded in the program's lock.
+- **Network grants are exact addresses and ports**, held by `wasmtime-wasi`'s socket address
+  check; UDP is linked and off. Tests give a `Server` or a `Client`.
+- **The HTTP world**: `wasmtime-wasi-http` (synchronous bindings, outgoing requests refused) in
+  the host; `wasip2` 2.0.1 in the program; requests in memory for `run` and the tests, a TCP port
+  for `lengua-run`.
+- **A component from another language** is compiled, held to the world, sealed and linked by
+  lengua's host; labelled `trusted`. The first one is in C, built by wasi-sdk 34 in CI.
+- **lengua's shared libraries** are seven lengua libraries in `libraries/`, each `checked`.
+- **New dependencies of lengua's own**: `wasmtime-wasi-http` 50.0.1 (`p2`) and `hyper` 1 (no
+  features, for its re-exported types; already in the graph), both in `lengua-host`.
+
 ## 10. Risks and open questions
 
 - **WASI 0.2, decided at L0 (2026-11-13): lengua 3 targets WASI 0.2, `wasm32-wasip2`.**
@@ -1655,6 +1674,28 @@ Decided for lengua 3 at L6 (2026-11-13):
 - **Crates that aren't pure Rust** (they wrap a C library) need a C compiler, build differently
   on each system and usually can't go into WebAssembly, so the `build` skill takes them last,
   and `check` flags them.
+- **Looked at again at L7: WASI 0.3 for HTTP.** `wasmtime-wasi-http` 50.0.1 has `p3` as a
+  feature of its own and its documents call the 0.3 module "experimental, incomplete", while its
+  `p2` module, with synchronous bindings, carries no such label; `wasip2` 2.0.1 binds WASI
+  0.2.12. So servers stay on WASI 0.2 (`wasi:http/proxy` 0.2.12). Look again at L13.
+- **Found at L7: what `std`'s sockets import** (run 43478821353, `lengua-mcp imports`): `fetch`
+  and `upper` import `wasi:sockets/tcp`, `tcp-create-socket`, `network`, `instance-network`,
+  `ip-name-lookup`, `udp` and `udp-create-socket`, and `wasi:clocks/wall-clock`, though they use
+  TCP only. So a network grant's world names them all, and the host keeps UDP off.
+- **Found at L7: the bindings' macros and `unsafe_code = "forbid"`.** `wasip2::http::proxy::export!`
+  (a `macro_rules!` of the crate) and `wit_bindgen::generate!` (a procedural macro) write
+  `unsafe` code and `#[unsafe(export_name)]` into the program, and the program's own lints still
+  forbid `unsafe_code`: rustc does not report a lint in code from another crate's macro. The
+  program's own source has no `unsafe` (lengua's lint and rule 9 hold that); the macros' code is
+  the declared crate's, as rule 9 allows. Measured on Linux x86-64 only so far; the landing run
+  holds it on five.
+- **Open at L7: the ports of the tests are fixed** (7801 to 7811 in the examples); a test server
+  waits up to 10 s for its port, and `lengua-run`'s test of a server needs its port free. A
+  program's own tests do not use the network unless the example gives a `Server` or a `Client`.
+- **Open at L7: `generate!` and the folder `wit/`.** `wit-bindgen`'s `generate!` reads `wit/` by
+  default, and lengua's `wit/world.wit` is a statement for the host, not WIT for a binding
+  generator (it imports WASI with no `wit/deps/`). A program writes `path: []` with `inline`; the
+  `build` skill (L9) says so.
 
 ## Sources
 
