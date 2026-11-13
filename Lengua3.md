@@ -95,6 +95,27 @@ What that means for lengua 3:
   development is what lengua does first and best; a desktop app is the same application in an
   Electron window.
 
+### Which part does what
+
+Decided by the owner on 2026-11-13. The split between the front end and the back end, which the
+`vision` skill's principles page quotes (L11). For every idea, the skill tells the person which
+row each part of it falls into.
+
+| Work | Where | Built with | Native? |
+|---|---|---|---|
+| Screens, forms, navigation, layout, visualisations, AI chat UI | Front end | Next.js (TSX), shadcn/ui, Vercel's AI-UI tools | No |
+| 3D, charts, effects, image and video processing, small and medium in-browser models | Front end | WebGPU in the browser or Electron's Chromium | No |
+| Data, business rules, storage, logins, secrets, APIs, calls to other services and AI models | Back end | Rust compiled to WebAssembly (one file) | No |
+| Large local models, training, fine-tuning, heavy compute | Back end | A native Rust part, pure Rust first (Candle or Burn; CUDA or Metal where needed) | Yes, declared and labelled |
+| Desktop window and shell | Desktop | Electron, running the same front end and back end | Yes (the shell), declared |
+| Shared types between the front end and the back end | Interface | Generated from the back end's routes (`api.md`, `web/lib/lengua.ts`) | No |
+
+An example only, not something to build: an IDE for changing the weights of open-source language
+models. Its editors and its views of the weights are the Next.js front end (the views drawn with
+WebGPU); browsing the files, small edits and simple merges can be the back end in WebAssembly;
+fine-tuning and running the model are a native Rust part on the GPU; and the desktop app is
+Electron.
+
 ### WebAssembly first; native only when necessary
 
 All Rust that lengua builds compiles to WebAssembly unless WebAssembly truly can't do the job.
@@ -104,7 +125,7 @@ All Rust that lengua builds compiles to WebAssembly unless WebAssembly truly can
 | Web apps: the server | back end | WebAssembly | WASI servers are where WebAssembly is strongest |
 | Web apps: the front end | front end | A Next.js static export (TSX), carried and served by the WebAssembly back end | The browser runs it; it is files inside the one `.wasm` file |
 | Command-line tools, servers, background services | back end | WebAssembly | No window is needed, so one file runs on any computer |
-| Desktop apps with their own window | both | Electron showing the same front end; the same WebAssembly back end run by `lengua-run` beside it (L10) | Electron's Chromium is the same on every system; no `- Native:` line is needed, since Electron and `lengua-run` are hosts, like the browser |
+| Desktop apps with their own window | both | Electron showing the same front end; the same WebAssembly back end run by `lengua-run` beside it (L10) | Electron's Chromium is the same on every system; the shell is native, so the idea declares it (`- Native: a desktop window, for ...`, L10) and it is labelled; the app's own code stays WebAssembly and TSX |
 | 3D, charts, maps, effects | front end (WebGPU) | WebAssembly and the browser, no native | The browser, or Electron's Chromium, gives the front end WebGPU |
 | Small or medium AI models on the user's machine | front end (WebGPU) | No native | WebLLM or Transformers.js run them in the browser on WebGPU |
 | Image and video processing | front end (WebGPU) | No native | WebGPU and the browser's media interfaces |
@@ -116,8 +137,8 @@ All Rust that lengua builds compiles to WebAssembly unless WebAssembly truly can
 The rule for a native part:
 1. The idea declares it with `- Native: <part>, for <reason>`, and the reason must be one of the
    kinds marked Native above (large local models, training or heavy compute on the GPU; threads
-   that share memory; a hardware device). Any other reason is refused. A window or front-end GPU
-   work is never a reason: the front end has WebGPU.
+   that share memory; a hardware device; and the desktop shell, Electron, for a desktop app).
+   Any other reason is refused. Front-end GPU work is never a reason: the front end has WebGPU.
 2. Only the part that needs it is native; the rest of the application stays WebAssembly.
 3. The same checks apply: the Power of 10, the idea's tests, the mutation score, the lock.
 4. Its label is `native`, shown in every reply and in the wiki, because it is not sandboxed: it
@@ -705,7 +726,9 @@ identical Chromium on every system and its stability, shows the same front end i
 starts the same WebAssembly back end with `lengua-run` beside it, on a local port. Nothing in
 L8 depends on a browser that Electron lacks: the front end is a static export, it calls only
 relative paths, and the back end serves it, so the same files serve a browser and an Electron
-window. Electron is downloaded only for an app built as a desktop app.
+window. Electron is downloaded only for an app built as a desktop app. The shell is native, so
+the idea declares it with `- Native:` and the reply and the wiki label it; the app's own code
+stays WebAssembly and TSX.
 
 ### The build
 
@@ -1431,6 +1454,42 @@ Decided at L1 (2026-11-13). The folder is an OKF v0.2 bundle: every idea is a co
   also has the score: ``label `checked`, mutation score 6 of 6 (100%)``, or ``label `checked`, no
   mutant counted``.
 
+#### The two sides in one wiki (since L8)
+
+Decided at L8 (2026-11-13), at the owner's request: the LLM wiki and OKF join the Next.js side
+and the Rust side, so an agent (or a person) finds what each side does and how they meet before
+it reads any code.
+
+- **Screen ideas are pages like every idea.** `ideas/ui/<screen>.md` has the type `lengua
+  Screen`; its `source` is `web/screens/<screen>.tsx` and its `source_sha256` that file's hash,
+  so the log lists a TypeScript file changed with or without its idea exactly as it lists a Rust
+  file (``Note: the code `web/screens/home.tsx` changed and its idea `ideas/ui/home.md` did
+  not``).
+- **`api.md`, the contract between the two sides.** When the server has `- Route:` lines,
+  `check` writes `api.md` at the folder's root, an OKF concept of type `lengua Interface`: for
+  each route its method and path, the shape of its request body and of its answers (the
+  TypeScript types, read from the server's examples), the function of `web/lib/lengua.ts` that
+  calls it, a link to each idea whose examples request it (the back-end idea that serves it), and
+  a link to each screen that calls it (read from the screens' code by lengua's TypeScript reader).
+  Its frontmatter has `client_sha256`, the hash of `web/lib/lengua.ts`, so the page describes the
+  generated types and is signed with them in the lock. When a route changes, `api.md` and the
+  client change together.
+- **`# Links` joins the sides.** `check` writes a `# Links` section at the end of every idea,
+  kept out of the idea's hash like the frontmatter: a screen links each route it calls (in
+  `api.md`) and the ideas that serve them; a back-end idea links each screen that calls a route
+  it serves; every idea links the ideas it uses and that use it.
+- **`index.md` has a section for each side:** `# Back end` (the program, its modules, its
+  libraries and components), `# Front end` (the screens), `# Interface` (`api.md`), and later
+  `# Vision` (L11) and `# Desktop` (L10); each line with its label. Its `# Dependencies` line
+  counts the crates and the npm packages (direct, and every one in `web/pnpm-lock.yaml`), and
+  names the npm packages that are large (over 1 MiB in pnpm's copy, when the build has
+  installed them).
+- **The query path.** An agent reads `index.md`, then `api.md`, then the pages of the side it
+  changes, and only then the code. The skills say so at L11; the builder of lengua works that
+  way now.
+- **OKF conformance** covers the screens and `api.md` (both have frontmatter with a `type`), and
+  the tree check of L13 covers the `web/` side too.
+
 ## 5. The Power of 10, for Rust compiled to WebAssembly
 
 NASA's [Power of 10](https://en.wikipedia.org/wiki/The_Power_of_10:_Rules_for_Developing_Safety-Critical_Code),
@@ -1817,6 +1876,15 @@ A review on 2026-11-13 against
 structure sound (concept ids, `index.md`, `log.md`) and these gaps. Each is part of the
 milestone named:
 
+- **L8, joining the front end and the back end** (section 4, "The two sides in one wiki"):
+  - screen ideas as `lengua Screen` pages whose `source_sha256` is their TSX file, with TypeScript
+    changes in the log like Rust ones;
+  - `api.md` (`lengua Interface`), generated from the routes and the examples, linking each route
+    to the ideas that serve it and the screens that call it, and signed with the generated types;
+  - `# Links` on every idea (this part of the L9 item below comes first, for the two sides);
+  - `index.md`'s sections for the back end, the front end and the interface, with the crate and
+    npm package counts;
+  - the query path: `index.md`, then `api.md`, then the side's pages.
 - **L9, in `check`:**
   - OKF's trust fields on every page: `generated` (by `lengua-mcp/<version>`, at), `verified` by
     `process:lengua-check` on every passing check, and `status` (`draft` until approved);
