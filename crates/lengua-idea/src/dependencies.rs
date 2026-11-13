@@ -105,7 +105,9 @@ fn not_pure(dir: &Path) -> bool {
     for line in manifest.lines() {
         let line = line.trim();
         if line.starts_with('[') {
-            build_section = line.trim_matches(['[', ']']).ends_with("build-dependencies");
+            build_section = line
+                .trim_matches(['[', ']'])
+                .ends_with("build-dependencies");
             continue;
         }
         if value(line, "links").is_some() {
@@ -251,7 +253,10 @@ impl Count {
                 "Not pure Rust (a `links` key, or a C build in their build script)",
                 &self.native,
             ),
-            ("Not read (their source is not in Cargo's folder)", &self.unread),
+            (
+                "Not read (their source is not in Cargo's folder)",
+                &self.unread,
+            ),
         ];
         for (what, list) in groups {
             if list.is_empty() && what.starts_with("Not read") {

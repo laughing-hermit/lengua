@@ -418,6 +418,36 @@ next starts (Lengua3.md, section 8).
 - **2026-11-13, L7: lengua's STE dictionary grows by the words of programs** that the new ideas
   need (`client`, `listen`, `get`, `hash`, `chunk`, `bracket`, `escape`, `overflow`, `tax`, ...),
   each with its part of speech.
+- **2026-11-13, the LLM wiki and OKF fixed ahead of L9 and L13** (`wip/wiki`; Lengua3.md,
+  section 8, "The LLM wiki and OKF, by milestone", and section 4, "The wiki's formats" and "One
+  wiki across the repository"). The decisions taken:
+  - OKF's `generated` and `verified` are keys lengua writes; `verified` keeps other actors'
+    entries and holds one of lengua's, `process:lengua-check`, only while the label is
+    `checked` or `tested`. Their times change only when the page's text changes, so a check that
+    changes nothing writes nothing, not even a log entry.
+  - `title` and `status: draft` are written when absent and then kept as the agent's;
+    `status: stable` from the agent is a finding until L11's approval.
+  - A check whose job has not ended keeps the label the wiki has when the files are the same, so
+    a new session or a fresh clone does not log `unchecked` and then `checked`. The old lock
+    stays valid only while every file is as it signed them.
+  - A library learns its users only in the folder index of `libraries/`, never in its own
+    files, which its lock holds.
+  - The crate count reads the folder's `Cargo.lock` and the crates' sources in Cargo's folder
+    (`unsafe` as a word outside line comments; not pure Rust: a `links` key or `cc`, `cmake`,
+    `pkg-config`, `bindgen` or `vcpkg` among the build dependencies), kept in
+    `target/lengua/crates.txt` under the lock's hash.
+  - Each folder under `libraries/` and `examples/` is an OKF bundle of its own (its `index.md`
+    keeps `okf_version`); the repository is a bundle of them, with root indexes written by
+    `lengua-mcp wiki <root>`, not by `check`.
+  - The committed wiki is written only by CI's new mode `wiki` and stays put: the tests check
+    copies, and the tree test fails (`wiki-stale`) when an idea or its code changes without a
+    new run of the mode `wiki`. Not walked by the tree test: hidden folders, `target/`,
+    `fixtures/`, and a folder with a `SKILL.md` (Agent Skills' own frontmatter has no `type`).
+  - The design documents get a `type`: `lengua Design`, `lengua Plan`, `lengua Overview`,
+    `lengua Crate`.
+  - Secrets: the rule is written for L9's secrets grant; nothing to test until that grant.
+  - Attested Computation: a recommendation in Lengua3.md, section 10, for L13 to decide.
+
 ## Runs
 
 The five-runner run a landing rests on is at the head it tests, so it is named in the landing report and added here at the next milestone.
@@ -490,3 +520,6 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 - **2026-11-13, L7:** a shell command of the builder that began with `python3 -` (a slip, before
   an edit of `lengua-lint`'s model) was refused. Again a mistake, not a need: the edit went on
   with the editor's tools.
+- **2026-11-13, the wiki fix:** a shell command that ran `python3 --version` (a slip, while
+  checking a file) was refused. Nothing needed it; the work went on with the editor's tools and
+  `sed`.

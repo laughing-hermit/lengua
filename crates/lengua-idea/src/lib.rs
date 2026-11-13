@@ -6,8 +6,8 @@ mod frontmatter;
 mod generate;
 mod idea;
 mod library;
-mod okf;
 pub mod lock;
+mod okf;
 mod rust;
 mod sha256;
 mod ste;
@@ -703,8 +703,7 @@ fn purpose_rules(
         } else {
             read.constraints
                 .get(k)
-                .map(|c| c.uses.iter().map(|(n, _)| n.as_str()).collect())
-                .unwrap_or_default()
+                .map_or_default(|c| c.uses.iter().map(|(n, _)| n.as_str()).collect())
         };
         let key = if k == 0 { "Modules" } else { "Uses" };
         for (name, line) in read.named.get(k).into_iter().flatten() {
@@ -740,7 +739,11 @@ fn conformance(
     findings: &mut Vec<Finding>,
 ) {
     let mut known: Vec<String> = pages.iter().map(|p| p.file.clone()).collect();
-    known.extend(components.iter().map(|(file, _, _)| wiki::component_page(file)));
+    known.extend(
+        components
+            .iter()
+            .map(|(file, _, _)| wiki::component_page(file)),
+    );
     for file in tree::markdown(folder, false) {
         let name = file.rsplit('/').next().unwrap_or_default();
         let reserved = name == "index.md" || name == "log.md";
@@ -858,11 +861,7 @@ pub fn check(folder: &Path, now: u64) -> Report {
 }
 
 #[must_use]
-pub fn check_with(
-    folder: &Path,
-    now: u64,
-    trust: impl FnOnce(&Build) -> Option<Trust>,
-) -> Report {
+pub fn check_with(folder: &Path, now: u64, trust: impl FnOnce(&Build) -> Option<Trust>) -> Report {
     let mut report = Report::default();
     let mut prepared = match prepare(folder) {
         Ok(prepared) => prepared,
@@ -880,8 +879,7 @@ pub fn check_with(
     let title = prepared
         .pages
         .first()
-        .map(|p| p.title.clone())
-        .unwrap_or_default();
+        .map_or_default(|p| p.title.clone());
     let parts = wiki::Parts {
         title: &title,
         shape: prepared.shape,

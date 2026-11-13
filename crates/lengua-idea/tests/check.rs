@@ -69,9 +69,17 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
     )));
     assert!(!words.contains("verified:"));
     assert!(words.contains("\n# Links\n\n* Used by: ["), "{words}");
-    assert!(words.contains("](../idea.md), [ui/summary](ui/summary.md).\n* Index: ["), "{words}");
+    assert!(
+        words.contains("](../idea.md), [ui/summary](ui/summary.md).\n* Index: ["),
+        "{words}"
+    );
     assert!(words.ends_with("](../index.md).\n"), "{words}");
-    assert!(top.contains("\n# Links\n\n* Uses: [Words](ideas/words.md), [ui/summary](ideas/ui/summary.md).\n"), "{top}");
+    assert!(
+        top.contains(
+            "\n# Links\n\n* Uses: [Words](ideas/words.md), [ui/summary](ideas/ui/summary.md).\n"
+        ),
+        "{top}"
+    );
     assert!(top.contains("\ntitle: lengua-idea-"), "{top}");
     assert!(!words.contains("label: checked"));
     let index = read(&folder, "index.md");
@@ -117,9 +125,9 @@ fn a_check_whose_job_is_not_done_keeps_the_label_of_the_same_files() {
     let first = lengua_idea::check_with(&folder, NOV_13_2026, |_| Some(checked));
     assert_eq!(first.findings, []);
     let top = read(&folder, "idea.md");
-    assert!(top.contains(
-        "\nverified:\n  - { by: process:lengua-check, at: 2026-11-13T00:00:00Z }\n"
-    ));
+    assert!(
+        top.contains("\nverified:\n  - { by: process:lengua-check, at: 2026-11-13T00:00:00Z }\n")
+    );
     let pending = lengua_idea::check_with(&folder, NOV_13_2026 + 60, |_| None);
     assert_eq!(pending.written, Vec::<String>::new());
     assert_eq!(read(&folder, "idea.md"), top);
@@ -145,7 +153,10 @@ fn the_links_section_is_check_s_own_and_outside_the_idea_s_hash() {
     fs::write(folder.join("ideas/words.md"), &edited).expect("an edit");
     let again = lengua_idea::check(&folder, NOV_13_2026 + 1);
     assert_eq!(again.findings, []);
-    assert_eq!(read(&folder, "ideas/words.md").replace("00:00:01Z", "00:00:00Z"), words);
+    assert_eq!(
+        read(&folder, "ideas/words.md").replace("00:00:01Z", "00:00:00Z"),
+        words
+    );
     assert!(!read(&folder, "log.md").contains("Idea [Words](ideas/words.md), changed"));
 }
 
@@ -469,8 +480,8 @@ fn the_label_and_the_score_go_into_the_wiki() {
     let folder = fixture("good", "label");
     let report = lengua_idea::check_with(&folder, NOV_13_2026, |_| {
         Some(Trust {
-        label: Label::Checked,
-        score: Some((9, 10)),
+            label: Label::Checked,
+            score: Some((9, 10)),
         })
     });
     assert_eq!(report.findings, []);
@@ -485,8 +496,8 @@ fn the_label_and_the_score_go_into_the_wiki() {
     );
     let tested = lengua_idea::check_with(&folder, NOV_13_2026 + 1, |_| {
         Some(Trust {
-        label: Label::Tested,
-        score: Some((1, 4)),
+            label: Label::Tested,
+            score: Some((1, 4)),
         })
     });
     assert_eq!(

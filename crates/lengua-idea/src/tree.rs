@@ -9,8 +9,7 @@ const SKIPPED: [&str; 3] = ["target", "fixtures", "node_modules"];
 fn skipped(dir: &Path) -> bool {
     let name = dir
         .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().to_string());
     name.starts_with('.') || SKIPPED.contains(&name.as_str()) || dir.join("SKILL.md").is_file()
 }
 
@@ -59,8 +58,7 @@ fn front_of(text: &str, file: &str) -> Front {
 
 fn parent(file: &str) -> String {
     file.rsplit_once('/')
-        .map(|(dir, _)| dir.to_string())
-        .unwrap_or_default()
+        .map_or_default(|(dir, _)| dir.to_string())
 }
 
 fn last(path: &str) -> String {
@@ -104,8 +102,10 @@ fn apps(root: &Path, files: &[String]) -> Vec<App> {
         }
         let file = join(&dir, "idea.md");
         let front = front_of(&read(root, &file), &file);
-        let value = |key: &str| front.value(key).map(okf::unquote).unwrap_or_default();
-        let title = Some(value("title")).filter(|t| !t.is_empty()).unwrap_or_else(|| last(&dir));
+        let value = |key: &str| front.value(key).map_or_default(okf::unquote);
+        let title = Some(value("title"))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| last(&dir));
         let uses = list(front.value("uses").unwrap_or_default())
             .into_iter()
             .filter(|id| id.starts_with("../"))
@@ -137,7 +137,10 @@ const KINDS: [&str; 3] = ["lengua Program", "lengua Server", "lengua Library"];
 fn counted(apps: &[&App]) -> String {
     let mut parts = Vec::new();
     for kind in KINDS {
-        let n = apps.iter().filter(|a| kind_names(&a.kind) == kind_names(kind)).count();
+        let n = apps
+            .iter()
+            .filter(|a| kind_names(&a.kind) == kind_names(kind))
+            .count();
         let (_, one, many) = kind_names(kind);
         match n {
             0 => {}
@@ -174,7 +177,9 @@ fn index_for(root: &Path, group: &str, files: &[String], apps: &[App]) -> String
     }
     let documents: Vec<String> = files
         .iter()
-        .filter(|f| parent(f) == group && !["index.md", "log.md", "idea.md"].contains(&last(f).as_str()))
+        .filter(|f| {
+            parent(f) == group && !["index.md", "log.md", "idea.md"].contains(&last(f).as_str())
+        })
         .map(|f| {
             let front = front_of(&read(root, f), f);
             let title = front
@@ -182,7 +187,7 @@ fn index_for(root: &Path, group: &str, files: &[String], apps: &[App]) -> String
                 .map(okf::unquote)
                 .filter(|t| !t.is_empty())
                 .unwrap_or_else(|| last(f).trim_end_matches(".md").to_string());
-            let description = front.value("description").map(okf::unquote).unwrap_or_default();
+            let description = front.value("description").map_or_default(okf::unquote);
             format!("* [{title}]({}) - {description}\n", okf::relative(&from, f))
         })
         .collect();
@@ -274,11 +279,13 @@ fn finding(file: &str, line: usize, code: &'static str, message: String) -> Find
 
 fn idea_file(file: &str, apps: &[App]) -> bool {
     apps.iter().any(|a| {
-        let rest = file.strip_prefix(&format!("{}/", a.path)).unwrap_or_default();
+        let rest = file
+            .strip_prefix(&format!("{}/", a.path))
+            .unwrap_or_default();
         rest == "idea.md"
-            || rest
-                .strip_prefix("ideas/")
-                .is_some_and(|r| !r.contains('/') || r.strip_prefix("ui/").is_some_and(|s| !s.contains('/')))
+            || rest.strip_prefix("ideas/").is_some_and(|r| {
+                !r.contains('/') || r.strip_prefix("ui/").is_some_and(|s| !s.contains('/'))
+            })
     })
 }
 
@@ -357,9 +364,21 @@ pub fn findings(root: &Path) -> Vec<Finding> {
             let mut sink = Sink::new(file);
             let front = frontmatter::split(&text, &mut sink);
             if front.entries.is_empty() {
-                sink.add(1, "okf-type", "an OKF concept starts with frontmatter between two `---` lines".to_string());
-            } else if front.value("type").map(okf::unquote).is_none_or(|t| t.is_empty()) {
-                sink.add(1, "okf-type", "an OKF concept's frontmatter has a `type` that is not empty".to_string());
+                sink.add(
+                    1,
+                    "okf-type",
+                    "an OKF concept starts with frontmatter between two `---` lines".to_string(),
+                );
+            } else if front
+                .value("type")
+                .map(okf::unquote)
+                .is_none_or(|t| t.is_empty())
+            {
+                sink.add(
+                    1,
+                    "okf-type",
+                    "an OKF concept's frontmatter has a `type` that is not empty".to_string(),
+                );
             }
             okf::check_values(&front, false, &mut sink);
             out.append(&mut sink.findings);

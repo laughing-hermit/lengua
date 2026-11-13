@@ -12,10 +12,7 @@ pub(crate) fn unquote(value: &str) -> String {
     if let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
         return inner.replace("\\\"", "\"").replace("\\\\", "\\");
     }
-    if let Some(inner) = value
-        .strip_prefix('\'')
-        .and_then(|v| v.strip_suffix('\''))
-    {
+    if let Some(inner) = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
         return inner.replace("''", "'");
     }
     value.to_string()
@@ -32,15 +29,13 @@ pub(crate) fn actor(value: &str) -> bool {
     {
         return plain(id);
     }
-    value
-        .split_once('/')
-        .is_some_and(|(producer, version)| {
-            plain(producer) && plain(version) && !producer.contains(':')
-        })
+    value.split_once('/').is_some_and(|(producer, version)| {
+        plain(producer) && plain(version) && !producer.contains(':')
+    })
 }
 
 fn leap(year: u64) -> bool {
-    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
 }
 
 fn days_in(year: u64, month: u64) -> u64 {
@@ -88,7 +83,14 @@ pub(crate) fn timestamp(value: &str) -> bool {
         number(value, 14, 16),
         number(value, 17, 19),
     ];
-    let [Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second)] = parts
+    let [
+        Some(year),
+        Some(month),
+        Some(day),
+        Some(hour),
+        Some(minute),
+        Some(second),
+    ] = parts
     else {
         return false;
     };
@@ -471,7 +473,8 @@ pub(crate) fn log_problems(text: &str) -> Vec<(usize, String)> {
             match date_heading(trimmed) {
                 Some(day) if last.is_some_and(|l| l <= day) => out.push((
                     number,
-                    "a log is newest first, so each `## YYYY-MM-DD` is older than the one above it".to_string(),
+                    "a log is newest first, so each `## YYYY-MM-DD` is older than the one above it"
+                        .to_string(),
                 )),
                 Some(day) => last = Some(day),
                 None => out.push((
@@ -484,7 +487,8 @@ pub(crate) fn log_problems(text: &str) -> Vec<(usize, String)> {
         } else if last.is_none() || !(trimmed.starts_with("* ") || line.starts_with(' ')) {
             out.push((
                 number,
-                "a log has a `# ` title, then `## YYYY-MM-DD` headings, each with `* ` entries".to_string(),
+                "a log has a `# ` title, then `## YYYY-MM-DD` headings, each with `* ` entries"
+                    .to_string(),
             ));
         }
     }

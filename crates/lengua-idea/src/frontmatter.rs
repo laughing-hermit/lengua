@@ -190,7 +190,13 @@ mod tests {
         assert_eq!(sink.findings, []);
         assert_eq!(front.value("label"), Some("checked"));
         assert_eq!(front.body_line, 7);
-        let out = front.render(&[("label", "unchecked".to_string())], &[("title", "Other".to_string()), ("status", "draft".to_string())]);
+        let out = front.render(
+            &[("label", "unchecked".to_string())],
+            &[
+                ("title", "Other".to_string()),
+                ("status", "draft".to_string()),
+            ],
+        );
         assert_eq!(
             out,
             "---\nlabel: unchecked\ntitle: Words\ntags:\n  - text\nstatus: draft\n---\n\n# Purpose\n"

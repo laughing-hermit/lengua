@@ -89,7 +89,11 @@ fn a_stale_page_a_broken_link_and_a_page_with_no_type_are_findings() {
     let words = root.join("apps/good/ideas/words.md");
     let text = fs::read_to_string(&words).expect("the idea");
     fs::write(&words, text.replace("two words", "2 words")).expect("a change");
-    fs::write(root.join("notes.md"), "# Notes\n\nSee [nothing](nothing.md).\n").expect("a file");
+    fs::write(
+        root.join("notes.md"),
+        "# Notes\n\nSee [nothing](nothing.md).\n",
+    )
+    .expect("a file");
     let found = codes(&root);
     for wanted in [
         ("apps/good/ideas/words.md", "wiki-stale"),

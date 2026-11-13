@@ -287,7 +287,7 @@ fn page_text(
     if let Some(value) = verified_value(&page.front, check.as_deref()) {
         keys.push(("verified", value));
     }
-    let fill = [
+    let absent = [
         ("title", scalar(&page.title)),
         ("status", "draft".to_string()),
     ];
@@ -312,16 +312,16 @@ fn page_text(
     }
     format!(
         "{}\n{}",
-        page.front.render(&keys, &fill),
+        page.front.render(&keys, &absent),
         links_text(&page.file, parts, &groups)
     )
 }
 
-fn render_without(front: &Front, keys: &[(&str, String)], fill: &[(&str, String)]) -> String {
+fn render_without(front: &Front, keys: &[(&str, String)], absent: &[(&str, String)]) -> String {
     let mut kept = front.clone();
     kept.entries
         .retain(|e| !keys.iter().any(|(key, _)| *key == e.key));
-    kept.render(keys, fill)
+    kept.render(keys, absent)
 }
 
 fn component_text(
@@ -350,17 +350,16 @@ fn component_text(
         ("label", "trusted".to_string()),
         ("generated", generated_value(&front, time)),
     ];
-    let fill = [
+    let absent = [
         ("title", scalar(&component_name(file))),
         ("status", "draft".to_string()),
     ];
     let user = pages
         .first()
-        .map(|top| vec![idea_link(&page, top.id(), pages, parts)])
-        .unwrap_or_default();
+        .map_or_default(|top| vec![idea_link(&page, top.id(), pages, parts)]);
     format!(
         "{}\n{}",
-        render_without(&front, &keys, &fill),
+        render_without(&front, &keys, &absent),
         links_text(&page, parts, &[("Used by", user)])
     )
 }
@@ -533,7 +532,12 @@ pub(crate) struct Written {
     pub findings: Vec<Finding>,
 }
 
-fn steady(folder: &Path, file: String, now: &str, make: impl Fn(&Time) -> String) -> (String, String) {
+fn steady(
+    folder: &Path,
+    file: String,
+    now: &str,
+    make: impl Fn(&Time) -> String,
+) -> (String, String) {
     let kept = make(&Time { now, keep: true });
     if differs(folder, &file, &kept) {
         let fresh = make(&Time { now, keep: false });
@@ -595,7 +599,10 @@ pub(crate) fn write(
         .unwrap_or(unchecked);
     let label = trust.map_or(previous, |t| t.label.name());
     let mut planned = texts(folder, pages, generated, label, parts, &stamp);
-    if !planned.iter().any(|(file, text)| differs(folder, file, text)) {
+    if !planned
+        .iter()
+        .any(|(file, text)| differs(folder, file, text))
+    {
         return out;
     }
     if trust.is_none() && label != unchecked {
