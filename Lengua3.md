@@ -309,8 +309,8 @@ program (lengua libraries come at L7). The same line two times is a finding.
 **`# Structure`**: only list items, ``- `<name>`: <one sentence>.``, where the name is a
 function, `snake_case`, or a method, `Type::snake_case` with the type in `UpperCamelCase`. The
 sentence may continue on indented lines; it is one STE sentence and ends with a full stop. A
-name is there one time only. The top idea's structure has `main`. At L4 `check` holds
-these names to the functions of the Rust file (rule 12).
+name is there one time only. The top idea's structure has `main`. Since L4 `check` holds
+these names to the functions of the Rust file (rule 12, section 5).
 
 **What `check` replies.** One pass reads every idea file and collects every finding of every
 kind: the frontmatter, the sections, the behaviours and their blocks, the constraints, the
@@ -533,6 +533,9 @@ background, in the program's folder, on a thread with one child process:
 
 - `cargo fetch --target wasm32-wasip2`, only when the ideas use crates and `Cargo.toml` changed
   since the last fetch (the folder `target/lengua/` keeps the SHA-256 of the last one);
+- since L4, `cargo fmt --check`, whose differences are `rust-format` findings, then `cargo
+  clippy --release --target wasm32-wasip2 --offline --message-format=short -- -D warnings`
+  (section 5);
 - then `cargo build --release --target wasm32-wasip2 --offline --message-format=short`.
 
 The job's key is the SHA-256 of `Cargo.toml`, `wit/world.wit` and every file in `src/`. A
@@ -558,7 +561,9 @@ mismatched types``. An error with no place (Cargo's own) is `build-error` on `Ca
 1. `ok` is true when there are no findings, so it is also true while the build runs.
 
 **`lengua-mcp doctor`** checks, in the current folder (so a `rust-toolchain.toml` there
-counts), that `cargo` and `rustc` run, that `rustc` is 1.85 or later (edition 2024), and that
+counts), that `cargo` and `rustc` run, that `rustc` is 1.85 or later (edition 2024), that
+`cargo fmt` and `cargo clippy` run (since L4; the command to install one is `rustup component
+add rustfmt` or `clippy`), and that
 the targets `wasm32-wasip2` and `wasm32-unknown-unknown` are installed: by `rustup target list
 --installed` when `rustup` is there, otherwise by `rustc --print sysroot` and the target's
 folder under `lib/rustlib/`. It writes one line per part, `ok       <part>: <version>` or
@@ -803,6 +808,88 @@ Added for an AI language:
 
 And on the built component: imports only from the world; no threads, no relaxed SIMD and no other
 feature whose result can differ between machines; a size limit.
+
+### What each rule accepts and refuses
+
+Decided at L4 (2026-11-13). `check` holds the rules in three places, and all their findings
+come in one reply:
+
+1. **lengua's lint** (`crates/lengua-lint`), on the ideas' pass, when `src/main.rs` is there:
+   rules 1, 2, 4, 5, 6, 8, 10 (the attributes that turn a warning off), 11 and 12. A finding
+   here means nothing is written and nothing is built, as with an idea's finding.
+2. **The build job**, in this order: `cargo fmt --check` (a difference is `rust-format`, at the
+   file and line `rustfmt` names), then `cargo clippy --release --target wasm32-wasip2
+   --offline --message-format=short -- -D warnings` (rules 7, 9, 10 and the `[lints]` of the
+   generated `Cargo.toml`; its errors are `rust-error` and `rust-warning`, as the compiler's),
+   then `cargo build`.
+3. **The component checks**, when the build ends (below).
+
+Each finding of the lint has a code that names its rule:
+
+| Rule | Accepts | Refuses, with the code |
+|---|---|---|
+| 1 | calls that make no cycle | a function that can reach itself through the call graph (`rule-1-recursion`, one finding on each function of the cycle, with the path); any `dyn` (`rule-1-dyn`); any `fn(` type, a function pointer (`rule-1-fn-pointer`) |
+| 2 | `for` over a range with an end, a slice, an array, a collection or an iterator; `while <counter> < <constant>` (or `<=`, or `>`/`>=` counting down, or the constant first), `&&` with other conditions allowed, with `<counter> += 1;` (or `-= 1;`) at the loop's top level; `loop` with a top-level `if <counter> >= <constant> { break ... }` (or `return`; `\|\|` with other conditions allowed) and the step the same way | `while let`; a condition with `\|\|` at its top level; a `while` or `loop` with no counter compared with a constant (an integer literal, or a path whose last name is `UPPER_CASE`); a step that is not 1, not at the top level, or the wrong way; any other change of the counter in the body (`=`, a compound assignment, `&mut`, a `let` of the same name); a `continue` for this loop before the step or the check; `<= ..MAX` and `>= ..MIN`; a `for` over `a..`, `repeat`, `repeat_with`, `from_fn`, `successors` or `cycle`, unless `.take(` or `.zip(` follows (all `rule-2-loop`) |
+| 4 | a function of 60 lines or fewer, from the line of `fn` to the line of its `}`, as written (the build's `cargo fmt --check` holds that what is written is what `rustfmt` writes) | a longer function (`rule-4-length`) |
+| 5 | at least two `assert!`, `assert_eq!`, `assert_ne!`, `debug_assert!`, `debug_assert_eq!` or `debug_assert_ne!` per function on average, over every function of the program but `main` (`main` and its assertions are not counted, so a program that is only `main` passes) | fewer (`rule-5-assertions`, on the first function with fewer than two) |
+| 6 | a `static` whose type is made of numbers, `bool`, `char`, `str`, `Option`, references, arrays, tuples, and the program's own structs and enums of them | `static mut`; a `static` of any other type (`Cell`, `RefCell`, `Mutex`, atomics, `OnceLock`, `String`, a type lengua can't see into); `thread_local!` (all `rule-6-static`) |
+| 8 | the standard library's macros (`println!`, `vec!`, `assert!`, `format!`, `write!`, `matches!`, `include_str!`, ... a list of 33); a `macro_rules!` whose body writes no item and uses no macro of the program; macros and derives of a crate that the idea declares, by path or by `use`; the derives `Clone`, `Copy`, `Debug`, `Default`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Hash`; the attributes `derive`, `cfg`, `must_use`, `inline`, `cold`, `repr`, `non_exhaustive`, `track_caller`, `forbid`, `deny`; `cfg` and `cfg!` with only `all`, `any`, `not`, `unix`, `windows` and the `target_*` names | a `macro_rules!` that writes `fn`, `struct`, `enum`, `union`, `impl`, `trait`, `mod`, `static`, `const`, `type`, `use`, `extern` or `macro_rules`, or uses a macro of the program (`rule-8-macro-rules`); any other macro, `include!` among them (`rule-8-macro`); any other derive (`rule-8-derive`); any other attribute, `cfg_attr`, `test` and `path` among them (`rule-8-attribute`); a `cfg` of anything but the target, `test`, `debug_assertions` and `feature` among them (`rule-8-cfg`); a `build.rs` (`rule-8-build-script`) |
+| 10 | — | `#[allow]`, `#[warn]` and `#[expect]`, outer or inner, since they turn the `[lints]` off (`rule-10-allow`); clippy holds the rest |
+| 11 | — | every comment, `//`, `/* */`, `///`, `//!`, `/** */` and `/*! */`; a `#[doc]` attribute; a shebang line (`rule-11-comment`) |
+| 12 | every function with a body named in its module's `# Structure`, a free function as `name` and a method as `Type::name` (the type of the `impl`, or the trait for a trait's own default method), and nothing else there | a function that is not named (`rule-12-unnamed`, on the Rust file); a name with no function (`rule-12-unknown`, on the idea); a `fn`, `impl`, `trait`, `mod` or `macro_rules!` inside a function (`rule-12-nested`); a `mod` with a body (`rule-12-module`); an `impl` for a type that has no `Type::` name: a primitive, a reference to one, a tuple, a slice, or a type parameter (`rule-12-impl`); a Rust file under `src/` that is no idea's file (`rule-12-source-unlisted`); an idea with no Rust file (`rule-12-source-missing`) |
+
+Two methods of one type with the same name (`fmt` of `Display` and of `Debug`) are one name in
+`# Structure`. A trait's method with no body is not a function; a trait's default method is
+`Trait::name`.
+
+**The reader** reads Rust on the standard library alone (decided at L4: `syn` does not merit
+it; it would be the lint's only dependency and a parser of all of Rust, where the rules need
+items, function bodies and a few shapes). It has a tokenizer of Rust's lexical grammar
+(identifiers and raw identifiers, lifetimes and character literals told apart, strings, byte,
+C and raw strings with any number of `#`, nested block comments, numbers with their suffixes,
+`1..2` and `1.max(2)` read as Rust reads them, a shebang, a byte-order mark), pairs the
+delimiters, and reads the items: `fn` (free, in `impl` blocks and in traits; with `const`,
+`async`, `unsafe`, `extern "abi"` and `pub(...)`), `struct`, `enum` and `union` with their
+fields, `trait`, `impl` (its generics, its trait and its type), `mod name;`, `use`, `static`,
+`const`, `type`, `macro_rules!`, macro invocations, and attributes. Whatever else it meets is
+the finding `rust-read`, with the line, and the rules are not guessed there: an `extern` block,
+`extern crate`, a negative `impl`, an item that is not one of these, a string or comment with
+no end, a delimiter that does not close.
+
+**What the call graph resolves.** Every function with a body is a node. Its edges come from its
+body, closures included, and from the bodies of the program's macros it uses:
+- a call `name(...)` or `name::<T>(...)` is an edge to every free function of that name, in any
+  module; `module::name(...)`, `crate::...` and `super::...` too, and `std::`, `core::` and
+  `alloc::` paths are not the program's;
+- a function's name used as a value (`map(step)`) is an edge, unless the body binds that name
+  (`let`, a parameter, a closure's parameter, `for`, a `match` arm, `if let`);
+- `Self::m`, `Type::m`, `Trait::m` and a type alias's `Alias::m` are edges to that method, and to
+  the trait's default `m` for each trait the program implements for the type; a trait's `m` is
+  an edge to the `m` of every type that implements it; a type parameter's `T::m` is an edge to
+  every method `m`;
+- a method call `x.m(...)` is resolved by the receiver: on `self`, to the type of the `impl`
+  (or every implementor, in a trait); on a field of `self`, to the types of that field; on a
+  parameter, to the types of the parameter; any other receiver, a local variable, a call's
+  result, a literal, `impl Trait` or a type parameter, to every method `m` of the program.
+
+What it does not resolve: calls that Rust makes on its own, through operators (`+` calls `add`),
+format macros (`{}` calls `fmt`), `Drop`, `Deref`, `for` (`next`), `?` (`from`), and the
+standard library's generic code that calls a trait method of the program (`sort` calls `cmp`);
+the code a declared crate's macro writes and the calls a declared crate makes back into the
+program's trait impls; and the drop glue and derived code of a recursive type. A recursion
+through these is not refused at check; at run, the stack overflows and the program traps, or
+the time limit stops it.
+
+**The component checks**, when the build ends: the size, at most 64 MiB (`component-size`),
+since the one file holds a GPUI front end with its fonts and images (section 4), and Cranelift's
+time to compile a larger file at the first run passes the 40 seconds of a tool call; the
+imports, only from the world (`import-ungranted`, since L3); and Wasmtime compiling the
+component with lengua's engine, whose `wasmtime::Config` refuses what can give a different
+result on a different machine (`component-refused`): `wasm_relaxed_simd(false)`,
+`wasm_shared_everything_threads(false)`, and no threads or shared memory at all, since Wasmtime
+is built without its `threads` feature; and `cranelift_nan_canonicalization(true)`, so that a
+NaN has the same bits on every CPU. Plain SIMD stays: its results are the same everywhere once
+NaNs are canonical.
 
 ## 6. Trust labels
 

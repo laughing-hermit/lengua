@@ -31,7 +31,14 @@ pub const LINES: usize = 60;
 
 const NESTED: [&str; 4] = ["impl", "trait", "mod", "macro_rules"];
 
-fn file_rules(model: &Model, crates: &[String], file: usize, code: &Code, name: &str, out: &mut Vec<Finding>) {
+fn file_rules(
+    model: &Model,
+    crates: &[String],
+    file: usize,
+    code: &Code,
+    name: &str,
+    out: &mut Vec<Finding>,
+) {
     let context = Context {
         model,
         crates,
@@ -76,7 +83,12 @@ fn function_rules(model: &Model, codes: &[Option<Code>], out: &mut Vec<Finding>)
         let file = model.files.get(function.file).map_or("", String::as_str);
         let (open, close) = function.body;
         for problem in loops::check(code, open + 1, close) {
-            out.push(finding(file, code.line(problem.at), "rule-2-loop", problem.message));
+            out.push(finding(
+                file,
+                code.line(problem.at),
+                "rule-2-loop",
+                problem.message,
+            ));
         }
         for at in open + 1..close {
             let nested_fn = code.is(at, "fn") && code.name(at + 1).is_some();
@@ -148,7 +160,9 @@ fn assertions(model: &Model, codes: &[Option<Code>], out: &mut Vec<Finding>) {
 
 fn recursion(model: &Model, codes: &[Option<Code>], out: &mut Vec<Finding>) {
     let index = graph::Index::new(model, codes);
-    let edges: Vec<BTreeSet<usize>> = (0..model.functions.len()).map(|id| index.edges(id)).collect();
+    let edges: Vec<BTreeSet<usize>> = (0..model.functions.len())
+        .map(|id| index.edges(id))
+        .collect();
     for (id, function) in model.functions.iter().enumerate() {
         let Some(path) = graph::cycle(&edges, id) else {
             continue;
@@ -220,7 +234,10 @@ pub fn lint(sources: &[Source], crates: &[String]) -> Vec<Finding> {
                     &source.file,
                     error.line,
                     "rust-read",
-                    format!("lengua's reader of Rust can't read the file: {}", error.message),
+                    format!(
+                        "lengua's reader of Rust can't read the file: {}",
+                        error.message
+                    ),
                 ));
                 codes.push(None);
             }

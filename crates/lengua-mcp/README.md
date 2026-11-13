@@ -20,7 +20,8 @@ add the tests, the lock and the lean runner (see [Lengua3.md](../../Lengua3.md),
 - Given the argument `--version`, when `lengua-mcp` runs, then it writes `lengua-mcp
   <version>` and a line end to standard output and stops with exit code 0.
 - Given the argument `doctor`, when `lengua-mcp` runs, then it writes one line for `cargo`, for
-  `rustc` and for each of the targets `wasm32-wasip2` and `wasm32-unknown-unknown`, with the
+  `rustc`, `rustfmt`, `clippy` and each of the targets `wasm32-wasip2` and
+  `wasm32-unknown-unknown`, with the
   command that installs each missing part, and stops with exit code 0, or 1 when a part is
   missing.
 - Given any other arguments, when `lengua-mcp` runs, then it writes `usage: lengua-mcp
@@ -34,6 +35,15 @@ add the tests, the lock and the lean runner (see [Lengua3.md](../../Lengua3.md),
 - Given a folder with ideas and code with no problems, when `check` is called until the
   build's state is not `building`, then the state is `built`, with the component's path, size
   and SHA-256.
+- Given code that `rustfmt` would change, when the build ends, then its state is `build_failed`
+  with a `rust-format` finding for each place, and nothing else is built.
+- Given code that clippy refuses (an `unwrap`, for one), when the build ends, then its state is
+  `build_failed` and each of clippy's errors is a finding with its file and line.
+- Given a component larger than 64 MiB, or one that lengua's engine does not take (threads,
+  shared memory, relaxed SIMD), when the build ends, then its state is `build_failed` with the
+  finding `component-size` or `component-refused`.
+- Given the arguments `imports <file>`, when `lengua-mcp` runs, then it writes the imports of
+  the component in the file, as Wasmtime reads them, one a line, sorted.
 - Given code that does not compile, when the build ends, then its state is `build_failed` and
   every error of the compiler is a finding with its file and line.
 - Given a component that imports an interface outside the world of its grants, when the build
@@ -57,7 +67,8 @@ add the tests, the lock and the lean runner (see [Lengua3.md](../../Lengua3.md),
 
 ## Structure
 
-- `main`: reads the arguments and writes the version line or the usage line, runs `doctor`, or
+- `main`: reads the arguments and writes the version line or the usage line, runs `doctor`,
+  prints the imports of a component (`print_imports`), or
   serves.
 - `serve`: starts the host and the Tokio runtime on one thread, and serves `Lengua` on standard
   input and output.
@@ -74,10 +85,13 @@ add the tests, the lock and the lean runner (see [Lengua3.md](../../Lengua3.md),
 - `VERSION`: the name of the package and its version, joined by a space.
 - `build.rs`: `Builds::new` and `Builds::status` give the state of a folder's build and start a
   new job when the build's key changed (`Job::start`, `Job::current`, `Job::status`,
-  `Job::stop`); `run`, `fetch` (with `fetch_stamp`), `cargo` and `built` run the job on its
-  thread, and `ungranted` holds the component's imports to the world; `problems`, `located` and
+  `Job::stop`); `run`, `fetch` (with `fetch_stamp`), `step`, `cargo` and `built` run the job on
+  its thread: `cargo fmt --check` (`format_problems`), clippy, then the build;
+  `ungranted` holds the component's size (`too_large`, `SIZE_LIMIT`) and imports to the world;
+  `problems`, `located` and
   `relative` turn the compiler's lines into findings; `lock` and `problem` are helpers.
-- `host.rs`: `Host::new` makes the engine and its epoch thread; `Host::component` compiles a
+- `host.rs`: `Host::new` makes the engine, with relaxed SIMD and shared-everything threads off
+  and NaNs canonical, and its epoch thread; `Host::component` compiles a
   component once per SHA-256; `Host::imports` lists its imports, and `outside` and `grant_for`
   hold them to the world; `Host::run` and `Host::execute` run a component: `link` adds one
   interface of the world to the linker, `context` makes the WASI context from the grants and
@@ -87,14 +101,15 @@ add the tests, the lock and the lean runner (see [Lengua3.md](../../Lengua3.md),
   result.
 - `runs.rs`: `Runs::new` and `Runs::run` start a run on its own thread or wait for the one with
   the same `key`, up to 30 seconds (`Job::start`, `Job::wait`), and give its `Progress`.
-- `doctor.rs`: `examine` checks `cargo`, `rustc` (`version`) and the targets
+- `doctor.rs`: `examine` checks `cargo`, `rustc` (`version`), `rustfmt`, `clippy` and the targets
   (`installed_targets`), with `output` and `install_rust`; `Doctor::ok`, `Doctor::text`,
   `Doctor::problems` and `Doctor::line` give the result.
 - `tests/version.rs`: runs the binary with `--version` and with other arguments.
 - `tests/doctor.rs`: runs `doctor` with the toolchain and with an empty path.
 - `tests/check.rs`: starts the server, sends `initialize`, lists the tools, calls `check` on
   the fixtures of `lengua-idea`, and builds copies of the examples: `hello` as it is, with a
-  compile error, after a change, with a hand-edited `Cargo.toml`, and with no toolchain; then
+  compile error, after a change, with a hand-edited `Cargo.toml`, with no toolchain, with a
+  comment (refused by the lint), unformatted and with an `unwrap` (refused by clippy); then
   runs `hello`, `echo` (arguments), `count` (standard input), `files` (a read folder, a write
   folder, and paths out of them), `ungranted` (refused at check and at run), `forever` (the
   time limit), `greedy` (the memory limit) and `clock` (fixed and real clock and random

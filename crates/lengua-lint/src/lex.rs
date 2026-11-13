@@ -308,8 +308,7 @@ impl Lexer {
             self.eat_while(|c| c.is_ascii_hexdigit() || c == '_');
         } else {
             self.eat_while(digit);
-            if self.peek(0) == Some('.')
-                && self.peek(1).is_none_or(|c| c != '.' && !ident_start(c))
+            if self.peek(0) == Some('.') && self.peek(1).is_none_or(|c| c != '.' && !ident_start(c))
             {
                 float = true;
                 self.bump();
@@ -387,7 +386,10 @@ mod tests {
                 Kind::Lifetime
             ]
         );
-        assert_eq!(texts("impl<'a> X<'a>"), ["impl", "<", "'a", ">", "X", "<", "'a", ">"]);
+        assert_eq!(
+            texts("impl<'a> X<'a>"),
+            ["impl", "<", "'a", ">", "X", "<", "'a", ">"]
+        );
     }
 
     #[test]

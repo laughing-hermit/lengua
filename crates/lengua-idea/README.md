@@ -7,7 +7,8 @@ four sections, the behaviours and their examples, the constraints, the structure
 and ASD-STE100 Simplified Technical English. It collects every problem of every idea in one
 pass. When there are no problems, it makes `Cargo.toml` and `wit/world.wit` from the ideas,
 holds the ones already there to what it wrote, and writes them with the wiki: the frontmatter
-of each idea, `index.md` and `log.md`. It uses the Rust standard library only. The grammar and
+of each idea, `index.md` and `log.md`. It uses the Rust standard library and `lengua-lint`
+(itself on the standard library alone) only. The grammar and
 the formats are in
 [Lengua3.md](../../Lengua3.md), section 4, "The idea file's grammar", "What the STE check
 holds", "The wiki's formats" and "The generated files, the build job and `doctor`".
@@ -23,6 +24,9 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
   that says nothing changed.
 - Given a Rust file that changed while its idea did not, when `check` runs, then its reply has
   a note and the log entry says so.
+- Given a `src/main.rs` that breaks a rule of the Power of 10 that lengua's lint holds, when
+  `check` runs, then it gives each finding of the lint with the findings of the ideas, and
+  writes nothing.
 - Given a folder with problems of many kinds, when `check` runs, then it gives every problem in
   one report, sorted by file and line, and writes nothing.
 - Given a `Cargo.toml` or `wit/world.wit` changed by hand, when `check` runs, then it gives the
@@ -54,7 +58,12 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
 - `constraints.rs`: `parse` and `Reader::item` read the constraints; `module_name`, `names`,
   `reads`, `files_in` (with `folder`), `host_port`, `amount`, `semver` and `crate_line` check
   their values, and keep the folders, the hosts, the memory and the time.
-- `structure.rs`: `parse` reads the structure; `function_name` checks a name.
+- `structure.rs`: `parse` reads the structure, with the line of each name; `function_name`
+  checks a name.
+- `rust.rs`: `lint`, when `src/main.rs` is there, reads the Rust file of each idea and gives it
+  to `lengua-lint` with the names of its `# Structure` and the declared crates, and finds the
+  Rust files of no idea (`rust_files`), the ideas with no Rust file and a `build.rs`;
+  `finding` makes a finding.
 - `generate.rs`: `plan` makes the text of `Cargo.toml` (`cargo_toml`, `Package`) and of
   `wit/world.wit` (`world` and `world_names`: the always set, then the interfaces of each
   grant from `interfaces`), checks the

@@ -120,7 +120,8 @@ fn changes(code: &Code, at: usize) -> bool {
         && code.joint(at + 2, code.text(at + 2), "=");
     let borrowed = at >= 2 && code.is(at - 1, "mut") && code.is(at - 2, "&");
     let shadowed = at >= 1
-        && (code.is(at - 1, "let") || (code.is(at - 1, "mut") && at >= 2 && code.is(at - 2, "let")));
+        && (code.is(at - 1, "let")
+            || (code.is(at - 1, "mut") && at >= 2 && code.is(at - 2, "let")));
     code.single_eq(at + 1) || compound || shift || borrowed || shadowed
 }
 
@@ -143,7 +144,13 @@ fn loop_body(code: &Code, at: usize, to: usize) -> Option<usize> {
     }
 }
 
-fn early_continue(code: &Code, open: usize, close: usize, label: Option<&str>, limit: usize) -> Option<usize> {
+fn early_continue(
+    code: &Code,
+    open: usize,
+    close: usize,
+    label: Option<&str>,
+    limit: usize,
+) -> Option<usize> {
     let nested: Vec<(usize, usize)> = (open + 1..close)
         .filter_map(|at| loop_body(code, at, close))
         .map(|brace| (brace, code.end(brace)))
@@ -159,7 +166,14 @@ fn early_continue(code: &Code, open: usize, close: usize, label: Option<&str>, l
     })
 }
 
-fn counted(code: &Code, open: usize, counter: &Counter, sign: &str, label: Option<&str>, check: usize) -> Result<(), String> {
+fn counted(
+    code: &Code,
+    open: usize,
+    counter: &Counter,
+    sign: &str,
+    label: Option<&str>,
+    check: usize,
+) -> Result<(), String> {
     let close = code.end(open);
     let name = counter.name.as_str();
     let Some(step) = step(code, open, close, name, sign) else {
@@ -203,8 +217,14 @@ fn while_loop(code: &Code, at: usize, to: usize) -> Result<(), String> {
         .split(at + 1, brace, "&", "&")
         .into_iter()
         .find_map(|(from, end)| compare(code, from, end))
-        .ok_or_else(|| format!("the condition of this `while` compares no counter with a constant; {SHAPE}"))?;
-    let sign = if counter.side == Side::Below { "+" } else { "-" };
+        .ok_or_else(|| {
+            format!("the condition of this `while` compares no counter with a constant; {SHAPE}")
+        })?;
+    let sign = if counter.side == Side::Below {
+        "+"
+    } else {
+        "-"
+    };
     counted(code, brace, &counter, sign, label(code, at), brace)
 }
 
@@ -239,9 +259,15 @@ fn endless_loop(code: &Code, at: usize) -> Result<(), String> {
     if !code.is(open, "{") {
         return Err(format!("a `loop` with no body; {SHAPE}"));
     }
-    let mut last = format!("this `loop` has no `if <counter> >= <constant> {{ break; }}` at its top level; {SHAPE}");
+    let mut last = format!(
+        "this `loop` has no `if <counter> >= <constant> {{ break; }}` at its top level; {SHAPE}"
+    );
     for (counter, check) in exits(code, open) {
-        let sign = if counter.side == Side::Above { "+" } else { "-" };
+        let sign = if counter.side == Side::Above {
+            "+"
+        } else {
+            "-"
+        };
         match counted(code, open, &counter, sign, label(code, at), check) {
             Ok(()) => return Ok(()),
             Err(message) => last = message,
@@ -307,10 +333,23 @@ mod tests {
         assert_eq!(problems("while i < 10 { work(); i += 1; }"), 0);
         assert_eq!(problems("while LIMIT > i && ok { i += 1 }"), 0);
         assert_eq!(problems("while n > 0 { n -= 1; }"), 0);
-        assert_eq!(problems("loop { if i >= MAX_ROUNDS { break; } i += 1; }"), 0);
-        assert_eq!(problems("'outer: loop { if done || i > 9 { return; } i += 1; for x in v { continue 'inner; } }"), 0);
+        assert_eq!(
+            problems("loop { if i >= MAX_ROUNDS { break; } i += 1; }"),
+            0
+        );
+        assert_eq!(
+            problems(
+                "'outer: loop { if done || i > 9 { return; } i += 1; for x in v { continue 'inner; } }"
+            ),
+            0
+        );
         assert_eq!(problems("while i < 3 { i += 1; if a { continue; } }"), 0);
-        assert_eq!(problems("for x in 0..n {} for y in v.iter().map(|z| { z }) {} for w in (0..).take(3) {}"), 0);
+        assert_eq!(
+            problems(
+                "for x in 0..n {} for y in v.iter().map(|z| { z }) {} for w in (0..).take(3) {}"
+            ),
+            0
+        );
     }
 
     #[test]
@@ -327,7 +366,12 @@ mod tests {
         assert_eq!(problems("while i < n { i += 1; }"), 1);
         assert_eq!(problems("while i < 10 { i -= 1; }"), 1);
         assert_eq!(problems("while i < 10 { take(&mut i); i += 1; }"), 1);
-        assert_eq!(problems("for x in 0.. {} for y in std::iter::repeat(1) {} for z in v.iter().cycle() {}"), 3);
+        assert_eq!(
+            problems(
+                "for x in 0.. {} for y in std::iter::repeat(1) {} for z in v.iter().cycle() {}"
+            ),
+            3
+        );
     }
 
     #[test]

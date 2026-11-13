@@ -10,8 +10,8 @@ next starts (Lengua3.md, section 8).
 | L0 | Tag `lengua2-final`; empty main; a new Cargo workspace; CI on five runners | Landed on main at bd29290 (run 43371160450, green on five) |
 | L1 | The idea file: reader, STE check, test format, `# Structure`, OKF, the wiki | Landed on main at c3d1db1 (run 43376901162, green on five) |
 | L2 | Generate `Cargo.toml` and the world; build in the background; `doctor` | Landed on main at a9aad3e (run 43380465318, green on five) |
-| L3 | The host on the component model: standard input and output, arguments, files, clock, random | Done on `wip/l3`; the five-runner landing run is named in the landing report |
-| L4 | The Power of 10 lint and the component checks | Not started |
+| L3 | The host on the component model: standard input and output, arguments, files, clock, random | Landed on main at 05b8b14 (run 43388384600, green on five) |
+| L4 | The Power of 10 lint and the component checks | Done on `wip/l4`; the five-runner landing run is named in the landing report |
 | L5 | Tests from the idea, generated cases, mutation score, trust labels | Not started |
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | Not started |
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Not started |
@@ -185,6 +185,56 @@ next starts (Lengua3.md, section 8).
   `ungranted` (a file and random numbers with no grant), `forever` (the time limit), `greedy`
   (the memory limit).
 
+- **2026-11-13, L4: lengua reads Rust itself, on the standard library; no `syn`.** A new crate,
+  `crates/lengua-lint` (a tokenizer of Rust's lexical grammar, a reader of items and bodies,
+  the call graph, the rules), with no dependencies; `lengua-idea` uses it. `syn` does not merit
+  it (Lengua3.md, section 4: convenience never does): the rules need items, bodies and a few
+  shapes, not all of Rust, and what the reader can't read is the finding `rust-read`. No new
+  external crate; `Cargo.lock` gains only the path crate.
+- **2026-11-13, L4: the lint runs with the idea checks**, when `src/main.rs` is there, so its
+  findings come in the same reply as the ideas' and stop the writing and the build; `run`
+  refuses a program the lint refuses. With no `src/main.rs`, nothing is linted (an idea can be
+  checked before its code).
+- **2026-11-13, L4: what each rule accepts and refuses** is in Lengua3.md, section 5, "What
+  each rule accepts and refuses", one code a rule part (`rule-1-recursion`, `rule-2-loop`, ...).
+- **2026-11-13, L4: rule 5 does not count `main`**, neither as a function nor its assertions:
+  `main` is where a program reads its input and writes its output, and a program that is only
+  `main` (hello world) has no function to hold to an average. Rule 4 still holds `main` to 60
+  lines. To reverse: count it, and every example then needs two assertions in `main`.
+- **2026-11-13, L4: rule 2's accepted shapes** are a counter that steps by exactly 1 at the
+  loop's top level, against an integer literal or an `UPPER_CASE` constant, with no other
+  change and no `continue` before the step; a `for` is bounded unless it goes over an open
+  range or one of std's endless iterators with no `.take(`/`.zip(`. A step of 1 is what keeps
+  a wrapping counter from jumping its constant.
+- **2026-11-13, L4: the call graph does not resolve calls Rust makes on its own** (operators,
+  format macros, `Drop`, `Deref`, `for`, `?`, std's generic code), nor a declared crate's
+  macros and callbacks; recursion through them traps at run (a stack overflow) or meets the
+  time limit. Stricter choice not taken: refuse the program's own impls of std's traits.
+- **2026-11-13, L4: a method call on an unknown receiver is a call to every method of that
+  name**, so the graph errs towards a false recursion, never a missed one; the message says how
+  to name the receiver's type.
+- **2026-11-13, L4: rule 10 is held by the lint too**: `#[allow]`, `#[warn]` and `#[expect]`
+  would turn the generated `[lints]` off, so they are refused (`rule-10-allow`).
+- **2026-11-13, L4: rule 12 refuses what it can't name**: functions, impls, traits, modules and
+  macros inside a function (`rule-12-nested`), inline modules (`rule-12-module`), impls for a
+  primitive, a tuple, a slice or a type parameter (`rule-12-impl`), and Rust files of no idea
+  (`rule-12-source-unlisted`).
+- **2026-11-13, L4: rule 6 holds a `static` to a list of types** (numbers, `bool`, `char`,
+  `str`, `Option`, references, arrays, tuples, the program's own types of them), not to a list
+  of interior-mutability types, so a type lengua can't see into is refused.
+- **2026-11-13, L4: the build runs `cargo fmt --check`, then clippy, then the build**; a format
+  difference is `rust-format`; clippy's errors are `rust-error` like the compiler's.
+  `doctor` checks `rustfmt` and `clippy` too.
+- **2026-11-13, L4: the component checks**: at most 64 MiB (`component-size`); lengua's engine
+  refuses relaxed SIMD and shared-everything threads, has no threads at all (Wasmtime's
+  `threads` feature is off), and canonicalizes NaNs (`component-refused` when Wasmtime does not
+  take a component). Why 64 MiB and the `Config` lines: Lengua3.md, section 5.
+- **2026-11-13, L4: `lengua-mcp imports <file>`**, a command not in the usage line, prints a
+  component's imports as Wasmtime reads them; the CI step that grepped `wasi:` names now runs
+  it (L3 found the names in the bytes misleading).
+- **2026-11-13, L4: `forever` and `greedy` loop with `for` over `0..u64::MAX` and
+  `0..u32::MAX`**, bounded as rule 2 asks, and still past their limits; their ideas say so.
+
 ## Runs
 
 The five-runner run a landing rests on is at the head it tests, so it is named in the landing report and added here at the next milestone.
@@ -210,6 +260,7 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-13 | [43386023245](https://github.com/laughing-hermit/lengua/actions/runs/43386023245) | wip/l3 710a7f4 | test, linux-x86_64 | Failed: the same merge had removed a function's first line |
 | 2026-11-13 | [43386598827](https://github.com/laughing-hermit/lengua/actions/runs/43386598827) | wip/l3 67e8070 | test, linux-x86_64 | Failed: the `lengua-idea` test that said hello world's world has no `stdin` (the always set has it now) |
 | 2026-11-13 | [43387181531](https://github.com/laughing-hermit/lengua/actions/runs/43387181531) | wip/l3 cc502b1 | test, linux-x86_64 | Tests green (59 + 8 + 6 + 17 + 2 + 2: hello runs, arguments, standard input, a read and a write folder with `..`, an absolute path and two symbolic links refused, an ungranted import refused at check and at run, the time limit, the memory limit, fixed and real clock and random numbers); failed only on a format patch, applied |
+| 2026-11-13 | [43388384600](https://github.com/laughing-hermit/lengua/actions/runs/43388384600) | wip/l3 05b8b14 | test, all five | Green on five: the L3 landing run |
 
 ## What the permission checks refused
 
@@ -218,4 +269,7 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
   needed it; the work went on with the editor's tools and `sed`.
 - **2026-11-13, L3:** a shell command of the builder that began with `python3 --help` (a slip,
   before a `grep`) was refused. Again a mistake, not a need: the edit went on with the editor's
+  tools.
+- **2026-11-13, L4:** a shell command of the builder that began with `perl -v` (a slip, before a
+  `sed` edit) was refused. Again a mistake, not a need: the edit went on with the editor's
   tools.

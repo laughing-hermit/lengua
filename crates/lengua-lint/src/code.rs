@@ -133,7 +133,11 @@ impl Code {
         self.is(at, "=")
             && !self.joint(at, "=", "=")
             && !self.joint(at, "=", ">")
-            && !(at > 0 && self.tokens.get(at - 1).is_some_and(|t| t.joint && t.kind == Kind::Punct))
+            && !(at > 0
+                && self
+                    .tokens
+                    .get(at - 1)
+                    .is_some_and(|t| t.joint && t.kind == Kind::Punct))
     }
 
     pub(crate) fn arrow_close(&self, at: usize) -> bool {
@@ -225,7 +229,13 @@ impl Code {
         self.is(end, "!") && !self.joint(end, "!", "=") && self.open(end + 1)
     }
 
-    pub(crate) fn split(&self, from: usize, to: usize, first: &str, second: &str) -> Vec<(usize, usize)> {
+    pub(crate) fn split(
+        &self,
+        from: usize,
+        to: usize,
+        first: &str,
+        second: &str,
+    ) -> Vec<(usize, usize)> {
         let mut parts = Vec::new();
         let mut start = from;
         let mut at = from;

@@ -91,8 +91,8 @@ const CFG_WORDS: [&str; 15] = [
 ];
 
 const STATIC_TYPES: [&str; 18] = [
-    "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
-    "f32", "f64", "bool", "char", "str", "Option",
+    "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize", "f32",
+    "f64", "bool", "char", "str", "Option",
 ];
 
 const ITEM_WORDS: [&str; 13] = [
@@ -334,7 +334,9 @@ impl Context<'_> {
                     "rule-1-fn-pointer",
                     "a function pointer calls code that lengua can't see in the call graph; call the function by its name, or use a generic or an `enum`".to_string(),
                 ));
-            } else if code.is(at, "#") && (code.is(at + 1, "[") || (code.is(at + 1, "!") && code.is(at + 2, "["))) {
+            } else if code.is(at, "#")
+                && (code.is(at + 1, "[") || (code.is(at + 1, "!") && code.is(at + 2, "[")))
+            {
                 self.attribute(at, out);
             } else if code.is(at, "static") {
                 self.static_item(at, out);
@@ -351,7 +353,8 @@ impl Context<'_> {
         let code = self.code;
         for found in self.model.macros.iter().filter(|m| m.file == self.file) {
             let (open, close) = found.body;
-            let items = (open + 1..close).find(|k| code.ident(*k).is_some_and(|w| ITEM_WORDS.contains(&w)));
+            let items =
+                (open + 1..close).find(|k| code.ident(*k).is_some_and(|w| ITEM_WORDS.contains(&w)));
             let nested = (open + 1..close).find(|k| {
                 code.name(*k).is_some_and(|n| self.local_macro(n)) && code.macro_call(*k + 1)
             });

@@ -31,7 +31,11 @@ impl<'a> Index<'a> {
         };
         for (id, function) in model.functions.iter().enumerate() {
             if function.owner.is_some() {
-                index.keyed.entry(function.key.clone()).or_default().push(id);
+                index
+                    .keyed
+                    .entry(function.key.clone())
+                    .or_default()
+                    .push(id);
                 index
                     .methods
                     .entry(method_name(&function.key).to_string())
@@ -259,10 +263,14 @@ impl Index<'_> {
         if code.is(before, "self") && !code.after_dot(before) {
             return Some(vec!["Self".to_string()]);
         }
-        let field = code.name(before).or_else(|| {
-            (code.kind(before) == Some(Kind::Integer)).then(|| code.text(before))
-        })?;
-        if before >= 2 && code.after_dot(before) && code.is(before - 2, "self") && !code.after_dot(before - 2) {
+        let field = code
+            .name(before)
+            .or_else(|| (code.kind(before) == Some(Kind::Integer)).then(|| code.text(before)))?;
+        if before >= 2
+            && code.after_dot(before)
+            && code.is(before - 2, "self")
+            && !code.after_dot(before - 2)
+        {
             return self.field_types(scope, field);
         }
         if code.after_dot(before) || code.after_path(before) {
@@ -271,7 +279,14 @@ impl Index<'_> {
         scope.params.get(field).cloned().flatten()
     }
 
-    fn method(&self, code: &Code, scope: &Scope, dot: usize, method: &str, out: &mut BTreeSet<usize>) {
+    fn method(
+        &self,
+        code: &Code,
+        scope: &Scope,
+        dot: usize,
+        method: &str,
+        out: &mut BTreeSet<usize>,
+    ) {
         match self.receiver(code, scope, dot) {
             Some(types) if !types.is_empty() => {
                 for name in &types {
@@ -306,13 +321,23 @@ impl Index<'_> {
             && !scope.params.contains_key(name)
             && !code.colon(end)
             && !code.single_eq(end)
-            && !matches!(code.ident(at.wrapping_sub(1)), Some("let" | "mut" | "ref" | "fn"));
+            && !matches!(
+                code.ident(at.wrapping_sub(1)),
+                Some("let" | "mut" | "ref" | "fn")
+            );
         if called || value {
             out.extend(ids.iter().copied());
         }
     }
 
-    fn scan(&self, code: &Code, scope: &Scope, range: (usize, usize), inline: bool, out: &mut BTreeSet<usize>) {
+    fn scan(
+        &self,
+        code: &Code,
+        scope: &Scope,
+        range: (usize, usize),
+        inline: bool,
+        out: &mut BTreeSet<usize>,
+    ) {
         for at in range.0..range.1 {
             if code.is(at, ".") && !code.after_dot(at) && !code.joint(at, ".", ".") {
                 if let Some(method) = code.name(at + 1)
@@ -359,7 +384,13 @@ impl Index<'_> {
         ) else {
             return out;
         };
-        self.scan(code, &scope, (function.body.0 + 1, function.body.1), true, &mut out);
+        self.scan(
+            code,
+            &scope,
+            (function.body.0 + 1, function.body.1),
+            true,
+            &mut out,
+        );
         out
     }
 }

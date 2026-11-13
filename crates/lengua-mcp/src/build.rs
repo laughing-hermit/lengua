@@ -307,7 +307,9 @@ fn ungranted(bytes: &[u8], sha256: &str, build: &Build, host: &Host) -> Vec<Prob
                 "Cargo.toml",
                 1,
                 "component-refused",
-                format!("wasmtime did not take the component: {error}; lengua's host refuses threads, shared memory and relaxed SIMD, whose results can differ between machines"),
+                format!(
+                    "wasmtime did not take the component: {error}; lengua's host refuses threads, shared memory and relaxed SIMD, whose results can differ between machines"
+                ),
             )];
         }
     };

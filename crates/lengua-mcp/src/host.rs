@@ -455,7 +455,9 @@ mod tests {
         let plain = wasmtime::Engine::default();
         assert!(wasmtime::Module::new(&plain, &relaxed).is_ok());
         let host = Host::new().expect("a host");
-        let refused = wasmtime::Module::new(&host.engine, &relaxed).expect_err("refused");
+        let Err(refused) = wasmtime::Module::new(&host.engine, &relaxed) else {
+            panic!("relaxed SIMD was taken");
+        };
         assert!(format!("{refused:#}").contains("relaxed"), "{refused:#}");
     }
 
@@ -465,7 +467,9 @@ mod tests {
         let unshared = module(&[0x05, 0x04, 0x01, 0x01, 0x01, 0x01]);
         assert!(wasmtime::Module::new(&host.engine, &unshared).is_ok());
         let shared = module(&[0x05, 0x04, 0x01, 0x03, 0x01, 0x01]);
-        let refused = wasmtime::Module::new(&host.engine, &shared).expect_err("refused");
+        let Err(refused) = wasmtime::Module::new(&host.engine, &shared) else {
+            panic!("shared memory was taken");
+        };
         let message = format!("{refused:#}").to_lowercase();
         assert!(
             message.contains("thread") || message.contains("shared"),

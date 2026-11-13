@@ -19,7 +19,10 @@ fn found(text: &str, structure: &[&str], crates: &[&str]) -> Vec<Finding> {
 }
 
 fn codes(text: &str, structure: &[&str]) -> Vec<&'static str> {
-    found(text, structure, &[]).into_iter().map(|f| f.code).collect()
+    found(text, structure, &[])
+        .into_iter()
+        .map(|f| f.code)
+        .collect()
 }
 
 fn refused(text: &str, structure: &[&str], code: &str) {
@@ -95,7 +98,11 @@ fn a_program_that_keeps_every_rule_has_no_findings() {
 
 #[test]
 fn rule_1_direct_recursion_is_refused() {
-    refused("fn main() {\n    main();\n}\n", &["main"], "rule-1-recursion");
+    refused(
+        "fn main() {\n    main();\n}\n",
+        &["main"],
+        "rule-1-recursion",
+    );
 }
 
 #[test]
@@ -306,11 +313,27 @@ fn main() {}
 
 #[test]
 fn rule_8_macros_derives_attributes_and_cfg_from_elsewhere_are_refused() {
-    refused("fn main() {\n    other::thing!(1);\n}\n", &["main"], "rule-8-macro");
-    refused("fn main() {\n    include!(\"x.rs\");\n}\n", &["main"], "rule-8-macro");
-    refused("#[derive(Serialize)]\nstruct A;\n\nfn main() {}\n", &["main"], "rule-8-derive");
+    refused(
+        "fn main() {\n    other::thing!(1);\n}\n",
+        &["main"],
+        "rule-8-macro",
+    );
+    refused(
+        "fn main() {\n    include!(\"x.rs\");\n}\n",
+        &["main"],
+        "rule-8-macro",
+    );
+    refused(
+        "#[derive(Serialize)]\nstruct A;\n\nfn main() {}\n",
+        &["main"],
+        "rule-8-derive",
+    );
     refused("#[test]\nfn main() {}\n", &["main"], "rule-8-attribute");
-    refused("#[cfg_attr(unix, inline)]\nfn main() {}\n", &["main"], "rule-8-attribute");
+    refused(
+        "#[cfg_attr(unix, inline)]\nfn main() {}\n",
+        &["main"],
+        "rule-8-attribute",
+    );
     refused("#[cfg(test)]\nfn main() {}\n", &["main"], "rule-8-cfg");
     refused(
         "fn main() {\n    if cfg!(debug_assertions) {\n        println!(\"debug\");\n    }\n}\n",
@@ -328,9 +351,21 @@ fn rule_8_macros_and_derives_of_a_declared_crate_are_taken() {
 
 #[test]
 fn rule_10_turning_a_warning_off_is_refused() {
-    refused("#[allow(clippy::unwrap_used)]\nfn main() {}\n", &["main"], "rule-10-allow");
-    refused("#![allow(unused)]\n\nfn main() {}\n", &["main"], "rule-10-allow");
-    refused("#[expect(dead_code)]\nfn main() {}\n", &["main"], "rule-10-allow");
+    refused(
+        "#[allow(clippy::unwrap_used)]\nfn main() {}\n",
+        &["main"],
+        "rule-10-allow",
+    );
+    refused(
+        "#![allow(unused)]\n\nfn main() {}\n",
+        &["main"],
+        "rule-10-allow",
+    );
+    refused(
+        "#[expect(dead_code)]\nfn main() {}\n",
+        &["main"],
+        "rule-10-allow",
+    );
 }
 
 #[test]
@@ -369,7 +404,10 @@ fn main() {
         .collect();
     assert_eq!(
         places,
-        [("idea.md", 31, "rule-12-unknown"), ("src/main.rs", 1, "rule-12-unnamed")]
+        [
+            ("idea.md", 31, "rule-12-unknown"),
+            ("src/main.rs", 1, "rule-12-unnamed")
+        ]
     );
 }
 
@@ -380,7 +418,11 @@ fn rule_12_nested_items_inline_modules_and_impls_of_other_types_are_refused() {
         &["main"],
         "rule-12-nested",
     );
-    refused("mod inner {}\n\nfn main() {}\n", &["main"], "rule-12-module");
+    refused(
+        "mod inner {}\n\nfn main() {}\n",
+        &["main"],
+        "rule-12-module",
+    );
     refused(
         "trait Twice {\n    fn twice(&self) -> u32;\n}\n\nimpl Twice for u32 {\n    fn twice(&self) -> u32 {\n        assert!(true);\n        assert!(true);\n        self * 2\n    }\n}\n\nfn main() {}\n",
         &["main"],
@@ -390,8 +432,15 @@ fn rule_12_nested_items_inline_modules_and_impls_of_other_types_are_refused() {
 
 #[test]
 fn what_the_reader_can_t_read_is_a_finding() {
-    refused("fn main() {\n    let s = \"open;\n}\n", &["main"], "rust-read");
+    refused(
+        "fn main() {\n    let s = \"open;\n}\n",
+        &["main"],
+        "rust-read",
+    );
     refused("fn main() {\n    let s = (1;\n}\n", &["main"], "rust-read");
-    let all = codes("unsafe extern \"C\" {\n    fn abs(x: i32) -> i32;\n}\n\nfn main() {}\n", &["main"]);
+    let all = codes(
+        "unsafe extern \"C\" {\n    fn abs(x: i32) -> i32;\n}\n\nfn main() {}\n",
+        &["main"],
+    );
     assert!(all.contains(&"rust-read"), "{all:?}");
 }

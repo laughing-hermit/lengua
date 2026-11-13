@@ -118,7 +118,10 @@ mod tests {
     fn run(kind: IdeaKind, text: &str) -> (Vec<&'static str>, Vec<String>) {
         let mut sink = Sink::new("idea.md");
         let names = parse(kind, 1, &lines(text, 2), &Dictionary::load(), &mut sink);
-        (sink.findings.iter().map(|f| f.code).collect(), names.into_iter().map(|(_, n)| n).collect())
+        (
+            sink.findings.iter().map(|f| f.code).collect(),
+            names.into_iter().map(|(_, n)| n).collect(),
+        )
     }
 
     #[test]

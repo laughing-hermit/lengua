@@ -297,10 +297,9 @@ impl Reader<'_> {
             return self.unreadable(at, to, "a `fn` with no body");
         }
         let body = (next, code.end(next));
-        let key = owner.and_then(|o| self.model.owners.get(o)).map_or_else(
-            || name.to_string(),
-            |o| format!("{}::{name}", o.target),
-        );
+        let key = owner
+            .and_then(|o| self.model.owners.get(o))
+            .map_or_else(|| name.to_string(), |o| format!("{}::{name}", o.target));
         self.model.functions.push(Function {
             file: self.file,
             key,
@@ -552,7 +551,9 @@ fn last_name(code: &Code, from: usize, to: usize) -> Option<String> {
 fn target_name(code: &Code, from: usize, to: usize) -> Option<String> {
     let mut at = from;
     while at < to
-        && (code.is(at, "&") || code.is(at, "mut") || code.kind(at) == Some(crate::lex::Kind::Lifetime))
+        && (code.is(at, "&")
+            || code.is(at, "mut")
+            || code.kind(at) == Some(crate::lex::Kind::Lifetime))
     {
         at += 1;
     }
