@@ -43,7 +43,8 @@ fn split_head(bytes: &[u8]) -> Result<(Vec<String>, &[u8]), Error> {
         .windows(4)
         .position(|four| four == b"\r\n\r\n")
         .ok_or(Error::Incomplete)?;
-    let head = std::str::from_utf8(bytes.get(..end).unwrap_or_default()).map_err(|_| Error::Line)?;
+    let head =
+        std::str::from_utf8(bytes.get(..end).unwrap_or_default()).map_err(|_| Error::Line)?;
     let rest = bytes.get(end + 4..).unwrap_or_default();
     let lines: Vec<String> = head.split("\r\n").map(str::to_string).collect();
     debug_assert_ne!(lines.len(), 0);
@@ -97,7 +98,12 @@ fn body_of(headers: &[(String, String)], rest: &[u8], to_end: bool) -> Result<Ve
 
 pub fn parse_request(bytes: &[u8]) -> Result<Request, Error> {
     let (lines, rest) = split_head(bytes)?;
-    let first: Vec<&str> = lines.first().map(String::as_str).unwrap_or_default().split(' ').collect();
+    let first: Vec<&str> = lines
+        .first()
+        .map(String::as_str)
+        .unwrap_or_default()
+        .split(' ')
+        .collect();
     let [method, target, version] = first.as_slice() else {
         return Err(Error::Line);
     };
@@ -187,7 +193,8 @@ pub fn decode_chunked(bytes: &[u8]) -> Result<(Vec<u8>, usize), Error> {
     let mut at = 0;
     for _ in 0..=bytes.len() {
         let end = line_end(bytes, at).ok_or(Error::Incomplete)?;
-        let line = std::str::from_utf8(bytes.get(at..end).unwrap_or_default()).map_err(|_| Error::Chunk(at))?;
+        let line = std::str::from_utf8(bytes.get(at..end).unwrap_or_default())
+            .map_err(|_| Error::Chunk(at))?;
         let size_text = line.split(';').next().unwrap_or_default().trim();
         let size = usize::from_str_radix(size_text, 16).map_err(|_| Error::Chunk(at))?;
         let start = end + 2;

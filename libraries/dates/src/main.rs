@@ -61,7 +61,11 @@ pub fn civil_from_days(days: i64) -> Date {
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let shifted = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * shifted + 2) / 5 + 1;
-    let month = if shifted < 10 { shifted + 3 } else { shifted - 9 };
+    let month = if shifted < 10 {
+        shifted + 3
+    } else {
+        shifted - 9
+    };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
     debug_assert!((1..=12).contains(&month));
     debug_assert!((1..=31).contains(&day));
@@ -92,7 +96,10 @@ fn number(text: &str, from: usize, to: usize) -> u16 {
 
 fn form(text: &str, length: usize, separators: &[(usize, u8)]) -> Result<(), Error> {
     for (at, byte) in text.bytes().enumerate() {
-        let wanted = separators.iter().find(|(place, _)| *place == at).map(|(_, b)| *b);
+        let wanted = separators
+            .iter()
+            .find(|(place, _)| *place == at)
+            .map(|(_, b)| *b);
         let fits = match wanted {
             Some(separator) => byte == separator,
             None => byte.is_ascii_digit(),
@@ -136,10 +143,12 @@ pub fn format_date(date: Date) -> String {
 pub fn parse_timestamp(text: &str) -> Result<i64, Error> {
     let date = parse_date(text.get(..10).unwrap_or(text))?;
     let clock = text.get(10..).unwrap_or_default();
-    form(clock, 10, &[(0, b'T'), (3, b':'), (6, b':'), (9, b'Z')]).map_err(|error| match error {
-        Error::Form(at) => Error::Form(at + 10),
-        other => other,
-    })?;
+    form(clock, 10, &[(0, b'T'), (3, b':'), (6, b':'), (9, b'Z')]).map_err(
+        |error| match error {
+            Error::Form(at) => Error::Form(at + 10),
+            other => other,
+        },
+    )?;
     let hour = i64::from(number(clock, 1, 3));
     let minute = i64::from(number(clock, 4, 6));
     let second = i64::from(number(clock, 7, 9));

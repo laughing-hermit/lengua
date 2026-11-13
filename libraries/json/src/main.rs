@@ -28,7 +28,10 @@ pub fn get<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
     let Value::Object(fields) = value else {
         return None;
     };
-    let found = fields.iter().find(|(name, _)| name == key).map(|(_, item)| item);
+    let found = fields
+        .iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, item)| item);
     debug_assert!(found.is_none() || !fields.is_empty());
     debug_assert!(fields.len() < usize::MAX);
     found
