@@ -1,4 +1,9 @@
 # lengua
+> **lengua 3 (decided by the owner on 2026-11-13).** lengua starts over: the agent writes Rust,
+> compiled to WebAssembly components, and the idea file is the only documentation. The design
+> is in [Lengua3.md](Lengua3.md). This file is the record of lengua 2, which is kept at the tag
+> `lengua2-final` and replaced at lengua 3's first milestone.
+
 
 lengua is an AI language. You say what a program should do, in your own words. Your AI agent
 writes that down as an idea file, `idea.md`: the program's behaviors, each shown by an example,

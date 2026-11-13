@@ -1,0 +1,285 @@
+# lengua 3
+
+The design of lengua 3: a fresh start, in which the agent writes Rust, Rust is compiled to
+WebAssembly, and the idea file is the program's only documentation.
+
+Decided by the owner on 2026-11-13. lengua 2 (hand-written WebAssembly text, `main.wat`) is
+finished and kept at the tag `lengua2-final`; main starts over from an empty tree.
+
+## 1. The vision
+
+In the owner's words:
+
+- "The purpose of this is basically using the LLM as a compiler. Modernizing the programming
+  language. into a AI language."
+- "i want to evolve programming languages into ai languages"
+- "EVERYTHING GETS COMPILED TO WEB ASSEMBLY FROM RUST"
+- "this need to be able to run anywhere regardless of cpu or os"
+- "code file will not have comments, the idea file thats in sync with code will be the
+  documentation/code"
+- "i want a fresh start dont be biased with past implementation"
+
+What that means for lengua 3:
+
+- **A person writes what they want; the agent is the compiler.** The person states a request.
+  The agent writes an idea file: what the program does, its behaviours as tests, and what it may
+  touch. Then the agent writes the Rust that does it. lengua checks the Rust against the idea
+  and runs it.
+- **The idea file is the source of truth and the only documentation.** Code files have no
+  comments. Every function the code has is named and described in the idea, and nothing else
+  is. `check` holds the two to each other, and the lock refuses one changed without the other.
+- **Runs anywhere.** What lengua builds is one WebAssembly component: the same bytes on every
+  CPU and every operating system.
+- **The machine checks the AI's work.** The AI is fast and tireless but makes mistakes, so
+  nothing it writes is trusted because it wrote it. Trust comes from the compiler, the rules,
+  the tests and the host, and lengua says plainly how far each check went.
+
+### Why Rust compiled to WebAssembly
+
+- **The AI knows Rust well**, far better than WebAssembly text. lengua 2's scale test (a web
+  server of 3,638 lines of WebAssembly text) showed the AI could write it, but the bookkeeping
+  of offsets and layout cost cycles that a compiler does for free.
+- **The Rust compiler catches a class of mistakes** before lengua sees the code: types, memory,
+  lifetimes, unhandled results.
+- **WebAssembly keeps the sandbox.** A WebAssembly component can reach nothing the host does not
+  hand it, so the idea's grants are enforced exactly, on every system. Native code would need
+  each operating system's own sandbox, which differ and leak.
+- **One component everywhere.** The same `.wasm` file runs on Linux, macOS and Windows, on x86-64
+  and ARM64, and in any runtime that speaks WASI 0.2.
+- **Interoperability.** WASI is a standard interface and the component model is a standard way
+  to link components. A component built from another language can be linked with a lengua
+  program, and a lengua program can be used by other hosts.
+
+## 2. What lengua 3 keeps from lengua 2, as ideas
+
+Kept as ideas, not as code. Old code is read at the tag `lengua2-final` when it helps, and a
+piece is ported only when lengua 3 needs it and it passes review on its own.
+
+- **The idea file:** a purpose, behaviours written as tests, and grants. Written in ASD-STE100
+  Simplified Technical English, and checked for it.
+- **Grants enforced by the host:** a program reaches only what its idea declares.
+- **Trust labels:** every result says how far the checks went.
+- **The lock:** one file ties the idea, the code and the build together, signed with the user's
+  key.
+- **The bundle wiki** (Karpathy's LLM wiki): each bundle of programs keeps an `index.md` and a
+  `log.md` that `check` writes.
+- **Open Knowledge Format** frontmatter on every idea, so programs can be indexed and found.
+- **A lean runner** that loads sealed, precompiled code with no compiler in it.
+- **All of an idea's problems in one reply**, not one kind at a time.
+- **Run tools:** a trace of host calls and a profile.
+- **Five runners, same bits:** built and tested on GitHub's free runners for Linux, macOS and
+  Windows, x86-64 and ARM64.
+- **No tool call past about 40 seconds:** long work runs as a background job and `check`
+  replies with its state.
+
+## 3. What lengua 3 drops
+
+- Hand-written WebAssembly text (`main.wat`) and its checker.
+- The SMT prover (z3 and cvc5), for now. It was lengua 2's most expensive part and reached
+  little: of the web server's 25 tests, 8 were proven for every input.
+- Parts by verbatim copy, and named-data offsets.
+- Work split into pieces (it did not pay at common sizes).
+- The "outside module" side door: every program is a component now, and a component built by
+  something else is simply labelled trusted.
+- The gate's list of rows behind C, C++ and Rust. lengua 3 measures its own overhead instead:
+  a component under lengua's host against the same component under plain Wasmtime.
+
+## 4. Architecture
+
+### The plugin
+
+lengua is an Agent Plugin: skills and one Rust MCP server, nothing else.
+
+| Part | What it does |
+|---|---|
+| Skill `write-idea` | Turns a request into `idea.md` |
+| Skill `build` | Turns `idea.md` into Rust in `src/` |
+| MCP tool `check` | Checks the idea, generates the build files, builds, checks the rules, runs the tests, writes the lock and the wiki |
+| MCP tool `run` | Runs a checked program under its grants |
+| `lengua-run` | The lean runner, for running a checked program from a shell |
+
+Standards followed:
+[Agent Plugins](https://agent-plugins.org/),
+[Agent Skills](https://agentskills.io/home),
+[MCP Rust SDK](https://github.com/modelcontextprotocol/rust-sdk),
+[Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format),
+[Karpathy's LLM wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
+
+### A program folder
+
+```
+greet/
+  idea.md        written by the agent: the source of truth and the documentation
+  src/main.rs    written by the agent: Rust, no comments
+  src/*.rs       more modules, if the idea's structure names them
+  Cargo.toml     generated by check from the idea; not edited by hand
+  wit/world.wit  generated by check from the idea's grants
+  lengua.lock    written by check
+```
+
+The agent writes only `idea.md` and `src/`. `check` generates `Cargo.toml` (name, edition, the
+lints of section 5, a release profile with `panic = "abort"`, no dependencies outside the
+bundle) and `wit/world.wit`, and holds them unchanged: a hand edit is a finding.
+
+### The idea file
+
+```
+---
+okf: ...                      Open Knowledge Format frontmatter
+---
+# Purpose                     what the program is for, in STE
+# Behaviours                  each behaviour as a test: given, when, then
+# Constraints                 grants (- Reads: files in ..., - Connects to: ...),
+                              memory, time, exports, calls
+# Structure                   every module and function, one sentence each
+# Contracts                   optional; kept for proofs later
+```
+
+`# Structure` is new. It is how the idea becomes the documentation: `check` reads every
+function in `src/` and every name in `# Structure`, and each must have the other.
+
+### The build
+
+`check` runs `cargo build --offline --release --target wasm32-wasip2` on the user's machine as
+a background job. It replies `building` until the build ends, then goes on. The result is one
+WebAssembly component.
+
+The user needs Rust and its `wasm32-wasip2` target installed. `lengua-mcp doctor` checks both
+and says the one command to run if either is missing.
+
+### Grants become the component's world
+
+The idea's grants generate the WIT world in `wit/world.wit`. The world imports only the WASI
+interfaces the grants allow: standard output always; standard input, arguments, the clock,
+random numbers, files and sockets only when granted.
+
+Two checks hold it:
+- **At check:** the built component's imports must all be in the world. Anything else is
+  refused.
+- **At run:** the host links only the world's interfaces, with lengua's policy on top: files only
+  in the folders the idea names, connections only to the hosts and ports it names, memory and
+  time limits from the idea.
+
+### The host
+
+Wasmtime with the component model and its WASI 0.2 implementation. In tests the clock is fixed
+and random numbers come from a seed, so every run gives the same output on every system.
+
+### Libraries and other languages
+
+- **A lengua library** is another program of the bundle that declares `- Exports:`. A program
+  that uses it names it in `- Uses:`, and `check` links it as a Rust path crate. Its own checks
+  and tests stand.
+- **A component built from another language** (C, Go, anything with a WASI 0.2 target) is linked
+  through the component model. lengua did not build or check it, so it is labelled `trusted`.
+
+### The lock
+
+`lengua.lock` holds the hashes of `idea.md`, every file in `src/`, the generated files, the
+toolchain version and the built component, signed with an HMAC under the user's key. It also
+names the sealed, precompiled form of the component that `run` and `lengua-run` load. A change
+to the idea or the code without a new check means the lock no longer matches, and `run`
+refuses.
+
+### The wiki
+
+`check` keeps each bundle's `index.md` (every program, its purpose and its trust label) and
+`log.md` (every check, in order), as in Karpathy's LLM wiki, and keeps each idea's OKF
+frontmatter current.
+
+## 5. The Power of 10, for Rust compiled to WebAssembly
+
+NASA's [Power of 10](https://en.wikipedia.org/wiki/The_Power_of_10:_Rules_for_Developing_Safety-Critical_Code),
+adapted for Rust that runs as a WebAssembly component and is written by an AI.
+
+| # | NASA's rule | lengua 3's rule | Held by |
+|---|---|---|---|
+| 1 | Simple control flow, no recursion | No recursion, direct or through other functions. No `dyn` trait objects and no function pointers in program code. | lengua's lint (the call graph from the source) |
+| 2 | Every loop has a fixed upper bound | `for` over a range, a slice or a bounded iterator. `while` and `loop` only with a counter checked against a constant. | lengua's lint; the host's time limit as a backstop |
+| 3 | No dynamic memory after start-up | The idea declares a memory maximum. The component's memory can never grow past it. | The component check and the host's limit |
+| 4 | A function fits on a page | 60 lines or fewer, after `rustfmt`. | lengua's lint |
+| 5 | Two assertions a function, on average | At least two `assert!` or `debug_assert!` per function, on average. | lengua's lint |
+| 6 | Data in the smallest scope | No `static mut`, no global with interior mutability. | `[lints]` and lengua's lint |
+| 7 | Check every return value and parameter | Every `Result` and `#[must_use]` value is used. No `unwrap`, `expect` or indexing that can panic in program code. | `[lints]`: `unused_must_use`, `clippy::unwrap_used`, `clippy::expect_used`, `clippy::indexing_slicing` |
+| 8 | Limit the preprocessor | No `macro_rules!` that define items, no procedural macros, no `build.rs`, no `cfg` beyond the target. | lengua's lint and the generated `Cargo.toml` |
+| 9 | Restrict pointers | No `unsafe` at all, so no raw pointers. | `#![forbid(unsafe_code)]` through `[lints]` |
+| 10 | All warnings on, from day one | Every warning is an error; clippy's `pedantic` group on; from the first build. | `[lints]` |
+
+Added for an AI language:
+
+| # | Rule | Held by |
+|---|---|---|
+| 11 | No comments and no doc comments in code files. The idea is the documentation. | lengua's lint |
+| 12 | Every function is named in the idea's `# Structure`, and nothing else is. | `check` |
+| 13 | No dependencies outside the bundle in v1: the standard library and the bundle's own libraries only. | The generated `Cargo.toml` and `Cargo.lock` |
+
+And on the built component: imports only from the world; no threads, no relaxed SIMD and no other
+feature whose result can differ between machines; a size limit.
+
+## 6. Trust labels
+
+| Label | Means |
+|---|---|
+| `checked` | Built by lengua, every rule holds, every test passes, and the mutation score is above the threshold |
+| `tested` | Built by lengua, every rule holds and every test passes, but the tests are weak: the mutation score is under the threshold |
+| `trusted` | A component lengua did not build; it runs under the grants, and its tests run, but nothing about its code is checked |
+
+`check`'s reply and the wiki show the label of every program. A program that uses a `trusted`
+component says so.
+
+## 7. Tests
+
+- **The idea's behaviours** run against the built component: given its input (standard input,
+  arguments, files, a local network fixture), then its output, compared exactly.
+- **Generated cases:** a behaviour can give ranges, and lengua draws cases from them, boundary
+  values first.
+- **Mutation score:** lengua changes the Rust source in small ways (an operator, a constant, a
+  comparison), builds each mutant, and runs the tests. The share of mutants the tests catch is
+  the score. It says how strong the tests are, and decides between `checked` and `tested`.
+- **Deterministic:** the same input gives the same output on every system, every time.
+
+## 8. Milestones
+
+Each one is green on all five runners before the next starts.
+
+| # | Milestone | Done when |
+|---|---|---|
+| L0 | Tag `lengua2-final`; empty main; a new Cargo workspace; CI on five runners | An empty `lengua-mcp` builds and its one test passes on five |
+| L1 | The idea file: reader, STE check, test format, `# Structure`, OKF, the wiki | `check` reports every problem of an idea at once |
+| L2 | Generate `Cargo.toml` and the world; build in the background; `doctor` | A hello-world idea builds to a component on five |
+| L3 | The host on the component model: standard input and output, arguments, files, clock, random | A program runs under exactly its grants; an ungranted import is refused at check and at run |
+| L4 | The Power of 10 lint and the component checks | Each rule has a test that a program breaking it is refused |
+| L5 | Tests from the idea, generated cases, mutation score, trust labels | A program goes from idea to `checked` |
+| L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | A changed idea or file is refused at run |
+| L7 | Network grants; lengua libraries; a component from another language | A program uses a library and a C component, each labelled |
+| L8 | The skills rewritten for Rust; a product test in an interactive session | An agent goes from a request to a `checked` program with the plugin alone |
+| L9 | The scale test: a web server in Rust, built and then changed three times | A report of cycles and breakages, next to lengua 2's 3,638-line record |
+| L10 | Trace and profile; a bench of lengua's overhead; documents; the finish line | The finish-line run green on five; only main and tags remain |
+
+## 9. How the work is done
+
+Unchanged from lengua 2:
+
+- This computer only edits files and runs git and gh. Everything is built, tested and measured
+  on GitHub's free runners.
+- Lean CI: iterate on Linux on x86-64; all five runners only for the run a landing rests on; a
+  compile check for documents-only changes.
+- Each milestone on a `wip/` branch, landed on main by fast-forward after a green five-runner
+  run, then deleted. At the end only main remains, with tags.
+- Nothing may cost money.
+- Agent-level product tests only in the live interactive session, never headless.
+
+## 10. Risks and open questions
+
+- **WASI 0.2 or 0.3:** check the state of WASI 0.3 and of the `wasm32-wasip2` target and
+  Wasmtime's versions at L0, and pin them.
+- **Build time:** a cold `cargo build` can take longer than one tool call; the background job
+  and a kept build folder per program must hide it.
+- **The user must have Rust installed.** lengua 2 needed nothing but lengua itself.
+- **Component size and start-up time** against lengua 2's hand-written modules: measured at L10.
+- **Dependencies:** v1 has none outside the bundle. Allowing crates from crates.io, pinned by
+  hash, is a later decision.
+- **Proofs:** none in v1. `# Contracts` stays in the idea so proofs can come back, for example
+  with Kani if it reaches all five systems.
+- **What other runtimes allow:** a lengua component runs in any WASI 0.2 runtime, but outside
+  lengua the grants are that runtime's to enforce, not lengua's.

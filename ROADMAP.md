@@ -1,4 +1,9 @@
 # lengua's roadmap: the pivot to WebAssembly
+> **lengua 3 (decided by the owner on 2026-11-13).** lengua starts over: the agent writes Rust,
+> compiled to WebAssembly components, and the idea file is the only documentation. The design
+> is in [Lengua3.md](Lengua3.md). This file is the record of lengua 2, which is kept at the tag
+> `lengua2-final` and replaced at lengua 3's first milestone.
+
 
 On 2026-11-06 the owner decided that lengua's code is WebAssembly: "we are now pivoting into web
 assembly", to "build end 2 end, this new iteration of lengua", "a good product so we can compete

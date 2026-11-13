@@ -1,4 +1,9 @@
 # lengua's agenda: what's left for people
+> **lengua 3 (decided by the owner on 2026-11-13).** lengua starts over: the agent writes Rust,
+> compiled to WebAssembly components, and the idea file is the only documentation. The design
+> is in [Lengua3.md](Lengua3.md). This file is the record of lengua 2, which is kept at the tag
+> `lengua2-final` and replaced at lengua 3's first milestone.
+
 
 **What lengua is.** An AI language: an LLM is the compiler, and lengua validates its translations
 instead of trusting them. A person's request becomes an idea file, `idea.md`: behaviors in
