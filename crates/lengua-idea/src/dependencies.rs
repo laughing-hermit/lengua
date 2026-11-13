@@ -97,6 +97,11 @@ fn uses_unsafe(dir: &Path) -> bool {
     false
 }
 
+fn links_a_library(dir: &Path) -> bool {
+    fs::read_to_string(dir.join("build.rs"))
+        .is_ok_and(|script| script.contains("rustc-link-lib") || script.contains("rustc-link-search"))
+}
+
 fn not_pure(dir: &Path) -> bool {
     let Ok(manifest) = fs::read_to_string(dir.join("Cargo.toml")) else {
         return false;
@@ -110,7 +115,7 @@ fn not_pure(dir: &Path) -> bool {
                 .ends_with("build-dependencies");
             continue;
         }
-        if value(line, "links").is_some() {
+        if value(line, "links").is_some() && links_a_library(dir) {
             return true;
         }
         let key = line
@@ -178,7 +183,7 @@ pub(crate) fn count(folder: &Path, declared: &[(String, String)]) -> Count {
     let Ok(lock) = fs::read_to_string(folder.join("Cargo.lock")) else {
         return count;
     };
-    let hash = sha256::hex(lock.as_bytes());
+    let hash = sha256::hex(format!("crates 2\0{lock}").as_bytes());
     if let Some(cached) = read_cache(folder, &hash) {
         return Count {
             declared: count.declared,
@@ -250,7 +255,7 @@ impl Count {
         let groups = [
             ("With `unsafe` in their Rust code", &self.unsafe_code),
             (
-                "Not pure Rust (a `links` key, or a C build in their build script)",
+                "Not pure Rust (a build script that links a native library, or `cc`, `cmake`, `pkg-config`, `bindgen` or `vcpkg` among the build dependencies)",
                 &self.native,
             ),
             (

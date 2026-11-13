@@ -433,7 +433,7 @@ next starts (Lengua3.md, section 8).
   - A library learns its users only in the folder index of `libraries/`, never in its own
     files, which its lock holds.
   - The crate count reads the folder's `Cargo.lock` and the crates' sources in Cargo's folder
-    (`unsafe` as a word outside line comments; not pure Rust: a `links` key or `cc`, `cmake`,
+    (`unsafe` as a word outside line comments; not pure Rust: a `links` key whose `build.rs` links a native library (`prettyplease` has a `links` key for its version alone, run 43516471987), or `cc`, `cmake`,
     `pkg-config`, `bindgen` or `vcpkg` among the build dependencies), kept in
     `target/lengua/crates.txt` under the lock's hash.
   - Each folder under `libraries/` and `examples/` is an OKF bundle of its own (its `index.md`

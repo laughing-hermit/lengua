@@ -1300,7 +1300,7 @@ the folder's root are OKF's reserved files (OKF sections 8 and 9).
   L9), the crate count of section 4, "Crates": the crates the ideas declare, the crates they
   bring in (the external packages of the folder's `Cargo.lock`, so "not known until the first
   build" before it), which of them have `unsafe` in their Rust code (the word, outside line
-  comments, in their sources in Cargo's folder), which are not pure Rust (a `links` key, or
+  comments, in their sources in Cargo's folder), which are not pure Rust (a `links` key with a build script that links a native library, or
   `cc`, `cmake`, `pkg-config`, `bindgen` or `vcpkg` among their build dependencies), and any
   whose source lengua could not read. The count is kept in `target/lengua/crates.txt` under the
   `Cargo.lock`'s SHA-256. An idea's title is its `title` (above).
