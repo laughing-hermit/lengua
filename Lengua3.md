@@ -6,6 +6,23 @@ WebAssembly, and the idea file is the program's only documentation.
 Decided by the owner on 2026-11-13. lengua 2 (hand-written WebAssembly text, `main.wat`) is
 finished and kept at the tag `lengua2-final`; main starts over from an empty tree.
 
+### A fresh start
+
+lengua 3 is designed and written from scratch, so that it is not biased by lengua 2 ("i want a
+fresh start dont be biased with past implementation").
+
+- **This document is the source.** lengua 3 is built from what this document says, not from
+  what lengua 2 did. Where the two differ, this document wins.
+- **No code is carried over.** lengua 2's source is not copied, ported or used as a template.
+  Every file of lengua 3 is written new.
+- **Don't read lengua 2's code to build lengua 3.** Whoever builds a milestone, a person or an
+  agent, works from this document and the standards it links. Lengua 2's reports may be read
+  for lessons (for example its scale test), never its code for answers.
+- **Main starts empty.** At L0 every file of lengua 2 is removed from main. lengua 2 stays only
+  at the tag `lengua2-final`, as history.
+- **Questions go back to the design.** When this document doesn't answer something, the answer
+  is decided for lengua 3 and written here, not taken from lengua 2.
+
 ## 1. The vision
 
 In the owner's words:
@@ -63,8 +80,8 @@ What that means for lengua 3:
 
 ## 2. What lengua 3 keeps from lengua 2, as ideas
 
-Kept as ideas, not as code. Old code is read at the tag `lengua2-final` when it helps, and a
-piece is ported only when lengua 3 needs it and it passes review on its own.
+Kept as ideas only, never as code. lengua 3 is written new, from this document (see "A fresh
+start" below).
 
 - **The idea file:** a purpose, behaviours, and grants. Behaviours are written the
   Behaviour-Driven way, as Given/When/Then with their examples, and each one is a test. The
