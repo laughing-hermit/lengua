@@ -26,8 +26,9 @@ and 7.
   <version>` and a line end to standard output and stops with exit code 0.
 - Given the argument `doctor`, when `lengua-mcp` runs, then it writes one line for `cargo`, for
   `rustc`, `rustfmt`, `clippy` and each of the targets `wasm32-wasip2` and
-  `wasm32-unknown-unknown`, with the
-  command that installs each missing part, and stops with exit code 0, or 1 when a part is
+  `wasm32-unknown-unknown`, and for `wasm-bindgen` 0.2.130 (since L8, for a front end), with the
+  command that installs each missing part, and stops with exit code 0, or 1 when a part that
+  every program needs is
   missing.
 - Given any other arguments, when `lengua-mcp` runs, then it writes `usage: lengua-mcp
   [--version | doctor]` to standard error and stops with exit code 2.
@@ -187,3 +188,21 @@ and 7.
 - `fixtures.rs` (since L7): `Fixtures::start` binds each `Server` of an example (waiting up to
   10 s for the port) and starts each `Client`, which connects to the program's port; `finish`
   stops them and gives what each client got.
+- `screens.rs` (since L8): `cases` expands the screens' examples into cases; `write` makes the
+  harness of the screens in `target/lengua/screens` (or, for a mutant of a screen,
+  `target/lengua/mutant-screens`): `manifest` (the screen crates with `test-support`, the
+  browser's platform crates left out) and `main_text` (`SUPPORT`: lengua's recording text
+  system `Shown`, the probe view `Probe`, the case runner `Run` with `open`, `settle`, `state`,
+  `click`, `type_into`, `expect_state`, `shown_now` and `expect_text`; the window with or
+  without GPUI Kit, `KIT_WINDOW` and `PLAIN_WINDOW`; one function per case, `step_line` and
+  `value`); `build` fetches it once (`fetched`) and builds it, turning its errors into findings
+  at the screen's file (`placed`, `tidy`) or `harness-error` at the example (`mapped`); `run`
+  runs the binary (`binary`) and reads each case's line; `finding` makes the finding of a
+  failed case. `Worker::screen_tests` and `Worker::screen_spec` in `build.rs` run it after the
+  program's tests, and `screen_verdict` in `mutation.rs` judges a mutant of a screen with it.
+- `build.rs`, since L8: `front_end` runs clippy and the build of the front end's package for
+  `wasm32-unknown-unknown` and `wasm-bindgen` (`tool`, which runs any command as `cargo` runs
+  cargo); `formatted` checks the format of the server's package and of each screen file;
+  `remaps` and `encoded_flags` give every cargo call `--remap-path-prefix` for the Cargo home
+  (`/cargo`), the program's folder (`/app`, found by `program_root`) and each path dependency
+  (`/<name>`, `lexical`), so the built files do not hold the paths of one computer.

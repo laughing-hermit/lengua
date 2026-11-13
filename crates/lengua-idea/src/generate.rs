@@ -478,6 +478,32 @@ fn front_plan(
     })
 }
 
+fn front_files(
+    title: &str,
+    found: &Front,
+    linked: &[(String, String)],
+) -> Vec<(&'static str, &'static str, String)> {
+    let names: Vec<String> = found.screens.iter().map(|s| s.name.clone()).collect();
+    let web = front::Plan {
+        package: title,
+        screens: &names,
+        start: &found.start,
+        crates: &found.crates,
+        libraries: linked,
+        assets: &found.assets,
+    };
+    vec![
+        ("app_cargo_sha256", front::APP_CARGO, front::app_cargo(&web)),
+        ("app_lib_sha256", front::APP_LIB, front::app_lib(&web)),
+        ("files_cargo_sha256", front::FILES_CARGO, front::files_cargo()),
+        (
+            "files_lib_sha256",
+            front::FILES_LIB,
+            front::files_lib(title, &found.assets),
+        ),
+    ]
+}
+
 pub(crate) fn plan(
     folder: &Path,
     title: &str,
@@ -537,27 +563,7 @@ pub(crate) fn plan(
         ("world_sha256", WORLD, world(&top.grants, shape)),
     ];
     if let Some(found) = &front {
-        let names: Vec<String> = found.screens.iter().map(|s| s.name.clone()).collect();
-        let web = front::Plan {
-            package: title,
-            screens: &names,
-            start: &found.start,
-            crates: &found.crates,
-            libraries: &linked,
-            assets: &found.assets,
-        };
-        files.push(("app_cargo_sha256", front::APP_CARGO, front::app_cargo(&web)));
-        files.push(("app_lib_sha256", front::APP_LIB, front::app_lib(&web)));
-        files.push((
-            "files_cargo_sha256",
-            front::FILES_CARGO,
-            front::files_cargo(),
-        ));
-        files.push((
-            "files_lib_sha256",
-            front::FILES_LIB,
-            front::files_lib(title, &found.assets),
-        ));
+        files.extend(front_files(title, found, &linked));
     }
     let previous = pages.first().map(|p| &p.front);
     let mut plan = Plan {

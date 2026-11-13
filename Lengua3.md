@@ -1694,6 +1694,42 @@ Decided for lengua 3 at L7 (2026-11-13):
 - **New dependencies of lengua's own**: `wasmtime-wasi-http` 50.0.1 (`p2`) and `hyper` 1 (no
   features, for its re-exported types; already in the graph), both in `lengua-host`.
 
+Decided for lengua 3 at L8 (2026-11-13):
+
+- **The risk was tested first** (CI runs 43490423487 and 43491793393, a throwaway crate, since
+  removed): GPUI and GPUI Kit build for `wasm32-unknown-unknown` on stable Rust 1.100.0, render
+  in headless Chrome, and run natively under GPUI's test context (section 10, "Found at L8").
+- **GPUI is pinned through the `gpui-pre` 0.3.12 snapshot of Zed commit `d2a4fb6`, and GPUI Kit
+  is `gpui-component` 0.9.1** (section 4, "As built at L8"); not a `git` dependency, since GPUI
+  Kit depends on the snapshot.
+- **GPUI Kit is `gpui-component`, not the facade `gpui-kit`**: `gpui-kit` brings
+  `gpui-pre-platform` with its default features (`multithreaded`, which needs a nightly
+  toolchain and a cross-origin-isolated page) and the native platforms (X11, Wayland) that the
+  screens' native tests do not need.
+- **The front end is a member of the program's workspace** (`web/app`, `web/files`), generated
+  and held, so one `Cargo.lock` pins both halves and the lock signs it; every crate of the
+  front end has `default-features = false`, since a crate's default features are code the idea
+  did not name.
+- **The loader is `wasm-bindgen`'s**, made by its command line at 0.2.130, which the user
+  installs (`doctor` says how) and CI downloads, pinned by SHA-256 (the Windows x86-64 build
+  runs on Windows ARM64 too). No loader of lengua's own: `wasm-bindgen`'s output is the only
+  way to start a `wasm-bindgen` crate.
+- **The fonts are the application's own files**, in `assets/fonts/`, added to GPUI's text
+  system by the generated start; `examples/notes` ships IBM Plex Sans Regular and SemiBold
+  (SIL Open Font License 1.1, `assets/fonts/OFL.txt`), the family GPUI's web text system falls
+  back to. They are in the front end's `.wasm`, not served again.
+- **The screens' tests run natively**, through GPUI's test context, with lengua's recording
+  text system for `Expect text` (section 7, "The screens' tests").
+- **Screens are the screens of a server.** A program or a library with screens is refused
+  (`screen-server`) once its code is there.
+- **Builds hold no paths of one computer**: every cargo call of the job gets
+  `--remap-path-prefix` for the Cargo home, the program's folder and its path dependencies
+  (section 10, "Found at L8").
+- **CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2`** on every runner, and a
+  failure fails the run (section 1).
+- **No new dependency of lengua's own**; `serde_json` (already in the graph) is a
+  dev-dependency of `lengua-run`, for the browser test.
+
 ## 10. Risks and open questions
 
 - **WASI 0.2, decided at L0 (2026-11-13): lengua 3 targets WASI 0.2, `wasm32-wasip2`.**
@@ -1830,6 +1866,41 @@ Decided for lengua 3 at L7 (2026-11-13):
   default, and lengua's `wit/world.wit` is a statement for the host, not WIT for a binding
   generator (it imports WASI with no `wit/deps/`). A program writes `path: []` with `inline`; the
   `build` skill (L9) says so.
+- **Found at L8: GPUI's web target, tested first** (CI runs 43490423487 and 43491793393, Linux
+  x86-64, a throwaway crate with one GPUI Kit button and one text field). Read from the sources
+  of `gpui_web` at Zed's `main` (`83df5df`) and at the snapshot's commit (`d2a4fb6`), and from
+  GPUI Kit's `crates/base/examples/wasm` and `crates/story-web`:
+  - **Stable Rust is enough** when GPUI's web platform is single-threaded:
+    `gpui-pre-platform` and `gpui-pre-web` with default features off
+    (`gpui_platform::single_threaded_web()` or `WebPlatform::new(false)`). Their default feature
+    `multithreaded` needs a nightly toolchain (`build-std`, atomics, shared memory) and a
+    cross-origin-isolated page, which is why Zed's `hello_web` and GPUI Kit's gallery pin
+    nightlies (`nightly-2026-10-31`). lengua keeps Rust 1.100.0 and one thread, as its WASI
+    components have.
+  - **The build:** 3 min 18 s for a cold release build (LTO, one codegen unit) of GPUI and GPUI
+    Kit for `wasm32-unknown-unknown` on the 4-core runner; 23,051,428 bytes before
+    `wasm-bindgen`, 20,977,185 after (`spike_bg.wasm`), and a loader of 161,147 bytes. 466
+    crates in the browser's graph, 801 in the lock with the native tests'. The front end makes
+    the one file about 20 MiB, under the 64 MiB limit.
+  - **The loader:** `wasm-bindgen --target web` makes an ES module and the `.wasm`; a page that
+    imports the module starts the `#[wasm_bindgen(start)]` function; GPUI makes its own canvas
+    (and a hidden `textarea` for the keyboard and input methods) in the page's body.
+  - **The GPU:** headless Chrome 157 on the runner has no WebGPU adapter (`No available
+    adapters.`), with or without `--enable-unsafe-webgpu`, so GPUI falls back to WebGL2, which
+    SwiftShader gives with `--use-angle=swiftshader --enable-unsafe-swiftshader`; GPUI logs
+    `Browser graphics initialized successfully with Gl`. WebGPU on a real GPU was not
+    exercised.
+  - **The fonts:** with no fonts added, GPUI panics at its first text (`failed to load font
+    ".SystemUIFont"`, `gpui-pre-0.3.12/src/text_system.rs:620`): its web text system starts
+    with no fonts and falls back to the family "IBM Plex Sans". With IBM Plex Sans added, the
+    screen draws its text (the screenshot of run 43491793393).
+  - **The test context:** a `TestAppContext` with a text system of lengua's own runs the screen
+    natively: a click at an element's debug bounds and typing into GPUI Kit's text field change
+    its state, and the lines laid out in the last frame are exactly the text it shows; 2 min 16 s
+    for the native debug build, 0.03 s for the test.
+  - **Paths:** the browser's `.wasm` holds the absolute paths of the crates in the Cargo home in
+    its panic messages (`/home/runner/.cargo/registry/src/...`), so builds on two computers
+    differ unless the paths are remapped.
 
 ## Sources
 
@@ -1838,5 +1909,11 @@ Decided for lengua 3 at L7 (2026-11-13):
   [`crates/gpui_web`](https://github.com/zed-industries/zed/tree/main/crates/gpui_web) and
   pull request [#50228, "GPUI on the web"](https://github.com/zed-industries/zed/pull/50228),
   merged on 2026-02-26.
-- GPUI Kit: [gpui-kit.com](https://gpui-kit.com/).
+- GPUI Kit: [gpui-kit.com](https://gpui-kit.com/), its source
+  [longbridge/gpui-component](https://github.com/longbridge/gpui-component) (release v0.9.1).
+- The snapshot crates: [gpui-pre](https://crates.io/crates/gpui-pre) and
+  [gpui-pre-web](https://crates.io/crates/gpui-pre-web) 0.3.12, "gpui-pre snapshot of
+  zed@d2a4fb6"; [wasm-bindgen](https://github.com/wasm-bindgen/wasm-bindgen) 0.2.130.
+- IBM Plex Sans: Copyright 2017 IBM Corp., SIL Open Font License 1.1 (the copy in Zed's
+  `assets/fonts/ibm-plex-sans`, with its license).
 - The standards and the Power of 10: the links in sections 4 and 5.

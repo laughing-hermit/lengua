@@ -119,3 +119,18 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
   library: its `idea.md`, its folder's name as the package, its lock verified with
   `lock::verify` (kind `library`), its label and the SHA-256 of its lock; `description` reads the
   library's description from its frontmatter.
+- `front.rs` (since L8): the front end of a server with screens. `app_cargo`, `app_lib`,
+  `files_cargo` and `files_lib` (with `page` and `media_type`) make the texts of
+  `web/app/Cargo.toml`, `web/app/lib.rs`, `web/files/Cargo.toml` and `web/files/lib.rs` from a
+  `Plan` (with `Plan::fonts`, `is_font`); `assets` lists the files of `assets/`; `app_name` and
+  `artifact` name the front end's package and its `.wasm`; `REQUIRED`, `WASM_BINDGEN`, `KIT`,
+  `LIBRARY_NAMES` (the library names of GPUI's crates, for the lint) and the paths are its
+  constants. In `generate.rs`, `front_plan` makes the `Front` of the build (with its `Screen`s,
+  `type_name`), `front_rules` checks the crates and the fonts, `split` divides the crates of the
+  server and of the screens, and `plan` writes the four files and the `screen-server` finding.
+- `cases.rs`, since L8: `Step` and `Value` are the steps of a screen's example, in order
+  (`State`, `Click`, `Type into`, `Expect state`, `Expect text`), filled for a drawn case;
+  `behaviours.rs` records them (`screen_step`, `state`).
+- `lib.rs`, since L8: `screen_checks` (with `named`) holds each element and each state field of
+  a screen's examples to the screens' Rust files; `Front` (with `Front::kit`,
+  `Front::wasm_bindgen` and `Front::screen_of`) and `Screen` are in the `Build`.

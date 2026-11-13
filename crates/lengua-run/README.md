@@ -43,3 +43,11 @@ error through. See [Lengua3.md](../../Lengua3.md), section 4, "The lock" and "`l
 Since L7, `lengua-run` links the trusted components that the lock seals, and a server (an idea
 with `- Serves: HTTP on TCP port N`) is served on `127.0.0.1:N` until the process is stopped,
 each request under the idea's time and memory.
+- `tests/browser.rs` (since L8, ignored unless run on its own): serves a checked
+  `examples/notes` (`LENGUA_NOTES`) with `lengua-run` (`serve_the_notes`), starts headless
+  Chrome with SwiftShader's WebGL2 (`chrome`, `start_chrome`), drives it over the DevTools
+  protocol with a small WebSocket client on `std::net` (`Socket`: `open`, `send_text`,
+  `read_message`, `call`, `evaluate`; `page_socket`, `http`, `wait_for`), waits until the page
+  says `started` with one canvas, takes a screenshot (`screenshot`, `decode`) and the
+  accessibility tree (`names`), and holds that the screen is drawn, that the console has no
+  panic, that the screens asked their server for the notes, and what a screen reader can read.

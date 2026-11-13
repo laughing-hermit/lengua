@@ -326,12 +326,12 @@ fn step_line(step: &Step) -> String {
     }
 }
 
-pub(crate) struct Text {
+pub(crate) struct Harness {
     pub text: String,
     pub starts: Vec<usize>,
 }
 
-pub(crate) fn main_text(front: &Front, ui: &str, cases: &[Case]) -> Text {
+pub(crate) fn main_text(front: &Front, ui: &str, cases: &[Case]) -> Harness {
     let mut text = String::from(
         "#![allow(unused_imports, unused_braces, unused_mut, dead_code, clippy::all, clippy::pedantic)]\n",
     );
@@ -374,7 +374,7 @@ pub(crate) fn main_text(front: &Front, ui: &str, cases: &[Case]) -> Text {
         }
         text.push_str("    Ok(())\n}\n");
     }
-    Text { text, starts }
+    Harness { text, starts }
 }
 
 fn source_of(front: &Front, idea: &str) -> String {
@@ -526,9 +526,10 @@ pub(crate) fn run(binary: &Path, count: usize) -> Vec<Option<String>> {
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output();
-    let text = output
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .unwrap_or_default();
+    let text = output.map_or_else(
+        |_| String::new(),
+        |o| String::from_utf8_lossy(&o.stdout).to_string(),
+    );
     let mut results: Vec<Option<String>> =
         vec![Some("the screen's test did not report".to_string()); count];
     for line in text.lines() {

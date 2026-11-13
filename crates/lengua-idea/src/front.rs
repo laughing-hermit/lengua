@@ -108,9 +108,9 @@ pub(crate) fn app_cargo(plan: &Plan) -> String {
 pub(crate) fn app_lib(plan: &Plan) -> String {
     let mut text = String::new();
     for screen in plan.screens {
-        let _ = write!(
+        let _ = writeln!(
             text,
-            "#[path = \"../../src/ui/{screen}.rs\"]\npub mod {screen};\n"
+            "#[path = \"../../src/ui/{screen}.rs\"]\npub mod {screen};"
         );
     }
     text.push_str("\n#[wasm_bindgen::prelude::wasm_bindgen(start)]\npub fn start() {\n    gpui_platform::web_init();\n    let platform = std::rc::Rc::new(gpui_web::WebPlatform::new(false));\n    let client = std::sync::Arc::new(platform.fetch_http_client());\n    gpui::Application::with_platform(platform)\n        .with_http_client(client)\n        .run(|cx: &mut gpui::App| {\n            let fonts = vec![\n");
@@ -136,10 +136,11 @@ pub(crate) const LIBRARY_NAMES: [(&str, &str); 4] = [
 ];
 
 pub(crate) fn is_font(asset: &str) -> bool {
-    let lower = asset.to_ascii_lowercase();
-    lower.starts_with("fonts/")
-        && (lower.ends_with(".ttf") || lower.ends_with(".otf"))
-        && !lower.contains('"')
+    asset.starts_with("fonts/")
+        && !asset.contains('"')
+        && Path::new(asset)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("otf"))
 }
 
 pub(crate) fn files_cargo() -> String {
@@ -184,16 +185,16 @@ pub(crate) fn files_lib(title: &str, assets: &[String]) -> String {
         page(title)
     );
     for (index, asset) in assets.iter().filter(|a| !is_font(a)).enumerate() {
-        let _ = write!(
+        let _ = writeln!(
             text,
-            "\nconst ASSET_{index}: &[u8] = include_bytes!(\"../../{ASSETS}/{asset}\");\n"
+            "\nconst ASSET_{index}: &[u8] = include_bytes!(\"../../{ASSETS}/{asset}\");"
         );
     }
     text.push_str("\n#[must_use]\npub fn asset(path: &str) -> Option<(&'static str, &'static [u8])> {\n    match path {\n        \"/\" | \"/index.html\" => Some((\"text/html; charset=utf-8\", PAGE.as_bytes())),\n        \"/app.js\" => Some((\"text/javascript; charset=utf-8\", SCRIPT)),\n        \"/app_bg.wasm\" => Some((\"application/wasm\", CODE)),\n");
     for (index, asset) in assets.iter().filter(|a| !is_font(a)).enumerate() {
-        let _ = write!(
+        let _ = writeln!(
             text,
-            "        \"/{ASSETS}/{asset}\" => Some((\"{}\", ASSET_{index})),\n",
+            "        \"/{ASSETS}/{asset}\" => Some((\"{}\", ASSET_{index})),",
             media_type(asset)
         );
     }

@@ -532,7 +532,7 @@ fn record(key: &Key, value: &str, found: &[String], test: &mut Test) {
             .push((name.to_lowercase(), first.unwrap_or_default())),
         Key::ExpectBody => test.expect_body = first,
         Key::State(_) | Key::Click | Key::TypeInto(_) | Key::ExpectState(_) | Key::ExpectText => {
-            test.steps.extend(screen_step(key, value, first))
+            test.steps.extend(screen_step(key, value, first));
         }
         Key::Range(_) => {}
     }
