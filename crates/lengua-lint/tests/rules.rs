@@ -27,7 +27,7 @@ fn codes(text: &str, structure: &[&str]) -> Vec<&'static str> {
 
 fn refused(text: &str, structure: &[&str], code: &str) {
     let all = found(text, structure, &[]);
-    assert!(!all.is_empty(), "no findings for:\n{text}");
+    assert_ne!(all, Vec::<Finding>::new(), "no findings for:\n{text}");
     assert!(
         all.iter().all(|f| f.code == code),
         "only {code} wanted:\n{all:#?}\nfor:\n{text}"
@@ -346,7 +346,7 @@ fn rule_8_macros_derives_attributes_and_cfg_from_elsewhere_are_refused() {
 fn rule_8_macros_and_derives_of_a_declared_crate_are_taken() {
     let text = "use gpui::div;\n\n#[derive(gpui::Render)]\nstruct View;\n\nfn main() {\n    div!();\n    gpui::other!();\n}\n";
     assert_eq!(found(text, &["main"], &["gpui"]), Vec::<Finding>::new());
-    assert!(!found(text, &["main"], &[]).is_empty());
+    assert_ne!(found(text, &["main"], &[]), Vec::<Finding>::new());
 }
 
 #[test]

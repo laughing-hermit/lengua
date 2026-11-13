@@ -464,7 +464,10 @@ mod tests {
                 ("src/cart.rs", 9, "rust-format")
             ]
         );
-        assert!(format_problems(Path::new("/w"), "error: expected `;`\n").is_empty());
+        assert_eq!(
+            format_problems(Path::new("/w"), "error: expected `;`\n"),
+            Vec::<super::Problem>::new()
+        );
     }
 
     #[test]

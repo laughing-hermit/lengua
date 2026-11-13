@@ -218,13 +218,15 @@ fn concept(name: &str) -> String {
     format!("ideas/{name}")
 }
 
+type PageRead = (Page, constraints::Constraints, Vec<(usize, String)>);
+
 fn read_page(
     folder: &Path,
     source: &Source,
     title: &str,
     dictionary: &Dictionary,
     findings: &mut Vec<Finding>,
-) -> Option<(Page, constraints::Constraints, Vec<(usize, String)>)> {
+) -> Option<PageRead> {
     let mut sink = Sink::new(&source.file);
     let text = match fs::read(folder.join(&source.file)).map(String::from_utf8) {
         Ok(Ok(text)) => text.replace("\r\n", "\n"),
