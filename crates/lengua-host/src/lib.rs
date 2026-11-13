@@ -507,7 +507,7 @@ impl Host {
                         continue;
                     }
                     let index = instance.get_export_index(&mut *store, Some(&outer), function);
-                    let Some(func) = index.and_then(|i| instance.get_func(&mut *store, &i)) else {
+                    let Some(func) = index.and_then(|i| instance.get_func(&mut *store, i)) else {
                         continue;
                     };
                     place

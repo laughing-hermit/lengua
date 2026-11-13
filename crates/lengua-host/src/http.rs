@@ -233,7 +233,7 @@ impl Host {
             }
         };
         let (ending, bytes) = match self.prepare(run, input, Streams::Memory, (&stdout, &stderr)) {
-            Ok(prepared) => self.handle(run, prepared, request),
+            Ok(prepared) => Self::handle(run, prepared, request),
             Err(ending) => (ending, Vec::new()),
         };
         Outcome {
@@ -244,7 +244,6 @@ impl Host {
     }
 
     fn handle(
-        &self,
         run: &Program,
         prepared: Prepared,
         request: hyper::Request<Whole>,

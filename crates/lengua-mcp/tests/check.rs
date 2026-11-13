@@ -1060,3 +1060,196 @@ fn an_application_of_three_modules_is_checked_as_one_file() {
     let run = server.run(6001, &folder, &json!({"stdin": "a\n"}));
     refused_for(&run, "`src/extra.rs` is new");
 }
+
+fn repo(path: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(path)
+}
+
+fn bundle(test: &str, parts: &[&str]) -> PathBuf {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("lengua-mcp-{test}"));
+    if root.exists() {
+        fs::remove_dir_all(&root).expect("an old copy removed");
+    }
+    for part in parts {
+        copy(&repo(part), &root.join(part));
+    }
+    root
+}
+
+fn done(server: &mut Server, folder: &Path, base: u64) -> Value {
+    let reply = until_built(server, folder, base);
+    assert_eq!(reply["build"]["state"], "done", "{reply:#}");
+    assert_eq!(reply["ok"], true, "{reply:#}");
+    reply
+}
+
+fn shared_library(name: &str) {
+    let path = format!("libraries/{name}");
+    let root = bundle(&format!("lib-{name}"), &[path.as_str()]);
+    let folder = root.join(&path);
+    let mut server = Server::start();
+    let reply = done(&mut server, &folder, 10);
+    assert_eq!(reply["label"], "checked", "{reply:#}");
+    assert_eq!(reply["build"]["tests"]["failed"], 0, "{reply:#}");
+    assert!(
+        reply["build"]["component"]
+            .as_str()
+            .is_some_and(|c| c.ends_with(".rlib")),
+        "{reply:#}"
+    );
+    let lock = fs::read_to_string(folder.join("lengua.lock")).expect("the lock");
+    assert!(lock.contains("\nkind library\n"), "{lock}");
+    assert!(lock.contains("\nlabel checked\n"), "{lock}");
+    assert!(!lock.contains("\nsealed "), "{lock}");
+    let cargo = fs::read_to_string(folder.join("Cargo.toml")).expect("Cargo.toml");
+    assert!(cargo.contains("[lib]\n"), "{cargo}");
+    assert!(!cargo.contains("[dependencies]"), "{cargo}");
+}
+
+#[test]
+fn the_shared_library_json_is_checked() {
+    shared_library("json");
+}
+
+#[test]
+fn the_shared_library_http_is_checked() {
+    shared_library("http");
+}
+
+#[test]
+fn the_shared_library_decimal_is_checked() {
+    shared_library("decimal");
+}
+
+#[test]
+fn the_shared_library_text_is_checked() {
+    shared_library("text");
+}
+
+#[test]
+fn the_shared_library_sort_is_checked() {
+    shared_library("sort");
+}
+
+#[test]
+fn the_shared_library_hashes_is_checked() {
+    shared_library("hashes");
+}
+
+#[test]
+fn the_shared_library_dates_is_checked() {
+    shared_library("dates");
+}
+
+#[test]
+fn a_program_uses_a_checked_library_and_refuses_one_that_changed() {
+    let root = bundle("uses", &["libraries/decimal", "examples/prices"]);
+    let library = root.join("libraries/decimal");
+    let program = root.join("examples/prices");
+    let mut server = Server::start();
+    let early = server.check(2, &program);
+    assert_eq!(codes(&early), ["library-lock"], "{early:#}");
+    done(&mut server, &library, 10);
+    let reply = done(&mut server, &program, 3000);
+    assert_eq!(reply["label"], "checked", "{reply:#}");
+    assert_eq!(
+        reply["libraries"],
+        json!([{"path": "../../libraries/decimal", "label": "checked"}]),
+        "{reply:#}"
+    );
+    let lock = fs::read_to_string(program.join("lengua.lock")).expect("the lock");
+    assert!(
+        lock.contains(" ../../libraries/decimal/lengua.lock\n"),
+        "{lock}"
+    );
+    let index = fs::read_to_string(program.join("index.md")).expect("the index");
+    assert!(
+        index.contains("\n# Libraries\n\n* [decimal](../../libraries/decimal/idea.md) - ")
+            && index.contains("Label: `checked`."),
+        "{index}"
+    );
+    let run = server.run_to_end(6000, &program, &json!({"stdin": "1.50\n2.25\n"}));
+    assert_eq!(run["stdout"], "3.75\n", "{run:#}");
+    let code = fs::read_to_string(library.join("src/main.rs")).expect("the code");
+    fs::write(library.join("src/main.rs"), format!("{code}\n")).expect("a change");
+    let refused = server.check(7000, &program);
+    assert!(codes(&refused).contains(&"library-lock".to_string()), "{refused:#}");
+    let run = server.run(7001, &program, &json!({"stdin": "1\n"}));
+    refused_for(&run, "the library of `../../libraries/decimal/lengua.lock`");
+}
+
+#[test]
+fn a_connection_reaches_only_the_granted_address() {
+    let (mut server, folder, reply) = built("fetch", "fetch");
+    assert_eq!(reply["build"]["tests"]["failed"], 0, "{reply:#}");
+    assert_ne!(reply["label"], "unchecked", "{reply:#}");
+    let world = fs::read_to_string(folder.join("wit/world.wit")).expect("the world");
+    assert!(world.contains("wasi:sockets/tcp@"), "{world}");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener");
+    let port = listener.local_addr().expect("an address").port();
+    let run = server.run_to_end(
+        5000,
+        &folder,
+        &json!({"arguments": [format!("127.0.0.1:{port}")]}),
+    );
+    assert_eq!(run["stdout"], "refused\n", "{run:#}");
+    assert_eq!(run["exit_code"], 1, "{run:#}");
+}
+
+#[test]
+fn a_program_listens_only_on_its_granted_port() {
+    let (_, _, reply) = built("upper", "upper");
+    assert_eq!(reply["build"]["tests"]["failed"], 0, "{reply:#}");
+    assert_ne!(reply["label"], "unchecked", "{reply:#}");
+}
+
+fn http_get(port: u16, path: &str) -> String {
+    let started = Instant::now();
+    loop {
+        if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n");
+            stream.write_all(request.as_bytes()).expect("a request");
+            let mut answer = String::new();
+            let _ = std::io::Read::read_to_string(&mut stream, &mut answer);
+            return answer;
+        }
+        assert!(started.elapsed() < Duration::from_secs(20), "no server");
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn a_server_answers_in_its_tests_with_run_and_with_lengua_run() {
+    let (mut server, folder, reply) = built("greet", "greet");
+    assert_eq!(reply["build"]["tests"]["failed"], 0, "{reply:#}");
+    assert_ne!(reply["label"], "unchecked", "{reply:#}");
+    let world = fs::read_to_string(folder.join("wit/world.wit")).expect("the world");
+    assert!(
+        world.contains("export wasi:http/incoming-handler@"),
+        "{world}"
+    );
+    let run = server.run_to_end(
+        5000,
+        &folder,
+        &json!({"stdin": "GET /hello?name=Lin HTTP/1.1\r\nhost: x\r\n\r\n"}),
+    );
+    assert_eq!(run["state"], "exited", "{run:#}");
+    let answer = run["stdout"].as_str().expect("an answer");
+    assert!(
+        answer.starts_with("HTTP/1.1 200 OK\r\n") && answer.ends_with("\r\n\r\nHello, Lin!"),
+        "{answer}"
+    );
+    let mut child = Command::new(lengua_run())
+        .arg(&folder)
+        .env("LENGUA_HOME", home())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("lengua-run starts");
+    let answer = http_get(7810, "/hello?name=Ada");
+    let missing = http_get(7810, "/other");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(answer.ends_with("Hello, Ada!"), "{answer}");
+    assert!(missing.starts_with("HTTP/1.1 404 "), "{missing}");
+}

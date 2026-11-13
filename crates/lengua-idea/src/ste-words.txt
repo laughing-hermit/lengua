@@ -56,6 +56,7 @@ automatically r
 available a
 away r
 back r
+backslash n
 bad a
 base n
 basic a
@@ -179,6 +180,7 @@ date n
 day n
 decimal an
 decrease v
+deep a
 default an
 define v
 definition n
@@ -244,8 +246,10 @@ examine v
 example n
 except p
 exit nv
+exponent n
 export nv
 expression n
+extension n
 external a
 fail v
 false a
@@ -305,6 +309,7 @@ hard a
 has m
 hash n
 have m
+head n
 header n
 heading n
 height n
@@ -559,6 +564,7 @@ real a
 reason n
 receive v
 record nv
+recursion n
 reference n
 refuse v
 region n
