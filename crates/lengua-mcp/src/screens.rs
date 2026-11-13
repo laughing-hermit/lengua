@@ -367,7 +367,7 @@ pub(crate) fn main_text(front: &Front, ui: &str, cases: &[Case]) -> Harness {
         starts.push(text.lines().count() + 1);
         let _ = writeln!(
             text,
-            "fn case_{index}() -> Result<(), String> {{\n    let mut run = Run::open(|window, cx| {module}::{kind}::new(window, cx));"
+            "fn case_{index}() -> Result<(), String> {{\n    let mut run = Run::open(|window, cx| {module}::{kind}::make(window, cx));"
         );
         for step in &case.test.steps {
             text.push_str(&step_line(step));
@@ -661,7 +661,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("let mut run = Run::open(|window, cx| list::List::new(window, cx));"),
+            text.contains("let mut run = Run::open(|window, cx| list::List::make(window, cx));"),
             "{text}"
         );
         assert!(

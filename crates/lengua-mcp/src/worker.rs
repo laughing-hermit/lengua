@@ -4,7 +4,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use lengua_host::{Ending, Host, Input, OUTPUT, Outcome, Program, Streams};
+use lengua_host::{ANSWER, Ending, Host, Input, OUTPUT, Outcome, Program, Streams};
 use lengua_idea::lock::{self, Kind};
 
 const POLL: Duration = Duration::from_millis(5);
@@ -125,7 +125,7 @@ pub(crate) fn run(request: &Request) -> Outcome {
     let reader = child.stdout.take().map(|pipe| {
         thread::spawn(move || {
             let mut bytes = Vec::new();
-            let most = u64::try_from(OUTPUT * 2).unwrap_or(u64::MAX) + FRAME;
+            let most = u64::try_from(OUTPUT + ANSWER).unwrap_or(u64::MAX) + FRAME;
             let _ = pipe.take(most).read_to_end(&mut bytes);
             bytes
         })

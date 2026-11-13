@@ -29,6 +29,7 @@ pub use crate::http::{read_request, response_bytes};
 
 pub const TICK_MS: u64 = 10;
 pub const OUTPUT: usize = 16 << 20;
+pub const ANSWER: usize = 64 << 20;
 const TABLE: usize = 1 << 20;
 const STEP_NS: u64 = 1_000_000;
 const FIXED_SECONDS: u64 = 1_767_225_600;

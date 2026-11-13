@@ -17,7 +17,9 @@ use wasmtime_wasi_http::{
     Error as HttpError, RequestOptions, WasiBody, WasiHttpHooks, WasiHttpView,
 };
 
-use crate::{Ending, Host, Input, OUTPUT, Outcome, Prepared, Program, Streams, trap_ending};
+use crate::{
+    ANSWER, Ending, Host, Input, OUTPUT, Outcome, Prepared, Program, Streams, trap_ending,
+};
 
 const HEAD_LIMIT: usize = 64 << 10;
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
@@ -182,8 +184,8 @@ fn collect(mut body: HyperOutgoingBody, deadline: Instant) -> Result<Vec<u8>, St
                 if let Ok(data) = frame.into_data() {
                     out.extend_from_slice(&data);
                 }
-                if out.len() > OUTPUT {
-                    return Err("the body of the answer is larger than 16 MiB".to_string());
+                if out.len() > ANSWER {
+                    return Err("the body of the answer is larger than 64 MiB".to_string());
                 }
             }
             Poll::Ready(Some(Err(error))) => return Err(format!("{error:?}")),
