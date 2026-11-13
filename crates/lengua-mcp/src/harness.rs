@@ -37,7 +37,7 @@ pub(crate) fn main_text(package: &str, cases: &[Case]) -> String {
         let call = case.test.call.as_deref().unwrap_or("()");
         let _ = writeln!(
             out,
-            "        \"{index}\" => println!(\"{{:?}}\", {{ {call} }}),"
+            "        \"{index}\" => println!(\"{{:?}}\", {call}),"
         );
     }
     out.push_str("        _ => {}\n    }\n}\n");
@@ -113,11 +113,11 @@ mod tests {
         assert_eq!(lines[1], "use my_json::*;");
         assert_eq!(
             lines[FIRST_ARM - 1],
-            "        \"0\" => println!(\"{:?}\", { parse(\"1\") }),"
+            "        \"0\" => println!(\"{:?}\", parse(\"1\")),"
         );
         assert_eq!(
             lines[FIRST_ARM],
-            "        \"1\" => println!(\"{:?}\", { write(&Value::Null) }),"
+            "        \"1\" => println!(\"{:?}\", write(&Value::Null)),"
         );
         let toml = manifest(&Library {
             package: "my-json",
