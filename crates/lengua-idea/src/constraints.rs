@@ -30,6 +30,10 @@ pub(crate) struct Constraints {
     pub modules: Vec<(String, usize)>,
     pub uses: Vec<(String, usize)>,
     pub grants: Vec<Grant>,
+    pub folders: Vec<(String, bool)>,
+    pub hosts: Vec<String>,
+    pub memory: u64,
+    pub time_ms: u64,
     pub exports: bool,
     pub crates: Vec<CrateUse>,
 }
@@ -54,10 +58,15 @@ fn reads(value: &str) -> bool {
 }
 
 fn files_in(value: &str) -> bool {
-    value
+    folder(value).is_some()
+}
+
+fn folder(value: &str) -> Option<String> {
+    let path = value
         .strip_prefix("files in ")
         .and_then(backticked)
-        .is_some_and(relative_path)
+        .filter(|p| relative_path(p))?;
+    Some(path.strip_suffix('/').unwrap_or(path).to_string())
 }
 
 fn host_port(value: &str) -> bool {
@@ -71,18 +80,14 @@ fn host_port(value: &str) -> bool {
     host_ok && port.parse::<u16>().is_ok_and(|p| p > 0)
 }
 
-fn amount(value: &str, units: &[(&str, u64)], max: u64) -> bool {
-    let Some((number, unit)) = value.split_once(' ') else {
-        return false;
-    };
-    let Some(scale) = units.iter().find(|(u, _)| *u == unit).map(|(_, s)| *s) else {
-        return false;
-    };
+fn amount(value: &str, units: &[(&str, u64)], max: u64) -> Option<u64> {
+    let (number, unit) = value.split_once(' ')?;
+    let scale = units.iter().find(|(u, _)| *u == unit).map(|(_, s)| *s)?;
     number
         .parse::<u64>()
         .ok()
         .and_then(|n| n.checked_mul(scale))
-        .is_some_and(|total| total > 0 && total <= max)
+        .filter(|total| *total > 0 && *total <= max)
 }
 
 fn semver(version: &str) -> bool {
@@ -236,9 +241,11 @@ impl Reader<'_> {
                 )
             }
             "Writes" => {
-                let good = files_in(value);
-                if good {
+                let found = folder(value);
+                let good = found.is_some();
+                if let Some(path) = found {
                     self.out.grants.push(Grant::Files);
+                    self.out.folders.push((path, true));
                 }
                 (good, "``files in `folder` ``")
             }
@@ -246,21 +253,33 @@ impl Reader<'_> {
                 let good = host_port(value);
                 if good {
                     self.out.grants.push(Grant::Network);
+                    if let Some(host) = backticked(value) {
+                        self.out.hosts.push(host.to_string());
+                    }
                 }
                 (good, "`` `host:port` ``")
             }
-            "Memory" => (
-                amount(
+            "Memory" => {
+                let found = amount(
                     value,
                     &[("KiB", 1 << 10), ("MiB", 1 << 20), ("GiB", 1 << 30)],
                     MAX_MEMORY,
-                ),
-                "a number and `KiB`, `MiB` or `GiB`, up to 4 GiB",
-            ),
-            "Time" => (
-                amount(value, &[("ms", 1), ("s", 1000)], MAX_TIME_MS),
-                "a number and `ms` or `s`, up to 3600 s",
-            ),
+                );
+                if let Some(bytes) = found {
+                    self.out.memory = bytes;
+                }
+                (
+                    found.is_some(),
+                    "a number and `KiB`, `MiB` or `GiB`, up to 4 GiB",
+                )
+            }
+            "Time" => {
+                let found = amount(value, &[("ms", 1), ("s", 1000)], MAX_TIME_MS);
+                if let Some(ms) = found {
+                    self.out.time_ms = ms;
+                }
+                (found.is_some(), "a number and `ms` or `s`, up to 3600 s")
+            }
             "Modules" | "Uses" => {
                 let list = names(value);
                 let good = list
@@ -304,7 +323,12 @@ impl Reader<'_> {
             "arguments" => Grant::Arguments,
             "the clock" => Grant::Clock,
             "random numbers" => Grant::Random,
-            _ => Grant::Files,
+            _ => {
+                if let Some(path) = folder(value) {
+                    self.out.folders.push((path, false));
+                }
+                Grant::Files
+            }
         });
     }
 }
@@ -340,6 +364,13 @@ mod tests {
             ]
         );
         assert!(out.exports);
+        assert_eq!(
+            out.folders,
+            [("data".to_string(), false), ("out".to_string(), true)]
+        );
+        assert_eq!(out.hosts, ["example.com:443"]);
+        assert_eq!(out.memory, 16 << 20);
+        assert_eq!(out.time_ms, 2000);
         assert_eq!(
             out.crates,
             [CrateUse {

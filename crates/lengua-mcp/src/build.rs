@@ -10,6 +10,7 @@ use std::time::Instant;
 use lengua_idea::Build;
 
 use crate::doctor;
+use crate::host::{Host, grant_for, outside};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Problem {
@@ -44,9 +45,10 @@ struct Job {
     child: Arc<Mutex<Option<Child>>>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct Builds {
     jobs: Arc<Mutex<HashMap<PathBuf, Job>>>,
+    host: Host,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -89,7 +91,7 @@ impl Job {
         }
     }
 
-    fn start(folder: &Path, build: &Build) -> Self {
+    fn start(folder: &Path, build: &Build, host: &Host) -> Self {
         let job = Self {
             inputs: build.inputs.clone(),
             started: Instant::now(),
@@ -101,8 +103,9 @@ impl Job {
         let state = Arc::clone(&job.state);
         let child = Arc::clone(&job.child);
         let started = job.started;
+        let host = host.clone();
         thread::spawn(move || {
-            let result = run(&folder, &build, &child);
+            let result = run(&folder, &build, &child, &host);
             *lock(&state) = (result, started.elapsed().as_secs());
         });
         job
@@ -110,6 +113,13 @@ impl Job {
 }
 
 impl Builds {
+    pub(crate) fn new(host: Host) -> Self {
+        Self {
+            jobs: Arc::new(Mutex::new(HashMap::new())),
+            host,
+        }
+    }
+
     pub(crate) fn status(&self, folder: &Path, build: &Build) -> Status {
         let mut jobs = lock(&self.jobs);
         if let Some(job) = jobs.get(folder) {
@@ -133,7 +143,7 @@ impl Builds {
                 seconds: 0,
             };
         }
-        let job = Job::start(folder, build);
+        let job = Job::start(folder, build, &self.host);
         let status = job.status();
         jobs.insert(folder.to_path_buf(), job);
         status
@@ -193,7 +203,7 @@ fn fetch(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> Result<()
     }
 }
 
-fn run(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> State {
+fn run(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>, host: &Host) -> State {
     if let Err(problems) = fetch(folder, build, slot) {
         return State::Failed { problems };
     }
@@ -206,7 +216,7 @@ fn run(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> State {
         "--message-format=short",
     ];
     match cargo(folder, &args, slot) {
-        Ok((true, _)) => built(folder, build),
+        Ok((true, _)) => built(folder, build, host),
         Ok((false, text)) => State::Failed {
             problems: problems(folder, &text),
         },
@@ -216,14 +226,55 @@ fn run(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> State {
     }
 }
 
-fn built(folder: &Path, build: &Build) -> State {
+fn ungranted(bytes: &[u8], sha256: &str, build: &Build, host: &Host) -> Vec<Problem> {
+    if !build.artifact.ends_with(".wasm") {
+        return Vec::new();
+    }
+    let component = match host.component(bytes, sha256) {
+        Ok(component) => component,
+        Err(error) => {
+            return vec![problem(
+                "Cargo.toml",
+                1,
+                "build-error",
+                format!("wasmtime could not compile the component: {error}"),
+            )];
+        }
+    };
+    outside(&host.imports(&component), &build.world)
+        .into_iter()
+        .map(|import| {
+            let advice = grant_for(&import).map_or_else(
+                || "; no grant allows it, so change the code so that it does not use it".to_string(),
+                |grant| format!("; to allow it, add {grant} to `# Constraints`, or change the code so that it does not use it"),
+            );
+            problem(
+                "idea.md",
+                1,
+                "import-ungranted",
+                format!(
+                    "the component imports `{import}`, which is not in the world the grants of the idea make, so the host does not link it{advice}"
+                ),
+            )
+        })
+        .collect()
+}
+
+fn built(folder: &Path, build: &Build, host: &Host) -> State {
     let component = folder.join(&build.artifact);
     match fs::read(&component) {
-        Ok(bytes) => State::Built {
-            size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-            sha256: lengua_idea::sha256_hex(&bytes),
-            component,
-        },
+        Ok(bytes) => {
+            let sha256 = lengua_idea::sha256_hex(&bytes);
+            let problems = ungranted(&bytes, &sha256, build, host);
+            if !problems.is_empty() {
+                return State::Failed { problems };
+            }
+            State::Built {
+                size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+                sha256,
+                component,
+            }
+        }
         Err(error) => State::Failed {
             problems: vec![problem(
                 "Cargo.toml",

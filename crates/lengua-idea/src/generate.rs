@@ -77,13 +77,18 @@ const NOT_NAMES: [&str; 62] = [
     "while",
 ];
 
-const ALWAYS: [&str; 9] = [
+const ALWAYS: [&str; 14] = [
+    "wasi:cli/environment",
     "wasi:cli/exit",
     "wasi:cli/stderr",
+    "wasi:cli/stdin",
     "wasi:cli/stdout",
+    "wasi:cli/terminal-input",
     "wasi:cli/terminal-output",
     "wasi:cli/terminal-stderr",
+    "wasi:cli/terminal-stdin",
     "wasi:cli/terminal-stdout",
+    "wasi:clocks/monotonic-clock",
     "wasi:io/error",
     "wasi:io/poll",
     "wasi:io/streams",
@@ -91,13 +96,8 @@ const ALWAYS: [&str; 9] = [
 
 pub(crate) fn interfaces(grant: Grant) -> &'static [&'static str] {
     match grant {
-        Grant::StandardInput => &[
-            "wasi:cli/stdin",
-            "wasi:cli/terminal-input",
-            "wasi:cli/terminal-stdin",
-        ],
-        Grant::Arguments => &["wasi:cli/environment"],
-        Grant::Clock => &["wasi:clocks/monotonic-clock", "wasi:clocks/wall-clock"],
+        Grant::StandardInput | Grant::Arguments => &[],
+        Grant::Clock => &["wasi:clocks/wall-clock"],
         Grant::Random => &[
             "wasi:random/insecure",
             "wasi:random/insecure-seed",
@@ -192,13 +192,18 @@ pub(crate) fn cargo_toml(package: &Package) -> String {
     text
 }
 
-pub(crate) fn world(grants: &[Grant], library: bool) -> String {
-    let mut names: Vec<&str> = ALWAYS.to_vec();
+pub(crate) fn world_names(grants: &[Grant]) -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = ALWAYS.to_vec();
     for grant in grants {
         names.extend_from_slice(interfaces(*grant));
     }
     names.sort_unstable();
     names.dedup();
+    names
+}
+
+pub(crate) fn world(grants: &[Grant], library: bool) -> String {
+    let names = world_names(grants);
     let mut text = String::from("package lengua:program;\n\nworld program {\n");
     for name in names {
         text.push_str("  import ");
@@ -457,18 +462,23 @@ codegen-units = 1
     }
 
     #[test]
-    fn hello_world_gets_standard_output_and_error_only() {
+    fn hello_world_gets_the_always_set_only() {
         assert_eq!(
             world(&[], false),
             "package lengua:program;
 
 world program {
+  import wasi:cli/environment@0.2.12;
   import wasi:cli/exit@0.2.12;
   import wasi:cli/stderr@0.2.12;
+  import wasi:cli/stdin@0.2.12;
   import wasi:cli/stdout@0.2.12;
+  import wasi:cli/terminal-input@0.2.12;
   import wasi:cli/terminal-output@0.2.12;
   import wasi:cli/terminal-stderr@0.2.12;
+  import wasi:cli/terminal-stdin@0.2.12;
   import wasi:cli/terminal-stdout@0.2.12;
+  import wasi:clocks/monotonic-clock@0.2.12;
   import wasi:io/error@0.2.12;
   import wasi:io/poll@0.2.12;
   import wasi:io/streams@0.2.12;
@@ -511,6 +521,21 @@ world program {
         assert!(!text.contains("export"));
         assert!(!text.contains("udp"));
         assert_eq!(text.matches("import").count(), 25);
+    }
+
+    #[test]
+    fn standard_input_and_arguments_add_nothing_and_the_clock_adds_the_wall_clock() {
+        let none = world(&[], false);
+        assert_eq!(
+            world(&[Grant::StandardInput, Grant::Arguments], false),
+            none
+        );
+        let clock = world(&[Grant::Clock], false);
+        assert_eq!(clock.matches("import").count(), 15);
+        assert!(clock.contains("  import wasi:clocks/wall-clock@0.2.12;\n"));
+        assert!(!none.contains("wall-clock"));
+        assert!(!none.contains("wasi:random"));
+        assert!(!none.contains("wasi:filesystem"));
     }
 
     #[test]

@@ -1,5 +1,7 @@
 mod build;
 mod doctor;
+mod host;
+mod runs;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -10,6 +12,8 @@ use rmcp::transport::stdio;
 use rmcp::{Json, ServerHandler, ServiceExt, schemars, serde, tool, tool_handler, tool_router};
 
 use crate::build::{Builds, State, Status};
+use crate::host::{Ending, Host, Input, Outcome};
+use crate::runs::{Progress, Runs};
 
 const VERSION: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
 
@@ -87,10 +91,118 @@ struct CheckReply {
     build: Option<BuildReply>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(crate = "rmcp::serde")]
+#[schemars(crate = "rmcp::schemars")]
+struct RunParams {
+    #[schemars(
+        description = "The program's folder, the one that holds idea.md, as an absolute path; check must have built it"
+    )]
+    folder: String,
+    #[serde(default)]
+    #[schemars(
+        description = "The arguments after the program's name; only when the idea has `- Reads: arguments`"
+    )]
+    arguments: Vec<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "The text on the program's standard input; only when the idea has `- Reads: standard input`"
+    )]
+    stdin: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "True gives a fixed wall clock and random numbers from a fixed seed, as the tests do, so that two runs give the same output"
+    )]
+    fixed: bool,
+}
+
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+#[serde(crate = "rmcp::serde")]
+#[schemars(crate = "rmcp::schemars")]
+struct RunReply {
+    #[schemars(
+        description = "running (call run again with the same input), exited, out_of_time, out_of_memory, trapped, or refused (the host did not start the program)"
+    )]
+    state: String,
+    #[schemars(description = "When exited: the program's exit code")]
+    exit_code: Option<i32>,
+    #[schemars(description = "What the program wrote to standard output, as UTF-8 text")]
+    stdout: String,
+    #[schemars(description = "What the program wrote to standard error, as UTF-8 text")]
+    stderr: String,
+    #[schemars(
+        description = "When trapped, out_of_time, out_of_memory or refused: what happened, in plain words or as the trap's message"
+    )]
+    message: Option<String>,
+    #[schemars(description = "The milliseconds the run has taken so far, or took")]
+    milliseconds: u64,
+}
+
 #[derive(Clone)]
 struct Lengua {
     name: &'static str,
     builds: Builds,
+    runs: Runs,
+}
+
+fn millis(taken: std::time::Duration) -> u64 {
+    u64::try_from(taken.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn plain(state: &str, message: Option<String>, milliseconds: u64) -> RunReply {
+    RunReply {
+        state: state.to_string(),
+        exit_code: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        message,
+        milliseconds,
+    }
+}
+
+fn run_reply(progress: Progress) -> RunReply {
+    let (outcome, taken) = match progress {
+        Progress::Running(taken) => return plain("running", None, millis(taken)),
+        Progress::Ended(outcome, taken) => (outcome, taken),
+    };
+    let Outcome {
+        ending,
+        stdout,
+        stderr,
+    } = outcome;
+    let (state, exit_code, message) = match ending {
+        Ending::Exited(code) => ("exited", Some(code), None),
+        Ending::OutOfTime(message) => ("out_of_time", None, Some(message)),
+        Ending::OutOfMemory => (
+            "out_of_memory",
+            None,
+            Some("the program asked for more memory than its idea allows".to_string()),
+        ),
+        Ending::Trapped(message) => ("trapped", None, Some(message)),
+        Ending::Refused(message) => ("refused", None, Some(message)),
+    };
+    RunReply {
+        state: state.to_string(),
+        exit_code,
+        stdout: String::from_utf8_lossy(&stdout).to_string(),
+        stderr: String::from_utf8_lossy(&stderr).to_string(),
+        message,
+        milliseconds: millis(taken),
+    }
+}
+
+fn ungranted_input(grants: &lengua_idea::Grants, params: &RunParams) -> Option<String> {
+    if !params.arguments.is_empty() && !grants.arguments {
+        return Some(
+            "the idea does not grant `- Reads: arguments`, so the program gets no arguments; add the grant, or call run with none".to_string(),
+        );
+    }
+    if params.stdin.is_some() && !grants.standard_input {
+        return Some(
+            "the idea does not grant `- Reads: standard input`, so the program gets an empty standard input; add the grant, or call run with no stdin".to_string(),
+        );
+    }
+    None
 }
 
 fn now() -> u64 {
@@ -194,20 +306,57 @@ impl Lengua {
         let report = lengua_idea::check(&folder, now());
         Ok(Json(self.reply(&folder, report)))
     }
+
+    #[tool(
+        description = "Runs a lengua program that check built, under exactly the grants of its idea: standard output and standard error always; the arguments, standard input, the wall clock, random numbers and the folders only when the idea grants them; the memory and the time of the idea as limits. Returns the state (exited, out_of_time, out_of_memory, trapped or refused), the exit code, standard output and standard error. When the run takes more than about 30 seconds, the state is running: call run again with the same input to get its result."
+    )]
+    fn run(&self, Parameters(params): Parameters<RunParams>) -> Result<Json<RunReply>, String> {
+        let folder = PathBuf::from(&params.folder);
+        if !folder.is_dir() {
+            return Err(format!("{} is not a folder", folder.display()));
+        }
+        let report = lengua_idea::program(&folder);
+        if !report.findings.is_empty() {
+            let codes: Vec<&str> = report.findings.iter().map(|f| f.code).collect();
+            return Ok(Json(plain(
+                "refused",
+                Some(format!(
+                    "the ideas have {} problems ({}); call check, and fix them first",
+                    codes.len(),
+                    codes.join(", ")
+                )),
+                0,
+            )));
+        }
+        let Some(build) = report.build else {
+            return Err("lengua could not read the program".to_string());
+        };
+        if let Some(message) = ungranted_input(&build.grants, &params) {
+            return Ok(Json(plain("refused", Some(message), 0)));
+        }
+        let input = Input {
+            arguments: params.arguments,
+            stdin: params.stdin.unwrap_or_default().into_bytes(),
+            fixed: params.fixed,
+        };
+        Ok(Json(run_reply(self.runs.run(&folder, build, input))))
+    }
 }
 
 #[tool_handler(
     name = "lengua-mcp",
-    instructions = "lengua checks and builds programs written as idea files and Rust. Call check with the absolute path of a program's folder; while the build's state is building, call check again."
+    instructions = "lengua checks, builds and runs programs written as idea files and Rust. Call check with the absolute path of a program's folder; while the build's state is building, call check again. When it is built, call run to run it under the grants of its idea."
 )]
 #[allow(clippy::unused_async_trait_impl)]
 impl ServerHandler for Lengua {}
 
 #[tokio::main(flavor = "current_thread")]
 async fn serve() -> Result<(), String> {
+    let host = Host::new()?;
     let lengua = Lengua {
         name: VERSION,
-        builds: Builds::default(),
+        builds: Builds::new(host.clone()),
+        runs: Runs::new(host),
     };
     let server = lengua.serve(stdio()).await.map_err(|e| e.to_string())?;
     server.waiting().await.map_err(|e| e.to_string())?;

@@ -31,6 +31,24 @@ pub struct Note {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Folder {
+    pub path: String,
+    pub write: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Grants {
+    pub standard_input: bool,
+    pub arguments: bool,
+    pub clock: bool,
+    pub random: bool,
+    pub folders: Vec<Folder>,
+    pub hosts: Vec<String>,
+    pub memory: u64,
+    pub time_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Build {
     pub package: String,
     pub artifact: String,
@@ -38,6 +56,33 @@ pub struct Build {
     pub crates: usize,
     pub code: bool,
     pub inputs: String,
+    pub grants: Grants,
+    pub world: Vec<String>,
+}
+
+fn grants(top: &constraints::Constraints) -> Grants {
+    let has = |grant| top.grants.contains(&grant);
+    let mut folders: Vec<Folder> = Vec::new();
+    for (path, write) in &top.folders {
+        if let Some(found) = folders.iter_mut().find(|f| f.path == *path) {
+            found.write |= *write;
+        } else {
+            folders.push(Folder {
+                path: path.clone(),
+                write: *write,
+            });
+        }
+    }
+    Grants {
+        standard_input: has(constraints::Grant::StandardInput),
+        arguments: has(constraints::Grant::Arguments),
+        clock: has(constraints::Grant::Clock),
+        random: has(constraints::Grant::Random),
+        folders,
+        hosts: top.hosts.clone(),
+        memory: top.memory,
+        time_ms: top.time_ms,
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -274,18 +319,39 @@ fn link(pages: &mut [Page], constraints: &[constraints::Constraints], findings: 
     }
 }
 
-#[must_use]
-pub fn check(folder: &Path, now: u64) -> Report {
-    let mut report = Report::default();
+struct Prepared {
+    pages: Vec<Page>,
+    top: constraints::Constraints,
+    plan: generate::Plan,
+}
+
+fn build(folder: &Path, prepared: &Prepared) -> Build {
+    let plan = &prepared.plan;
+    Build {
+        artifact: generate::artifact(&plan.package, plan.library),
+        package: plan.package.clone(),
+        target: generate::TARGET,
+        crates: plan.crates,
+        code: folder.join("src/main.rs").is_file(),
+        inputs: generate::inputs(folder),
+        grants: grants(&prepared.top),
+        world: generate::world_names(&prepared.top.grants)
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    }
+}
+
+fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
     if !folder.join("idea.md").is_file() {
-        report.findings.push(Finding {
+        return Err(vec![Finding {
             file: "idea.md".to_string(),
             line: 1,
             code: "idea-missing",
             message: "the folder has no `idea.md`".to_string(),
-        });
-        return report;
+        }]);
     }
+    let mut report = Report::default();
     let dictionary = Dictionary::load();
     let mut sink = Sink::new("ideas/");
     let sources = discover(folder, &mut sink);
@@ -318,29 +384,53 @@ pub fn check(folder: &Path, now: u64) -> Report {
     }
     report.findings.sort();
     if !report.findings.is_empty() {
-        return report;
+        return Err(report.findings);
     }
     let plan = generate::plan(folder, &title, &pages, &constraints, &mut report.findings);
     report.findings.sort();
     if !report.findings.is_empty() {
-        return report;
+        return Err(report.findings);
     }
-    if let Some(top) = pages.first_mut() {
-        top.generated.clone_from(&plan.stamps);
+    Ok(Prepared {
+        pages,
+        top: constraints.into_iter().next().unwrap_or_default(),
+        plan,
+    })
+}
+
+#[must_use]
+pub fn check(folder: &Path, now: u64) -> Report {
+    let mut report = Report::default();
+    let mut prepared = match prepare(folder) {
+        Ok(prepared) => prepared,
+        Err(findings) => {
+            report.findings = findings;
+            return report;
+        }
+    };
+    if let Some(top) = prepared.pages.first_mut() {
+        top.generated.clone_from(&prepared.plan.stamps);
     }
-    let written = wiki::write(folder, &pages, &plan.texts, now);
+    let written = wiki::write(folder, &prepared.pages, &prepared.plan.texts, now);
     report.written = written.files;
     report.notes = written.notes;
     report.findings = written.findings;
     if report.findings.is_empty() {
-        report.build = Some(Build {
-            artifact: generate::artifact(&plan.package, plan.library),
-            package: plan.package,
-            target: generate::TARGET,
-            crates: plan.crates,
-            code: folder.join("src/main.rs").is_file(),
-            inputs: generate::inputs(folder),
-        });
+        report.build = Some(build(folder, &prepared));
     }
     report
+}
+
+#[must_use]
+pub fn program(folder: &Path) -> Report {
+    match prepare(folder) {
+        Ok(prepared) => Report {
+            build: Some(build(folder, &prepared)),
+            ..Report::default()
+        },
+        Err(findings) => Report {
+            findings,
+            ..Report::default()
+        },
+    }
 }

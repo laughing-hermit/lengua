@@ -143,10 +143,10 @@ jobs:
       - name: tests run
         if: ${{ needs.plan.outputs.mode == 'test' }}
         run: cargo test --workspace --locked
-      - name: the imports of hello.wasm
+      - name: the imports of the built examples
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |
-          for f in $(find target/tmp -path '*wasm32-wasip2/release/hello.wasm'); do
+          for f in $(find target/tmp -path '*wasm32-wasip2/release/*.wasm' -not -path '*/deps/*'); do
             echo "$f: $(wc -c < "$f") bytes"
             grep -aoE 'wasi:[a-z-]+/[a-z-]+@[0-9.]+' "$f" | sort -u
           done

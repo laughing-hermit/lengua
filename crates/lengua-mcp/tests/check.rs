@@ -100,6 +100,27 @@ impl Server {
         }
     }
 
+    fn run(&mut self, id: u64, folder: &Path, input: &Value) -> Value {
+        let mut arguments = input.clone();
+        arguments["folder"] = json!(folder.to_string_lossy());
+        let reply = self.call(
+            id,
+            "tools/call",
+            &json!({"name": "run", "arguments": arguments}),
+        );
+        reply["result"]["structuredContent"].clone()
+    }
+
+    fn run_to_end(&mut self, base: u64, folder: &Path, input: &Value) -> Value {
+        for id in base..base + 100 {
+            let reply = self.run(id, folder, input);
+            if reply["state"] != "running" {
+                return reply;
+            }
+        }
+        panic!("the run did not end after 100 calls");
+    }
+
     fn check(&mut self, id: u64, folder: &Path) -> Value {
         let reply = self.call(
             id,
@@ -133,10 +154,23 @@ fn the_server_lists_the_check_tool() {
     let tools = reply["result"]["tools"]
         .as_array()
         .expect("a list of tools");
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0]["name"], "check");
-    assert!(tools[0]["inputSchema"]["properties"]["folder"].is_object());
-    assert!(tools[0]["outputSchema"]["properties"]["findings"].is_object());
+    assert_eq!(tools.len(), 2);
+    let check = tools
+        .iter()
+        .find(|t| t["name"] == "check")
+        .expect("the check tool");
+    assert!(check["inputSchema"]["properties"]["folder"].is_object());
+    assert!(check["outputSchema"]["properties"]["findings"].is_object());
+    let run = tools
+        .iter()
+        .find(|t| t["name"] == "run")
+        .expect("the run tool");
+    for name in ["folder", "arguments", "stdin", "fixed"] {
+        assert!(run["inputSchema"]["properties"][name].is_object(), "{run:#}");
+    }
+    for name in ["state", "exit_code", "stdout", "stderr", "message"] {
+        assert!(run["outputSchema"]["properties"][name].is_object(), "{run:#}");
+    }
 }
 
 #[test]
@@ -216,10 +250,16 @@ fn a_folder_that_is_not_there_is_a_tool_error() {
 }
 
 fn example(test: &str) -> PathBuf {
-    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello");
+    example_named("hello", test)
+}
+
+fn example_named(name: &str, test: &str) -> PathBuf {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples")
+        .join(name);
     let to = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("lengua-mcp-{test}"))
-        .join("hello");
+        .join(name);
     if to.exists() {
         fs::remove_dir_all(&to).expect("an old copy removed");
     }
@@ -345,4 +385,165 @@ fn a_missing_toolchain_gives_the_doctor_s_message() {
     assert_eq!(codes(&reply), ["toolchain-missing"]);
     let message = reply["findings"][0]["message"].as_str().expect("a message");
     assert!(message.contains("missing  cargo: not found"), "{message}");
+}
+
+fn built(name: &str, test: &str) -> (Server, PathBuf) {
+    let folder = example_named(name, test);
+    let mut server = Server::start();
+    let reply = until_built(&mut server, &folder, 10);
+    assert_eq!(reply["build"]["state"], "built", "{reply:#}");
+    (server, folder)
+}
+
+#[test]
+fn hello_world_runs_under_its_grants_and_gets_no_input() {
+    let (mut server, folder) = built("hello", "run-hello");
+    let reply = server.run_to_end(5000, &folder, &json!({}));
+    assert_eq!(reply["state"], "exited", "{reply:#}");
+    assert_eq!(reply["exit_code"], 0, "{reply:#}");
+    assert_eq!(reply["stdout"], "Hello, world!\n", "{reply:#}");
+    assert_eq!(reply["stderr"], "", "{reply:#}");
+    let arguments = server.run(6000, &folder, &json!({"arguments": ["one"]}));
+    assert_eq!(arguments["state"], "refused", "{arguments:#}");
+    assert!(
+        arguments["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("`- Reads: arguments`")),
+        "{arguments:#}"
+    );
+    let stdin = server.run(6001, &folder, &json!({"stdin": "text"}));
+    assert_eq!(stdin["state"], "refused", "{stdin:#}");
+    assert!(
+        stdin["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("`- Reads: standard input`")),
+        "{stdin:#}"
+    );
+}
+
+#[test]
+fn granted_arguments_reach_the_program() {
+    let (mut server, folder) = built("echo", "run-echo");
+    let reply = server.run_to_end(5000, &folder, &json!({"arguments": ["one", "two words"]}));
+    assert_eq!(reply["state"], "exited", "{reply:#}");
+    assert_eq!(reply["stdout"], "one\ntwo words\n", "{reply:#}");
+    let none = server.run_to_end(6000, &folder, &json!({}));
+    assert_eq!(none["stdout"], "", "{none:#}");
+}
+
+#[test]
+fn granted_standard_input_reaches_the_program() {
+    let (mut server, folder) = built("count", "run-count");
+    let reply = server.run_to_end(5000, &folder, &json!({"stdin": "hello world\n"}));
+    assert_eq!(reply["state"], "exited", "{reply:#}");
+    assert_eq!(reply["stdout"], "2\n", "{reply:#}");
+    let empty = server.run_to_end(6000, &folder, &json!({}));
+    assert_eq!(empty["stdout"], "0\n", "{empty:#}");
+}
+
+#[cfg(unix)]
+fn link(target: &Path, at: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, at)
+}
+
+#[cfg(windows)]
+fn link(target: &Path, at: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, at)
+}
+
+#[test]
+fn a_granted_folder_is_read_and_written_and_nothing_outside_it_is() {
+    let (mut server, folder) = built("files", "run-files");
+    fs::create_dir_all(folder.join("data")).expect("a folder");
+    fs::write(folder.join("data/note.txt"), "a note\n").expect("a file");
+    link(&Path::new("..").join("idea.md"), &folder.join("data/link")).expect("a relative link");
+    link(&folder.join("idea.md"), &folder.join("data/far")).expect("an absolute link");
+    let absolute = folder.join("idea.md").to_string_lossy().to_string();
+    let paths = [
+        "data/note.txt",
+        "../idea.md",
+        "data/../idea.md",
+        absolute.as_str(),
+        "data/link",
+        "data/far",
+    ];
+    let reply = server.run_to_end(5000, &folder, &json!({"arguments": paths}));
+    assert_eq!(reply["state"], "exited", "{reply:#}");
+    let expected = format!(
+        "a note\ncannot read ../idea.md\ncannot read data/../idea.md\ncannot read {absolute}\ncannot read data/link\ncannot read data/far\nwrite in data: no\n"
+    );
+    assert_eq!(reply["stdout"], expected, "{reply:#}");
+    assert_eq!(
+        fs::read_to_string(folder.join("out/count.txt")).expect("the count"),
+        "1\n"
+    );
+    assert!(!folder.join("data/new.txt").exists());
+}
+
+#[test]
+fn an_ungranted_import_is_refused_at_check_and_at_run() {
+    let folder = example_named("ungranted", "run-ungranted");
+    let mut server = Server::start();
+    let reply = until_built(&mut server, &folder, 10);
+    assert_eq!(reply["build"]["state"], "build_failed", "{reply:#}");
+    let found = codes(&reply);
+    assert!(!found.is_empty(), "{reply:#}");
+    assert!(found.iter().all(|c| c == "import-ungranted"), "{reply:#}");
+    let findings = reply["findings"].as_array().expect("a list of findings");
+    assert!(
+        findings.iter().any(|f| f["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("`wasi:filesystem/") && m.contains("`- Writes: files in"))),
+        "{reply:#}"
+    );
+    let world = fs::read_to_string(folder.join("wit/world.wit")).expect("the world");
+    assert!(!world.contains("wasi:filesystem"), "{world}");
+    let run = server.run_to_end(5000, &folder, &json!({}));
+    assert_eq!(run["state"], "refused", "{run:#}");
+    assert!(
+        run["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("links only the world") && m.contains("wasi:")),
+        "{run:#}"
+    );
+    assert_eq!(run["stdout"], "", "{run:#}");
+    assert!(!folder.join("note.txt").exists());
+}
+
+#[test]
+fn an_endless_loop_stops_at_the_time_limit() {
+    let (mut server, folder) = built("forever", "run-forever");
+    let reply = server.run_to_end(5000, &folder, &json!({}));
+    assert_eq!(reply["state"], "out_of_time", "{reply:#}");
+    let taken = reply["milliseconds"].as_u64().expect("a time");
+    assert!((200..20_000).contains(&taken), "{reply:#}");
+}
+
+#[test]
+fn memory_past_the_limit_stops_the_program() {
+    let (mut server, folder) = built("greedy", "run-greedy");
+    let reply = server.run_to_end(5000, &folder, &json!({}));
+    assert_eq!(reply["state"], "out_of_memory", "{reply:#}");
+    assert_eq!(reply["stdout"], "", "{reply:#}");
+}
+
+#[test]
+fn the_clock_and_random_numbers_are_fixed_for_tests_and_real_when_granted() {
+    let (mut server, folder) = built("clock", "run-clock");
+    let first = server.run_to_end(5000, &folder, &json!({"fixed": true}));
+    assert_eq!(first["state"], "exited", "{first:#}");
+    let second = server.run_to_end(6000, &folder, &json!({"fixed": true}));
+    assert_eq!(first["stdout"], second["stdout"], "{first:#} {second:#}");
+    let text = first["stdout"].as_str().expect("a text");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    assert_eq!(lines.first().copied(), Some("1767225600"), "{text}");
+    assert!(lines.get(1).is_some_and(|l| l.parse::<u64>().is_ok()), "{text}");
+    let live = server.run_to_end(7000, &folder, &json!({}));
+    let seconds: u64 = live["stdout"]
+        .as_str()
+        .and_then(|t| t.lines().next())
+        .and_then(|l| l.parse().ok())
+        .expect("the seconds of the clock");
+    assert!(seconds > 1_767_225_600, "{live:#}");
 }
