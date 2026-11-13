@@ -76,11 +76,13 @@ const START: [u32; 8] = [
     0x5be0_cd19,
 ];
 
-pub(crate) fn hex(data: &[u8]) -> String {
+const BLOCK: usize = 64;
+
+pub(crate) fn digest(data: &[u8]) -> [u8; 32] {
     let bits = u64::try_from(data.len()).map_or(u64::MAX, |n| n.wrapping_mul(8));
     let mut message = data.to_vec();
     message.push(0x80);
-    while message.len() % 64 != 56 {
+    while message.len() % BLOCK != 56 {
         message.push(0);
     }
     message.extend_from_slice(&bits.to_be_bytes());
@@ -89,14 +91,59 @@ pub(crate) fn hex(data: &[u8]) -> String {
     for block in blocks {
         compress(&mut state, block);
     }
-    let mut out = String::with_capacity(64);
-    for word in state {
-        for shift in (0..8).rev() {
-            let digit = (word >> (shift * 4)) & 0xf;
-            out.push(char::from_digit(digit, 16).unwrap_or('0'));
+    let mut out = [0u8; 32];
+    let (slots, _) = out.as_chunks_mut::<4>();
+    for (slot, word) in slots.iter_mut().zip(state) {
+        *slot = word.to_be_bytes();
+    }
+    out
+}
+
+pub(crate) fn to_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        for digit in [byte >> 4, byte & 0xf] {
+            out.push(char::from_digit(u32::from(digit), 16).unwrap_or('0'));
         }
     }
     out
+}
+
+pub(crate) fn from_hex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    let (pairs, _) = text.as_bytes().as_chunks::<2>();
+    pairs
+        .iter()
+        .map(|pair| {
+            let high = char::from(pair[0]).to_digit(16)?;
+            let low = char::from(pair[1]).to_digit(16)?;
+            u8::try_from(high * 16 + low).ok()
+        })
+        .collect()
+}
+
+pub(crate) fn hex(data: &[u8]) -> String {
+    to_hex(&digest(data))
+}
+
+pub(crate) fn hmac(key: &[u8], message: &[u8]) -> [u8; 32] {
+    let mut block = [0u8; BLOCK];
+    if key.len() > BLOCK {
+        block[..32].copy_from_slice(&digest(key));
+    } else {
+        block[..key.len()].copy_from_slice(key);
+    }
+    let mut inner: Vec<u8> = block.iter().map(|b| b ^ 0x36).collect();
+    inner.extend_from_slice(message);
+    let mut outer: Vec<u8> = block.iter().map(|b| b ^ 0x5c).collect();
+    outer.extend_from_slice(&digest(&inner));
+    digest(&outer)
+}
+
+pub(crate) fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
 }
 
 fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
@@ -145,7 +192,7 @@ fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
 
 #[cfg(test)]
 mod tests {
-    use super::hex;
+    use super::{from_hex, hex, hmac, same, to_hex};
 
     #[test]
     fn empty_input_gives_the_known_hash() {
@@ -169,5 +216,60 @@ mod tests {
             hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
             "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
         );
+    }
+
+    fn mac(key: &[u8], data: &[u8]) -> String {
+        to_hex(&hmac(key, data))
+    }
+
+    #[test]
+    fn hmac_gives_the_vectors_of_rfc_4231() {
+        assert_eq!(
+            mac(&[0x0b; 20], b"Hi There"),
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+        assert_eq!(
+            mac(b"Jefe", b"what do ya want for nothing?"),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+        assert_eq!(
+            mac(&[0xaa; 20], &[0xdd; 50]),
+            "773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe"
+        );
+        let counting: Vec<u8> = (1..=25).collect();
+        assert_eq!(
+            mac(&counting, &[0xcd; 50]),
+            "82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b"
+        );
+        assert_eq!(
+            mac(&[0x0c; 20], b"Test With Truncation").get(..32),
+            Some("a3b6167473100ee06e0c796c2955552b")
+        );
+        assert_eq!(
+            mac(
+                &[0xaa; 131],
+                b"Test Using Larger Than Block-Size Key - Hash Key First"
+            ),
+            "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+        );
+        assert_eq!(
+            mac(
+                &[0xaa; 131],
+                b"This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm."
+            ),
+            "9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2"
+        );
+    }
+
+    #[test]
+    fn hex_goes_both_ways_and_same_compares_every_byte() {
+        let bytes = [0u8, 1, 0x7f, 0x80, 0xff];
+        assert_eq!(to_hex(&bytes), "00017f80ff");
+        assert_eq!(from_hex("00017f80ff"), Some(bytes.to_vec()));
+        assert_eq!(from_hex("0g"), None);
+        assert_eq!(from_hex("abc"), None);
+        assert!(same(b"abc", b"abc"));
+        assert!(!same(b"abc", b"abd"));
+        assert!(!same(b"abc", b"ab"));
     }
 }

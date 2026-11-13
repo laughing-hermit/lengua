@@ -33,6 +33,10 @@ fn fixture(name: &str) -> PathBuf {
     to
 }
 
+fn home() -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join("lengua-home")
+}
+
 struct Server {
     child: Child,
     input: ChildStdin,
@@ -45,6 +49,9 @@ impl Server {
     }
 
     fn start_with(mut command: Command) -> Self {
+        if !command.get_envs().any(|(name, _)| name == "LENGUA_HOME") {
+            command.env("LENGUA_HOME", home());
+        }
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -316,9 +323,13 @@ fn hello_world_builds_to_a_component() {
     let written = first["written"].as_array().expect("a list of files");
     assert!(written.iter().any(|f| f == "Cargo.toml"), "{first:#}");
     assert!(written.iter().any(|f| f == "wit/world.wit"), "{first:#}");
+    assert!(!folder.join("lengua.lock").exists(), "{first:#}");
     let reply = until_built(&mut server, &folder, 10);
     assert_eq!(reply["build"]["state"], "done", "{reply:#}");
     assert_eq!(reply["ok"], true, "{reply:#}");
+    assert!(folder.join("lengua.lock").is_file(), "{reply:#}");
+    let written = reply["written"].as_array().expect("a list of files");
+    assert!(written.iter().any(|f| f == "lengua.lock"), "{reply:#}");
     let component = PathBuf::from(reply["build"]["component"].as_str().expect("a path"));
     assert!(component.ends_with("target/wasm32-wasip2/release/hello.wasm"));
     let bytes = fs::read(&component).expect("the component");
@@ -532,7 +543,7 @@ fn an_ungranted_import_is_refused_at_check_and_at_run() {
     assert!(
         run["message"]
             .as_str()
-            .is_some_and(|m| m.contains("links only the world") && m.contains("wasi:")),
+            .is_some_and(|m| m.contains("there is no lock `lengua.lock`") && m.contains("run `check`")),
         "{run:#}"
     );
     assert_eq!(run["stdout"], "", "{run:#}");
@@ -689,6 +700,7 @@ fn a_wrong_output_fails_its_example_with_what_was_expected_and_what_came() {
     assert!(reply["build"]["mutants"].is_null(), "{reply:#}");
     let index = fs::read_to_string(folder.join("index.md")).expect("the index");
     assert!(index.contains("Label: `unchecked`."), "{index}");
+    assert!(!folder.join("lengua.lock").exists(), "{reply:#}");
 }
 
 #[test]
@@ -845,4 +857,163 @@ fn a_hash_map_works_without_a_grant_of_random_numbers() {
     let first = server.run_to_end(5000, &folder, &json!({"stdin": "b a b c\n"}));
     assert_eq!(first["state"], "exited", "{first:#}");
     assert_eq!(first["stdout"], "3\n", "{first:#}");
+}
+
+fn lengua_run() -> PathBuf {
+    Path::new(env!("CARGO_BIN_EXE_lengua-mcp")).with_file_name(format!(
+        "lengua-run{}",
+        std::env::consts::EXE_SUFFIX
+    ))
+}
+
+fn run_lengua_run(folder: &Path, args: &[&str], home_folder: &Path) -> (std::process::Output, f64) {
+    let started = Instant::now();
+    let output = Command::new(lengua_run())
+        .arg(folder)
+        .args(args)
+        .env("LENGUA_HOME", home_folder)
+        .stdin(Stdio::null())
+        .output()
+        .expect("lengua-run starts");
+    (output, started.elapsed().as_secs_f64())
+}
+
+fn sealed_file(folder: &Path) -> String {
+    fs::read_to_string(folder.join("lengua.lock"))
+        .expect("the lock")
+        .lines()
+        .find_map(|l| l.strip_prefix("sealed "))
+        .and_then(|rest| rest.split_once(' '))
+        .map(|(_, path)| path.to_string())
+        .expect("a sealed line")
+}
+
+fn refused_for(reply: &Value, part: &str) {
+    assert_eq!(reply["state"], "refused", "{reply:#}");
+    let message = reply["message"].as_str().expect("a message");
+    assert!(message.contains(part), "{part} in {message}");
+    assert!(message.contains("run `check`"), "{message}");
+}
+
+#[test]
+fn a_changed_byte_in_each_locked_file_is_refused_at_run() {
+    let (mut server, folder, _) = built("hello", "lock-files");
+    let lock = fs::read_to_string(folder.join("lengua.lock")).expect("the lock");
+    assert!(lock.starts_with("lengua-lock 1\nkind program\nlengua "), "{lock}");
+    assert!(lock.contains("\nlabel checked\nscore 0 of 0\n"), "{lock}");
+    assert!(lock.contains("\ntoolchain rustc "), "{lock}");
+    let good = server.run_to_end(5000, &folder, &json!({}));
+    assert_eq!(good["stdout"], "Hello, world!\n", "{good:#}");
+    let sealed = sealed_file(&folder);
+    assert!(sealed.starts_with("target/lengua/sealed/"), "{sealed}");
+    let files = [
+        "idea.md",
+        "index.md",
+        "log.md",
+        "src/main.rs",
+        "Cargo.toml",
+        "wit/world.wit",
+        "Cargo.lock",
+        "target/wasm32-wasip2/release/hello.wasm",
+        sealed.as_str(),
+    ];
+    let mut id = 6000;
+    for file in files {
+        let path = folder.join(file);
+        let bytes = fs::read(&path).expect("a locked file");
+        let mut changed = bytes.clone();
+        let middle = changed.len() / 2;
+        changed[middle] ^= 1;
+        fs::write(&path, &changed).expect("a changed byte");
+        let reply = server.run(id, &folder, &json!({}));
+        refused_for(&reply, &format!("`{file}` changed"));
+        fs::write(&path, &bytes).expect("the file back");
+        let again = server.run_to_end(id + 1, &folder, &json!({}));
+        assert_eq!(again["state"], "exited", "{file}: {again:#}");
+        id += 10;
+    }
+    fs::write(folder.join("src/extra.rs"), "\n").expect("a new file");
+    let reply = server.run(7000, &folder, &json!({}));
+    refused_for(&reply, "`src/extra.rs` is new");
+    fs::remove_file(folder.join("src/extra.rs")).expect("removed");
+    let (output, _) = run_lengua_run(&folder, &[], &home());
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    fs::write(folder.join("idea.md"), "# Purpose\n").expect("a changed idea");
+    let (output, _) = run_lengua_run(&folder, &[], &home());
+    assert_eq!(output.status.code(), Some(125), "{output:?}");
+    let message = String::from_utf8_lossy(&output.stderr);
+    assert!(message.contains("`idea.md` changed") && message.contains("run `check`"), "{message}");
+}
+
+#[test]
+fn a_lock_signed_with_another_key_is_refused() {
+    let (_, folder, _) = built("hello", "lock-key");
+    let other = Path::new(env!("CARGO_TARGET_TMPDIR")).join("lengua-other-home");
+    fs::create_dir_all(&other).expect("a folder");
+    fs::write(other.join("key"), format!("{}\n", "ab".repeat(32))).expect("another key");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lengua-mcp"));
+    command.env("LENGUA_HOME", &other);
+    let mut server = Server::start_with(command);
+    let reply = server.run(2, &folder, &json!({}));
+    refused_for(&reply, "not signed with this user's key");
+    let (output, _) = run_lengua_run(&folder, &[], &other);
+    assert_eq!(output.status.code(), Some(125), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not signed with this user's key"));
+}
+
+#[test]
+fn lengua_run_runs_a_checked_folder_with_arguments_and_a_granted_folder() {
+    let (_, hello, _) = built("hello", "lengua-run-hello");
+    let (output, _) = run_lengua_run(&hello, &[], &home());
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Hello, world!\n");
+    let (output, _) = run_lengua_run(&hello, &["one"], &home());
+    assert_eq!(output.status.code(), Some(125), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("`- Reads: arguments`"));
+    let (_, files, _) = built("files", "lengua-run-files");
+    fs::create_dir_all(files.join("data")).expect("a folder");
+    fs::write(files.join("data/note.txt"), "a note\n").expect("a file");
+    let (output, _) = run_lengua_run(&files, &["data/note.txt", "../idea.md"], &home());
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "a note\ncannot read ../idea.md\nwrite in data: no\n"
+    );
+    assert_eq!(
+        fs::read_to_string(files.join("out/count.txt")).expect("the count"),
+        "1\n"
+    );
+    let (_, count, _) = built("count", "lengua-run-count");
+    let output = Command::new(lengua_run())
+        .arg(&count)
+        .env("LENGUA_HOME", home())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            if let Some(mut input) = child.stdin.take() {
+                input.write_all(b"one two three\n")?;
+            }
+            child.wait_with_output()
+        })
+        .expect("lengua-run runs");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
+}
+
+#[test]
+fn a_program_that_waits_in_the_host_is_stopped_at_its_time() {
+    let (mut server, folder, checked) = built("sleepy", "sleepy");
+    assert_eq!(checked["ok"], true, "{checked:#}");
+    assert_eq!(checked["build"]["tests"]["failed"], 0, "{checked:#}");
+    assert_ne!(checked["label"], "unchecked", "{checked:#}");
+    let reply = server.run_to_end(5000, &folder, &json!({}));
+    assert_eq!(reply["state"], "out_of_time", "{reply:#}");
+    assert_eq!(reply["stdout"], "", "{reply:#}");
+    let taken = reply["milliseconds"].as_u64().expect("a time");
+    assert!((1000..10_000).contains(&taken), "{reply:#}");
+    let (output, seconds) = run_lengua_run(&folder, &[], &home());
+    assert_eq!(output.status.code(), Some(124), "{output:?}");
+    assert!(seconds < 10.0, "{seconds}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("out of time"));
 }

@@ -177,7 +177,42 @@ jobs:
           cargo clean -q
           TIMEFORMAT='build alone, from clean: %R s'
           time cargo build -q --release --target wasm32-wasip2 --offline
+      - name: lengua-run built alone, with no compiler in it
+        run: |
+          if cargo tree --locked -p lengua-run -e normal --prefix none | grep -i cranelift; then
+            echo "::error::lengua-run depends on Cranelift"
+            exit 1
+          fi
+          cargo build --release --locked -p lengua-run
+          ./target/release/lengua-run --version
       - name: lengua-mcp built
         run: |
           cargo build --release --locked -p lengua-mcp
           ./target/release/lengua-mcp --version
+      - name: the size and the start-up of lengua-run and of lengua-mcp
+        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+        run: |
+          exe=""
+          if [ -f target/release/lengua-run.exe ]; then
+            exe=.exe
+          fi
+          for b in lengua-run lengua-mcp; do
+            echo "$b: $(wc -c < "target/release/$b$exe") bytes"
+          done
+          h=target/tmp/lengua-mcp-lengua-run-hello/hello
+          if [ ! -f "$h/lengua.lock" ]; then
+            echo "no checked hello world"
+            exit 0
+          fi
+          export LENGUA_HOME=target/tmp/lengua-home
+          ./target/release/lengua-run "$h"
+          ./target/release/lengua-mcp worker program "$h/lengua.lock" "$h" "$h" live < /dev/null | head -c 200
+          echo
+          TIMEFORMAT='lengua-run, hello world, 20 runs: %R s'
+          time (for i in $(seq 20); do ./target/release/lengua-run "$h" > /dev/null; done)
+          TIMEFORMAT='lengua-mcp worker, hello world, 20 runs: %R s'
+          time (for i in $(seq 20); do ./target/release/lengua-mcp worker program "$h/lengua.lock" "$h" "$h" live < /dev/null > /dev/null; done)
+          TIMEFORMAT='lengua-run --version, 20 runs: %R s'
+          time (for i in $(seq 20); do ./target/release/lengua-run --version > /dev/null; done)
+          TIMEFORMAT='lengua-mcp --version, 20 runs: %R s'
+          time (for i in $(seq 20); do ./target/release/lengua-mcp --version > /dev/null; done)

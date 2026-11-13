@@ -4,6 +4,7 @@ mod constraints;
 mod frontmatter;
 mod generate;
 mod idea;
+pub mod lock;
 mod rust;
 mod sha256;
 mod ste;

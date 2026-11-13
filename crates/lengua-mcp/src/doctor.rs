@@ -105,6 +105,14 @@ pub(crate) fn examine(folder: &Path) -> Doctor {
 }
 
 impl Doctor {
+    pub(crate) fn rustc(&self) -> String {
+        self.items
+            .iter()
+            .filter(|i| i.name.starts_with("rustc"))
+            .find_map(|i| i.found.clone())
+            .unwrap_or_else(|| "rustc, version not found".to_string())
+    }
+
     pub(crate) fn ok(&self) -> bool {
         self.items.iter().all(|i| i.fix.is_none())
     }

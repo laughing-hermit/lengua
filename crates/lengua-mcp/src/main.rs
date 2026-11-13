@@ -4,6 +4,7 @@ mod host;
 mod mutation;
 mod runs;
 mod testing;
+mod worker;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -14,7 +15,9 @@ use rmcp::transport::stdio;
 use rmcp::{Json, ServerHandler, ServiceExt, schemars, serde, tool, tool_handler, tool_router};
 
 use crate::build::{Builds, Stage, Status};
-use crate::host::{Ending, Host, Input, Outcome};
+use crate::host::Host;
+use lengua_host::{Ending, Input, Outcome};
+use lengua_idea::lock::{self, Facts, Key, Kind};
 use crate::runs::{Progress, Runs};
 use lengua_idea::Trust;
 
@@ -259,6 +262,38 @@ fn ungranted_input(grants: &lengua_idea::Grants, params: &RunParams) -> Option<S
     None
 }
 
+fn seal_program(
+    folder: &Path,
+    report: &mut lengua_idea::Report,
+    snapshot: Option<&(String, Status)>,
+    key: &Key,
+) {
+    let (Some(plan), Some((inputs, status))) = (report.build.as_ref(), snapshot) else {
+        return;
+    };
+    let done = report.findings.is_empty() && *inputs == plan.inputs && status.stage == Stage::Done;
+    let Some(component) = status.component.as_ref().filter(|_| done) else {
+        return;
+    };
+    let facts = Facts {
+        kind: Kind::Program,
+        toolchain: status.toolchain.clone(),
+        trust: report.trust,
+        files: lock::program_files(folder),
+        component: Some(plan.artifact.clone()),
+        sealed: component.seal.as_ref().map(|s| s.sealed.clone()),
+    };
+    match lock::write(folder, &folder.join(lock::LOCK), &facts, key) {
+        Ok(()) => report.written.push(lock::LOCK.to_string()),
+        Err(message) => report.findings.push(lengua_idea::Finding {
+            file: lock::LOCK.to_string(),
+            line: 1,
+            code: "lock-write",
+            message,
+        }),
+    }
+}
+
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -378,7 +413,7 @@ impl Lengua {
 #[tool_router]
 impl Lengua {
     #[tool(
-        description = "Checks a lengua program: its ideas (idea.md, ideas/*.md, ideas/ui/*.md) and the rules of its Rust code, then, in the background, builds it to a WebAssembly component, runs the examples of its ideas as tests, and measures the tests with mutants of the code. Returns every problem at once, each with its file, line, code and message. When the ideas have no problems, it writes the frontmatter of each idea, index.md, log.md, Cargo.toml and wit/world.wit, and starts the job; the reply gives its state: building, build_failed, testing, tests_failed (each failed test a finding, with what was expected and what came), mutating or done, and the trust label: checked when every test passes and the mutation score is 80% or more, tested when the score is under 80%, unchecked until then. Each mutant that survived is a note with its file and line. Call check again to get the state of the job."
+        description = "Checks a lengua program: its ideas (idea.md, ideas/*.md, ideas/ui/*.md) and the rules of its Rust code, then, in the background, builds it to a WebAssembly component, runs the examples of its ideas as tests, and measures the tests with mutants of the code. Returns every problem at once, each with its file, line, code and message. When the ideas have no problems, it writes the frontmatter of each idea, index.md, log.md, Cargo.toml and wit/world.wit, and starts the job; the reply gives its state: building, build_failed, testing, tests_failed (each failed test a finding, with what was expected and what came), mutating or done, and the trust label: checked when every test passes and the mutation score is 80% or more, tested when the score is under 80%, unchecked until then. Each mutant that survived is a note with its file and line. When the job is done, the same call writes lengua.lock: the SHA-256 of every idea, index.md, log.md, the code, the generated files, the component and its sealed precompiled code, signed with the user's key. Call check again to get the state of the job."
     )]
     fn check(
         &self,
@@ -388,8 +423,12 @@ impl Lengua {
         if !folder.is_dir() {
             return Err(format!("{} is not a folder", folder.display()));
         }
+        let key = lock::user_key_or_create(|bytes| {
+            getrandom::fill(bytes)
+                .map_err(|e| format!("the system gave lengua no random numbers: {e}"))
+        })?;
         let mut snapshot: Option<(String, Status)> = None;
-        let report = lengua_idea::check_with(&folder, now(), |plan| {
+        let mut report = lengua_idea::check_with(&folder, now(), |plan| {
             snapshot = if plan.code {
                 self.builds
                     .snapshot(&folder, plan)
@@ -401,16 +440,23 @@ impl Lengua {
                 .as_ref()
                 .map_or_else(Trust::default, |(_, status)| status.trust())
         });
+        seal_program(&folder, &mut report, snapshot.as_ref(), &key);
         Ok(Json(self.reply(&folder, report, snapshot)))
     }
 
     #[tool(
-        description = "Runs a lengua program that check built, under exactly the grants of its idea: standard output and standard error always; the arguments, standard input, the wall clock, random numbers and the folders only when the idea grants them; the memory and the time of the idea as limits. Returns the state (exited, out_of_time, out_of_memory, trapped or refused), the exit code, standard output and standard error. When the run takes more than about 30 seconds, the state is running: call run again with the same input to get its result."
+        description = "Runs a lengua program that check built and locked, in a process of its own, under exactly the grants of its idea. It refuses the program when a file is not as its lengua.lock signed it (the reply names the file; call check again). It grants standard output and standard error always; the arguments, standard input, the wall clock, random numbers and the folders only when the idea grants them; the memory and the time of the idea as limits. Returns the state (exited, out_of_time, out_of_memory, trapped or refused), the exit code, standard output and standard error. When the run takes more than about 30 seconds, the state is running: call run again with the same input to get its result."
     )]
     fn run(&self, Parameters(params): Parameters<RunParams>) -> Result<Json<RunReply>, String> {
         let folder = PathBuf::from(&params.folder);
         if !folder.is_dir() {
             return Err(format!("{} is not a folder", folder.display()));
+        }
+        let lock_path = folder.join(lock::LOCK);
+        let verified = lock::user_key()
+            .and_then(|key| lock::verify(&folder, &lock_path, Kind::Program, &key));
+        if let Err(message) = verified {
+            return Ok(Json(plain("refused", Some(message), 0)));
         }
         let report = lengua_idea::program(&folder);
         if !report.findings.is_empty() {
@@ -437,7 +483,7 @@ impl Lengua {
             fixed: params.fixed,
             root: None,
         };
-        Ok(Json(run_reply(self.runs.run(&folder, build, input))))
+        Ok(Json(run_reply(self.runs.run(&folder, &build, input))))
     }
 }
 
@@ -453,8 +499,8 @@ async fn serve() -> Result<(), String> {
     let host = Host::new()?;
     let lengua = Lengua {
         name: VERSION,
-        builds: Builds::new(host.clone()),
-        runs: Runs::new(host),
+        builds: Builds::new(host),
+        runs: Runs::default(),
     };
     let server = lengua.serve(stdio()).await.map_err(|e| e.to_string())?;
     server.waiting().await.map_err(|e| e.to_string())?;
@@ -506,6 +552,11 @@ fn main() -> ExitCode {
         && command == "imports"
     {
         return print_imports(path);
+    }
+    if let Some((command, rest)) = args.split_first()
+        && command == "worker"
+    {
+        return worker::serve(rest);
     }
     if !args.is_empty() {
         eprintln!("usage: {} [--version | doctor]", env!("CARGO_PKG_NAME"));

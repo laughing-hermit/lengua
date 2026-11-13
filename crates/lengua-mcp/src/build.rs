@@ -11,7 +11,7 @@ use std::time::Instant;
 use lengua_idea::{Build, Label, Trust};
 
 use crate::doctor;
-use crate::host::{Host, grant_for, outside};
+use crate::host::{Host, Seal, grant_for, outside};
 use crate::{mutation, testing};
 
 pub(crate) const THRESHOLD: usize = 80;
@@ -36,6 +36,7 @@ pub(crate) struct Component {
     pub path: PathBuf,
     pub size: u64,
     pub sha256: String,
+    pub seal: Option<Seal>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +93,7 @@ pub(crate) struct Status {
     pub remarks: Vec<Remark>,
     pub tests: Tests,
     pub mutants: Mutants,
+    pub toolchain: String,
 }
 
 impl Status {
@@ -104,6 +106,7 @@ impl Status {
             remarks: Vec::new(),
             tests: Tests::default(),
             mutants: Mutants::default(),
+            toolchain: String::new(),
         }
     }
 
@@ -133,6 +136,7 @@ pub(crate) type Shared = Arc<Mutex<Status>>;
 pub(crate) type Slot = Arc<Mutex<Option<Child>>>;
 
 struct Job {
+    folder: PathBuf,
     inputs: String,
     started: Instant,
     state: Shared,
@@ -207,21 +211,22 @@ impl Worker {
             })
             .collect();
         let cases = testing::cases(&self.build);
+        let seal = component.seal.clone();
         self.update(|s| {
             s.component = Some(component);
             s.stage = Stage::Testing;
             s.remarks = screens;
             s.tests.total = cases.len();
         });
-        if self.build.library {
+        let Some(seal) = seal.filter(|_| !self.build.library) else {
             return self.finish(Stage::Done, Vec::new());
-        }
+        };
         let mut problems = Vec::new();
         for case in &cases {
             if self.stopped() {
                 return;
             }
-            let failed = testing::run_case(&self.host, &self.folder, &self.build, case);
+            let failed = testing::run_case(&self.folder, &self.build, &seal.lock, case);
             if let Some(detail) = &failed {
                 problems.push(testing::problem(case, detail));
             }
@@ -253,10 +258,13 @@ impl Job {
         if self.inputs != inputs {
             return false;
         }
-        lock(&self.state)
-            .component
-            .as_ref()
-            .is_none_or(|c| c.path.is_file())
+        let state = lock(&self.state);
+        state.component.as_ref().is_none_or(|c| {
+            c.path.is_file()
+                && c.seal
+                    .as_ref()
+                    .is_none_or(|s| s.lock.is_file() && self.folder.join(&s.sealed).is_file())
+        })
     }
 
     fn stop(&self) {
@@ -268,6 +276,7 @@ impl Job {
 
     fn start(folder: &Path, build: &Build, host: &Host) -> Self {
         let job = Self {
+            folder: folder.to_path_buf(),
             inputs: build.inputs.clone(),
             started: Instant::now(),
             state: Arc::new(Mutex::new(Status::new(Stage::Building))),
@@ -324,6 +333,7 @@ impl Builds {
             return status;
         }
         let job = Job::start(folder, build, &self.host);
+        lock(&job.state).toolchain = doctor.rustc();
         let status = job.status();
         jobs.insert(folder.to_path_buf(), job);
         status
@@ -522,9 +532,24 @@ fn built(folder: &Path, build: &Build, host: &Host) -> Result<Component, Vec<Pro
             if !problems.is_empty() {
                 return Err(problems);
             }
+            let seal = if build.library {
+                None
+            } else {
+                crate::host::clear(folder);
+                let sealed = host.seal(folder, &bytes, &sha256).map_err(|message| {
+                    vec![problem(
+                        "Cargo.toml",
+                        1,
+                        "seal-failed",
+                        format!("lengua could not seal the precompiled code: {message}"),
+                    )]
+                })?;
+                Some(sealed)
+            };
             Ok(Component {
                 size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
                 sha256,
+                seal,
                 path: component,
             })
         }

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use lengua_idea::{Build, Case, Mutant, Mutation, Test};
 
 use crate::build::{Remark, Worker, cargo, lock};
+use crate::host::{Seal, unseal};
 use crate::testing;
 
 pub(crate) const MUTANTS: usize = 40;
@@ -167,14 +168,24 @@ fn verdict(
     let Ok(bytes) = fs::read(worker.folder.join(&space.build.artifact)) else {
         return Some(Verdict::Unbuilt);
     };
-    if lengua_idea::sha256_hex(&bytes) == original {
+    let sha256 = lengua_idea::sha256_hex(&bytes);
+    if sha256 == original {
         return Some(Verdict::Same);
     }
+    let Ok(seal) = worker.host.seal(&worker.folder, &bytes, &sha256) else {
+        return Some(Verdict::Unbuilt);
+    };
+    let found = judge(worker, space, cases, &seal);
+    unseal(&worker.folder, &seal);
+    found
+}
+
+fn judge(worker: &Worker, space: &Workspace, cases: &[Case], seal: &Seal) -> Option<Verdict> {
     for case in cases {
         if worker.stopped() {
             return None;
         }
-        if testing::run_case(&worker.host, &worker.folder, &space.build, case).is_some() {
+        if testing::run_case(&worker.folder, &space.build, &seal.lock, case).is_some() {
             return Some(Verdict::Caught);
         }
     }

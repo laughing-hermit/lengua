@@ -1,0 +1,17 @@
+[package]
+name = "lengua-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+lengua-idea = { path = "../lengua-idea" }
+wasmtime = { version = "=50.0.1", default-features = false, features = ["runtime", "std", "component-model"] }
+wasmtime-wasi = { version = "=50.0.1", default-features = false, features = ["p2"] }
+wasmtime-wasi-io = { version = "=50.0.1", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

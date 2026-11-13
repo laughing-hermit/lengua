@@ -353,7 +353,7 @@ pub(crate) fn plan(
     plan
 }
 
-fn collect(folder: &Path, relative: &str, out: &mut Vec<(String, Vec<u8>)>) {
+pub(crate) fn collect(folder: &Path, relative: &str, out: &mut Vec<(String, Vec<u8>)>) {
     let Ok(entries) = fs::read_dir(folder.join(relative)) else {
         return;
     };

@@ -1,16 +1,16 @@
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use lengua_idea::{Build, Case, End, Range, Reach, Test};
 
 use crate::build::Problem;
-use crate::host::{Ending, Host, Input, Outcome};
+use crate::runs::GRACE;
+use crate::worker::{self, Request};
+use lengua_host::{Ending, Input, Outcome};
+use lengua_idea::lock::Kind;
 
-const GRACE: Duration = Duration::from_secs(2);
 const SHOWN: usize = 60;
 const BEFORE: usize = 20;
 
@@ -130,24 +130,6 @@ fn place(root: &Path, build: &Build, test: &Test) -> Result<(), String> {
     Ok(())
 }
 
-fn bounded(host: &Host, folder: &Path, build: &Build, input: Input) -> Outcome {
-    let (send, receive) = mpsc::channel();
-    let limit = Duration::from_millis(build.grants.time_ms) + GRACE;
-    let host = host.clone();
-    let folder = folder.to_path_buf();
-    let build = build.clone();
-    thread::spawn(move || {
-        let _ = send.send(host.run(&folder, &build, &input));
-    });
-    receive.recv_timeout(limit).unwrap_or_else(|_| Outcome {
-        ending: Ending::OutOfTime(
-            "the program waited in a host call past the time of its idea, and lengua stopped waiting for it".to_string(),
-        ),
-        stdout: Vec::new(),
-        stderr: Vec::new(),
-    })
-}
-
 fn ungranted(build: &Build, test: &Test) -> Option<String> {
     let arguments = test.arguments.as_ref().is_some_and(|a| !a.is_empty());
     if arguments && !build.grants.reach(Reach::Arguments) {
@@ -165,7 +147,7 @@ fn ungranted(build: &Build, test: &Test) -> Option<String> {
     None
 }
 
-pub(crate) fn run_case(host: &Host, folder: &Path, build: &Build, case: &Case) -> Option<String> {
+pub(crate) fn run_case(folder: &Path, build: &Build, lock: &Path, case: &Case) -> Option<String> {
     let test = &case.test;
     if let Some(message) = ungranted(build, test) {
         return Some(message);
@@ -182,7 +164,13 @@ pub(crate) fn run_case(host: &Host, folder: &Path, build: &Build, case: &Case) -
             fixed: true,
             root: Some(root.clone()),
         };
-        let outcome = bounded(host, folder, build, input);
+        let outcome = worker::run(&Request {
+            kind: Kind::Test,
+            lock,
+            folder,
+            input: &input,
+            limit: Duration::from_millis(build.grants.time_ms) + GRACE,
+        });
         compare(test, &outcome, &root)
     });
     let _ = fs::remove_dir_all(&root);

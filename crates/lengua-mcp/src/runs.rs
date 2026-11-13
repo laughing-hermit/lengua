@@ -4,12 +4,14 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use lengua_host::{Input, Outcome};
 use lengua_idea::Build;
+use lengua_idea::lock::{self, Kind};
 
-use crate::host::{Ending, Host, Input, Outcome};
+use crate::worker::{self, Request};
 
 const WAIT: Duration = Duration::from_secs(30);
-const GRACE: Duration = Duration::from_secs(2);
+pub(crate) const GRACE: Duration = Duration::from_secs(2);
 
 type Slot = Arc<(Mutex<Option<Outcome>>, Condvar)>;
 
@@ -17,7 +19,6 @@ type Slot = Arc<(Mutex<Option<Outcome>>, Condvar)>;
 struct Job {
     key: String,
     started: Instant,
-    limit: Duration,
     slot: Slot,
 }
 
@@ -26,13 +27,12 @@ pub(crate) enum Progress {
     Ended(Outcome, Duration),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct Runs {
-    host: Host,
     jobs: Arc<Mutex<HashMap<PathBuf, Job>>>,
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+fn lock_of<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -52,20 +52,26 @@ fn key(folder: &Path, build: &Build, input: &Input) -> String {
 }
 
 impl Job {
-    fn start(host: &Host, folder: &Path, build: Build, input: Input, key: String) -> Self {
+    fn start(folder: &Path, build: &Build, input: Input, key: String) -> Self {
         let job = Self {
             key,
             started: Instant::now(),
-            limit: Duration::from_millis(build.grants.time_ms) + GRACE,
             slot: Arc::new((Mutex::new(None), Condvar::new())),
         };
         let slot = Arc::clone(&job.slot);
-        let host = host.clone();
         let folder = folder.to_path_buf();
+        let limit = Duration::from_millis(build.grants.time_ms) + GRACE;
         thread::spawn(move || {
-            let outcome = host.run(&folder, &build, &input);
+            let lock_path = folder.join(lock::LOCK);
+            let outcome = worker::run(&Request {
+                kind: Kind::Program,
+                lock: &lock_path,
+                folder: &folder,
+                input: &input,
+                limit,
+            });
             let (result, done) = &*slot;
-            *lock(result) = Some(outcome);
+            *lock_of(result) = Some(outcome);
             done.notify_all();
         });
         job
@@ -73,7 +79,7 @@ impl Job {
 
     fn wait(&self, longest: Duration) -> Option<Outcome> {
         let (result, done) = &*self.slot;
-        let guard = lock(result);
+        let guard = lock_of(result);
         let (guard, _) = done
             .wait_timeout_while(guard, longest, |outcome| outcome.is_none())
             .unwrap_or_else(PoisonError::into_inner);
@@ -82,47 +88,30 @@ impl Job {
 }
 
 impl Runs {
-    pub(crate) fn new(host: Host) -> Self {
-        Self {
-            host,
-            jobs: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    pub(crate) fn run(&self, folder: &Path, build: Build, input: Input) -> Progress {
-        let key = key(folder, &build, &input);
+    pub(crate) fn run(&self, folder: &Path, build: &Build, input: Input) -> Progress {
+        let key = key(folder, build, &input);
         let job = {
-            let mut jobs = lock(&self.jobs);
+            let mut jobs = lock_of(&self.jobs);
             match jobs.get(folder) {
                 Some(job) if job.key == key => job.clone(),
                 _ => {
-                    let job = Job::start(&self.host, folder, build, input, key);
+                    let job = Job::start(folder, build, input, key);
                     jobs.insert(folder.to_path_buf(), job.clone());
                     job
                 }
             }
         };
-        let left = job.limit.saturating_sub(job.started.elapsed());
-        let outcome = job.wait(left.min(WAIT));
-        let seconds = job.started.elapsed();
-        let finished = outcome.or_else(|| {
-            (seconds >= job.limit).then(|| Outcome {
-                ending: Ending::OutOfTime(
-                    "the program waited in a host call past the time of its idea, and lengua stopped waiting for it".to_string(),
-                ),
-                stdout: Vec::new(),
-                stderr: Vec::new(),
-            })
-        });
-        match finished {
+        let outcome = job.wait(WAIT);
+        let taken = job.started.elapsed();
+        match outcome {
             Some(outcome) => {
-                let mut jobs = lock(&self.jobs);
+                let mut jobs = lock_of(&self.jobs);
                 if jobs.get(folder).is_some_and(|j| j.key == job.key) {
                     jobs.remove(folder);
                 }
-                Progress::Ended(outcome, seconds)
+                Progress::Ended(outcome, taken)
             }
-            None => Progress::Running(seconds),
+            None => Progress::Running(taken),
         }
     }
 }
