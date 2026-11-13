@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
-use lengua_idea::{Build, Grants};
+use lengua_idea::{Build, Grants, Reach};
 use wasmtime::component::{Component, HasData, Linker, ResourceTable};
 use wasmtime::{Config, Engine, ResourceLimiter, Store, Trap};
 use wasmtime_wasi::cli::{WasiCli, WasiCliView};
@@ -231,12 +231,12 @@ fn context(
         .stdin(MemoryInputPipe::new(input.stdin.clone()))
         .stdout(output.0.clone())
         .stderr(output.1.clone());
-    if grants.arguments {
+    if grants.reach(Reach::Arguments) {
         let mut all = vec![name.to_string()];
         all.extend(input.arguments.iter().cloned());
         builder.args(all.as_slice());
     }
-    if !grants.clock || input.fixed {
+    if !grants.reach(Reach::Clock) || input.fixed {
         builder.monotonic_clock(Steps::default());
         builder.wall_clock(Fixed);
     }

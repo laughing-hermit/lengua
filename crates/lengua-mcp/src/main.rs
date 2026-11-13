@@ -192,12 +192,12 @@ fn run_reply(progress: Progress) -> RunReply {
 }
 
 fn ungranted_input(grants: &lengua_idea::Grants, params: &RunParams) -> Option<String> {
-    if !params.arguments.is_empty() && !grants.arguments {
+    if !params.arguments.is_empty() && !grants.reach(lengua_idea::Reach::Arguments) {
         return Some(
             "the idea does not grant `- Reads: arguments`, so the program gets no arguments; add the grant, or call run with none".to_string(),
         );
     }
-    if params.stdin.is_some() && !grants.standard_input {
+    if params.stdin.is_some() && !grants.reach(lengua_idea::Reach::StandardInput) {
         return Some(
             "the idea does not grant `- Reads: standard input`, so the program gets an empty standard input; add the grant, or call run with no stdin".to_string(),
         );

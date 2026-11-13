@@ -36,16 +36,28 @@ pub struct Folder {
     pub write: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    StandardInput,
+    Arguments,
+    Clock,
+    Random,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Grants {
-    pub standard_input: bool,
-    pub arguments: bool,
-    pub clock: bool,
-    pub random: bool,
+    pub reaches: Vec<Reach>,
     pub folders: Vec<Folder>,
     pub hosts: Vec<String>,
     pub memory: u64,
     pub time_ms: u64,
+}
+
+impl Grants {
+    #[must_use]
+    pub fn reach(&self, reach: Reach) -> bool {
+        self.reaches.contains(&reach)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,7 +73,12 @@ pub struct Build {
 }
 
 fn grants(top: &constraints::Constraints) -> Grants {
-    let has = |grant| top.grants.contains(&grant);
+    let pairs = [
+        (constraints::Grant::StandardInput, Reach::StandardInput),
+        (constraints::Grant::Arguments, Reach::Arguments),
+        (constraints::Grant::Clock, Reach::Clock),
+        (constraints::Grant::Random, Reach::Random),
+    ];
     let mut folders: Vec<Folder> = Vec::new();
     for (path, write) in &top.folders {
         if let Some(found) = folders.iter_mut().find(|f| f.path == *path) {
@@ -74,10 +91,11 @@ fn grants(top: &constraints::Constraints) -> Grants {
         }
     }
     Grants {
-        standard_input: has(constraints::Grant::StandardInput),
-        arguments: has(constraints::Grant::Arguments),
-        clock: has(constraints::Grant::Clock),
-        random: has(constraints::Grant::Random),
+        reaches: pairs
+            .into_iter()
+            .filter(|(grant, _)| top.grants.contains(grant))
+            .map(|(_, reach)| reach)
+            .collect(),
         folders,
         hosts: top.hosts.clone(),
         memory: top.memory,

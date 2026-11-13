@@ -38,7 +38,8 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
 - `Sink::new`, `Sink::add` (`lib.rs`): collect the findings of one file.
 - `Build`, `build`, `sha256_hex` (`lib.rs`): what `check` gives the build job and the host,
   and the SHA-256 of bytes.
-- `Grants`, `Folder`, `grants` (`lib.rs`): the top idea's grants as the host reads them: standard
+- `Grants` (with `Grants::reach`), `Reach`, `Folder`, `grants` (`lib.rs`): the top idea's grants as
+  the host reads them: standard
   input, arguments, the clock, random numbers, the folders (read or read-write), the hosts, the
   memory in bytes and the time in milliseconds.
 - `markdown_files`, `discover`, `source_file`, `concept`, `read_page`, `link` (`lib.rs`): find
