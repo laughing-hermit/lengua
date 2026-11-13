@@ -401,6 +401,8 @@ pub struct Pool {
     looked_at: usize,
     /// Whether that look found free memory below the floor proofs leave.
     short_of_memory: bool,
+    /// What [`Pool::as_crc`] has read of the terms so far, bit by bit.
+    forms: gf2::Forms,
 }
 
 /// The smallest all-ones number at least `value`: the range an or or xor stays in.
@@ -5502,6 +5504,7 @@ impl Pool {
 }
 
 pub mod float;
+mod gf2;
 #[cfg(test)]
 mod random;
 

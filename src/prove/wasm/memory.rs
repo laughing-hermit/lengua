@@ -161,6 +161,22 @@ pub(super) fn load(
 ) -> Result<Term, End> {
     let address = effective(pool, base, offset);
     let found = places(module, state, pool, at, address, u64::from(bytes))?;
+    // A proof of one function alone: every load stays inside the bytes the function's contract
+    // says its addresses hold, so nothing else of memory can reach what the function gives.
+    if let Some(windows) = &state.core.window {
+        let inside = found.iter().all(|(_, place)| {
+            windows.iter().any(|(start, end)| {
+                start <= place && place.saturating_add(u64::from(bytes)) <= *end
+            })
+        });
+        if !inside {
+            return Err(unsupported(state.core.placed(
+                module,
+                at,
+                super::unit::OUTSIDE_ITS_TEXT,
+            )));
+        }
+    }
     let mut value: Option<Term> = None;
     for (here, place) in found.iter().rev() {
         let there = read(module, &state.core, pool, *place, bytes);

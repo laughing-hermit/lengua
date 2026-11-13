@@ -504,6 +504,9 @@ pub(super) struct WasmCode {
     obligations: Vec<Obligation>,
     /// The parts main.wat takes functions from, as lengua.lock records them.
     parts: Vec<lock::PartStamp>,
+    /// What the contracts say main.wat's functions give: its own contract's, for a part, and
+    /// those of the functions it took from parts.
+    pub(super) claims: Vec<prove::contract::Claim>,
     /// For an idea with a `- Secret:` line, what the check of the engine's machine code read on
     /// this CPU, in one line.
     machine_code: Option<String>,
@@ -1335,6 +1338,17 @@ impl LenguaServer {
             report.next_step.push_str(&note);
         }
         report.contract = parts::contract_lines(idea_text);
+        // What each contract says a function gives, as its proof of the function alone settled
+        // it: a part's own with its contract, a taken function's with the parts.
+        if let Ok(found) = checking.found.lock() {
+            for (taken, line) in &found.contracts {
+                if *taken {
+                    report.parts.push(format!("contract {line}"));
+                } else {
+                    report.contract.push(format!("gives {line}"));
+                }
+            }
+        }
         let proven_wrong = checking.found.lock().is_ok_and(|found| found.wrong);
         if report.state == "done" {
             events.push(graph::Event::Done);
@@ -1445,6 +1459,8 @@ impl LenguaServer {
             .map_err(|refused| refused.iter().map(ToString::to_string).collect::<Vec<_>>())?;
             Some(passed.line())
         };
+        let mut claims = parts::own_claims(idea_text, code);
+        claims.extend(parts::taken_claims(&taken, code));
         let features = engine::features_used(&built.wasm);
         let module = Sha256Hex::of(&built.wasm);
         let program = Program::new(built)
@@ -1460,6 +1476,7 @@ impl LenguaServer {
             unsafe_blocks: report.unsafe_blocks.len(),
             obligations: report.facts.obligations.clone(),
             parts: parts::stamps(&taken),
+            claims,
             calls: opened,
             machine_code,
             functions,
@@ -2225,6 +2242,7 @@ async fn attest_proofs(
     let model = Model {
         program: Arc::clone(program),
         policy: Policy::of(&idea.uses, &idea.network),
+        claims: Arc::default(),
     };
     let listens = idea.network.listens.is_some();
     let deadline = Instant::now() + proof_time();

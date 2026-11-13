@@ -9,6 +9,7 @@
 //! beyond its machine, its output, files and network, and the conditions it met, is its
 //! [`world`], which the checks of a finished run read.
 
+pub mod contract;
 pub mod exec;
 pub mod formula;
 pub mod induction;
@@ -2662,7 +2663,22 @@ pub fn prove_wasm(
     block: &Generated,
     budget: &Budget,
 ) -> Verdict {
-    attempt_wasm(built, policy, block, budget).unwrap_or_else(Verdict::NotProven)
+    prove_wasm_with(built, policy, block, budget, &[])
+}
+
+/// [`prove_wasm`] with `claims`, what the contracts of functions the program took from parts
+/// say each gives, each proven of its function alone ([`contract::settle`]): a run takes a
+/// claim's value at a call whose arguments are in the claim's ranges, in place of following
+/// the function's body.
+#[must_use]
+pub fn prove_wasm_with(
+    built: &crate::wasm::Built,
+    policy: crate::wasm::Policy,
+    block: &Generated,
+    budget: &Budget,
+    claims: &[contract::Claim],
+) -> Verdict {
+    attempt_wasm(built, policy, block, budget, claims).unwrap_or_else(Verdict::NotProven)
 }
 
 fn attempt_wasm(
@@ -2670,6 +2686,7 @@ fn attempt_wasm(
     policy: crate::wasm::Policy,
     block: &Generated,
     budget: &Budget,
+    claims: &[contract::Claim],
 ) -> Result<Verdict, String> {
     if block.uses_now() {
         return Err(USES_NOW.into());
@@ -2680,7 +2697,7 @@ fn attempt_wasm(
     } else {
         policy
     };
-    let module = wasm::Module::new(built, policy)?;
+    let module = wasm::Module::new(built, policy)?.with_claims(claims);
     either_way(&module, block, budget)
 }
 
@@ -4497,18 +4514,36 @@ pub fn agrees_wasm(
     listens: bool,
     deadline: Instant,
 ) -> Result<Option<Verdict>, String> {
+    agrees_wasm_with(built, policy, cases, listens, deadline, &[])
+}
+
+/// [`agrees_wasm`] with `claims`, as [`prove_wasm_with`] takes them: the model's runs take the
+/// claims' values at the calls a proof's runs do, so the model the samples hold to the real
+/// program is the one the proof runs.
+///
+/// # Errors
+///
+/// Describes the first disagreement, what the model can't run, or that the time is up.
+pub fn agrees_wasm_with(
+    built: &crate::wasm::Built,
+    policy: crate::wasm::Policy,
+    cases: &[crate::testfile::Case],
+    listens: bool,
+    deadline: Instant,
+    claims: &[contract::Claim],
+) -> Result<Option<Verdict>, String> {
     // A case about a piece of split work runs in a piece's own world, the others in the
     // program's: each kind on a model of its own.
     let (pieces, whole): (Vec<&crate::testfile::Case>, Vec<&crate::testfile::Case>) =
         cases.iter().partition(|case| case.piece);
     if !whole.is_empty() || pieces.is_empty() {
-        let module = wasm::Module::new(built, policy)?;
+        let module = wasm::Module::new(built, policy)?.with_claims(claims);
         let found = agrees_with(&module, whole, listens, deadline)?;
         if found.is_some() || pieces.is_empty() {
             return Ok(found);
         }
     }
-    let module = wasm::Module::new(built, policy.for_a_piece())?;
+    let module = wasm::Module::new(built, policy.for_a_piece())?.with_claims(claims);
     agrees_with(&module, pieces, listens, deadline)
 }
 

@@ -4,7 +4,9 @@
 
 use super::host::{self, Handle};
 use super::image::{Arity, Binary, Function, Module, NOWHERE, Op, Unary};
-use super::{Frame, Label, Wasm, fill, float, function_label, induction, memory, must_not, vector};
+use super::{
+    Frame, Label, Wasm, fill, float, function_label, induction, memory, must_not, unit, vector,
+};
 use crate::prove::exec::{End, MAX_STEPS, State, Step, TOO_LONG, unsupported};
 use crate::prove::term::{Pool, Term};
 
@@ -214,6 +216,13 @@ fn operate(
                 guard_division(module, state, pool, at, *operation, (a, b))?;
             }
             let result = binary(pool, *operation, a, b);
+            // A CRC a program computes a bit at a time ends each byte with an exclusive or:
+            // there its state is the CRC step's own term, the one a formula's `crc32` builds.
+            let result = if *operation == Binary::Xor {
+                pool.as_crc(result).unwrap_or(result)
+            } else {
+                result
+            };
             state.core.stack.push(result);
         }
         Op::Float(operation) => {
@@ -477,6 +486,11 @@ fn call(
     at: usize,
 ) -> Result<Step<Wasm>, End> {
     let callee = module.function(index).ok_or_else(malformed)?;
+    // A proof of one function alone follows none of the host and none of lengua's library: the
+    // one function of them a unit calls is `$assert_fail`, where it stops the program.
+    if state.core.window.is_some() && !callee.own {
+        return Err(state.core.trap(module, at, unit::STOPS));
+    }
     // A function of a module the program calls: the model follows no other module, and doesn't
     // know what the call gives back, so the run stops here.
     if callee.called {
@@ -488,6 +502,11 @@ fn call(
     }
     if let Some(function) = callee.import {
         return host::call(module, state, pool, function, at);
+    }
+    // A function taken from a part, whose contract says what it gives: the formula's value,
+    // which the function's own proof holds it to, in place of its body.
+    if unit::reuse(module, state, pool, index, callee.params) {
+        return Ok(Step::Next);
     }
     // Every read a proof by induction takes is a call of `$fill`: the read loop's must be the
     // first.

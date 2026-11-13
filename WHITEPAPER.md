@@ -140,8 +140,8 @@ agent.
     that input arrives, cut into any pieces; a program on the network is proven for four ways its
     peer's bytes can arrive [33].
   - Sorting and word tallies are proven for texts of up to 8 bytes and tested beyond; SHA-256
-    and AES-128 aren't modelled; and a server that waits on its connections with `poll_oneoff`
-    isn't followed yet. Those stay "tested, not proven", and their lines say so [34].
+    and AES-128 aren't modelled; and a server's wait on `poll_oneoff` that mixes its connections
+    with a clock or a file isn't followed. Those stay "tested, not proven", and their lines say so [34].
 
   So "the line count is proven" doesn't mean every streaming program is. lengua says which
   programs, never that all are.
@@ -363,8 +363,8 @@ https://github.com/laughing-hermit/lengua.
     its input can be cut); `src/prove/mod.rs` and `src/testrun.rs` (the four deliveries of a
     test's peer).
 34. `src/prove/formula.rs` (`sort`, `uniq` and `tally` of texts up to 8 bytes; any other test
-    function "the proof doesn't model yet"); `src/prove/wasm/host.rs` (a server's wait on
-    `poll_oneoff` for its connections).
+    function "the proof doesn't model yet"); `src/prove/wasm/host.rs` (a wait on `poll_oneoff`
+    that mixes a server's connections with a clock, a write, standard input or a file).
 35. `src/idea.rs` (the `- Uses:` and `- Network:` lines); `src/wasm/host/policy.rs`.
 36. `src/wasm/host/files.rs` and `Cargo.toml` (`cap-std` 4.0.3).
 37. `src/connect.rs` and `src/wasm/host/net.rs` (the connections lengua makes before a program

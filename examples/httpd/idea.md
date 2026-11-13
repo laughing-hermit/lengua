@@ -52,7 +52,8 @@ These are the limits:
 
 The server answers a request for a part of a file with that part, when the request has one
 `Range` field of one range. It answers status 304 when the `If-None-Match` field of the request
-is the `ETag` of the file. The `ETag` is the CRC-32 of the file, in decimal.
+is the `ETag` of the file. The `ETag` is the CRC-32 of the file, in decimal. The tests of another
+`ETag` send a number from `4294967296` to `4295967295`, which is not a CRC-32.
 
 For each request, the server prints one line to standard output. The line has the method, the
 target, the status and the length of the body of the answer. It has two hyphens in place of
@@ -170,7 +171,7 @@ the target is too long. The server does not stop when it cannot print this line.
 
 ## B5: Sends the file when the client has another ETag
 - Given a file `public/notes.txt` that contains `abcdefgh`
-- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nIf-None-Match: "7"\r\n\r\n`
+- And a client that sends `GET /files/notes.txt HTTP/1.1\r\nIf-None-Match: "4294967303"\r\n\r\n`
 - When the program runs
 - Then the client receives text that matches `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 8\r\nETag: "{any(0, 4294967295)}"\r\nConnection: close\r\n\r\nabcdefgh`
 - And it prints `GET /files/notes.txt 200 8` and a newline
@@ -186,7 +187,7 @@ the target is too long. The server does not stop when it cannot print this line.
 
 | body | n | runs |
 |---|---|---|
-| `string(8, 8, "abcdefgh")` | `int(0, 999999)` | 6 |
+| `string(8, 8, "abcdefgh")` | `int(4294967296, 4295967295)` | 6 |
 
 ## B6: Sends a part of a file
 - Given a file `public/notes.txt` that contains `hello-world-again`

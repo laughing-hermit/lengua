@@ -30,6 +30,7 @@ mod memory;
 mod step;
 #[cfg(test)]
 mod tests;
+mod unit;
 mod vector;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -41,6 +42,9 @@ use super::term::{Pool, Term};
 use super::world::{World, net};
 use host::Handle;
 pub use image::Module;
+pub(in crate::prove) use unit::{
+    GAP as UNIT_GAP, TEXTS_FROM as UNIT_TEXTS_FROM, begin as unit_begin, end as unit_end,
+};
 
 /// A label of a block a call is inside: where a branch to it goes, and what it carries there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +119,9 @@ pub struct Wasm {
     head: Option<Box<induction::Snapshot>>,
     /// What one buffer-full changed, by the second time, for a run that reads two from the head.
     changed: Option<Box<Changes>>,
+    /// In a proof of one function alone, the bytes its loads may read, each a first address
+    /// and the one past the last: the texts its contract says its addresses hold.
+    window: Option<Rc<Vec<(u64, u64)>>>,
     /// A zero, for a slot the run has no place for: one a time round's checks never read, as a
     /// run whose calls aren't the head's has stopped the induction first.
     zero: Term,
@@ -248,6 +255,7 @@ pub fn begin(
         filled: false,
         head: None,
         changed: None,
+        window: None,
         zero: pool.bv(32, 0),
     };
     State {

@@ -2277,6 +2277,136 @@ fn proves_the_vector_templates_behaviors() {
     }
 }
 
+/// A block of the fixture `name` with each of its texts at most `longest` characters long, so a
+/// proof of it by length ends in a test's time.
+fn short_block(name: &str, number: usize, longest: usize) -> (Generated, Policy) {
+    let (blocks, policy) = blocks_of(name);
+    let mut block = blocks[number].clone();
+    for (_, generator) in &mut block.vars {
+        if let Generator::Str { min, max, .. } = generator {
+            *max = longest.max(*min);
+        }
+    }
+    (block, policy)
+}
+
+/// A server that waits on its listener and its connections with poll_oneoff, the shout server,
+/// is proven as any program is, where its proofs used to stop at the wait: a client's line of
+/// up to 4 characters comes back in capitals however it is cut and whenever each piece
+/// arrives, and two lines on one connection; and with two clients at once, in every order
+/// their steps can come. A planted bug is found: a server that drops a line's last letter.
+#[test]
+fn proves_a_server_that_waits_on_its_connections() {
+    if !solvers_installed() {
+        return;
+    }
+    let shout = fixture("shout-server", "main.wat");
+    let built = build(&shout).expect("the shout server builds");
+    for number in 0..2 {
+        let (block, policy) = short_block("shout-server", number, 4);
+        let verdict = prove_wasm(&built, policy, &block, &budget(900, true));
+        println!("shout-server's block {number}: {verdict:?}");
+        assert!(
+            proven(&verdict),
+            "shout-server's block {number}: {verdict:?}"
+        );
+    }
+    // Two clients at once, with the paths a check gives a shape: every order of their steps is
+    // a path or more, so the proof may stop at a length, and says where.
+    let (block, policy) = short_block("shout-server", 2, 2);
+    let whole = Budget::until(Instant::now() + Duration::from_secs(900), true);
+    let verdict = prove_wasm(&built, policy, &block, &whole);
+    println!("shout-server's block 2: {verdict:?}");
+    assert!(
+        matches!(verdict, Verdict::Proven { .. }),
+        "shout-server's block 2: {verdict:?}"
+    );
+    // A planted bug: letters sent back as they came.
+    let quiet = edited(
+        &shout,
+        (
+            "(global $CASE_BIT i32 (i32.const 32))",
+            "(global $CASE_BIT i32 (i32.const 0))",
+        ),
+    );
+    let built = build(&quiet).expect("it builds");
+    let (block, policy) = short_block("shout-server", 0, 4);
+    let verdict = prove_wasm(&built, policy, &block, &budget(900, true));
+    assert!(
+        matches!(verdict, Verdict::Counterexample(_)),
+        "a server that doesn't shout: {verdict:?}"
+    );
+}
+
+/// The model's run of a server that waits with poll_oneoff, with no client: it serves, as a
+/// test of a server that keeps serving finds it.
+#[test]
+fn a_server_that_waits_with_no_client_serves() {
+    let text = fixture("shout-server", "main.wat");
+    let (_, policy) = blocks_of("shout-server");
+    let given = Given {
+        listens: true,
+        ..Given::default()
+    };
+    let done = ran(&text, policy, &given);
+    assert_eq!(done.end, Ended::Other(format!("{:?}", Some(End::Serving))));
+}
+
+/// Every run of the shout server through its waits, with one client whose line arrives whole
+/// or in two pieces, every value known: each ends serving, with the line sent back in capitals,
+/// whenever the client's steps come between the waits.
+#[test]
+fn a_server_s_runs_through_its_waits_end_serving_with_the_answer() {
+    let text = fixture("shout-server", "main.wat");
+    let (_, policy) = blocks_of("shout-server");
+    let module = module(&text, policy);
+    let mut failures = Vec::new();
+    for (line, cut) in [(&b"\n"[..], 1), (&b"ab\n"[..], 3), (&b"ab\n"[..], 1)] {
+        let mut pool = Pool::default();
+        let bytes = exec::bytes(&mut pool, line);
+        let mut pieces = vec![bytes[..cut].to_vec(), bytes[cut..].to_vec()];
+        pieces.retain(|piece| !piece.is_empty());
+        let network = net::Network {
+            server: Vec::new(),
+            made: Vec::new(),
+            client: vec![net::Client {
+                pieces,
+                waits: true,
+                held: false,
+            }],
+            listening: true,
+            at_once: false,
+            eager: false,
+        };
+        let start = begin(&module, &mut pool, &[], &[], Vec::new()).with_network(network);
+        let runs =
+            exec::explore(&module, start, &mut pool, &mut exec::Concrete, 64).expect("the runs");
+        assert!(!runs.is_empty(), "no run of {line:?}");
+        let wanted: Vec<Option<u128>> = line
+            .iter()
+            .map(|byte| Some(u128::from(byte.to_ascii_uppercase())))
+            .collect();
+        for run in &runs {
+            let sent: Vec<Option<u128>> = run
+                .world
+                .connections
+                .iter()
+                .flat_map(|connection| connection.sent.iter())
+                .map(|term| pool.constant(*term))
+                .collect();
+            let said = format!(
+                "{line:?} cut at {cut}: {:?} after {} steps, sent {sent:?}",
+                run.world.end, run.world.steps
+            );
+            println!("{said}");
+            if run.world.end != Some(End::Serving) || sent != wanted {
+                failures.push(said);
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 /// A program whose idea calls a module: with no argument it ends before any call, with one it
 /// calls a function of the module, and with two it copies bytes to it.
 const CALLS_A_MODULE: &str = r#"(module

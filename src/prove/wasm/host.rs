@@ -332,6 +332,13 @@ pub(super) fn call(
              the program is tested, not proven, where it splits",
         ));
     }
+    // A server's wait on its listener and its connections: the test's clients take any of the
+    // steps open to them first, each way a run of its own.
+    if function.name == "poll_oneoff"
+        && let Some(step) = wait_on_network(module, state, pool, &arguments)?
+    {
+        return Ok(step);
+    }
     // The bytes of a module it calls: the model follows no other module.
     if function.name == "give" || function.name == "take" {
         return Err(unsupported(
@@ -355,6 +362,221 @@ pub(super) fn call(
     let result = host.pool.bv(32, u128::from(number));
     host.core.stack.push(result);
     Ok(Step::Next)
+}
+
+/// Everything of `state` that what its run does from here on depends on, and what its checks
+/// find of it, as numbers: two states of one exploration with the same key are the same state
+/// but for how many steps they took to get there. `None` for a state a key doesn't cover: one
+/// with a file or a folder's listing in hand, in a proof by induction, or of a function alone.
+fn wait_key(state: &State<Wasm>) -> Option<Vec<u64>> {
+    let core = &state.core;
+    if core.hook.is_some() || core.head.is_some() || core.changed.is_some() || core.window.is_some()
+    {
+        return None;
+    }
+    let term = |term: &Term| term.index() as u64;
+    let mut key = vec![core.stack.len() as u64];
+    key.extend(core.stack.iter().map(term));
+    key.push(core.frames.len() as u64);
+    for frame in &core.frames {
+        key.extend([
+            u64::from(frame.function),
+            frame.pc as u64,
+            frame.height as u64,
+            frame.locals.len() as u64,
+            frame.labels.len() as u64,
+        ]);
+        key.extend(frame.locals.iter().map(term));
+        for label in &frame.labels {
+            key.extend([
+                u64::from(label.looping),
+                label.height as u64,
+                label.carries as u64,
+                label.target as u64,
+            ]);
+        }
+    }
+    key.push(core.globals.len() as u64);
+    key.extend(core.globals.iter().map(term));
+    core.memory.key(&mut key);
+    key.extend([
+        core.pages,
+        u64::from(core.first),
+        u64::from(core.handed),
+        core.reversed.map_or(2, u64::from),
+        core.written,
+        u64::from(core.arrivals),
+        u64::from(core.filled),
+        core.dropped.len() as u64,
+        core.fds.len() as u64,
+    ]);
+    key.extend(core.dropped.iter().map(|dropped| u64::from(*dropped)));
+    for (number, handle) in &core.fds {
+        key.push(u64::from(*number));
+        match handle {
+            Handle::Stdin => key.push(0),
+            Handle::Stdout => key.push(1),
+            Handle::Stderr => key.push(2),
+            Handle::Folder {
+                path,
+                listing: None,
+            } if path.is_empty() => key.push(3),
+            Handle::Folder { .. } | Handle::File { .. } => return None,
+            Handle::Listener => key.push(4),
+            Handle::Socket {
+                world,
+                read_shut,
+                write_shut,
+            } => key.extend([5, *world, u64::from(*read_shut), u64::from(*write_shut)]),
+        }
+    }
+    state.world.wait_key(&mut key).then_some(key)
+}
+
+/// A server's wait on `poll_oneoff` for its listener and the connections it took, where every
+/// subscription is a wait to read on one of them: the test's clients first take any of the
+/// steps open to them, connecting, each piece of what they send arriving, and closing their
+/// side, each way a run of its own ([`World::stepped`]), and the wait comes back in each with an
+/// event for every subscription that then has something, in the subscriptions' order, as the
+/// host writes them. The runs from one wait so cover every order the clients' steps can come
+/// in, and every moment the host's look at the descriptors can fall at. The listener's event
+/// says one connection waits, as the host's does; a connection's count of bytes and its flags
+/// are any value, since how much has arrived by then, and whether the other end has ended, is
+/// the network's timing. With nothing to come in any of them, the server waits forever:
+/// serving, once every client has its whole answer, or stuck.
+///
+/// `None` for any other wait, which the host's own steps answer: one whose arguments, kinds or
+/// descriptors the model doesn't know as numbers, one a check of the host's refuses, one of a
+/// program whose idea doesn't reach the network, and one that mixes a clock, a write, standard
+/// input, a file or a connection lengua made with them.
+///
+/// # Errors
+///
+/// How the wait ends the run: serving, stuck, or a connection taken before the first wait.
+fn wait_on_network(
+    module: &Module,
+    state: &mut State<Wasm>,
+    pool: &mut Pool,
+    arguments: &[Term],
+) -> Result<Option<Step<Wasm>>, End> {
+    let mut numbers = Vec::new();
+    for argument in arguments {
+        let Some(number) = pool
+            .constant(*argument)
+            .and_then(|value| u64::try_from(value).ok())
+        else {
+            return Ok(None);
+        };
+        numbers.push(number);
+    }
+    let [input, output, count, out] = numbers[..] else {
+        return Ok(None);
+    };
+    let (subscription, event_size) = (u64::from(size::SUBSCRIPTION), u64::from(size::EVENT));
+    let fits = (1..=2 * OPEN_FILES).contains(&count)
+        && memory::inside(&state.core, out, 4)
+        && memory::inside(&state.core, input, count * subscription)
+        && memory::inside(&state.core, output, count * event_size);
+    if !fits || !module.policy.network() {
+        return Ok(None);
+    }
+    // Each subscription's own word, and the world's descriptor it waits to read on.
+    let mut watched: Vec<(Term, u64)> = Vec::new();
+    for index in 0..count {
+        let place = input + index * subscription;
+        let userdata = memory::read(module, &state.core, pool, place, 8);
+        let kind = memory::read(module, &state.core, pool, place + 8, 1);
+        let fd = memory::read(module, &state.core, pool, place + 16, 4);
+        let (Some(kind), Some(fd)) = (pool.constant(kind), pool.constant(fd)) else {
+            return Ok(None);
+        };
+        if kind != u128::from(event::FD_READ) {
+            return Ok(None);
+        }
+        let held = u32::try_from(fd)
+            .ok()
+            .and_then(|fd| state.core.fds.get(&fd));
+        let world = match held {
+            Some(Handle::Listener) => LISTENED,
+            Some(Handle::Socket {
+                world,
+                read_shut: false,
+                ..
+            }) => *world,
+            _ => return Ok(None),
+        };
+        // A connection lengua made before the start is no client's.
+        let accepted = state
+            .world
+            .connection_of(world)
+            .ok()
+            .flatten()
+            .and_then(|number| state.world.connections.get(number))
+            .is_some_and(|connection| connection.accepted);
+        if world != LISTENED && !accepted {
+            return Ok(None);
+        }
+        watched.push((userdata, world));
+    }
+    state.world.start_polling()?;
+    let mut choices = Vec::new();
+    // Whether the wait has something in some way the clients can stand.
+    let mut any = false;
+    for world in state.world.stepped() {
+        let ready: Vec<(Term, u64)> = watched
+            .iter()
+            .filter(|(_, fd)| world.readable(*fd))
+            .copied()
+            .collect();
+        if ready.is_empty() {
+            continue;
+        }
+        any = true;
+        let mut choice = State {
+            core: state.core.clone(),
+            world,
+        };
+        for (index, (userdata, fd)) in (0_u64..).zip(&ready) {
+            let place = output + index * event_size;
+            let zero = pool.bv(8, 0);
+            for offset in 0..event_size {
+                choice.core.memory.insert(place + offset, zero);
+            }
+            memory::write(&mut choice.core, pool, place, *userdata);
+            let kind = pool.bv(8, u128::from(event::FD_READ));
+            memory::write(&mut choice.core, pool, place + 10, kind);
+            let name = choice.world.wait_name(*fd);
+            let (bytes, flags) = if *fd == LISTENED {
+                (pool.bv(64, 1), pool.bv(16, 0))
+            } else {
+                (
+                    pool.var(64, &format!("{name}.bytes")),
+                    pool.var(16, &format!("{name}.flags")),
+                )
+            };
+            memory::write(&mut choice.core, pool, place + 16, bytes);
+            memory::write(&mut choice.core, pool, place + 24, flags);
+        }
+        let happened = pool.bv(32, ready.len() as u128);
+        memory::write(&mut choice.core, pool, out, happened);
+        let success = pool.bv(32, u128::from(errno::SUCCESS));
+        choice.core.stack.push(success);
+        // A run back in a state another run already came back in goes no further.
+        let advanced = choice.world.peers != state.world.peers;
+        let goes_on = match wait_key(&choice) {
+            Some(key) => choice.world.comes_back(key, advanced),
+            None => true,
+        };
+        if goes_on {
+            choices.push((pool.boolean(true), choice));
+        }
+    }
+    // Nothing can come: the server waits forever. Where something can, and every way it comes
+    // was followed from another run already, this run goes no further.
+    if !any {
+        return Err(state.world.idle());
+    }
+    Ok(Some(Step::Choose(choices)))
 }
 
 /// One host call's view of a run: the module, the run's machine and world, its pool, and the
@@ -1515,8 +1737,9 @@ impl Call<'_> {
     fn ready(&self, fd: u32, write: bool) -> Result<Option<(u16, u64, u16)>, Fail> {
         let waits = || {
             Fail::End(unsupported(
-                "a server's wait on poll_oneoff for its connections, which the WebAssembly model \
-                 follows from W9",
+                "a wait on poll_oneoff that mixes a server's connections with a clock, a write, \
+                 standard input or a file, or is on a connection lengua made, which the model \
+                 doesn't follow",
             ))
         };
         Ok(match self.core.fds.get(&fd) {

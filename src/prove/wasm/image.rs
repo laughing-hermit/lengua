@@ -490,6 +490,11 @@ pub struct Module {
     bodies: Vec<(u64, u64)>,
     /// Whether some run has called each function, by index.
     entered: Vec<AtomicBool>,
+    /// Whether the program may change each global, by index.
+    pub(super) mutable: Vec<bool>,
+    /// What the contracts of the functions the program took say each gives, by the function's
+    /// index: a run takes one at a call, in place of the function's body.
+    pub(super) claims: BTreeMap<u32, super::unit::Held>,
 }
 
 /// How a module reads, as every way its input can be cut and a proof by induction need to know
@@ -1509,6 +1514,8 @@ impl Module {
             lines: built.lines.clone(),
             bodies: built.bodies.clone(),
             entered,
+            mutable,
+            claims: BTreeMap::new(),
         })
     }
 

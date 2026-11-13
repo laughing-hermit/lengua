@@ -421,14 +421,66 @@ What a function's other arguments must be, such as a length of at most 4096, the
 checks itself, with an assertion.
 
 **The proofs.** A part's proofs are of the part's own program, for the inputs its idea gives.
-The prover doesn't use them in a program built on the part: it follows each taken function
-again, in the program's own module, for the program's generated tests. Using a part's contract
-in place of its body would need the contract to state what the function computes, as a formula
-the prover holds the body to once, for every argument and every memory it may be lent; the
-contract states only what it reaches, and the part's proofs cover only the calls the part's
-program makes. So a program's `proofs` say what holds of it, the taken functions included, and
-its `parts` lines say what each part's own lock records, as evidence about the function, not as
-a proof of the program.
+The prover follows each taken function again in the program's own module, for the program's
+generated tests, with one exception: a function whose contract states what it gives.
+
+A contract's item may state that, with three more kinds of clause before its full stop:
+
+```markdown
+- `$crc32_update`: reads 4096 bytes at `$at`; takes `$crc` from 0 to 0; takes `$length` from 0
+  to 64; `$at` holds `$length` bytes; gives `crc32(at)`. Its arguments are …
+```
+
+`takes` a parameter `from` its least value `to` its most, read with a sign when the least is
+below 0; an address `holds` as many bytes as a parameter says, and the formula names those bytes
+by the address's parameter; `gives` a formula in the language of the idea's tests, whose value
+is the function's result, in the result's bits. `check` refuses an item whose clauses don't fit
+each other or the function's text (`code_problems`): a formula it can't read or that names what
+the item doesn't take, a parameter the function doesn't have, a range its type doesn't hold, a
+function that writes, more bytes than the function reads. A function that writes at an address
+has no `gives` clause: the formula states a result, not what a function leaves in memory.
+
+`check` then proves the formula of the function alone, as a unit (`src/prove/contract.rs`,
+`src/prove/wasm/unit.rs`), before the tests' proofs and in at most 40 seconds of their time: for
+every argument in the ranges, every byte the addresses hold and every value of the other
+parameters, each path through the function returns, no assertion and no trap is reached, and
+the value it gives is the formula's, each question confirmed by both solvers where the terms
+don't settle it. A text's length is laid out one length at a time, at most 4,096 combinations.
+The reply says so in `contract`, on a line that starts with `gives`. In a program that took the
+function, `check` proves it again, of the function as that program's module holds it, and the
+program's proofs then take the formula's value at each call whose arguments are in the ranges,
+in place of following the body; the reply says so in `parts`, on a line that starts with
+`contract`. A call whose arguments the terms don't show to be in the ranges, an address or a
+length that isn't a number the run knows, a claim whose proof found it false, and one whose
+proof ran out of time part of the way, proven only to a length, follow the body as before.
+
+Why a proof of the function alone holds at every call. What a taken function means is fixed by
+its text: `check` holds it to the part word for word, with each constant it reads and each
+function it calls, and it names no region and no global that changes. The unit's own rules,
+read off the module's operators before any proof, hold the rest: no store, no bulk memory
+operator, no `memory.grow`, no `global.set`, no read of a global that changes; no call of the
+host, and none of lengua's library but `$assert_fail`, where a unit's run ends and the proof
+must show no argument in range arrives; an address is only ever the address of a load, with
+numbers added to it, never compared, stored, copied to a local, passed on, branched on, given
+back or kept on the stack across a block's edge; every load is at such an address; and a
+function it calls takes no address and reads no memory. So the function changes nothing a
+run can see but its result, and its result depends on nothing but its number arguments and the
+bytes it loads. Those bytes are the ones the item names: the unit's run has the texts in memory
+with every byte a free value, and a load outside them ends the proof, so no other byte of
+memory can reach the result, and where the bytes stand can't either, since nothing is computed
+from an address but the place of a load. The formula's bytes at a call are read from the
+caller's memory at the call's own address and length. The frame is the rules' too: with no
+store and no host call, the function writes nothing at all. One translation of the formula to
+a term serves the unit's proof and the call (`contract::value`), so what is assumed is what was
+proven. The memory rules still hold every call to the item's `reads` clause: the caller lends
+the room the function may reach.
+
+What is left out: a function that writes (`$decimal_parse`, `$decimal_format`, `$lines_read`,
+`$sort64`), since the formula language has no value for memory after a call; a formula over
+bytes at an address whose length the call's input chooses; and lengua.lock, which records no
+claim, so each program proves the claims of the functions it took again, on its own module,
+rather than trusting a part's lock for them. The attester, which reads one folder, proves no
+claim and follows every body.
 
 lengua.lock records the parts with the code: each part's folder, lengua's hash of its idea.md,
 the SHA-256 of its main.wat, and the functions taken. The record is of the parts as they were
@@ -450,8 +502,10 @@ assertions are numbered from 800, each part its own.
 
 How far each is proven, by its own program on lengua's runners (todo.md has the runs): `decimal`,
 `lines` and `bytes` for every input in their ideas' ranges; `sort64` for two numbers, with three
-tested; `crc32` for a text of 2 characters in five minutes, and tested beyond. `examples/sum` is
-proven for every input in its range, and `examples/checksums` as far as crc32.
+tested; `crc32`, in a minute, for a text of up to 478 of its 4,096 bytes, and its function alone
+for every text of up to 64 bytes (it was 2 characters in five minutes before the model read a
+CRC's step). `examples/sum` is proven for every input in its range, and `examples/checksums`,
+in a minute, for two lines of up to 20 of 24 bytes each, with crc32's formula at each call.
 
 ## The rules
 
@@ -740,9 +794,67 @@ It refuses, as "tested, not proven": a call that splits the program's work into 
 runs it doesn't follow; tables, element segments and a start function; recursion, and
 calls that may take more than 262,144 bytes of stack; SIMD128's float lanes' arithmetic, its
 narrowing, widening and pairwise forms and its lane loads; the trapping float-to-int conversions;
-a number or a name the input chooses in a host call; a server's wait on `poll_oneoff` for its
-connections, so the server template's proofs stop there; clients at once; a block that uses
+a number or a name the input chooses in a host call; a wait on `poll_oneoff` that mixes a
+server's connections with a clock, a write, standard input or a file; a block that uses
 `now`; and the test functions `sha256` and `aes128`, with `sort`, `uniq` and `tally` past 8 bytes.
+
+### A CRC a bit at a time
+
+A formula's `crc32(s)` is a chain of CRC steps, one term a byte (`Node::Crc`). A program with no
+table computes the same number with shifts, a mask and exclusive ors, eight rounds a byte, and
+the two were two terms of one number: the solvers settled their equality for a text of two
+characters in five minutes, and no further. The model now reads the step out of the program's
+own operations (`src/prove/term/gf2.rs`): after each exclusive or of two 32-bit values, it asks
+whether the result is a CRC step, and where it is, the result is the step's own term. A
+program's CRC and a formula's of the same bytes then meet as one term, with no question.
+
+How it is sound. Each bit of the term is written as an exclusive or of bits of atoms, and of 1
+or not. An atom is any term the reading doesn't go through: a variable, an earlier CRC step, a
+sum. A constant, `xor`, `not`, `and` and `or` with a constant, an extraction, a widening, a
+concatenation and the negation of a 0 or 1 are exact in that form, bit by bit, from the
+operators' own definitions; a bit that would be the exclusive or of more than 48 atoms' bits
+makes its term an atom. To read an atom as free bits loses facts and adds none, so two terms
+with the same form are equal for every input. A CRC step is linear over those bits, so its
+form comes from the same definition the solvers are given (`crc_byte`), and a term is replaced
+only when each of its 32 bits has exactly the step's form, for the zlib or the Castagnoli
+polynomial, from a state that is a term, its complement, all ones or zero, and a byte that is a
+term or a constant. The bits of a byte that its range fixes, as a small letter's range fixes
+three, are constants on both sides: a fact of every value in the range. A test asks z3 and
+cvc5 the same of the term as a program's shifts build it, for every state and byte, and both
+answer that the two never differ. A CRC by a table, as `examples/crc32c-split` computes it, is
+not read this way: its lookups are not exclusive ors of the input's bits in the model's terms.
+
+### A server's wait
+
+A server that takes one connection at a time, with `sock_accept` alone, is followed as any
+program. One that serves clients at once waits with `poll_oneoff` on its listener and its
+connections, and the model follows that wait where every subscription is a wait to read on the
+listener or on a connection the program took (`wait_on_network`, `src/prove/wasm/host.rs`;
+the clients' steps, `src/prove/world/net.rs`). Before the wait looks, each of the test's
+clients takes any number of the steps open to it: connecting, each piece of what it sends
+arriving, and closing its side once its answer has begun. Each way is a run of its own, and the
+wait comes back in it with an event for each subscription that has something, in the
+subscriptions' order, as lengua's host writes them. So the runs from one wait cover every
+order the clients' steps can come in, and every moment the host's look at the descriptors can
+fall at. The listener's event says one connection waits, as the host's does. A connection's
+count of bytes and its flags are any value, a variable named by the connection's moment, since
+the host's own numbers there depend on how the bytes were taken in. With nothing that can come,
+the server waits forever: it is serving once every client has its whole answer, and stuck
+otherwise.
+
+A run back from a wait in a state another run of the same exploration already came back in,
+after a client's step, goes no further: the key is every value the machine and the world hold
+(the stack, the calls and their locals, the globals, every byte of memory written, the
+descriptors, what was sent and printed, the run's conditions and what it must still be shown
+never to do), terms being one number each, so the two runs are the same from there on, and no
+loop closes through such a state, since the clients' steps only add up. A run back in the very
+state its last wait left it in, with no step taken, goes round its loop forever and ends
+stuck. A state with a file open or written has no key, and is always followed.
+
+What the model still refuses there: a wait that mixes a server's connections with a clock, a
+write, standard input or a file; a wait on a connection lengua made; and a connection taken
+before the first wait. The claim is the one a server without the wait gets: for every input in
+range, for the test's clients as the test's deliveries cut what they send.
 
 ### Budgets
 

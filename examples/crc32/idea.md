@@ -88,9 +88,13 @@ A program that builds on this part names it on the `- Builds on:` line of its id
 function from main.wat, word for word, under a `;; from: ../crc32` line, with the `$CRC32_`
 constants that the function reads.
 
-- `$crc32_update`: reads 4096 bytes at `$at`. Its arguments are `$crc`, `$at` and `$length`. It
-  gives the CRC-32 of some bytes and then the `$length` bytes at `$at`, where `$crc` is the
-  CRC-32 of the bytes before them, and 0 when there are none. So one call with 0 gives the
-  CRC-32 of the bytes at `$at`, and a call for each piece gives the CRC-32 of a longer text.
-  `$length` is at most 4096: the function stops the program with assertion 831 when it is not.
-  The caller lends `$at` with room for 4096 bytes, whatever `$length` is.
+- `$crc32_update`: reads 4096 bytes at `$at`; takes `$crc` from 0 to 0; takes `$length` from 0
+  to 64; `$at` holds `$length` bytes; gives `crc32(at)`. Its arguments are `$crc`, `$at` and
+  `$length`. It gives the CRC-32 of some bytes and then the `$length` bytes at `$at`, where
+  `$crc` is the CRC-32 of the bytes before them, and 0 when there are none. So one call with 0
+  gives the CRC-32 of the bytes at `$at`, and a call for each piece gives the CRC-32 of a longer
+  text. `$length` is at most 4096: the function stops the program with assertion 831 when it is
+  not. The caller lends `$at` with room for 4096 bytes, whatever `$length` is. The formula
+  `crc32(at)` is for one call with 0 and a text of at most 64 bytes. `check` proves the formula
+  of the function alone. The proofs of a program that takes the function use the formula at
+  such a call.

@@ -149,6 +149,8 @@ stated contract. lengua ships five (`decimal`, `lines`, `crc32`, `bytes` and `so
 program of your own can be one. The agent names the part in the idea (`- Builds on:`), copies
 the functions it takes into `main.wat` word for word, and `check` holds each copy to the part
 at every check and says what the program takes ([DESIGN.md](DESIGN.md), Parts).
+A contract can also state what a function gives, as a formula: `check` proves it of the
+function alone, and the proofs of a program built on the part use it at each call.
 
 Run it with the `run` tool, which gives it 10 seconds by default (up to 40) and 8 MiB of each
 output stream, in a fresh folder or in one you name. A server keeps serving in the background
@@ -303,8 +305,8 @@ What it doesn't promise:
   files, with none of these checks behind it.
 - **Not every proof finishes.** Some tests stay "tested, not proven": sorts and word tallies over
   8 bytes, SHA-256 and AES-128 (the proof doesn't model them), a CRC-32 a program computes
-  itself past two characters of text (the library's `crc32` among them), a server that waits on
-  its connections with `poll_oneoff`, a program that opens its own connections, sends datagrams,
+  with a table, a wait on `poll_oneoff` that mixes a server's connections with a clock or a
+  file, a program that opens its own connections, sends datagrams,
   looks up names, opens a file an argument names, starts a program or uses the terminal's
   functions (the model follows only what lengua gives a program before it starts), and whatever
   runs out of time. A stream is proven for every length by induction over its read loop only
@@ -539,10 +541,11 @@ After the finish line, four milestones aim to make lengua a replacement for C, C
 - **W21, a library of proven parts** that programs build on with `- Builds on:`. Built: the
   mechanism (a part's contract, the copy `check` holds to the part, the lock's record) and five
   parts, `decimal`, `lines`, `crc32`, `bytes` and `sort64`, with two programs on them. Left:
-  the prover proves a taken function again in each program, and hash tables, SHA-256, HTTP, a
+  a function that writes memory has no formula, so the prover follows it again in each
+  program, and hash tables, SHA-256, HTTP, a
   faster sort, JSON, compression and dates have no part. `decimal`, `lines` and `bytes` are
-  proven for every input in their ranges; `sort64` for two numbers and `crc32` for 2
-  characters of text, each tested beyond.
+  proven for every input in their ranges; `sort64` for two numbers and `crc32` for 478 bytes
+  of text in a minute, each tested beyond.
 - **W22, scale:** run on 2026-11-12, passed with conditions
   ([docs/scale/README.md](docs/scale/README.md)): one agent built a web server of 3,600 lines of
   `main.wat`, `examples/httpd`, and changed it three times with `check` green. Its tests are
