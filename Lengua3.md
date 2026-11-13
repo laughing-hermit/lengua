@@ -40,6 +40,12 @@ In the owner's words:
 - "for the frontend we can use gpui/gpui-kit … but remember all has to be in 1 wasm file"
 - "ensure documentation doesnt drift, all documentation must be current and in sync thats why
   we have a lock file"
+- "lengua must be the evolution of a programming language, it needs to be an artificial
+  intelligence/ super intelligence language"
+- "the idea is maximum interoperability regardless of os and cpu"
+- "lengua should also compile rust to webassembly as much as possible but i know that there
+  will be exeptions"
+- "it should be able to do a full stack way of doing things"
 
 What that means for lengua 3:
 
@@ -61,6 +67,63 @@ What that means for lengua 3:
 - **The machine checks the AI's work.** The AI is fast and tireless but makes mistakes, so
   nothing it writes is trusted because it wrote it. Trust comes from the compiler, the rules,
   the tests and the host, and lengua says plainly how far each check went.
+- **Full stack.** One lengua application can hold a GPUI front end, a server, storage,
+  logins, calls to other services and to AI models, all in the one file. Full-stack web
+  development is what lengua does first and best.
+
+### WebAssembly first; native only when necessary
+
+All Rust that lengua builds compiles to WebAssembly unless WebAssembly truly can't do the job.
+
+| Kind of application or part | Builds to | Why |
+|---|---|---|
+| Web apps: front end and server | WebAssembly | The browser and WASI servers are where WebAssembly is strongest |
+| Command-line tools, servers, background services | WebAssembly | No window is needed, so one file runs on any computer |
+| GPUI apps in a browser window | WebAssembly | They look like desktop apps and run in the browser |
+| Calling AI models over the network, embeddings, search | WebAssembly | Outgoing HTTP is enough |
+| Desktop apps with their own window | Native | A real window and the GPU outside the browser are not in WebAssembly yet |
+| Running or training AI models locally | Native | Needs the GPU directly |
+| Threads that share memory | Native | Not in WebAssembly yet |
+| Hardware devices (serial, USB, Bluetooth) | Native, or a host grant | Not in WebAssembly; a specific device can instead be a grant the host provides |
+
+The rule for a native part:
+1. The idea declares it with `- Native: <part>, for <reason>`, and the reason must be one of the
+   kinds marked Native above. Any other reason is refused.
+2. Only the part that needs it is native; the rest of the application stays WebAssembly.
+3. The same checks apply: the Power of 10, the idea's tests, the mutation score, the lock.
+4. Its label is `native`, shown in every reply and in the wiki, because it is not sandboxed: it
+   can do what the user's account can.
+5. When a standard lifts the limit (see the watch list in section 10), the part moves back to
+   WebAssembly.
+
+The two native programs that lengua itself is made of, `lengua-mcp` and `lengua-run`, are the
+standing exception: something native must run the WebAssembly. lengua's own std-only
+libraries are also built for WebAssembly, so the checker could one day run as WebAssembly too.
+
+**Where it runs, said plainly.** The user is never surprised:
+- before any code is written, the `write-idea` skill says whether the request will be one
+  WebAssembly file or needs a native part, and why, and offers a WebAssembly alternative when
+  one exists;
+- the idea file says it (WebAssembly is the default; native parts are declared);
+- `check` refuses code that needs native without the idea declaring it, and says what needs it;
+- every reply and `index.md` start with a "Where it runs" line, for example "One WebAssembly
+  file. Runs on any OS and CPU. Sandboxed: it reaches only what the idea grants."
+
+### Nothing unless absolutely necessary
+
+One principle runs through lengua:
+1. No external dependencies unless absolutely necessary; pure-Rust crates first.
+2. No native builds unless absolutely necessary.
+3. No access unless the idea grants it.
+4. No `unsafe` code: lengua's single `unsafe` call runs only after verification.
+5. No randomness or real time unless granted.
+6. No memory or time beyond what the idea declares.
+7. No unchecked code unless it is labelled `trusted`.
+8. No new grammar in the idea file unless something can't be said without it.
+9. No human steps unless only a person can take them.
+
+And three with no exceptions: no comments in code; no code without its idea and no idea without
+its code; no change without a new check.
 
 ### Why Rust compiled to WebAssembly
 
@@ -1355,10 +1418,14 @@ Each one is green on all five runners before the next starts.
 | L5 | Tests from the idea, generated cases, mutation score, trust labels | A program goes from idea to `checked` |
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | A changed idea or file is refused at run |
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries (JSON, HTTP, decimal, text, sorting, hashes, dates); a component from another language | An application of several module ideas builds to one file; it uses a library and a C component, each labelled |
-| L8 | The GPUI front end: screens built for the browser, embedded in the one file, their behaviours tested | A web application with a GPUI screen ships as one file and opens in a browser |
-| L9 | The skills rewritten for Rust and GPUI; a product test in an interactive session | An agent goes from a request to a `checked` web application with the plugin alone |
-| L10 | The scale test: a web application, server and GPUI front end, in one file, built and then changed three times | A report of cycles and breakages, next to lengua 2's 3,638-line record |
-| L11 | Trace and profile; a bench of lengua's overhead; documents; the finish line | The finish-line run green on five; only main and tags remain |
+| L8 | The GPUI front end: screens built for the browser, embedded in the one file; several screens with navigation and forms; their behaviours tested; what a screen reader can read, tested and written down; one Zed commit pinned; lengua's own std-only crates also built for WebAssembly in CI | A web application with GPUI screens ships as one file and opens in a browser |
+| L9 | Full stack: storage granted by the idea; outgoing HTTP calls (other services and AI models, with streaming replies); secrets given by the host and never written to the lock or logs; logins (sessions, password hashing, tokens) as a shared library; the front end calling its own server with shared Rust types; logs and errors of a running app; an embeddings and vector-search shared library; a tested way to deploy | A full-stack application (front end, server, storage, logins, an AI call) is `checked` and runs as one file |
+| L10 | Native parts: `- Native:` with a named reason, built for the user's system and on five runners, the same checks, the `native` label, the "Where it runs" line; an example desktop app with its own GPUI window whose logic stays WebAssembly; what a native part can reach, written down | A native part is built, checked and labelled; an undeclared native need is refused |
+| L11 | The skills rewritten for Rust, GPUI, full stack and native parts: "Where it runs" before any code, pure Rust first, the merit test for crates, crates that aren't pure Rust flagged; the Agent Plugins version settled; a product test in an interactive session | An agent goes from a request to a `checked` full-stack application with the plugin alone |
+| L12 | The scale test: a full-stack application (GPUI front end, server, storage, logins, an AI call) in one file, built and then changed three times | A report of cycles and breakages, next to lengua 2's 3,638-line record |
+| L13 | The finish line: trace and profile; a bench of lengua's overhead; release archives for the five systems with install steps; every path a milestone listed as never exercised, now exercised or its reason written; WASI 0.3 checked again; every document current; a short guide to the owner's own steps (publishing, loading the plugin, branch protection) | The finish-line run green on five; only main and tags remain |
+
+The watch list (section 10) is not a milestone: each item waits on a standard.
 
 ## 9. How the work is done
 
@@ -1572,6 +1639,22 @@ Decided for lengua 3 at L6 (2026-11-13):
 - **GPUI's test context** must run on all five systems for the front end's tests.
 - **What other runtimes allow:** a lengua component runs in any WASI 0.2 runtime, but outside
   lengua the grants are that runtime's to enforce, not lengua's.
+
+- **The watch list: what would lift each native limit.** Each waits on a standard, not on
+  lengua; when one matures, the native kind it covers moves to WebAssembly.
+  - Desktop windows and the GPU outside the browser: **wasi-gfx** (WebGPU for WASI). Then
+    `lengua-run` could open a real window for the same one file.
+  - Running AI models locally: **wasi-nn**.
+  - Threads that share memory: WebAssembly's **shared-everything-threads** proposal.
+  - WebSockets: not in WASI 0.2's HTTP world; watch WASI 0.3 and later.
+  - Timed jobs ("every night at 2 a.m."): no WASI standard yet.
+- **Decided 2026-11-13, the front end is GPUI and GPUI Kit,** after comparing Leptos and Native
+  Shell: the owner chose to keep GPUI. Known risks: GPUI's web target is a basic pre-1.0 port,
+  and GPUI Kit's own site says it is made for the desktop; L8 tests it first and pins one
+  commit.
+- **Crates that aren't pure Rust** (they wrap a C library) need a C compiler, build differently
+  on each system and usually can't go into WebAssembly, so the `build` skill takes them last,
+  and `check` flags them.
 
 ## Sources
 
