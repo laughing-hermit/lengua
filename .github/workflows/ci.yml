@@ -180,7 +180,7 @@ jobs:
         run: cargo test --workspace --locked --no-run
       - name: tests run
         if: ${{ needs.plan.outputs.mode == 'test' }}
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast
       - name: the imports of the built examples, as Wasmtime reads them
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |

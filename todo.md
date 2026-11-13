@@ -13,8 +13,8 @@ next starts (Lengua3.md, section 8).
 | L3 | The host on the component model: standard input and output, arguments, files, clock, random | Landed on main at 05b8b14 (run 43388384600, green on five) |
 | L4 | The Power of 10 lint and the component checks | Landed on main at f197505 (run 43399815151, green on five) |
 | L5 | Tests from the idea, generated cases, mutation score, trust labels | Landed on main at 7ce9264 (run 43439284107, green on five) |
-| L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | Done on `wip/l6`; the five-runner landing run is named in the landing report |
-| L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Not started |
+| L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | Landed on main at cb314b2 (run 43450491850, green on five) |
+| L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Done on `wip/l7`; the five-runner landing run is named in the landing report |
 | L8 | The GPUI front end, embedded in the one file, its behaviours tested | Not started |
 | L9 | The skills rewritten for Rust and GPUI; a product test in an interactive session | Not started |
 | L10 | The scale test | Not started |
@@ -348,6 +348,70 @@ next starts (Lengua3.md, section 8).
 - **2026-11-13, L6: the example `sleepy`** sleeps 30 s with `- Time: 1 s`; its test expects
   `out of time`.
 
+
+- **2026-11-13, L7: a module's examples run through the program's own entry** (its input,
+  arguments, files or requests), against the one component; the harness is for libraries only.
+  Reason: a Rust binary can't be linked into a harness, and a module of a program has no entry
+  of its own, so a test through the entry is the one that keeps the example in Given/When/Then
+  with the program's own input and output. To reverse: make each module a `[lib]` of its own.
+- **2026-11-13, L7: each module has its `mod <name>;` line in `src/main.rs`** (`module-undeclared`),
+  read by `lengua_lint::declared`; a module file that Rust never builds would give mutants that
+  no test can catch.
+- **2026-11-13, L7: a library's examples are calls** (`- Call:` with a Rust expression and
+  `- Expect value:` with its `{:?}`), run by a generated harness binary in
+  `target/lengua/harness`, one example a line, the example's number its only argument; a call
+  that does not build is `harness-error` at the example. The mutants of a library are built
+  through a harness of their own, so its score is the score of its examples.
+- **2026-11-13, L7: a library is a `[lib]` with `path = "src/main.rs"`** (as decided at L2), its
+  lock of kind `library` with its `.rlib` and no sealed code; its `[lints.clippy]` allow
+  `missing_errors_doc` and `missing_panics_doc`, since rule 11 forbids the doc comments they ask
+  for. A library has no grants, libraries or components of its own (`library-grant`).
+- **2026-11-13, L7: a program names a library by its folder** in `- Uses:` (a name with a `/`,
+  relative to the program's folder); `check` verifies the library's lock first (`library-lock`),
+  links it as a path crate, and puts the SHA-256 of its lock in the job's key and a `library`
+  line in the program's lock; `run`, the worker and `lengua-run` verify the library's lock again
+  through that line. The reply's `libraries` and `index.md`'s `# Libraries` give each label.
+- **2026-11-13, L7: the network grants are exact `host:port` pairs and ports**, no patterns: a
+  pattern would grant addresses no example tests. The host resolves the granted hosts when a run
+  starts and holds every socket use to them with `wasmtime-wasi`'s socket address check; UDP is
+  linked (the world names it, since `std`'s sockets may import it) and off.
+- **2026-11-13, L7: the test fixtures of the network are a `Server` and a `Client`** of the
+  example, at fixed ports that differ between the examples (7801 to 7811), with a wait of up to
+  10 s for a port that another test holds.
+- **2026-11-13, L7: a server is `- Serves: HTTP on TCP port N`**, a `[lib]` of crate type
+  `cdylib` that exports `wasi:http/incoming-handler`; its examples are requests (`- Request:`,
+  `- Expect status:`, headers and bodies). The host serves it with `wasmtime-wasi-http`'s
+  synchronous bindings, a request in memory and its answer as HTTP/1.1 bytes; `run` and the tests
+  give the request on the standard input, and `lengua-run` serves `127.0.0.1:N`. Outgoing HTTP
+  is refused by lengua's own hooks (no grant gives it yet).
+- **2026-11-13, L7: the dependencies for HTTP**, each with its reason:
+  - `wasmtime-wasi-http` 50.0.1, default features off, `p2`: the host's implementation of
+    `wasi:http` 0.2; no default client (`default-send-request`, which brings `rustls`), no `p3`.
+  - `hyper` 1, default features off, named by `lengua-host` only for the types it re-exports
+    (`Request`, `Response`, `StatusCode`, `Body`, `Bytes`, `Frame`), which the functions of
+    `wasmtime-wasi-http` take; it is already in the graph through `wasmtime-wasi-http` (with the
+    feature `full`), so it adds no package. lengua's own HTTP/1.1 reader and writer, on the
+    standard library, serve the TCP port: no `hyper` server, no Tokio of lengua's own.
+  - The lock grows by 11 packages (run 43459242259): `wasmtime-wasi-http`, `hyper`, `h2`, `http`,
+    `http-body`, `http-body-util`, `httparse`, `httpdate`, `atomic-waker`, `try-lock`, `want`.
+  - For a program (declared in its idea, not lengua's own): `wasip2` 2.0.1+wasi-0.2.12, the
+    current WASI 0.2 bindings with `http::proxy::export!` (the `wasi` crate stopped at 0.14.7
+    for WASI 0.2.4); and `wit-bindgen` 0.62.0 for a component's interface, the version `wasip2`
+    2.0.1 depends on, so one `wit-bindgen` is in the program's graph.
+- **2026-11-13, L7: the component from another language is in C**, `examples/shop/components`:
+  `rates.c` and `tax.wit`, built in CI's job `component` with wasi-sdk 34 (`clang
+  --target=wasm32-wasip2 -mexec-model=reactor`) and the `wit-bindgen` 0.62.0 command line
+  (`wit-bindgen c`), both downloaded from their releases and pinned by SHA-256; the component is
+  an artifact that each test job downloads, and `.gitignore` keeps it out of the repository.
+  Linked by the host's own linker (no `wac`): the host instantiates it first and defines each
+  function it exports in the program's linker.
+- **2026-11-13, L7: lengua's shared libraries** are in `libraries/`: `json`, `http`, `decimal`,
+  `text`, `sort`, `hashes`, `dates`, each `checked` by a test of its own, with no recursion (the
+  JSON reader and writer use a stack, the sort is a bottom-up merge sort), and built for
+  `wasm32-unknown-unknown` by a CI step. Their exports are in Lengua3.md, section 4.
+- **2026-11-13, L7: lengua's STE dictionary grows by the words of programs** that the new ideas
+  need (`client`, `listen`, `get`, `hash`, `chunk`, `bracket`, `escape`, `overflow`, `tax`, ...),
+  each with its part of speech.
 ## Runs
 
 The five-runner run a landing rests on is at the head it tests, so it is named in the landing report and added here at the next milestone.
@@ -401,3 +465,6 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 - **2026-11-13, L4:** a shell command of the builder that began with `perl -v` (a slip, before a
   `sed` edit) was refused. Again a mistake, not a need: the edit went on with the editor's
   tools.
+- **2026-11-13, L7:** a shell command of the builder that began with `python3 -` (a slip, before
+  an edit of `lengua-lint`'s model) was refused. Again a mistake, not a need: the edit went on
+  with the editor's tools.

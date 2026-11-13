@@ -126,7 +126,7 @@ fn component_line(
 ) -> Option<(String, String)> {
     let (file, words) = value.split_once(", built from ")?;
     let mut tokens = Vec::new();
-    tokenize(words, line, &mut tokens);
+    tokenize(&format!("built from {words}"), line, &mut tokens);
     dictionary.words(&tokens, sink);
     let file = backticked(file).filter(|f| {
         relative_path(f)
