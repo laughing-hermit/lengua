@@ -236,7 +236,12 @@ fn the_hello_example_has_no_findings_and_gets_its_build_files() {
     assert!(read(&to, "Cargo.toml").starts_with("[package]\nname = \"hello\"\n"));
     let world = read(&to, "wit/world.wit");
     assert!(world.contains("  import wasi:cli/stdin@0.2.12;\n"));
-    for ungranted in ["wasi:random", "wasi:filesystem", "wasi:sockets", "wall-clock"] {
+    for ungranted in [
+        "wasi:random",
+        "wasi:filesystem",
+        "wasi:sockets",
+        "wall-clock",
+    ] {
         assert!(!world.contains(ungranted), "{ungranted} in {world}");
     }
 }

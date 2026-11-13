@@ -966,10 +966,15 @@ Decided for lengua 3 at L3 (2026-11-13):
   exit code`, but a program stopped at its time or memory limit has none. The examples
   `forever` and `greedy` write `Expect exit code: 1` for now; L5 needs a key such as `Expect
   end: out of time`.
-- **Open at L3: what more `std` imports.** The CI step "the imports of the built examples" lists
-  every example's imports. If a common part of `std` (`HashMap`'s random keys, for one) imports
-  `wasi:random`, a program that uses it needs `- Reads: random numbers`; to decide with that
-  evidence whether such an import joins the always set with a fixed seed behind it.
+- **Open at L3: what more `std` imports.** The CI step "the imports of the built examples"
+  lists the `wasi:` names in each example's bytes (run 43387181531). That is not the list of
+  imports: `files.wasm` has the name `wasi:random/insecure-seed`, and `clock.wasm` the names of
+  `wasi:filesystem`, yet both passed the import check, which reads the real imports through
+  Wasmtime. So the names are also in the component's type information, and the check is the
+  evidence. If a common part of `std` (`HashMap`'s random keys, for one) does import
+  `wasi:random`, a program that uses it needs `- Reads: random numbers`; to decide then whether
+  such an import joins the always set with a fixed seed behind it. To make the evidence exact,
+  L4's component checks can print the imports that Wasmtime reads.
 - **Build time:** a cold `cargo build` can take longer than one tool call; the background job
   and a kept build folder per program must hide it.
 - **The user must have Rust installed**, with its two WebAssembly targets. lengua 2 needed nothing
