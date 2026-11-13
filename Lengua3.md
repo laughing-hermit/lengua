@@ -67,9 +67,11 @@ piece is ported only when lengua 3 needs it and it passes review on its own.
 - **Trust labels:** every result says how far the checks went.
 - **The lock:** one file ties the idea, the code and the build together, signed with the user's
   key.
-- **The bundle wiki** (Karpathy's LLM wiki): each bundle of programs keeps an `index.md` and a
-  `log.md` that `check` writes.
-- **Open Knowledge Format** frontmatter on every idea, so programs can be indexed and found.
+- **The wiki and the log** (Karpathy's LLM wiki): every idea, the top one and each module's, is a
+  page; `check` keeps an `index.md` and an append-only `log.md`, so the documentation can't
+  drift from the code.
+- **Open Knowledge Format** frontmatter on every idea, module ideas included, so programs and
+  their parts can be indexed and found.
 - **A lean runner** that loads sealed, precompiled code with no compiler in it.
 - **All of an idea's problems in one reply**, not one kind at a time.
 - **Run tools:** a trace of host calls and a profile.
@@ -157,9 +159,16 @@ have the other.
 ### Web applications
 
 The one file can be a whole server-side web application: it implements WASI's HTTP world, and
-its pages, styles and images are embedded in the component, so there is nothing else to ship. A
-browser does not run WASI components directly, so a front end that runs inside the browser
-would be a second build; that is not in v1.
+its pages, styles and images are embedded in the component, so there is nothing else to ship.
+
+A web application has two halves:
+- **The server side** receives requests and sends back pages, data and images. The one file can
+  be all of it. A server that sends pages with forms and links is already a complete web app.
+- **The front end** is code that runs inside the visitor's browser and reacts at once to
+  clicks and typing without reloading the page. A browser runs plain WebAssembly but not WASI
+  components, so this part is a second, small `.wasm` built for the browser. The server's file
+  carries it inside and serves it, so the application still ships as one file. The front end
+  is not in v1.
 
 ### The build
 
@@ -204,11 +213,27 @@ names the sealed, precompiled form of the component that `run` and `lengua-run` 
 to the idea or the code without a new check means the lock no longer matches, and `run`
 refuses.
 
-### The wiki
+### The wiki and the log: documentation that can't drift
 
-`check` keeps each bundle's `index.md` (every program, its purpose and its trust label) and
-`log.md` (every check, in order), as in Karpathy's LLM wiki, and keeps each idea's OKF
-frontmatter current.
+An application's ideas form a wiki, as in Karpathy's LLM wiki, and `check` keeps it.
+
+- **Every idea is a wiki page** with Open Knowledge Format frontmatter: the top `idea.md` and
+  each `ideas/<module>.md`. The frontmatter gives its kind, its module, links to the ideas it
+  uses and the ideas that use it, its trust label, and the hash of its Rust file. `check`
+  writes the frontmatter; the agent doesn't.
+- **`index.md`** has one line per idea and module, with its purpose and its label. It is the
+  map an agent, or a person, reads to find the right page before reading any code.
+- **`log.md`** is append-only. Each check adds one entry: the date, which ideas and which Rust
+  files changed, their new hashes, the result and the label. When an entry shows a Rust file
+  changed with no change to its idea, or an idea changed with no change to its code, `check`'s
+  reply says so.
+
+Three things stop the documentation drifting from the code:
+1. **Rule 12:** every function is named in its module's `# Structure`, and nothing else is.
+2. **The lock:** the ideas' and the code's hashes are signed together, and `run` refuses a
+   program whose files no longer match.
+3. **The log:** the history of when each idea and each file changed, so anyone can see they
+   moved together.
 
 ## 5. The Power of 10, for Rust compiled to WebAssembly
 
