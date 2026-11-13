@@ -14,3 +14,6 @@ lengua-seal = { path = "../lengua-seal" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+serde_json = "1"

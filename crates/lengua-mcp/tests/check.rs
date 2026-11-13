@@ -281,8 +281,12 @@ fn example_named(name: &str, test: &str) -> PathBuf {
 }
 
 fn until_built(server: &mut Server, folder: &Path, base: u64) -> Value {
+    until_built_within(server, folder, base, 5000)
+}
+
+fn until_built_within(server: &mut Server, folder: &Path, base: u64, polls: u64) -> Value {
     let started = Instant::now();
-    for id in base..base + 5000 {
+    for id in base..base + polls {
         let reply = server.check(id, folder);
         let state = reply["build"]["state"].as_str().unwrap_or("").to_string();
         if !["building", "testing", "mutating"].contains(&state.as_str()) {
@@ -309,7 +313,7 @@ fn until_built(server: &mut Server, folder: &Path, base: u64) -> Value {
         assert!(reply["build"]["seconds"].is_u64(), "{reply:#}");
         thread::sleep(Duration::from_millis(200));
     }
-    panic!("the job did not end in about 1000 seconds");
+    panic!("the job did not end in {polls} polls of 200 ms or more");
 }
 
 #[test]
@@ -1368,4 +1372,93 @@ fn the_shop_is_one_file_of_three_modules_two_libraries_and_a_c_component() {
     fs::remove_file(shop.join("components/tax.wasm")).expect("the component removed");
     let refused = server.check(10_000, &shop);
     assert_eq!(codes(&refused), ["component-missing"], "{refused:#}");
+}
+
+fn http_bytes(port: u16, path: &str) -> Vec<u8> {
+    let started = Instant::now();
+    loop {
+        if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n");
+            stream.write_all(request.as_bytes()).expect("a request");
+            let mut answer = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut stream, &mut answer);
+            return answer;
+        }
+        assert!(started.elapsed() < Duration::from_secs(20), "no server");
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn the_notes_are_one_file_with_gpui_screens_built_for_the_browser_and_tested() {
+    let root = bundle("notes", &["libraries/json", "examples/notes"]);
+    let notes = root.join("examples/notes");
+    let mut server = Server::start();
+    done(&mut server, &root.join("libraries/json"), 10);
+    let reply = until_built_within(&mut server, &notes, 20_000, 60_000);
+    assert_eq!(reply["build"]["state"], "done", "{reply:#}");
+    assert_eq!(reply["ok"], true, "{reply:#}");
+    assert_ne!(reply["label"], "unchecked", "{reply:#}");
+    assert_eq!(reply["build"]["tests"]["failed"], 0, "{reply:#}");
+    let front = &reply["build"]["front"];
+    assert_eq!(front["target"], "wasm32-unknown-unknown", "{reply:#}");
+    assert_eq!(front["screens"], json!(["list", "note", "edit"]), "{reply:#}");
+    let front_size = front["size"].as_u64().unwrap_or(0);
+    let size = reply["build"]["size"].as_u64().unwrap_or(0);
+    assert!(front_size > 1 << 20, "{reply:#}");
+    assert!(size > front_size, "the one file holds the front end: {reply:#}");
+    for file in [
+        "web/app/Cargo.toml",
+        "web/app/lib.rs",
+        "web/files/Cargo.toml",
+        "web/files/lib.rs",
+    ] {
+        assert!(notes.join(file).is_file(), "{file}");
+    }
+    let lock = fs::read_to_string(notes.join("lengua.lock")).expect("the lock");
+    for line in [
+        " target/lengua/web/app_bg.wasm\n",
+        " target/lengua/web/app.js\n",
+        " web/app/lib.rs\n",
+        " src/ui/list.rs\n",
+        " ideas/ui/edit.md\n",
+        " assets/fonts/IBMPlexSans-Regular.ttf\n",
+        "\ncomponent ",
+        "\nsealed ",
+    ] {
+        assert!(lock.contains(line), "{line} in {lock}");
+    }
+    assert_eq!(lock.matches("\nfront ").count(), 2, "{lock}");
+    let index = fs::read_to_string(notes.join("index.md")).expect("the index");
+    assert!(index.contains("\n# Screens\n"), "{index}");
+    let mut child = Command::new(lengua_run())
+        .arg(&notes)
+        .env("LENGUA_HOME", home())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("lengua-run starts");
+    let started = Instant::now();
+    let page = http_get(7812, "/");
+    let page_ms = started.elapsed().as_millis();
+    let list = http_get(7812, "/api/notes");
+    let code = http_bytes(7812, "/app_bg.wasm");
+    let code_ms = started.elapsed().as_millis();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(page.contains("<title>notes</title>"), "{page}");
+    assert!(list.ends_with("\"text\":\"Call the shop at noon.\"}]"), "{list}");
+    let body = code
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map_or(0, |at| code.len() - at - 4);
+    assert_eq!(u64::try_from(body).unwrap_or(0), front_size, "the front end as served");
+    let log = Path::new(env!("CARGO_TARGET_TMPDIR")).join("lengua-timings.txt");
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(log) {
+        let _ = writeln!(
+            file,
+            "notes: one file of {size} bytes, the front end {front_size} bytes; lengua-run's page {page_ms} ms and the front end {code_ms} ms after its start; mutants {}, score {}",
+            reply["build"]["mutants"], reply["score"]
+        );
+    }
 }

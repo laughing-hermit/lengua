@@ -101,6 +101,16 @@ pub(crate) fn examine(folder: &Path) -> Doctor {
             fix: (!have).then(|| format!("rustup target add {target}")),
         });
     }
+    let wanted = lengua_idea::Front::wasm_bindgen();
+    let bindgen = output("wasm-bindgen", &["--version"], folder);
+    let right = bindgen
+        .as_deref()
+        .is_some_and(|v| v.split_whitespace().nth(1) == Some(wanted));
+    items.push(Item {
+        name: format!("wasm-bindgen {wanted}, for a front end"),
+        fix: (!right).then(|| format!("cargo install wasm-bindgen-cli --version {wanted} --locked")),
+        found: bindgen,
+    });
     Doctor { items }
 }
 
@@ -113,8 +123,11 @@ impl Doctor {
             .unwrap_or_else(|| "rustc, version not found".to_string())
     }
 
-    pub(crate) fn ok(&self) -> bool {
-        self.items.iter().all(|i| i.fix.is_none())
+    pub(crate) fn ready(&self, front: bool) -> bool {
+        self.items
+            .iter()
+            .filter(|i| front || !i.name.contains("front end"))
+            .all(|i| i.fix.is_none())
     }
 
     fn line(item: &Item) -> String {
@@ -127,8 +140,11 @@ impl Doctor {
 
     pub(crate) fn text(&self) -> String {
         let mut lines: Vec<String> = self.items.iter().map(Self::line).collect();
-        lines.push(if self.ok() {
+        lines.push(if self.ready(true) {
             "lengua can build programs.".to_string()
+        } else if self.ready(false) {
+            "lengua can build programs, and not front ends until the missing parts are installed."
+                .to_string()
         } else {
             "lengua can't build programs until the missing parts are installed.".to_string()
         });
@@ -137,11 +153,11 @@ impl Doctor {
         text
     }
 
-    pub(crate) fn problems(&self) -> String {
+    pub(crate) fn problems(&self, front: bool) -> String {
         let lines: Vec<String> = self
             .items
             .iter()
-            .filter(|i| i.fix.is_some())
+            .filter(|i| i.fix.is_some() && (front || !i.name.contains("front end")))
             .map(Self::line)
             .collect();
         format!(
@@ -177,12 +193,12 @@ mod tests {
                 },
             ],
         };
-        assert!(!doctor.ok());
+        assert!(!doctor.ready(false));
         assert_eq!(
             doctor.text(),
             "ok       cargo: cargo 1.100.0\nmissing  the target wasm32-wasip2: not found; to install it, run: rustup target add wasm32-wasip2\nlengua can't build programs until the missing parts are installed.\n"
         );
-        assert!(doctor.problems().ends_with(
+        assert!(doctor.problems(false).ends_with(
             "build: missing  the target wasm32-wasip2: not found; to install it, run: rustup target add wasm32-wasip2"
         ));
     }

@@ -96,6 +96,15 @@ pub(crate) fn lint(
         .flat_map(|c| c.crates.iter().map(|k| k.name.clone()))
         .collect();
     crates.extend(libraries.iter().map(|l| l.crate_name.clone()));
+    let named: Vec<String> = crate::front::LIBRARY_NAMES
+        .iter()
+        .filter(|(package, _)| crates.iter().any(|c| c == package))
+        .map(|(_, library)| (*library).to_string())
+        .collect();
+    crates.extend(named);
+    if pages.iter().any(|p| p.kind == IdeaKind::Screen) {
+        crates.push(crate::front::FILES_CRATE.to_string());
+    }
     findings.extend(declarations(folder, pages, constraints.first()));
     findings.extend(
         lengua_lint::lint(&sources, &crates)

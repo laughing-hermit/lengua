@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::Sink;
-use crate::cases::{End, Range, Test};
+use crate::cases::{End, Range, Step, Test, Value};
 use crate::idea::IdeaKind;
 use crate::ste::Dictionary;
 use crate::text::{
@@ -479,6 +479,28 @@ fn values(key: &Key, item: &Item, value: &str, sink: &mut Sink) -> Vec<String> {
     }
 }
 
+fn state(value: &str, first: Option<String>) -> Option<Value> {
+    match value {
+        "true" => Some(Value::Boolean(true)),
+        "false" => Some(Value::Boolean(false)),
+        _ if value.parse::<i64>().is_ok() => Some(Value::Integer(value.to_string())),
+        _ => first.map(Value::Text),
+    }
+}
+
+fn screen_step(key: &Key, value: &str, first: Option<String>) -> Option<Step> {
+    match key {
+        Key::State(field) => state(value, first).map(|v| Step::State(field.clone(), v)),
+        Key::ExpectState(field) => {
+            state(value, first).map(|v| Step::ExpectState(field.clone(), v))
+        }
+        Key::Click => backticked(value).map(|e| Step::Click(e.to_string())),
+        Key::TypeInto(element) => first.map(|t| Step::Type(element.clone(), t)),
+        Key::ExpectText => first.map(Step::ExpectText),
+        _ => None,
+    }
+}
+
 fn record(key: &Key, value: &str, found: &[String], test: &mut Test) {
     let first = found.first().cloned();
     match key {
@@ -515,8 +537,8 @@ fn record(key: &Key, value: &str, found: &[String], test: &mut Test) {
         | Key::Click
         | Key::TypeInto(_)
         | Key::ExpectState(_)
-        | Key::ExpectText
-        | Key::Range(_) => {}
+        | Key::ExpectText => test.steps.extend(screen_step(key, value, first)),
+        Key::Range(_) => {}
     }
 }
 
@@ -918,6 +940,7 @@ pub(crate) fn parse(
 #[cfg(test)]
 mod tests {
     use super::{parse, template_names};
+    use crate::cases::{Step, Value};
     use crate::Sink;
     use crate::idea::IdeaKind;
     use crate::ste::Dictionary;
@@ -990,6 +1013,24 @@ mod tests {
         let text = "## Add\nGiven an empty basket,\nWhen the user clicks the button,\nThen the basket shows one item.\n### Example: one\n- State `items`: 0\n- Click: `add`\n- Type into `name`: \"tea\"\n- Expect state `items`: 1\n- Expect text: \"1 item\"\n";
         assert_eq!(codes(IdeaKind::Screen, text), Vec::<&str>::new());
         assert!(codes(IdeaKind::Program, text).contains(&"example-key"));
+        let mut sink = Sink::new("ideas/ui/basket.md");
+        let tests = parse(
+            IdeaKind::Screen,
+            1,
+            &lines(text, 2),
+            &Dictionary::load(),
+            &mut sink,
+        );
+        assert_eq!(
+            tests[0].steps,
+            [
+                Step::State("items".to_string(), Value::Integer("0".to_string())),
+                Step::Click("add".to_string()),
+                Step::Type("name".to_string(), "tea".to_string()),
+                Step::ExpectState("items".to_string(), Value::Integer("1".to_string())),
+                Step::ExpectText("1 item".to_string()),
+            ]
+        );
     }
 
     #[test]

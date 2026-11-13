@@ -5,6 +5,7 @@ mod harness;
 mod host;
 mod mutation;
 mod runs;
+mod screens;
 mod testing;
 mod worker;
 
@@ -116,6 +117,46 @@ struct BuildReply {
     tests: Option<TestsReply>,
     #[schemars(description = "From mutating on: the mutants")]
     mutants: Option<MutantsReply>,
+    #[schemars(
+        description = "When the program has screens and is built: the front end, compiled for the browser and embedded in the component, the one file"
+    )]
+    front: Option<FrontReply>,
+}
+
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+#[serde(crate = "rmcp::serde")]
+#[schemars(crate = "rmcp::schemars")]
+struct FrontReply {
+    #[schemars(description = "The target the front end is built for, wasm32-unknown-unknown")]
+    target: String,
+    #[schemars(description = "The absolute path of the front end's WebAssembly, as wasm-bindgen made it")]
+    path: String,
+    #[schemars(description = "Its size in bytes")]
+    size: u64,
+    #[schemars(description = "Its SHA-256, in hex")]
+    sha256: String,
+    #[schemars(description = "The screens, by name; the first one is where the front end starts")]
+    screens: Vec<String>,
+}
+
+fn front_reply(folder: &Path, front: &lengua_idea::Front) -> Option<FrontReply> {
+    let path = folder.join(front.out).join("app_bg.wasm");
+    let bytes = std::fs::read(&path).ok()?;
+    let mut screens: Vec<String> = vec![front.start.clone()];
+    screens.extend(
+        front
+            .screens
+            .iter()
+            .map(|s| s.name.clone())
+            .filter(|n| *n != front.start),
+    );
+    Some(FrontReply {
+        target: front.target.to_string(),
+        path: path.to_string_lossy().to_string(),
+        size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        sha256: lengua_idea::sha256_hex(&bytes),
+        screens,
+    })
 }
 
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
@@ -321,6 +362,9 @@ fn seal_program(
             .filter(|_| !library)
             .map(|s| s.sealed.clone()),
         sealed_trusted: component.trusted.clone(),
+        front: plan.front.as_ref().map_or_else(Vec::new, |f| {
+            vec![format!("{}/app_bg.wasm", f.out), format!("{}/app.js", f.out)]
+        }),
     };
     match lock::write(folder, &folder.join(lock::LOCK), &facts, key) {
         Ok(()) => report.written.push(lock::LOCK.to_string()),
@@ -384,6 +428,7 @@ fn build_reply(
             same: m.same,
             cached: m.cached,
         }),
+        front: None,
     }
 }
 
@@ -450,7 +495,12 @@ impl Lengua {
                 let status = snapshot
                     .filter(|(inputs, _)| *inputs == plan.inputs)
                     .map_or_else(|| self.builds.status(folder, &plan), |(_, status)| status);
-                build_reply(plan.target, status, &mut findings, &mut notes)
+                let built = status.component.is_some();
+                let mut reply = build_reply(plan.target, status, &mut findings, &mut notes);
+                if built {
+                    reply.front = plan.front.as_ref().and_then(|f| front_reply(folder, f));
+                }
+                reply
             } else {
                 BuildReply {
                     state: "no_code".to_string(),
@@ -461,6 +511,7 @@ impl Lengua {
                     sha256: None,
                     tests: None,
                     mutants: None,
+                    front: None,
                 }
             }
         });
@@ -584,7 +635,7 @@ fn run_doctor() -> ExitCode {
     let folder = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let doctor = doctor::examine(&folder);
     print!("{}", doctor.text());
-    if doctor.ok() {
+    if doctor.ready(false) {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE

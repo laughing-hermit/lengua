@@ -1,6 +1,7 @@
 mod behaviours;
 mod cases;
 mod constraints;
+mod front;
 mod frontmatter;
 mod generate;
 mod idea;
@@ -20,7 +21,7 @@ use crate::idea::{Idea, IdeaKind};
 use crate::ste::Dictionary;
 use crate::wiki::Page;
 
-pub use crate::cases::{CASES_DRAWN, Case, End, Range, Test, cases};
+pub use crate::cases::{CASES_DRAWN, Case, End, Range, Step, Test, Value, cases};
 pub use crate::library::Library;
 pub use lengua_lint::{Edit, Mutant, Mutation, apply};
 
@@ -137,6 +138,44 @@ pub struct Trusted {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Screen {
+    pub name: String,
+    pub type_name: String,
+    pub file: String,
+    pub idea: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Front {
+    pub package: String,
+    pub artifact: String,
+    pub target: &'static str,
+    pub out: &'static str,
+    pub start: String,
+    pub screens: Vec<Screen>,
+    pub crates: Vec<(String, String)>,
+    pub libraries: Vec<(String, String)>,
+    pub assets: Vec<String>,
+}
+
+impl Front {
+    #[must_use]
+    pub fn kit(&self) -> bool {
+        self.crates.iter().any(|(name, _)| name == front::KIT)
+    }
+
+    #[must_use]
+    pub fn wasm_bindgen() -> &'static str {
+        front::WASM_BINDGEN
+    }
+
+    #[must_use]
+    pub fn screen_of(&self, file: &str) -> Option<&Screen> {
+        self.screens.iter().find(|s| s.file == file)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Build {
     pub package: String,
     pub artifact: String,
@@ -153,6 +192,7 @@ pub struct Build {
     pub sources: Vec<String>,
     pub tests: Vec<Test>,
     pub tests_hash: String,
+    pub front: Option<Front>,
 }
 
 impl Build {
@@ -609,6 +649,7 @@ fn build(folder: &Path, prepared: &Prepared) -> Build {
         sources: prepared.pages.iter().map(|p| p.source.clone()).collect(),
         tests: prepared.tests.clone(),
         tests_hash,
+        front: plan.front.clone(),
     }
 }
 
@@ -644,6 +685,57 @@ fn read_all(folder: &Path, title: &str, findings: &mut Vec<Finding>) -> Read {
         }
     }
     read
+}
+
+fn named(text: &str, element: &str) -> bool {
+    let stem = element.trim_end_matches(|c: char| c.is_ascii_digit());
+    text.contains(&format!("\"{element}\""))
+        || (stem != element && text.contains(&format!("\"{stem}{{")))
+}
+
+fn screen_checks(folder: &Path, pages: &[Page], tests: &[Test]) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let screens: String = pages
+        .iter()
+        .filter(|p| p.kind == IdeaKind::Screen)
+        .filter_map(|p| fs::read_to_string(folder.join(&p.source)).ok())
+        .collect();
+    for test in tests.iter().filter(|t| t.screen) {
+        let Some(page) = pages.iter().find(|p| p.file == test.file) else {
+            continue;
+        };
+        let text = fs::read_to_string(folder.join(&page.source)).unwrap_or_default();
+        for step in &test.steps {
+            let (code, missing, message) = match step {
+                Step::Click(element) | Step::Type(element, _) => (
+                    "screen-element",
+                    !named(&screens, element),
+                    format!(
+                        "the example `{}` uses the element `{element}`, and no screen names it; give the element `.debug_selector(|| \"{element}\".to_string())`, so the test finds it",
+                        test.name
+                    ),
+                ),
+                Step::State(field, _) | Step::ExpectState(field, _) => (
+                    "screen-field",
+                    !text.contains(&format!("pub {field}:")),
+                    format!(
+                        "the example `{}` uses the state `{field}`, and `{}` has no field `pub {field}:` in the screen's struct",
+                        test.name, page.source
+                    ),
+                ),
+                Step::ExpectText(_) => continue,
+            };
+            if missing {
+                findings.push(Finding {
+                    file: test.file.clone(),
+                    line: test.line,
+                    code,
+                    message,
+                });
+            }
+        }
+    }
+    findings
 }
 
 fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
@@ -694,6 +786,7 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
             &read.constraints,
             &libraries,
         ));
+        findings.extend(screen_checks(folder, &read.pages, &read.tests));
     }
     findings.sort();
     if !findings.is_empty() {

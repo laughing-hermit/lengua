@@ -5,7 +5,9 @@ use std::path::Path;
 use crate::constraints::{Constraints, Grant};
 use crate::sha256;
 use crate::wiki::{Page, Stamp};
-use crate::{Finding, Library, Shape};
+use crate::front;
+use crate::idea::IdeaKind;
+use crate::{Finding, Front, Library, Screen, Shape};
 
 pub(crate) const CARGO_TOML: &str = "Cargo.toml";
 pub(crate) const WORLD: &str = "wit/world.wit";
@@ -138,6 +140,7 @@ pub(crate) struct Package<'a> {
     pub sources: &'a [String],
     pub crates: &'a [(String, String)],
     pub libraries: &'a [(String, String)],
+    pub front: bool,
 }
 
 fn quoted_list(items: &[String]) -> String {
@@ -157,6 +160,12 @@ fn dependencies(package: &Package) -> Vec<String> {
             .iter()
             .map(|(name, path)| (name.clone(), format!("{name} = {{ path = \"{path}\" }}"))),
     );
+    if package.front {
+        lines.push((
+            front::FILES_CRATE.to_string(),
+            format!("{} = {{ path = \"web/files\" }}", front::FILES_CRATE),
+        ));
+    }
     lines.sort();
     lines.into_iter().map(|(_, line)| line).collect()
 }
@@ -221,6 +230,9 @@ pub(crate) fn cargo_toml(package: &Package) -> String {
         "[workspace]",
     ] {
         lines.push(line.to_string());
+    }
+    if package.front {
+        lines.push("members = [\"web/app\", \"web/files\"]".to_string());
     }
     let mut text = lines.join("\n");
     text.push('\n');
@@ -339,6 +351,131 @@ pub(crate) struct Plan {
     pub crates: usize,
     pub texts: Vec<(String, String)>,
     pub stamps: Vec<Stamp>,
+    pub front: Option<Front>,
+}
+
+fn split(
+    pages: &[Page],
+    constraints: &[Constraints],
+    screen: bool,
+) -> (Vec<Page>, Vec<Constraints>) {
+    pages
+        .iter()
+        .zip(constraints)
+        .filter(|(page, _)| (page.kind == IdeaKind::Screen) == screen)
+        .map(|(page, constraint)| (page.clone(), constraint.clone()))
+        .unzip()
+}
+
+fn type_name(screen: &str) -> String {
+    screen
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_ascii_uppercase().to_string() + chars.as_str()
+            })
+        })
+        .collect()
+}
+
+fn front_finding(file: &str, code: &'static str, message: String) -> Finding {
+    Finding {
+        file: file.to_string(),
+        line: 1,
+        code,
+        message,
+    }
+}
+
+fn front_rules(
+    screens: &[Page],
+    crates: &[(String, String)],
+    assets: &[String],
+    findings: &mut Vec<Finding>,
+) {
+    let Some(first) = screens.first() else {
+        return;
+    };
+    let missing: Vec<&str> = front::REQUIRED
+        .iter()
+        .copied()
+        .filter(|name| !crates.iter().any(|(n, _)| n == name))
+        .collect();
+    if !missing.is_empty() {
+        findings.push(front_finding(
+            &first.file,
+            "front-crate-missing",
+            format!(
+                "a front end is built with GPUI's web target, and the screen ideas do not declare {}; add a `- Uses crate:` line for each, with its reason",
+                missing
+                    .iter()
+                    .map(|m| format!("`{m}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
+    let bindgen = crates.iter().find(|(n, _)| n == "wasm-bindgen");
+    if bindgen.is_some_and(|(_, v)| v != front::WASM_BINDGEN) {
+        findings.push(front_finding(
+            &first.file,
+            "front-wasm-bindgen",
+            format!(
+                "the crate `wasm-bindgen` must be at {}, the version of the `wasm-bindgen` command that makes the browser's loader",
+                front::WASM_BINDGEN
+            ),
+        ));
+    }
+    if !assets.iter().any(|a| front::is_font(a)) {
+        findings.push(front_finding(
+            "idea.md",
+            "front-font",
+            "GPUI's web text system has no fonts of its own and falls back to IBM Plex Sans; put the fonts the screens use (`.ttf` or `.otf`) in `assets/fonts/`".to_string(),
+        ));
+    }
+}
+
+fn front_plan(
+    folder: &Path,
+    title: &str,
+    screens: &[Page],
+    top: &Constraints,
+    crates: Vec<(String, String)>,
+    linked: &[(String, String)],
+) -> Option<Front> {
+    if screens.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = screens
+        .iter()
+        .map(|p| p.name.trim_start_matches("ui/").to_string())
+        .collect();
+    let start = top
+        .modules
+        .iter()
+        .find_map(|(m, _)| m.strip_prefix("ui/").map(str::to_string))
+        .unwrap_or_default();
+    Some(Front {
+        package: front::app_name(title),
+        artifact: front::artifact(title),
+        target: front::TARGET,
+        out: front::OUT,
+        start,
+        screens: screens
+            .iter()
+            .zip(&names)
+            .map(|(page, name)| Screen {
+                name: name.clone(),
+                type_name: type_name(name),
+                file: page.source.clone(),
+                idea: page.file.clone(),
+            })
+            .collect(),
+        crates,
+        libraries: linked.to_vec(),
+        assets: front::assets(folder),
+    })
 }
 
 pub(crate) fn plan(
@@ -360,29 +497,71 @@ pub(crate) fn plan(
             ),
         });
     }
-    let used = crates(pages, constraints, findings);
+    let all = crates(pages, constraints, findings);
+    let (server_pages, server_constraints) = split(pages, constraints, false);
+    let (screen_pages, screen_constraints) = split(pages, constraints, true);
+    let used = crates(&server_pages, &server_constraints, &mut Vec::new());
+    let front_crates = crates(&screen_pages, &screen_constraints, &mut Vec::new());
     let sources: Vec<String> = pages.iter().map(|p| p.source.clone()).collect();
     let linked: Vec<(String, String)> = libraries
         .iter()
         .map(|l| (l.name.clone(), l.path.clone()))
         .collect();
+    let front = if shape == Shape::Server {
+        front_plan(folder, title, &screen_pages, &top, front_crates, &linked)
+    } else {
+        None
+    };
+    if let Some(first) = screen_pages.first().filter(|_| shape != Shape::Server)
+        && folder.join("src/main.rs").is_file()
+    {
+        findings.push(front_finding(
+            &first.file,
+            "screen-server",
+            "the screens of a front end are sent to the browser by the program's own server, so the top idea has `- Serves: HTTP on TCP port N`".to_string(),
+        ));
+    }
+    if let Some(found) = &front {
+        front_rules(&screen_pages, &found.crates, &found.assets, findings);
+    }
     let package = Package {
         name: title,
         shape,
         sources: &sources,
         crates: &used,
         libraries: &linked,
+        front: front.is_some(),
     };
-    let files = [
+    let mut files = vec![
         ("cargo_sha256", CARGO_TOML, cargo_toml(&package)),
         ("world_sha256", WORLD, world(&top.grants, shape)),
     ];
+    if let Some(found) = &front {
+        let names: Vec<String> = found.screens.iter().map(|s| s.name.clone()).collect();
+        let web = front::Plan {
+            package: title,
+            screens: &names,
+            start: &found.start,
+            crates: &found.crates,
+            libraries: &linked,
+            assets: &found.assets,
+        };
+        files.push(("app_cargo_sha256", front::APP_CARGO, front::app_cargo(&web)));
+        files.push(("app_lib_sha256", front::APP_LIB, front::app_lib(&web)));
+        files.push(("files_cargo_sha256", front::FILES_CARGO, front::files_cargo()));
+        files.push((
+            "files_lib_sha256",
+            front::FILES_LIB,
+            front::files_lib(title, &found.assets),
+        ));
+    }
     let previous = pages.first().map(|p| &p.front);
     let mut plan = Plan {
         package: title.to_string(),
-        crates: used.len(),
+        crates: all.len(),
         texts: Vec::new(),
         stamps: Vec::new(),
+        front,
     };
     for (key, file, text) in files {
         let stamp = previous.and_then(|f| f.value(key));
@@ -434,6 +613,7 @@ pub(crate) fn inputs(
         .map(|(file, text)| (file.clone(), text.as_bytes().to_vec()))
         .collect();
     collect(folder, "src", &mut files);
+    collect(folder, front::ASSETS, &mut files);
     files.push(("tests".to_string(), tests.as_bytes().to_vec()));
     files.extend(extra.iter().cloned());
     let mut all = Vec::new();
@@ -496,6 +676,7 @@ codegen-units = 1
             sources: &sources,
             crates: &[],
             libraries: &[],
+            front: false,
         };
         assert_eq!(cargo_toml(&package), HELLO);
     }
@@ -510,6 +691,7 @@ codegen-units = 1
             sources: &sources,
             crates: &crates,
             libraries: &[("json".to_string(), "../json".to_string())],
+            front: false,
         };
         let text = cargo_toml(&package);
         assert!(text.starts_with("[package]\nname = \"word-count\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\ninclude = [\"src/main.rs\", \"src/words.rs\"]\nautobins = false\n\n[lib]\nname = \"word_count\"\npath = \"src/main.rs\"\n\n[dependencies]\ngpui = \"=0.2.0\"\njson = { path = \"../json\" }\n\n[lints.rust]\n"));
@@ -641,12 +823,16 @@ world program {
             sources: &sources,
             crates: &[],
             libraries: &[],
+            front: true,
         };
         let text = cargo_toml(&package);
         assert!(text.contains(
             "[lib]\nname = \"shop\"\npath = \"src/main.rs\"\ncrate-type = [\"cdylib\"]\n"
         ));
         assert!(!text.contains("missing_errors_doc"));
+        assert!(text.contains("web-files = { path = \"web/files\" }\n"), "{text}");
+        assert!(text.ends_with("[workspace]\nmembers = [\"web/app\", \"web/files\"]\n"), "{text}");
+        assert_eq!(super::type_name("edit_note"), "EditNote");
         let world = world(&[Grant::Http], Shape::Server);
         assert!(world.contains("  import wasi:http/types@0.2.12;\n"));
         assert!(world.contains("  export wasi:http/incoming-handler@0.2.12;\n"));

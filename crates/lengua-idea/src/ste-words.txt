@@ -109,6 +109,7 @@ came v
 cancel v
 can m
 cannot m
+canvas n
 carriage n
 cart n
 case n
@@ -148,6 +149,7 @@ come v
 comma n
 command n
 comment n
+commit n
 common a
 compare v
 compile v
@@ -403,6 +405,7 @@ link nv
 list nv
 listen v
 load v
+loader n
 local a
 location n
 lock nv
@@ -426,6 +429,7 @@ mark v
 match v
 maximum an
 measure v
+media n
 memory n
 menu n
 me o
@@ -522,6 +526,7 @@ per p
 person n
 place n
 plain a
+platform n
 plus p
 pointer n
 point nv
@@ -603,6 +608,7 @@ saw v
 scale n
 schedule n
 screen n
+script n
 search v
 secondary a
 second qn
@@ -649,6 +655,7 @@ slowly r
 small a
 smaller a
 smallest a
+snapshot n
 so cr
 some d
 someone o
@@ -770,6 +777,7 @@ volume n
 wait v
 warning n
 was m
+web n
 week n
 went v
 we o

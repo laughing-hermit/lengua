@@ -73,7 +73,7 @@ jobs:
         id: fmt
         run: |
           cargo fmt --all
-          for f in libraries/*/src/main.rs examples/*/src/main.rs; do
+          for f in libraries/*/src/main.rs examples/*/src/main.rs examples/*/src/ui/*.rs; do
             rustfmt --edition 2024 "$f"
           done
           if git diff --quiet; then
@@ -148,7 +148,7 @@ jobs:
     needs: [plan, component]
     name: ${{ needs.plan.outputs.mode }} (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
@@ -176,8 +176,32 @@ jobs:
             --profile minimal --component rustfmt,clippy --target wasm32-wasip2,wasm32-unknown-unknown
           rustc --version
           cargo --version
+      - name: wasm-bindgen 0.2.130, for the front ends, pinned by SHA-256
+        run: |
+          case "${{ matrix.target }}" in
+            linux-x86_64) a=x86_64-unknown-linux-musl; s=9687f3bb551b9f66f37ed32a40d7913a00f7962db653054e56857bc306c3227f ;;
+            linux-aarch64) a=aarch64-unknown-linux-gnu; s=cc8dd8e90aa9111758168d30c63a14b7f0276997d9d60d3e160a1fb5e7d3b919 ;;
+            macos-aarch64) a=aarch64-apple-darwin; s=b90ddb9357f584b1af897d58ad77e4cce2b48fc17e2a967bc249a87f72809444 ;;
+            windows-x86_64|windows-aarch64) a=x86_64-pc-windows-msvc; s=844d23f1b56097549b936dd2e0d561fadebc1e8c9e985d5068b6b919654104ad ;;
+          esac
+          curl -sSfL -o wb.tar.gz "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.130/wasm-bindgen-0.2.130-$a.tar.gz"
+          if command -v sha256sum > /dev/null; then
+            echo "$s  wb.tar.gz" | sha256sum -c
+          else
+            echo "$s  wb.tar.gz" | shasum -a 256 -c
+          fi
+          mkdir -p "$RUNNER_TEMP/wasm-bindgen"
+          tar xzf wb.tar.gz -C "$RUNNER_TEMP/wasm-bindgen"
+          rm wb.tar.gz
+          dir="$RUNNER_TEMP/wasm-bindgen/wasm-bindgen-0.2.130-$a"
+          if command -v cygpath > /dev/null; then
+            dir=$(cygpath -w "$dir")
+          fi
+          echo "$dir" >> "$GITHUB_PATH"
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked
+      - name: lengua's own std-only crates, built for WebAssembly (wasm32-wasip2)
+        run: cargo build --locked --target wasm32-wasip2 -p lengua-idea -p lengua-lint
       - name: tests built
         if: ${{ needs.plan.outputs.mode == 'compile' }}
         run: cargo test --workspace --locked --no-run
@@ -191,6 +215,41 @@ jobs:
             echo "$f: $(wc -c < "$f") bytes"
             cargo run --locked -q -p lengua-mcp -- imports "$f"
           done
+      - name: the notes, served by lengua-run, open in headless Chrome (the screenshot, the console, the accessibility tree)
+        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+        env:
+          LENGUA_NOTES: ${{ github.workspace }}/target/tmp/lengua-mcp-notes/examples/notes
+          LENGUA_HOME: ${{ github.workspace }}/target/tmp/lengua-home
+          LENGUA_BROWSER_OUT: ${{ github.workspace }}/browser
+        run: |
+          if [ ! -f "$LENGUA_NOTES/lengua.lock" ]; then
+            echo "::error::the notes were not checked by the tests"
+            exit 1
+          fi
+          cargo test --locked -p lengua-run --test browser -- --ignored --nocapture
+      - name: the bytes of the built components, for the check that every system builds the same
+        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+        run: |
+          mkdir -p same
+          for pair in "hello target/tmp/lengua-mcp-hello/hello/target/wasm32-wasip2/release/hello.wasm" \
+                      "shop target/tmp/lengua-mcp-shop/examples/shop/target/wasm32-wasip2/release/shop.wasm" \
+                      "notes target/tmp/lengua-mcp-notes/examples/notes/target/wasm32-wasip2/release/notes.wasm" \
+                      "notes-front target/tmp/lengua-mcp-notes/examples/notes/target/lengua/web/app_bg.wasm"; do
+            set -- $pair
+            if [ -f "$2" ]; then
+              cp "$2" "same/$1.wasm"
+            fi
+          done
+          ls -l same
+          cd same && (sha256sum *.wasm 2> /dev/null || shasum -a 256 *.wasm) | tee sums.txt
+      - uses: actions/upload-artifact@v5
+        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+        with:
+          name: built-${{ matrix.target }}
+          path: |
+            same
+            browser
+          if-no-files-found: ignore
       - name: the shared libraries, checked by the tests, built for wasm32-unknown-unknown too
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |
@@ -276,79 +335,42 @@ jobs:
           TIMEFORMAT='lengua-mcp --version, 20 runs: %R s'
           time (for i in $(seq 20); do ./target/release/lengua-mcp --version > /dev/null; done)
 
-  gpui-risk:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+  same-bytes:
+    needs: [plan, check]
+    if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    env:
-      RUSTFLAGS: ""
     steps:
-      - uses: actions/checkout@v5
-      - name: toolchain
-        run: |
-          rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal --component clippy --target wasm32-unknown-unknown
-          rustc --version
-      - uses: actions/cache@v4
+      - uses: actions/download-artifact@v5
         with:
-          path: |
-            ~/.cargo/registry
-            spike/gpui/target
-          key: spike-${{ hashFiles('spike/gpui/Cargo.toml') }}
-      - name: wasm-bindgen 0.2.130, pinned by SHA-256
+          pattern: built-*
+          path: built
+      - name: hello, the shop and the notes have the same SHA-256 on every system
         run: |
-          curl -sSfL -o wb.tar.gz https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.130/wasm-bindgen-0.2.130-x86_64-unknown-linux-musl.tar.gz
-          echo "9687f3bb551b9f66f37ed32a40d7913a00f7962db653054e56857bc306c3227f  wb.tar.gz" | sha256sum -c
-          tar xzf wb.tar.gz
-          echo "$PWD/wasm-bindgen-0.2.130-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
-      - name: resolve
-        working-directory: spike/gpui
-        run: |
-          cargo generate-lockfile
-          cargo tree --target wasm32-unknown-unknown -e normal --prefix none | sort -u | wc -l
-          cargo tree --target wasm32-unknown-unknown -e normal -i parking_lot || true
-      - name: the screen for wasm32-unknown-unknown, on stable
-        id: wasm
-        working-directory: spike/gpui
-        run: |
-          time cargo build --release --target wasm32-unknown-unknown --lib 2>&1 | tail -80
-          ls -l target/wasm32-unknown-unknown/release/*.wasm
-      - name: clippy of the screen for the browser
-        if: ${{ !cancelled() }}
-        working-directory: spike/gpui
-        run: cargo clippy --release --target wasm32-unknown-unknown --lib 2>&1 | tail -40
-      - name: wasm-bindgen
-        if: ${{ !cancelled() }}
-        working-directory: spike/gpui
-        run: |
-          mkdir -p out
-          wasm-bindgen target/wasm32-unknown-unknown/release/spike.wasm --target web --no-typescript --out-dir out
-          cp index.html out/
-          ls -l out
-          sha256sum out/*
-      - name: the screen in headless Chrome
-        if: ${{ !cancelled() }}
-        working-directory: spike/gpui/out
-        run: |
-          which google-chrome chromium chromium-browser chromedriver || true
-          google-chrome --version || true
-          (python3 -m http.server 8099 > ../server.log 2>&1 &)
-          sleep 2
-          for flags in "--use-angle=swiftshader --enable-unsafe-swiftshader" "--use-angle=swiftshader --enable-unsafe-swiftshader --enable-unsafe-webgpu --enable-features=Vulkan"; do
-            echo "== $flags"
-            timeout 60 google-chrome --headless=new --no-sandbox $flags --window-size=800,600 --virtual-time-budget=20000 --enable-logging=stderr --v=0 --dump-dom http://127.0.0.1:8099/index.html 2> chrome.log | head -c 3000
-            echo
-            grep -i 'console\|error\|webgl\|webgpu\|gpui' chrome.log | head -40
-            timeout 60 google-chrome --headless=new --no-sandbox $flags --window-size=800,600 --virtual-time-budget=30000 --screenshot="$PWD/shot-$(echo $flags | wc -c).png" http://127.0.0.1:8099/index.html 2>/dev/null || true
+          ls built
+          status=0
+          for name in hello shop notes notes-front; do
+            required=0
+            if [ "$name" = hello ] || [ "$name" = shop ]; then required=1; fi
+            echo "== $name"
+            first=""
+            for dir in built/built-*; do
+              file="$dir/same/$name.wasm"
+              if [ ! -f "$file" ]; then
+                echo "$(basename "$dir"): not built"
+                if [ "$required" = 0 ]; then continue; fi
+                status=1
+                continue
+              fi
+              sum=$(sha256sum "$file" | cut -d' ' -f1)
+              echo "$(basename "$dir"): $(wc -c < "$file") bytes, $sum"
+              if [ -z "$first" ]; then
+                first="$file"
+              elif ! cmp -s "$first" "$file"; then
+                if [ "$required" = 1 ]; then status=1; fi
+                echo "  differs from $(dirname "$(dirname "$first")"): $(cmp -l "$first" "$file" | wc -l) bytes differ; the first differences:"
+                cmp -l "$first" "$file" | head -20 || true
+                diff <(strings -n 8 "$first") <(strings -n 8 "$file") | head -40 || true
+              fi
+            done
           done
-          ls -l *.png || true
-      - uses: actions/upload-artifact@v5
-        if: ${{ !cancelled() }}
-        with:
-          name: gpui-risk-${{ github.run_number }}
-          path: |
-            spike/gpui/out/*.png
-            spike/gpui/Cargo.lock
-      - name: the screen's test, natively, with GPUI's test context
-        if: ${{ !cancelled() }}
-        working-directory: spike/gpui
-        run: time cargo test --test screen -- --nocapture 2>&1 | tail -80
+          exit $status

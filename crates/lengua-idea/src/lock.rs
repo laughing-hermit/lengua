@@ -86,6 +86,7 @@ pub struct Facts {
     pub component: Option<String>,
     pub sealed: Option<String>,
     pub sealed_trusted: Vec<String>,
+    pub front: Vec<String>,
 }
 
 impl Facts {
@@ -275,8 +276,12 @@ fn ideas(folder: &Path) -> Vec<String> {
 }
 
 fn sources(folder: &Path) -> Vec<String> {
+    files_in(folder, "src")
+}
+
+fn files_in(folder: &Path, place: &str) -> Vec<String> {
     let mut found = Vec::new();
-    generate::collect(folder, "src", &mut found);
+    generate::collect(folder, place, &mut found);
     let mut names: Vec<String> = found.into_iter().map(|(path, _)| path).collect();
     names.sort();
     names
@@ -290,6 +295,17 @@ pub fn program_files(folder: &Path) -> Vec<String> {
     out.extend(sources(folder));
     out.push("Cargo.toml".to_string());
     out.push("wit/world.wit".to_string());
+    for file in [
+        crate::front::APP_CARGO,
+        crate::front::APP_LIB,
+        crate::front::FILES_CARGO,
+        crate::front::FILES_LIB,
+    ] {
+        if folder.join(file).is_file() {
+            out.push(file.to_string());
+        }
+    }
+    out.extend(files_in(folder, crate::front::ASSETS));
     if folder.join("Cargo.lock").is_file() {
         out.push("Cargo.lock".to_string());
     }
@@ -321,6 +337,7 @@ pub fn text(folder: &Path, facts: &Facts, key: &Key) -> Result<String, String> {
     let mut entries: Vec<(&str, &str)> = facts.files.iter().map(|f| ("file", f.as_str())).collect();
     entries.extend(facts.libraries.iter().map(|l| ("library", l.as_str())));
     entries.extend(facts.trusted.iter().map(|t| ("trusted", t.as_str())));
+    entries.extend(facts.front.iter().map(|f| ("front", f.as_str())));
     entries.extend(facts.component.as_deref().map(|c| ("component", c)));
     entries.extend(facts.sealed.as_deref().map(|s| ("sealed", s)));
     entries.extend(
@@ -425,7 +442,8 @@ fn read_lines(folder: &Path, body: &str, key: &Key) -> Reading {
         match tag {
             "kind" => out.found = Kind::parse(rest),
             "label" => out.label = rest.to_string(),
-            "file" | "component" | "sealed" | "library" | "trusted" | "sealed-trusted" => {
+            "file" | "front" | "component" | "sealed" | "library" | "trusted"
+            | "sealed-trusted" => {
                 match check_entry(folder, (tag, rest), key, &mut out.changed) {
                     Some((path, code)) => {
                         out.files.push(path);

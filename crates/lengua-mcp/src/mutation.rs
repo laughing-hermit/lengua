@@ -6,7 +6,7 @@ use lengua_idea::{Build, Case, Mutant, Mutation, Shape, Test};
 
 use crate::build::{Remark, Worker, cargo, lock};
 use crate::host::{Seal, unseal};
-use crate::{harness, testing};
+use crate::{harness, screens, testing};
 
 pub(crate) const MUTANTS: usize = 40;
 const CACHE: &str = "target/lengua/mutants";
@@ -106,6 +106,9 @@ pub(crate) fn mutant_manifest(text: &str, package: &str, folder: &Path) -> Strin
     for line in text.lines() {
         if line.starts_with('[') {
             section = line.trim().to_string();
+        }
+        if section == "[workspace]" && line.starts_with("members = ") {
+            continue;
         }
         let changed = if line == format!("name = \"{package}\"") && section != "[lib]" {
             format!("name = \"{}\"", mutant_name(package))
@@ -217,6 +220,9 @@ fn verdict(
             return Some(Verdict::Unbuilt);
         }
     }
+    if mutant.file.starts_with("src/ui/") {
+        return screen_verdict(worker);
+    }
     let target_dir = worker.folder.join("target").to_string_lossy().to_string();
     let args = [
         "build",
@@ -256,6 +262,24 @@ fn verdict(
     let found = judge(worker, space, cases, &seal);
     unseal(&worker.folder, &seal);
     found
+}
+
+fn screen_verdict(worker: &Worker) -> Option<Verdict> {
+    let cases = screens::cases(&worker.build);
+    let spec = worker.screen_spec(true);
+    let built = screens::build(worker, screens::MUTANT_FOLDER, &spec, &cases);
+    if worker.stopped() {
+        return None;
+    }
+    let Ok(binary) = built else {
+        return Some(Verdict::Unbuilt);
+    };
+    let results = screens::run(&binary, cases.len());
+    if results.iter().any(Option::is_some) {
+        Some(Verdict::Caught)
+    } else {
+        Some(Verdict::Survived)
+    }
 }
 
 fn judge(worker: &Worker, space: &Workspace, cases: &[Case], seal: &Seal) -> Option<Verdict> {
@@ -366,7 +390,7 @@ mod tests {
 
     #[test]
     fn a_mutant_gets_its_own_names_and_absolute_library_paths() {
-        let manifest = "[package]\nname = \"shop\"\n\n[lib]\nname = \"shop\"\npath = \"src/main.rs\"\n\n[dependencies]\njson = { path = \"../libraries/json\" }\nwasip2 = \"=2.0.1\"\n\n[workspace]\n";
+        let manifest = "[package]\nname = \"shop\"\n\n[lib]\nname = \"shop\"\npath = \"src/main.rs\"\n\n[dependencies]\njson = { path = \"../libraries/json\" }\nwasip2 = \"=2.0.1\"\nweb-files = { path = \"web/files\" }\n\n[workspace]\nmembers = [\"web/app\", \"web/files\"]\n";
         let folder = std::path::Path::new("/work/shop");
         let text = super::mutant_manifest(manifest, "shop", folder);
         assert!(
@@ -380,5 +404,7 @@ mod tests {
         );
         assert!(text.contains("wasip2 = \"=2.0.1\"\n"), "{text}");
         assert!(text.contains("path = \"src/main.rs\"\n"), "{text}");
+        assert!(!text.contains("members"), "{text}");
+        assert!(text.contains("web-files = { path = \"/work/shop/web/files\" }"), "{text}");
     }
 }

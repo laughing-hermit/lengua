@@ -65,6 +65,53 @@ impl Range {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Value {
+    Text(String),
+    Integer(String),
+    Boolean(bool),
+}
+
+impl Value {
+    #[must_use]
+    pub fn shown(&self) -> String {
+        match self {
+            Self::Text(text) | Self::Integer(text) => text.clone(),
+            Self::Boolean(flag) => flag.to_string(),
+        }
+    }
+
+    fn filled(&self, values: &[(String, String)]) -> Self {
+        match self {
+            Self::Text(text) => Self::Text(fill(text, values)),
+            other => other.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Step {
+    State(String, Value),
+    Click(String),
+    Type(String, String),
+    ExpectState(String, Value),
+    ExpectText(String),
+}
+
+impl Step {
+    fn filled(&self, values: &[(String, String)]) -> Self {
+        match self {
+            Self::State(field, value) => Self::State(field.clone(), value.filled(values)),
+            Self::ExpectState(field, value) => {
+                Self::ExpectState(field.clone(), value.filled(values))
+            }
+            Self::Type(element, text) => Self::Type(element.clone(), fill(text, values)),
+            Self::ExpectText(text) => Self::ExpectText(fill(text, values)),
+            Self::Click(element) => Self::Click(element.clone()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Test {
     pub file: String,
@@ -92,6 +139,7 @@ pub struct Test {
     pub status: Option<u16>,
     pub expect_headers: Vec<(String, String)>,
     pub expect_body: Option<String>,
+    pub steps: Vec<Step>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -218,6 +266,7 @@ fn filled(test: &Test, values: &[(String, String)]) -> Test {
         request_body: test.request_body.as_ref().map(one),
         expect_headers: pairs(&test.expect_headers),
         expect_body: test.expect_body.as_ref().map(one),
+        steps: test.steps.iter().map(|s| s.filled(values)).collect(),
         ..test.clone()
     }
 }

@@ -12,7 +12,7 @@ use lengua_idea::{Build, Label, Trust};
 
 use crate::doctor;
 use crate::host::{Host, Seal, grant_for, outside};
-use crate::{harness, mutation, testing};
+use crate::{harness, mutation, screens, testing};
 
 pub(crate) const THRESHOLD: usize = 80;
 
@@ -193,32 +193,57 @@ impl Worker {
         });
     }
 
+    pub(crate) fn screen_spec(&self, mutant: bool) -> screens::Spec<'static> {
+        let suffix = if mutant { "-screens-mutant" } else { "-screens" };
+        screens::Spec {
+            package: format!("{}{suffix}", self.build.package),
+            ui: if mutant {
+                "../mutant/src/ui"
+            } else {
+                "../../../src/ui"
+            },
+            libraries: "../../..",
+        }
+    }
+
+    fn screen_tests(&self, cases: &[lengua_idea::Case]) -> Vec<Problem> {
+        let spec = self.screen_spec(false);
+        let binary = match screens::build(self, screens::FOLDER, &spec, cases) {
+            Ok(binary) => binary,
+            Err(found) => {
+                self.update(|s| {
+                    s.tests.run += cases.len();
+                    s.tests.failed += cases.len();
+                });
+                return found;
+            }
+        };
+        let results = screens::run(&binary, cases.len());
+        let mut found = Vec::new();
+        for (case, result) in cases.iter().zip(&results) {
+            if let Some(detail) = result {
+                found.push(screens::finding(case, detail));
+            }
+        }
+        self.update(|s| {
+            s.tests.run += cases.len();
+            s.tests.failed += found.len();
+        });
+        found
+    }
+
     fn work(&self) {
         let component = match compile(&self.folder, &self.build, &self.child, &self.host) {
             Ok(component) => component,
             Err(problems) => return self.finish(Stage::BuildFailed, problems),
         };
-        let screens: Vec<Remark> = self
-            .build
-            .tests
-            .iter()
-            .filter(|t| t.screen)
-            .map(|t| Remark {
-                file: t.file.clone(),
-                line: Some(t.line),
-                message: format!(
-                    "the screen example `{}` runs at L8, with GPUI's test context; it was not run",
-                    t.name
-                ),
-            })
-            .collect();
         let cases = testing::cases(&self.build);
+        let screen_cases = screens::cases(&self.build);
         let seal = component.seal.clone();
         self.update(|s| {
             s.component = Some(component);
             s.stage = Stage::Testing;
-            s.remarks = screens;
-            s.tests.total = cases.len();
+            s.tests.total = cases.len() + screen_cases.len();
         });
         let Some(seal) = seal else {
             return self.finish(Stage::Done, Vec::new());
@@ -236,6 +261,12 @@ impl Worker {
                 s.tests.run += 1;
                 s.tests.failed += usize::from(failed.is_some());
             });
+        }
+        if !screen_cases.is_empty() {
+            if self.stopped() {
+                return;
+            }
+            problems.extend(self.screen_tests(&screen_cases));
         }
         if !problems.is_empty() {
             return self.finish(Stage::TestsFailed, problems);
@@ -324,13 +355,14 @@ impl Builds {
         }
         jobs.remove(folder);
         let doctor = doctor::examine(folder);
-        if !doctor.ok() {
+        let front = build.front.is_some();
+        if !doctor.ready(front) {
             let mut status = Status::new(Stage::BuildFailed);
             status.problems = vec![problem(
                 "Cargo.toml",
                 1,
                 "toolchain-missing",
-                doctor.problems(),
+                doctor.problems(front),
             )];
             return status;
         }
@@ -347,7 +379,91 @@ pub(crate) fn cargo(
     args: &[&str],
     slot: &Mutex<Option<Child>>,
 ) -> Result<(bool, String), String> {
-    let mut child = Command::new("cargo")
+    tool("cargo", folder, args, slot)
+}
+
+fn program_root(folder: &Path) -> PathBuf {
+    let mut root = folder.to_path_buf();
+    let mut seen = 0;
+    while seen < 8 {
+        if root.join("idea.md").is_file() {
+            return root;
+        }
+        if !root.pop() {
+            break;
+        }
+        seen += 1;
+    }
+    folder.to_path_buf()
+}
+
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+fn cargo_home() -> Option<PathBuf> {
+    std::env::var_os("CARGO_HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                .map(|home| PathBuf::from(home).join(".cargo"))
+        })
+}
+
+pub(crate) fn remaps(folder: &Path) -> Vec<String> {
+    let root = program_root(folder);
+    let mut out = Vec::new();
+    if let Some(home) = cargo_home() {
+        out.push(format!("--remap-path-prefix={}=/cargo", home.display()));
+    }
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
+    for line in manifest.lines() {
+        let Some((name, rest)) = line.split_once(" = { path = \"") else {
+            continue;
+        };
+        let relative = rest.trim_end_matches("\" }");
+        if relative.starts_with("web/") {
+            continue;
+        }
+        let place = lexical(&root.join(relative));
+        out.push(format!("--remap-path-prefix={}=/{name}", place.display()));
+    }
+    out.push(format!("--remap-path-prefix={}=/app", root.display()));
+    out
+}
+
+fn encoded_flags(folder: &Path) -> String {
+    let mut flags: Vec<String> = std::env::var("RUSTFLAGS")
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    flags.extend(remaps(folder));
+    flags.join("\u{1f}")
+}
+
+pub(crate) fn tool(
+    program: &str,
+    folder: &Path,
+    args: &[&str],
+    slot: &Mutex<Option<Child>>,
+) -> Result<(bool, String), String> {
+    let mut command = Command::new(program);
+    if program == "cargo" {
+        command.env("CARGO_ENCODED_RUSTFLAGS", encoded_flags(folder));
+    }
+    let mut child = command
         .args(args)
         .current_dir(folder)
         .env("CARGO_TERM_COLOR", "never")
@@ -355,7 +471,7 @@ pub(crate) fn cargo(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("lengua could not start cargo: {e}"))?;
+        .map_err(|e| format!("lengua could not start {program}: {e}"))?;
     let out_pipe = child.stdout.take();
     let err_pipe = child.stderr.take();
     *lock(slot) = Some(child);
@@ -376,7 +492,7 @@ pub(crate) fn cargo(
     let status = taken
         .ok_or_else(|| "the build was stopped".to_string())?
         .wait()
-        .map_err(|e| format!("lengua could not wait for cargo: {e}"))?;
+        .map_err(|e| format!("lengua could not wait for {program}: {e}"))?;
     Ok((status.success(), String::from_utf8_lossy(&all).to_string()))
 }
 
@@ -391,7 +507,11 @@ fn fetch(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> Result<()
     if build.crates == 0 || fs::read_to_string(&stamp).is_ok_and(|s| s == hash) {
         return Ok(());
     }
-    match cargo(folder, &["fetch", "--target", build.target], slot) {
+    let mut args = vec!["fetch", "--target", build.target];
+    if let Some(front) = &build.front {
+        args.extend(["--target", front.target]);
+    }
+    match cargo(folder, &args, slot) {
         Ok((true, _)) => {
             let _ = stamp.parent().map(fs::create_dir_all);
             let _ = fs::write(&stamp, hash);
@@ -431,25 +551,38 @@ fn step(folder: &Path, args: &[&str], slot: &Mutex<Option<Child>>) -> Result<(),
     }
 }
 
-fn compile(
-    folder: &Path,
-    build: &Build,
-    slot: &Mutex<Option<Child>>,
-    host: &Host,
-) -> Result<Component, Vec<Problem>> {
-    fetch(folder, build, slot)?;
-    if let Ok((false, text)) = cargo(folder, &["fmt", "--check"], slot) {
-        let found = format_problems(folder, &text);
-        if !found.is_empty() {
-            return Err(found);
+fn formatted(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> Result<(), Vec<Problem>> {
+    let mut found = Vec::new();
+    let package = build.package.as_str();
+    let whole: Vec<&str> = if build.front.is_some() {
+        vec!["fmt", "--check", "-p", package]
+    } else {
+        vec!["fmt", "--check"]
+    };
+    if let Ok((false, text)) = cargo(folder, &whole, slot) {
+        found.extend(format_problems(folder, &text));
+    }
+    for screen in build.front.iter().flat_map(|f| &f.screens) {
+        let args = ["--check", "--edition", "2024", screen.file.as_str()];
+        if let Ok((false, text)) = tool("rustfmt", folder, &args, slot) {
+            found.extend(format_problems(folder, &text));
         }
     }
-    let target = build.target;
+    if found.is_empty() { Ok(()) } else { Err(found) }
+}
+
+fn front_end(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> Result<(), Vec<Problem>> {
+    let Some(front) = &build.front else {
+        return Ok(());
+    };
+    let package = front.package.as_str();
     let clippy = [
         "clippy",
+        "-p",
+        package,
         "--release",
         "--target",
-        target,
+        front.target,
         "--offline",
         "--message-format=short",
         "--",
@@ -458,12 +591,63 @@ fn compile(
     ];
     let building = [
         "build",
+        "-p",
+        package,
         "--release",
         "--target",
-        target,
+        front.target,
         "--offline",
         "--message-format=short",
     ];
+    for args in [&clippy[..], &building[..]] {
+        step(folder, args, slot)?;
+    }
+    let out = folder.join(front.out);
+    let _ = fs::create_dir_all(&out);
+    let out_text = out.to_string_lossy().to_string();
+    let args = [
+        front.artifact.as_str(),
+        "--target",
+        "web",
+        "--no-typescript",
+        "--out-dir",
+        out_text.as_str(),
+        "--out-name",
+        "app",
+    ];
+    match tool("wasm-bindgen", folder, &args, slot) {
+        Ok((true, _)) => Ok(()),
+        Ok((false, text)) => Err(vec![problem(
+            "Cargo.toml",
+            1,
+            "front-bindgen",
+            format!("`wasm-bindgen` could not make the browser's loader: {}", text.trim()),
+        )]),
+        Err(message) => Err(vec![problem("Cargo.toml", 1, "front-bindgen", message)]),
+    }
+}
+
+fn compile(
+    folder: &Path,
+    build: &Build,
+    slot: &Mutex<Option<Child>>,
+    host: &Host,
+) -> Result<Component, Vec<Problem>> {
+    fetch(folder, build, slot)?;
+    formatted(folder, build, slot)?;
+    front_end(folder, build, slot)?;
+    let target = build.target;
+    let package = build.package.as_str();
+    let mut clippy = vec!["clippy"];
+    let mut building = vec!["build"];
+    if build.front.is_some() {
+        clippy.extend(["-p", package]);
+        building.extend(["-p", package]);
+    }
+    let common = ["--release", "--target", target, "--offline", "--message-format=short"];
+    clippy.extend(common);
+    clippy.extend(["--", "-D", "warnings"]);
+    building.extend(common);
     for args in [&clippy[..], &building[..]] {
         step(folder, args, slot)?;
     }
@@ -702,7 +886,21 @@ fn library(
 fn relative(folder: &Path, path: &str) -> String {
     let path = Path::new(path);
     let inside = path.strip_prefix(folder).unwrap_or(path);
-    inside.to_string_lossy().replace('\\', "/")
+    let text = inside.to_string_lossy().replace('\\', "/");
+    if text.starts_with("..") || !text.contains("/../") {
+        return text;
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for part in text.split('/') {
+        match part {
+            ".." => {
+                parts.pop();
+            }
+            "." => {}
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
 }
 
 fn located(folder: &Path, line: &str) -> Option<Problem> {
@@ -750,7 +948,7 @@ pub(crate) fn problems(folder: &Path, text: &str) -> Vec<Problem> {
 mod tests {
     use std::path::Path;
 
-    use super::{SIZE_LIMIT, format_problems, problems, too_large};
+    use super::{SIZE_LIMIT, format_problems, problems, relative, remaps, too_large};
 
     #[test]
     fn each_error_gives_its_file_and_line() {
@@ -815,5 +1013,39 @@ mod tests {
         let found = too_large(SIZE_LIMIT + 1, SIZE_LIMIT).expect("a problem");
         assert_eq!(found.code, "component-size");
         assert!(found.message.contains("64 MiB"), "{}", found.message);
+    }
+
+    #[test]
+    fn a_path_through_a_member_is_the_file_in_the_folder() {
+        let folder = Path::new("/work/notes");
+        assert_eq!(relative(folder, "web/app/../../src/ui/list.rs"), "src/ui/list.rs");
+        assert_eq!(relative(folder, "/work/notes/src/main.rs"), "src/main.rs");
+        assert_eq!(relative(folder, "../json/src/read.rs"), "../json/src/read.rs");
+    }
+
+    #[test]
+    fn the_paths_of_a_build_are_remapped_to_fixed_names() {
+        let root = std::env::temp_dir().join(format!("lengua-mcp-{}-remap", std::process::id()));
+        let inner = root.join("app").join("target").join("lengua").join("screens");
+        std::fs::create_dir_all(&inner).expect("a folder");
+        let app = root.join("app");
+        std::fs::write(app.join("idea.md"), "# Purpose\n").expect("an idea");
+        std::fs::write(
+            app.join("Cargo.toml"),
+            "[dependencies]\njson = { path = \"../libraries/json\" }\nweb-files = { path = \"web/files\" }\n",
+        )
+        .expect("a manifest");
+        let found = remaps(&inner);
+        let library = root.join("libraries").join("json");
+        assert!(
+            found.contains(&format!("--remap-path-prefix={}=/json", library.display())),
+            "{found:?}"
+        );
+        assert!(
+            found.contains(&format!("--remap-path-prefix={}=/app", app.display())),
+            "{found:?}"
+        );
+        assert!(found.iter().any(|f| f.ends_with("=/cargo")), "{found:?}");
+        assert!(!found.iter().any(|f| f.contains("web-files")), "{found:?}");
     }
 }
