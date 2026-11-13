@@ -145,7 +145,6 @@ struct CheckReply {
     build: Option<BuildReply>,
 }
 
-
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 #[serde(crate = "rmcp::serde")]
 #[schemars(crate = "rmcp::schemars")]

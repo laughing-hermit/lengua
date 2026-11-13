@@ -513,7 +513,6 @@ fn ungranted(bytes: &[u8], sha256: &str, build: &Build, host: &Host) -> Vec<Prob
         .collect()
 }
 
-
 fn built(folder: &Path, build: &Build, host: &Host) -> Result<Component, Vec<Problem>> {
     let component = folder.join(&build.artifact);
     match fs::read(&component) {

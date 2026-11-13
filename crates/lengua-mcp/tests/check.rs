@@ -730,10 +730,16 @@ fn a_well_tested_program_is_checked_and_its_label_goes_into_the_wiki() {
     assert_eq!(reply["label"], "checked", "{reply:#}");
     assert_eq!(reply["score"], 100, "{reply:#}");
     let mutants = &reply["build"]["mutants"];
-    assert!(mutants["total"].as_u64().is_some_and(|n| n >= 4), "{reply:#}");
+    assert!(
+        mutants["total"].as_u64().is_some_and(|n| n >= 4),
+        "{reply:#}"
+    );
     assert_eq!(mutants["survived"], 0, "{reply:#}");
     assert_eq!(mutants["done"], mutants["total"], "{reply:#}");
-    assert!(notes_with(&reply, "a mutant survived").is_empty(), "{reply:#}");
+    assert!(
+        notes_with(&reply, "a mutant survived").is_empty(),
+        "{reply:#}"
+    );
     assert!(
         reply["build"]["tests"]["total"]
             .as_u64()
@@ -809,10 +815,7 @@ fn a_weakly_tested_program_is_tested_and_its_surviving_mutants_are_notes() {
     assert_eq!(reply["build"]["state"], "done", "{reply:#}");
     assert_eq!(reply["ok"], true, "{reply:#}");
     assert_eq!(reply["label"], "tested", "{reply:#}");
-    assert!(
-        reply["score"].as_u64().is_some_and(|s| s < 80),
-        "{reply:#}"
-    );
+    assert!(reply["score"].as_u64().is_some_and(|s| s < 80), "{reply:#}");
     let survivors = notes_with(&reply, "a mutant survived");
     assert!(!survivors.is_empty(), "{reply:#}");
     let line = line_of(

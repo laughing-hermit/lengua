@@ -30,7 +30,11 @@ fn shown(text: &str, at: usize) -> String {
     let start = at.saturating_sub(BEFORE);
     let window: String = chars.iter().skip(start).take(SHOWN).collect();
     let before = if start > 0 { "..." } else { "" };
-    let after = if start + SHOWN < chars.len() { "..." } else { "" };
+    let after = if start + SHOWN < chars.len() {
+        "..."
+    } else {
+        ""
+    };
     format!("{before}{window:?}{after}")
 }
 

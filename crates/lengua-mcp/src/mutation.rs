@@ -202,8 +202,7 @@ pub(crate) fn run(worker: &Worker, cases: &[Case]) -> bool {
     let original = lock(&worker.state)
         .component
         .as_ref()
-        .map(|c| c.sha256.clone())
-        .unwrap_or_default();
+        .map_or_else(String::new, |c| c.sha256.clone());
     worker.update(|s| s.mutants.total = mutation.mutants.len());
     let cache = worker.folder.join(CACHE);
     let old = read_cache(&cache);

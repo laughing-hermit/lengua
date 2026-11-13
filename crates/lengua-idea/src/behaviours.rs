@@ -421,7 +421,14 @@ fn key_place(key: &Key, key_text: &str, screen: bool, cases: bool, line: usize, 
     }
 }
 
-fn block(kind: IdeaKind, cases: bool, lines: &[Line], head: usize, test: &mut Test, sink: &mut Sink) {
+fn block(
+    kind: IdeaKind,
+    cases: bool,
+    lines: &[Line],
+    head: usize,
+    test: &mut Test,
+    sink: &mut Sink,
+) {
     let screen = kind == IdeaKind::Screen;
     test.screen = screen;
     let mut keys: Vec<Key> = Vec::new();
