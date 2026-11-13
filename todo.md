@@ -14,11 +14,13 @@ next starts (Lengua3.md, section 8).
 | L4 | The Power of 10 lint and the component checks | Landed on main at f197505 (run 43399815151, green on five) |
 | L5 | Tests from the idea, generated cases, mutation score, trust labels | Landed on main at 7ce9264 (run 43439284107, green on five) |
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | Landed on main at cb314b2 (run 43450491850, green on five) |
-| L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Done on `wip/l7`; the five-runner landing run is named in the landing report |
-| L8 | The GPUI front end, embedded in the one file, its behaviours tested | Not started |
-| L9 | The skills rewritten for Rust and GPUI; a product test in an interactive session | Not started |
-| L10 | The scale test | Not started |
-| L11 | Trace and profile; a bench of lengua's overhead; documents; the finish line | Not started |
+| L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Landed on main at af89139 (run 43483075983, green on five) |
+| L8 | The GPUI front end: screens built for the browser, embedded in the one file; navigation and forms; their behaviours tested; what a screen reader can read; one Zed commit pinned; lengua's own std-only crates built for WebAssembly in CI | Done on `wip/l8`; the five-runner landing run is named in the landing report |
+| L9 | Full stack: storage, outgoing HTTP and AI calls, secrets, logins, shared types, logs, embeddings, a way to deploy | Not started |
+| L10 | Native parts, the `native` label, an example desktop app | Not started |
+| L11 | The skills rewritten for Rust, GPUI, full stack and native parts; a product test in an interactive session | Not started |
+| L12 | The scale test | Not started |
+| L13 | Trace and profile; a bench of lengua's overhead; release archives; every document current; the finish line | Not started |
 
 ## Decisions
 
@@ -412,6 +414,50 @@ next starts (Lengua3.md, section 8).
 - **2026-11-13, L7: lengua's STE dictionary grows by the words of programs** that the new ideas
   need (`client`, `listen`, `get`, `hash`, `chunk`, `bracket`, `escape`, `overflow`, `tax`, ...),
   each with its part of speech.
+
+- **2026-11-13, L8: the risk was tested first**, in two CI runs of a throwaway crate (43490423487,
+  43491793393): GPUI and GPUI Kit build for `wasm32-unknown-unknown` on stable 1.100.0 when the
+  web platform is single-threaded, draw in headless Chrome through WebGL2 (SwiftShader; the
+  runner's Chrome has no WebGPU adapter), need fonts (IBM Plex Sans, GPUI's web fallback, or
+  they panic at the first text), and run natively under GPUI's test context. Details:
+  Lengua3.md, section 10, "Found at L8".
+- **2026-11-13, L8: one Zed commit, `d2a4fb6ded7c470be25d1541281da3882495b65b`, pinned through the
+  crates.io snapshot `gpui-pre` 0.3.12** (and `gpui-pre-platform`, `gpui-pre-web`,
+  `gpui-pre-http-client` 0.3.12), exact version and checksum, **not a `git` dependency with
+  `rev =`**: GPUI Kit 0.9.1 requires `gpui-pre =0.3.12`, so a `git` GPUI would be a second,
+  incompatible `gpui` in the graph. To reverse: wait for a GPUI Kit that builds on a `git`
+  GPUI, or patch GPUI Kit's dependency.
+- **2026-11-13, L8: GPUI Kit is `gpui-component` 0.9.1, not `gpui-kit`**: the facade turns on
+  `gpui-pre-platform`'s default `multithreaded` (nightly, cross-origin isolation) and the native
+  platforms. To reverse: use `gpui-kit` with default features off, if a later release allows.
+- **2026-11-13, L8: the front end is generated as two members of the program's workspace**,
+  `web/app` (the `cdylib` for the browser, its `lib.rs` with a `#[path]` module per screen and
+  the start) and `web/files` (the server's embedded files), held like `Cargo.toml`; one
+  `Cargo.lock` for both halves. Every crate of the front end gets `default-features = false`.
+- **2026-11-13, L8: the loader is `wasm-bindgen`'s command line at 0.2.130**, the same version as
+  the crate (`front-wasm-bindgen`), checked by `doctor` (`cargo install wasm-bindgen-cli
+  --version 0.2.130 --locked`); in CI it is the release's binary, pinned by SHA-256 per system,
+  the Windows x86-64 one on Windows ARM64 too (no ARM64 build is published).
+- **2026-11-13, L8: the fonts are the application's files in `assets/fonts/`**, added by the
+  generated start; `examples/notes` carries IBM Plex Sans Regular and SemiBold (OFL 1.1, from
+  Zed's `assets/fonts`, 200,500 and 202,632 bytes), the only binary files of the repository.
+- **2026-11-13, L8: the screens' tests run natively** under GPUI's `TestAppContext`, in a
+  generated harness (`target/lengua/screens`), with lengua's recording text system for `Expect
+  text` (the lines of the last frame) and GPUI's debug selectors for `Click` and `Type into`.
+  A screen's constructor is `make`, so the call graph does not read `cx.new` as a recursion.
+- **2026-11-13, L8: mutants of the screens** are built into their own harness and judged by the
+  screens' cases, within the 40.
+- **2026-11-13, L8: paths are remapped** in every cargo call of the job (`--remap-path-prefix`
+  for the Cargo home, the folder and each path dependency), so the browser's `.wasm`, which
+  holds panic locations, does not carry one computer's paths.
+- **2026-11-13, L8: CI** downloads `wasm-bindgen`, builds `lengua-idea` and `lengua-lint` for
+  `wasm32-wasip2` (a failure fails the run), runs the browser test after the tests (headless
+  Chrome over the DevTools protocol, from a Rust test on `std::net`; no npm, no node), uploads
+  the built components, and its job `same-bytes` holds `hello` and the shop to one SHA-256 on
+  every runner (the notes are compared and reported). The check job's limit is 240 minutes.
+- **2026-11-13, L8: no new dependency of lengua's own**; `serde_json` (already in the graph) is a
+  dev-dependency of `lengua-run`, for the browser test. The program's crates of
+  `examples/notes` are declared in its screen ideas with their reasons.
 ## Runs
 
 The five-runner run a landing rests on is at the head it tests, so it is named in the landing report and added here at the next milestone.

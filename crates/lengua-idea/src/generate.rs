@@ -495,7 +495,11 @@ fn front_files(
     vec![
         ("app_cargo_sha256", front::APP_CARGO, front::app_cargo(&web)),
         ("app_lib_sha256", front::APP_LIB, front::app_lib(&web)),
-        ("files_cargo_sha256", front::FILES_CARGO, front::files_cargo()),
+        (
+            "files_cargo_sha256",
+            front::FILES_CARGO,
+            front::files_cargo(),
+        ),
         (
             "files_lib_sha256",
             front::FILES_LIB,

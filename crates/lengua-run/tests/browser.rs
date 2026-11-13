@@ -104,10 +104,10 @@ impl Socket {
         if length < 126 {
             frame.push(0x80 | u8::try_from(length).expect("a small length"));
         } else if length < 65_536 {
-            frame.push(0x80 | 126);
+            frame.push(0x80 | 0x7e);
             frame.extend_from_slice(&u16::try_from(length).expect("a length").to_be_bytes());
         } else {
-            frame.push(0x80 | 127);
+            frame.push(0x80 | 0x7f);
             frame.extend_from_slice(&u64::try_from(length).expect("a length").to_be_bytes());
         }
         let mask = [0x12u8, 0x34, 0x56, 0x78];
@@ -145,7 +145,7 @@ impl Socket {
         }
     }
 
-    fn call(&mut self, method: &str, params: Value) -> Value {
+    fn call(&mut self, method: &str, params: &Value) -> Value {
         let id = self.next;
         self.next += 1;
         self.send_text(&json!({"id": id, "method": method, "params": params}).to_string());
@@ -161,7 +161,7 @@ impl Socket {
     fn evaluate(&mut self, expression: &str) -> Value {
         let reply = self.call(
             "Runtime.evaluate",
-            json!({"expression": expression, "returnByValue": true}),
+            &json!({"expression": expression, "returnByValue": true}),
         );
         reply["result"]["result"]["value"].clone()
     }
@@ -204,7 +204,7 @@ fn page_socket() -> Socket {
 fn names(tree: &Value) -> Vec<String> {
     tree["result"]["nodes"]
         .as_array()
-        .map(|nodes| {
+        .map_or_else(Vec::new, |nodes| {
             nodes
                 .iter()
                 .filter(|n| n["ignored"] != json!(true))
@@ -217,7 +217,6 @@ fn names(tree: &Value) -> Vec<String> {
                 })
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 fn start_chrome(chrome: &Path) -> Killed {
@@ -253,7 +252,7 @@ fn events(socket: &Socket, method: &str, show: impl Fn(&Value) -> String) -> Vec
 }
 
 fn screenshot(socket: &mut Socket) -> Vec<u8> {
-    let shot = socket.call("Page.captureScreenshot", json!({"format": "png"}));
+    let shot = socket.call("Page.captureScreenshot", &json!({"format": "png"}));
     decode(shot["result"]["data"].as_str().unwrap_or_default())
 }
 
@@ -293,8 +292,8 @@ fn the_notes_open_in_a_browser() {
     let _server = serve_the_notes(&folder);
     let _chrome = start_chrome(&chrome);
     let mut socket = page_socket();
-    socket.call("Runtime.enable", json!({}));
-    socket.call("Network.enable", json!({}));
+    socket.call("Runtime.enable", &json!({}));
+    socket.call("Network.enable", &json!({}));
     let started = wait_for(90, || {
         let state = socket.evaluate(
             "document.body.dataset.lengua + ' ' + document.querySelectorAll('canvas').length",
@@ -311,15 +310,15 @@ fn the_notes_open_in_a_browser() {
     thread::sleep(Duration::from_secs(5));
     let png = screenshot(&mut socket);
     fs::write(out.join("notes.png"), &png).expect("the screenshot");
-    socket.call("Accessibility.enable", json!({}));
-    let read = names(&socket.call("Accessibility.getFullAXTree", json!({})));
+    socket.call("Accessibility.enable", &json!({}));
+    let read = names(&socket.call("Accessibility.getFullAXTree", &json!({})));
     fs::write(out.join("notes-accessibility.txt"), read.join("\n")).expect("the tree");
     println!(
         "what a screen reader can read ({} nodes):\n{}",
         read.len(),
         read.join("\n")
     );
-    socket.call("Page.navigate", json!({"url": "about:blank"}));
+    socket.call("Page.navigate", &json!({"url": "about:blank"}));
     thread::sleep(Duration::from_secs(2));
     let blank = screenshot(&mut socket);
     let mut console = events(&socket, "Runtime.consoleAPICalled", |e| {

@@ -98,7 +98,9 @@ The rule for a native part:
 
 The two native programs that lengua itself is made of, `lengua-mcp` and `lengua-run`, are the
 standing exception: something native must run the WebAssembly. lengua's own std-only
-libraries are also built for WebAssembly, so the checker could one day run as WebAssembly too.
+libraries are also built for WebAssembly, so the checker could one day run as WebAssembly too:
+since L8, CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2` on every runner, and a
+failure fails the run.
 
 **Where it runs, said plainly.** The user is never surprised:
 - before any code is written, the `write-idea` skill says whether the request will be one
