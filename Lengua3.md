@@ -226,8 +226,23 @@ and random numbers come from a seed, so every run gives the same output on every
 
 ### Crates: few, and only ones that build for WebAssembly
 
-The whole Rust ecosystem is open, but every external crate is code lengua didn't write and
-can't hold to its rules, so lengua keeps them few. The `build` skill chooses in this order:
+**Always try to reduce external dependencies.** In the age of AI, an agent can write its own
+code, checked and tested to lengua's rules, where before a team would have taken a crate. Every
+external crate is code lengua didn't write and can't hold to its rules. But be flexible: some
+crates are worth far more than writing them again, and those are the exceptions.
+
+Recognised exceptions, each still declared in the idea with its reason:
+- **GPUI and GPUI Kit**, for the front end: a GPU-drawn UI framework is not something to write
+  again.
+- **Axum**, for a server's routes, run inside the WASI HTTP world through `wstd-axum`
+  ([docs](https://docs.rs/wstd-axum)), which builds for `wasm32-wasip2`.
+- **Tokio**, only where it builds: a WASI component has one thread, so only Tokio's
+  current-thread runtime applies. For HTTP, `wstd` drives the request and Tokio does not. To
+  verify against Tokio's own release notes at the milestone that adds the network.
+- Others the same way: a crate with wide use, that builds for the targets, and that would cost
+  much more to write than to declare.
+
+The `build` skill chooses in this order:
 
 1. **A lengua library** already in the bundle, or in lengua's own shared libraries (section
    below). Written to the same rules, checked and tested like the application.
@@ -381,8 +396,9 @@ Unchanged from lengua 2:
 
 ## 10. Risks and open questions
 
-- **WASI 0.2 or 0.3:** check the state of WASI 0.3 and of the `wasm32-wasip2` target and
-  Wasmtime's versions at L0, and pin them.
+- **WASI 0.2 or 0.3:** a third-party report says WASI 0.3, with async built in, came out in
+  February 2026, while `wstd-axum`'s guide still targets the stable 0.2 HTTP world. Check both
+  against the official WASI and Wasmtime documents at L0, and pin one.
 - **Build time:** a cold `cargo build` can take longer than one tool call; the background job
   and a kept build folder per program must hide it.
 - **The user must have Rust installed.** lengua 2 needed nothing but lengua itself.
