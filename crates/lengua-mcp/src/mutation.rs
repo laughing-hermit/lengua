@@ -6,7 +6,7 @@ use lengua_idea::{Build, Case, Mutant, Mutation, Shape, Test};
 
 use crate::build::{Remark, Worker, cargo, lock};
 use crate::host::{Seal, unseal};
-use crate::{harness, testing};
+use crate::{front, harness, testing};
 
 pub(crate) const MUTANTS: usize = 40;
 const CACHE: &str = "target/lengua/mutants";
@@ -286,8 +286,55 @@ fn remark(mutant: &Mutant) -> Remark {
     }
 }
 
+fn mutation(worker: &Worker) -> Mutation {
+    let (mut groups, mut skeleton) = lengua_idea::mutant_groups(&worker.folder, &worker.build);
+    if let Some(found) = &worker.build.front {
+        let (more, text) = lengua_ts::groups(&front::screen_files(&worker.folder, found));
+        groups.extend(more);
+        skeleton.push_str(&text);
+    }
+    Mutation {
+        sites: groups.iter().map(Vec::len).sum(),
+        mutants: lengua_idea::choose(&groups, MUTANTS),
+        skeleton,
+    }
+}
+
+fn script(mutant: &Mutant) -> bool {
+    Path::new(&mutant.file)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("tsx") || e.eq_ignore_ascii_case("ts"))
+}
+
+fn decide(
+    worker: &Worker,
+    space: &mut Option<Workspace>,
+    mutant: &Mutant,
+    cases: &[Case],
+    original: &str,
+) -> Option<Verdict> {
+    if script(mutant) {
+        let found = front::judge(worker, mutant);
+        if worker.stopped() {
+            return None;
+        }
+        return Some(match found {
+            Some(true) => Verdict::Caught,
+            Some(false) => Verdict::Survived,
+            None => Verdict::Unbuilt,
+        });
+    }
+    if space.is_none() {
+        *space = workspace(worker).ok();
+    }
+    match space {
+        Some(ready) => verdict(worker, ready, mutant, cases, original),
+        None => Some(Verdict::Unbuilt),
+    }
+}
+
 pub(crate) fn run(worker: &Worker, cases: &[Case]) -> bool {
-    let mutation = lengua_idea::mutants(&worker.folder, &worker.build, MUTANTS);
+    let mutation = mutation(worker);
     let original = lock(&worker.state)
         .component
         .as_ref()
@@ -305,14 +352,7 @@ pub(crate) fn run(worker: &Worker, cases: &[Case]) -> bool {
         let found = if let Some(found) = hit {
             found
         } else {
-            if space.is_none() {
-                space = workspace(worker).ok();
-            }
-            let decided = match &space {
-                Some(ready) => verdict(worker, ready, mutant, cases, &original),
-                None => Some(Verdict::Unbuilt),
-            };
-            let Some(found) = decided else {
+            let Some(found) = decide(worker, &mut space, mutant, cases, &original) else {
                 return false;
             };
             found

@@ -86,6 +86,7 @@ pub struct Facts {
     pub component: Option<String>,
     pub sealed: Option<String>,
     pub sealed_trusted: Vec<String>,
+    pub export: Option<String>,
 }
 
 impl Facts {
@@ -282,12 +283,44 @@ fn sources(folder: &Path) -> Vec<String> {
     names
 }
 
+const WEB_SKIPPED: [&str; 3] = ["web/node_modules", "web/.next", "web/out"];
+
+fn web_files(folder: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    generate::collect_skipping(folder, "web", &WEB_SKIPPED, &mut found);
+    let mut names: Vec<String> = found.into_iter().map(|(path, _)| path).collect();
+    names.sort();
+    names
+}
+
+#[must_use]
+pub fn tree_hash(folder: &Path, relative: &str) -> Option<String> {
+    if !folder.join(relative).is_dir() {
+        return None;
+    }
+    let mut found = Vec::new();
+    generate::collect(folder, relative, &mut found);
+    let mut all = Vec::new();
+    for (path, bytes) in found {
+        all.extend_from_slice(path.as_bytes());
+        all.push(0);
+        all.extend_from_slice(bytes.len().to_string().as_bytes());
+        all.push(0);
+        all.extend_from_slice(&bytes);
+    }
+    Some(sha256::hex(&all))
+}
+
 #[must_use]
 pub fn program_files(folder: &Path) -> Vec<String> {
     let mut out = ideas(folder);
     out.push("index.md".to_string());
     out.push("log.md".to_string());
+    if folder.join("api.md").is_file() {
+        out.push("api.md".to_string());
+    }
     out.extend(sources(folder));
+    out.extend(web_files(folder));
     out.push("Cargo.toml".to_string());
     out.push("wit/world.wit".to_string());
     if folder.join("Cargo.lock").is_file() {
@@ -321,6 +354,7 @@ pub fn text(folder: &Path, facts: &Facts, key: &Key) -> Result<String, String> {
     let mut entries: Vec<(&str, &str)> = facts.files.iter().map(|f| ("file", f.as_str())).collect();
     entries.extend(facts.libraries.iter().map(|l| ("library", l.as_str())));
     entries.extend(facts.trusted.iter().map(|t| ("trusted", t.as_str())));
+    entries.extend(facts.export.as_deref().map(|e| ("export", e)));
     entries.extend(facts.component.as_deref().map(|c| ("component", c)));
     entries.extend(facts.sealed.as_deref().map(|s| ("sealed", s)));
     entries.extend(
@@ -335,9 +369,15 @@ pub fn text(folder: &Path, facts: &Facts, key: &Key) -> Result<String, String> {
                 "lengua can't lock the file `{path}`: its name has a line end"
             ));
         }
-        let bytes = fs::read(folder.join(path))
-            .map_err(|e| format!("lengua could not read `{path}` to lock it: {e}"))?;
-        let _ = writeln!(out, "{tag} {} {path}", sha256::hex(&bytes));
+        let hash = if tag == "export" {
+            tree_hash(folder, path)
+                .ok_or_else(|| format!("lengua could not read the folder `{path}` to lock it"))?
+        } else {
+            let bytes = fs::read(folder.join(path))
+                .map_err(|e| format!("lengua could not read `{path}` to lock it: {e}"))?;
+            sha256::hex(&bytes)
+        };
+        let _ = writeln!(out, "{tag} {hash} {path}");
     }
     let signature = sha256::to_hex(&sha256::hmac(&key.bytes, out.as_bytes()));
     let _ = writeln!(out, "{SIGNATURE}{signature}");
@@ -379,6 +419,14 @@ fn check_entry(
 ) -> Option<(String, Option<Sealed>)> {
     let (hash, path) = rest.split_once(' ')?;
     let keep = tag == "sealed" || tag == "sealed-trusted";
+    if tag == "export" {
+        match tree_hash(folder, path) {
+            Some(found) if found == hash => {}
+            Some(_) => changed.push(format!("`{path}` changed")),
+            None => changed.push(format!("`{path}` is not there")),
+        }
+        return Some((path.to_string(), None));
+    }
     let sealed = match fs::read(folder.join(path)) {
         Ok(bytes) if sha256::hex(&bytes) == hash => keep.then_some(Sealed { bytes }),
         Ok(_) => {
@@ -425,7 +473,8 @@ fn read_lines(folder: &Path, body: &str, key: &Key) -> Reading {
         match tag {
             "kind" => out.found = Kind::parse(rest),
             "label" => out.label = rest.to_string(),
-            "file" | "component" | "sealed" | "library" | "trusted" | "sealed-trusted" => {
+            "file" | "component" | "sealed" | "library" | "trusted" | "sealed-trusted"
+            | "export" => {
                 match check_entry(folder, (tag, rest), key, &mut out.changed) {
                     Some((path, code)) => {
                         out.files.push(path);
@@ -471,6 +520,7 @@ pub fn verify(folder: &Path, lock: &Path, kind: Kind, key: &Key) -> Result<Verif
     if kind != Kind::Test {
         let mut now = ideas(folder);
         now.extend(sources(folder));
+        now.extend(web_files(folder));
         let files = &read.files;
         read.changed.extend(
             now.into_iter()

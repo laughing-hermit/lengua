@@ -10,6 +10,19 @@ pub(crate) fn function_name(name: &str) -> bool {
     }
 }
 
+pub(crate) fn script_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic()) && chars.all(|c| c.is_ascii_alphanumeric())
+}
+
+fn name_ok(kind: IdeaKind, name: &str) -> bool {
+    if kind == IdeaKind::Screen {
+        script_name(name)
+    } else {
+        function_name(name)
+    }
+}
+
 fn entries(lines: &[Line], sink: &mut Sink) -> Vec<(usize, String)> {
     let mut out: Vec<(usize, String)> = Vec::new();
     for line in lines {
@@ -55,12 +68,12 @@ pub(crate) fn parse(
             );
             continue;
         };
-        if !function_name(name) {
+        if !name_ok(kind, name) {
             sink.add(
                 line,
                 "structure-name",
                 format!(
-                    "`{name}` is not a function name; write `snake_case` or `Type::snake_case`"
+                    "`{name}` is not a function name; write `snake_case` or `Type::snake_case`, or in a screen idea `lowerCamelCase` or `UpperCamelCase`"
                 ),
             );
         }

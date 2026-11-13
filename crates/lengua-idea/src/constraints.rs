@@ -3,11 +3,11 @@ use crate::idea::IdeaKind;
 use crate::ste::Dictionary;
 use crate::text::{Line, backticked, relative_path, snake, split_key, tokenize, upper_camel};
 
-const KEYS: &str = "`Reads`, `Writes`, `Connects to`, `Listens on`, `Serves`, `Memory`, `Time`, `Modules`, `Exports`, `Uses`, `Uses crate` and `Uses component`";
+const KEYS: &str = "`Reads`, `Writes`, `Connects to`, `Listens on`, `Serves`, `Memory`, `Time`, `Modules`, `Exports`, `Uses`, `Uses crate`, `Uses component`, `Uses package`, `Uses shadcn` and `Route`";
 const MAX_MEMORY: u64 = 4 << 30;
 const MAX_TIME_MS: u64 = 3_600_000;
 const RESERVED: [&str; 4] = ["main", "ui", "index", "log"];
-const TOP_ONLY: [&str; 10] = [
+const TOP_ONLY: [&str; 12] = [
     "Reads",
     "Writes",
     "Connects to",
@@ -18,6 +18,8 @@ const TOP_ONLY: [&str; 10] = [
     "Modules",
     "Exports",
     "Uses component",
+    "Uses shadcn",
+    "Route",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -54,6 +56,68 @@ pub(crate) struct Constraints {
     pub exports: Vec<(String, usize)>,
     pub crates: Vec<CrateUse>,
     pub components: Vec<(String, String, usize)>,
+    pub packages: Vec<CrateUse>,
+    pub shadcn: Vec<(String, usize)>,
+    pub routes: Vec<(String, String, usize)>,
+}
+
+pub(crate) const SHADCN: [&str; 5] = ["button", "card", "input", "label", "textarea"];
+
+fn package_name(name: &str) -> bool {
+    let part = |p: &str| {
+        !p.is_empty()
+            && !p.starts_with('.')
+            && p.chars().all(|c| {
+                c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_' || c == '.'
+            })
+    };
+    match name.strip_prefix('@').and_then(|rest| rest.split_once('/')) {
+        Some((scope, rest)) => part(scope) && part(rest),
+        None => !name.starts_with('@') && part(name),
+    }
+}
+
+fn package_line(
+    value: &str,
+    line: usize,
+    dictionary: &Dictionary,
+    sink: &mut Sink,
+) -> Option<(String, String)> {
+    let (head, reason) = value.split_once(", for ")?;
+    let (name, version) = head.trim().rsplit_once(' ')?;
+    let name = backticked(name).filter(|n| package_name(n))?;
+    if reason.trim().is_empty() {
+        return None;
+    }
+    let mut tokens = Vec::new();
+    tokenize(reason, line, &mut tokens);
+    dictionary.words(&tokens, sink);
+    if !semver(version) {
+        sink.add(
+            line,
+            "package-version",
+            format!(
+                "the package `{name}` is pinned to one exact version, `major.minor.patch`, such as `1.2.3`; `{version}` is not one"
+            ),
+        );
+    }
+    Some((name.to_string(), version.to_string()))
+}
+
+fn route_line(value: &str) -> Option<(String, String)> {
+    let inner = backticked(value)?;
+    let (method, path) = inner.split_once(' ')?;
+    let methods = ["GET", "POST", "PUT", "DELETE", "PATCH"];
+    let parts_ok = path.strip_prefix('/')?.split('/').all(|part| {
+        let name = part.strip_prefix('{').and_then(|p| p.strip_suffix('}'));
+        match name {
+            Some(n) => snake(n),
+            None => part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'),
+        }
+    });
+    (methods.contains(&method) && parts_ok).then(|| (method.to_string(), path.to_string()))
 }
 
 pub(crate) fn module_name(name: &str) -> bool {
@@ -387,6 +451,40 @@ impl Reader<'_> {
                     });
                 }
                 (good, "`` `name` 1.2.3, for <reason> ``")
+            }
+            "Uses package" => {
+                let found = package_line(value, line, self.dictionary, sink);
+                let good = found.is_some();
+                if let Some((name, version)) = found {
+                    self.out.packages.push(CrateUse {
+                        name,
+                        version,
+                        line,
+                    });
+                }
+                (good, "`` `name` 1.2.3, for <reason> ``")
+            }
+            "Uses shadcn" => {
+                let list = names(value).unwrap_or_default();
+                let good = !list.is_empty() && list.iter().all(|n| SHADCN.contains(&n.as_str()));
+                if good {
+                    self.out.shadcn.extend(list.into_iter().map(|n| (n, line)));
+                }
+                (
+                    good,
+                    "shadcn/ui component names in backticks, with commas between them: `button`, `card`, `input`, `label`, `textarea`",
+                )
+            }
+            "Route" => {
+                let found = route_line(value);
+                let good = found.is_some();
+                if let Some((method, path)) = found {
+                    self.out.routes.push((method, path, line));
+                }
+                (
+                    good,
+                    "`` `<METHOD> <path>` ``: `GET`, `POST`, `PUT`, `DELETE` or `PATCH`, and a path from `/` whose parts may be `{name}`",
+                )
             }
             "Uses component" => {
                 let found = component_line(value, line, self.dictionary, sink);

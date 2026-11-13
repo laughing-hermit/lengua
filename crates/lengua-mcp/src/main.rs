@@ -1,6 +1,7 @@
 mod build;
 mod doctor;
 mod fixtures;
+mod front;
 mod harness;
 mod host;
 mod mutation;
@@ -93,6 +94,16 @@ struct MutantsReply {
     #[schemars(description = "Mutants whose result came from the last check")]
     cached: usize,
 }
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+#[serde(crate = "rmcp::serde")]
+#[schemars(crate = "rmcp::schemars")]
+struct ExportReply {
+    #[schemars(description = "The files of the export")]
+    files: usize,
+    #[schemars(description = "Their size together, in bytes")]
+    bytes: u64,
+}
+
 
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 #[serde(crate = "rmcp::serde")]
@@ -116,6 +127,8 @@ struct BuildReply {
     tests: Option<TestsReply>,
     #[schemars(description = "From mutating on: the mutants")]
     mutants: Option<MutantsReply>,
+    #[schemars(description = "For an application with screens, once built: the front end's static export, its files and bytes")]
+    export: Option<ExportReply>,
 }
 
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
@@ -321,6 +334,7 @@ fn seal_program(
             .filter(|_| !library)
             .map(|s| s.sealed.clone()),
         sealed_trusted: component.trusted.clone(),
+        export: plan.front.as_ref().map(|_| format!("{}/out", front::STAGE)),
     };
     match lock::write(folder, &folder.join(lock::LOCK), &facts, key) {
         Ok(()) => report.written.push(lock::LOCK.to_string()),
@@ -361,6 +375,7 @@ fn build_reply(
         message: r.message,
     }));
     let component = status.component;
+    let export = status.export;
     BuildReply {
         state: status.stage.name().to_string(),
         seconds: status.seconds,
@@ -384,6 +399,7 @@ fn build_reply(
             same: m.same,
             cached: m.cached,
         }),
+        export: export.map(|(files, bytes)| ExportReply { files, bytes }),
     }
 }
 
@@ -461,6 +477,7 @@ impl Lengua {
                     sha256: None,
                     tests: None,
                     mutants: None,
+                    export: None,
                 }
             }
         });
@@ -501,7 +518,8 @@ impl Lengua {
                 .map_err(|e| format!("the system gave lengua no random numbers: {e}"))
         })?;
         let mut snapshot: Option<(String, Status)> = None;
-        let mut report = lengua_idea::check_with(&folder, now(), |plan| {
+        let lint: lengua_idea::WebLint = lengua_ts::lint;
+        let mut report = lengua_idea::check_web(&folder, now(), |plan| {
             snapshot = if plan.code {
                 self.builds
                     .snapshot(&folder, plan)
@@ -512,7 +530,7 @@ impl Lengua {
             snapshot
                 .as_ref()
                 .map_or_else(Trust::default, |(_, status)| status.trust())
-        });
+        }, Some(lint));
         seal_program(&folder, &mut report, snapshot.as_ref(), &key);
         Ok(Json(self.reply(&folder, report, snapshot)))
     }
@@ -584,7 +602,8 @@ fn run_doctor() -> ExitCode {
     let folder = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let doctor = doctor::examine(&folder);
     print!("{}", doctor.text());
-    if doctor.ok() {
+    let screens = folder.join("ideas").join("ui").is_dir();
+    if doctor.ok() && (!screens || doctor.front_ok()) {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE

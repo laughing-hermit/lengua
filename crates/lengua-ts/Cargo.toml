@@ -1,0 +1,21 @@
+[package]
+name = "lengua-ts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+lengua-idea = { path = "../lengua-idea" }
+lengua-lint = { path = "../lengua-lint" }
+oxc_allocator = "=0.158.0"
+oxc_ast = "=0.158.0"
+oxc_ast_visit = "=0.158.0"
+oxc_parser = "=0.158.0"
+oxc_span = "=0.158.0"
+oxc_syntax = "=0.158.0"
+
+[lints]
+workspace = true

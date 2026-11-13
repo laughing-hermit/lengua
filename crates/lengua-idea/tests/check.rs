@@ -43,7 +43,6 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
         [
             "idea.md",
             "ideas/words.md",
-            "ideas/ui/summary.md",
             "index.md",
             "log.md",
             "Cargo.toml",
@@ -51,7 +50,7 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
         ]
     );
     let top = read(&folder, "idea.md");
-    assert!(top.starts_with("---\ntype: lengua Program\ndescription: \"The program counts the words in a text.\"\nmodule: main\nsource: src/main.rs\nuses: [ideas/words, ideas/ui/summary]\nused_by: []\nlabel: unchecked\nidea_sha256: "));
+    assert!(top.starts_with("---\ntype: lengua Program\ndescription: \"The program counts the words in a text.\"\nmodule: main\nsource: src/main.rs\nuses: [ideas/words]\nused_by: []\nlabel: unchecked\nidea_sha256: "));
     assert!(top.contains("\nsource_sha256: none\ncargo_sha256: "));
     assert!(top.contains("\nworld_sha256: "));
     assert!(top.contains("\n---\n\n# Purpose\n"));
@@ -62,17 +61,16 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
     assert_eq!(report.build.as_ref().map(|b| b.code), Some(false));
     let words = read(&folder, "ideas/words.md");
     assert!(words.contains("type: lengua Module\n"));
-    assert!(words.contains("used_by: [idea, ideas/ui/summary]\n"));
+    assert!(words.contains("used_by: [idea]\n"));
     assert!(words.contains("source_sha256: none\ntitle: Words\ntags: [text]\n---\n"));
     assert!(!words.contains("label: checked"));
     let index = read(&folder, "index.md");
-    assert!(index.starts_with("---\nokf_version: \"0.2\"\n---\n\n# Program\n\n* ["));
+    assert!(index.starts_with("---\nokf_version: \"0.2\"\n---\n\n# Back end\n\n## Program\n\n* ["));
     assert!(
         index
             .contains("](idea.md) - The program counts the words in a text. Label: `unchecked`.\n")
     );
-    assert!(index.contains("\n# Modules\n\n* [words](ideas/words.md) - The module finds the words in a text. Label: `unchecked`.\n"));
-    assert!(index.contains("\n# Screens\n\n* [ui/summary](ideas/ui/summary.md) - "));
+    assert!(index.contains("\n## Modules\n\n* [words](ideas/words.md) - The module finds the words in a text. Label: `unchecked`.\n"));
     let log = read(&folder, "log.md");
     assert!(log.starts_with(
         "# Log\n\n## 2026-11-13\n\n* **Check** at 00:00:00Z: no problems; label `unchecked`.\n"
@@ -341,7 +339,6 @@ fn the_label_and_the_score_go_into_the_wiki() {
         [
             "idea.md",
             "ideas/words.md",
-            "ideas/ui/summary.md",
             "index.md",
             "log.md"
         ]
@@ -365,13 +362,12 @@ fn the_build_carries_every_test_of_every_idea() {
             ("idea.md", "two words", false),
             ("idea.md", "one word", false),
             ("idea.md", "empty input", false),
-            ("ideas/words.md", "two words", false),
-            ("ideas/ui/summary.md", "two words", true)
+            ("ideas/words.md", "two words", false)
         ]
     );
     assert_eq!(
         build.sources,
-        ["src/main.rs", "src/words.rs", "src/ui/summary.rs"]
+        ["src/main.rs", "src/words.rs"]
     );
     assert_eq!(build.tests[1].ranges.len(), 1);
     assert_eq!(build.tests[2].stdout.as_deref(), Some("0\n"));

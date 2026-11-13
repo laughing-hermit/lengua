@@ -13,7 +13,7 @@ use crate::model::Model;
 use crate::rules::{ASSERTS, Context};
 
 pub use crate::model::Declared;
-pub use crate::mutate::{Edit, Mutant, Mutation, apply, mutants};
+pub use crate::mutate::{Edit, Mutant, Mutation, apply, choose, groups, mutants};
 
 #[must_use]
 pub fn declared(text: &str) -> Vec<Declared> {

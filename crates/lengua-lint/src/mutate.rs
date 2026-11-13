@@ -342,7 +342,7 @@ fn function_mutants(source: &Source, code: &Code, function: &Function) -> Vec<Mu
 }
 
 #[must_use]
-pub fn mutants(sources: &[Source], cap: usize) -> Mutation {
+pub fn groups(sources: &[Source]) -> (Vec<Vec<Mutant>>, String) {
     let mut groups: Vec<Vec<Mutant>> = Vec::new();
     let mut skeleton = String::new();
     for source in sources {
@@ -371,11 +371,15 @@ pub fn mutants(sources: &[Source], cap: usize) -> Mutation {
         skeleton.push('\n');
         skeleton.push_str(&apply(&source.text, &bodies));
     }
-    let sites = groups.iter().map(Vec::len).sum();
+    (groups, skeleton)
+}
+
+#[must_use]
+pub fn choose(groups: &[Vec<Mutant>], cap: usize) -> Vec<Mutant> {
     let longest = groups.iter().map(Vec::len).max().unwrap_or(0);
     let mut chosen: Vec<Mutant> = Vec::new();
     'rounds: for round in 0..longest {
-        for group in &groups {
+        for group in groups {
             if chosen.len() >= cap {
                 break 'rounds;
             }
@@ -390,9 +394,15 @@ pub fn mutants(sources: &[Source], cap: usize) -> Mutation {
             .then(a.line.cmp(&b.line))
             .then(a.site.cmp(&b.site))
     });
+    chosen
+}
+
+#[must_use]
+pub fn mutants(sources: &[Source], cap: usize) -> Mutation {
+    let (groups, skeleton) = groups(sources);
     Mutation {
-        mutants: chosen,
-        sites,
+        sites: groups.iter().map(Vec::len).sum(),
+        mutants: choose(&groups, cap),
         skeleton,
     }
 }

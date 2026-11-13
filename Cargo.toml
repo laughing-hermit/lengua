@@ -6,6 +6,7 @@ members = [
     "crates/lengua-host",
     "crates/lengua-seal",
     "crates/lengua-run",
+    "crates/lengua-ts",
     "crates/lengua-mcp",
 ]
 

@@ -1,8 +1,10 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub(crate) const TARGETS: [&str; 2] = ["wasm32-wasip2", "wasm32-unknown-unknown"];
 const OLDEST: (u32, u32) = (1, 85);
+const NODE: (u32, u32) = (22, 12);
+const PNPM: (u32, u32) = (10, 0);
 
 pub(crate) struct Item {
     pub name: String,
@@ -12,6 +14,7 @@ pub(crate) struct Item {
 
 pub(crate) struct Doctor {
     pub items: Vec<Item>,
+    pub front: Vec<Item>,
 }
 
 fn output(program: &str, args: &[&str], folder: &Path) -> Option<String> {
@@ -58,6 +61,64 @@ fn installed_targets(folder: &Path) -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn find(program: &str) -> Option<PathBuf> {
+    let names: Vec<String> = if cfg!(windows) {
+        vec![format!("{program}.exe"), format!("{program}.cmd")]
+    } else {
+        vec![program.to_string()]
+    };
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        for name in &names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn tool_version(program: &str, folder: &Path) -> Option<String> {
+    let path = find(program)?;
+    output(&path.to_string_lossy(), &["--version"], folder)
+}
+
+pub(crate) fn numbers(text: &str) -> Option<(u32, u32)> {
+    let number = text.trim().trim_start_matches('v');
+    let mut parts = number.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
+fn front_items(folder: &Path) -> Vec<Item> {
+    let node = tool_version("node", folder);
+    let node_fix = match node.as_deref().map(numbers) {
+        Some(Some(found)) if found >= NODE => None,
+        _ if cfg!(windows) => Some("winget install --id OpenJS.NodeJS.LTS".to_string()),
+        _ => Some("install the LTS release from https://nodejs.org/en/download".to_string()),
+    };
+    let pnpm = tool_version("pnpm", folder);
+    let pnpm_fix = match pnpm.as_deref().map(numbers) {
+        Some(Some(found)) if found >= PNPM => None,
+        _ if cfg!(windows) => Some("winget install --id pnpm.pnpm".to_string()),
+        _ => Some("npm install --global pnpm".to_string()),
+    };
+    vec![
+        Item {
+            name: format!("node {}.{} or later", NODE.0, NODE.1),
+            found: node,
+            fix: node_fix,
+        },
+        Item {
+            name: format!("pnpm {} or later", PNPM.0),
+            found: pnpm,
+            fix: pnpm_fix,
+        },
+    ]
+}
+
 pub(crate) fn examine(folder: &Path) -> Doctor {
     let mut items = Vec::new();
     let cargo = output("cargo", &["--version"], folder);
@@ -101,7 +162,10 @@ pub(crate) fn examine(folder: &Path) -> Doctor {
             fix: (!have).then(|| format!("rustup target add {target}")),
         });
     }
-    Doctor { items }
+    Doctor {
+        items,
+        front: front_items(folder),
+    }
 }
 
 impl Doctor {
@@ -117,6 +181,10 @@ impl Doctor {
         self.items.iter().all(|i| i.fix.is_none())
     }
 
+    pub(crate) fn front_ok(&self) -> bool {
+        self.front.iter().all(|i| i.fix.is_none())
+    }
+
     fn line(item: &Item) -> String {
         let found = item.found.as_deref().unwrap_or("not found");
         match &item.fix {
@@ -127,6 +195,13 @@ impl Doctor {
 
     pub(crate) fn text(&self) -> String {
         let mut lines: Vec<String> = self.items.iter().map(Self::line).collect();
+        lines.extend(self.front.iter().map(Self::line));
+        if !self.front_ok() {
+            lines.push(
+                "lengua can't build a front end (screens) until Node.js and pnpm are installed."
+                    .to_string(),
+            );
+        }
         lines.push(if self.ok() {
             "lengua can build programs.".to_string()
         } else {
@@ -149,16 +224,31 @@ impl Doctor {
             lines.join("; ")
         )
     }
+
+    pub(crate) fn front_problems(&self) -> String {
+        let lines: Vec<String> = self
+            .front
+            .iter()
+            .filter(|i| i.fix.is_some())
+            .map(Self::line)
+            .collect();
+        format!(
+            "Node.js and pnpm are not ready, so lengua can't build the front end: {}",
+            lines.join("; ")
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Doctor, Item, version};
+    use super::{Doctor, Item, numbers, version};
 
     #[test]
     fn the_version_is_read_from_the_first_line() {
         assert_eq!(version("rustc 1.100.0 (abc 2026-11-12)"), Some((1, 100)));
         assert_eq!(version("cargo"), None);
+        assert_eq!(numbers("v26.1.0"), Some((26, 1)));
+        assert_eq!(numbers("12.18.0\n"), Some((12, 18)));
     }
 
     #[test]
@@ -176,6 +266,7 @@ mod tests {
                     fix: Some("rustup target add wasm32-wasip2".to_string()),
                 },
             ],
+            front: Vec::new(),
         };
         assert!(!doctor.ok());
         assert_eq!(

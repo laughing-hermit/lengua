@@ -1,6 +1,6 @@
 use crate::Sink;
 
-pub(crate) const LENGUA_KEYS: [&str; 11] = [
+pub(crate) const LENGUA_KEYS: [&str; 12] = [
     "type",
     "description",
     "module",
@@ -12,6 +12,7 @@ pub(crate) const LENGUA_KEYS: [&str; 11] = [
     "source_sha256",
     "cargo_sha256",
     "world_sha256",
+    "web_sha256",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,6 +56,23 @@ impl Front {
         out.push_str(self.body_text());
         out
     }
+}
+
+pub(crate) fn without_links(body: &str) -> String {
+    let mut fence = false;
+    let mut at = 0;
+    for line in body.split_inclusive('\n') {
+        if line.trim_start().starts_with("```") {
+            fence = !fence;
+        }
+        if !fence && line.trim_end() == "# Links" {
+            let mut kept = body.get(..at).unwrap_or(body).trim_end_matches('\n').to_string();
+            kept.push('\n');
+            return kept;
+        }
+        at += line.len();
+    }
+    body.to_string()
 }
 
 fn valid_key(key: &str) -> bool {

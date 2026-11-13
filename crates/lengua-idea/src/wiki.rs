@@ -1,14 +1,26 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
 use crate::frontmatter::Front;
 use crate::idea::IdeaKind;
+use crate::types::render;
+use crate::web::Route;
 use crate::{Finding, Library, Note, Shape, Trust};
 
 pub(crate) struct Parts<'a> {
     pub shape: Shape,
     pub libraries: &'a [Library],
     pub components: &'a [(String, String, usize)],
+    pub interface: &'a Interface<'a>,
+}
+
+pub(crate) struct Interface<'a> {
+    pub routes: &'a [Route],
+    pub calls: &'a [(String, Vec<String>)],
+    pub client_hash: Option<String>,
+    pub packages: &'a [(String, String)],
+    pub crates: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -127,24 +139,22 @@ pub(crate) fn page_text(page: &Page, used_by: &[String], label: &str, shape: Sha
 
 pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
     let mut out = String::from("---\nokf_version: \"0.2\"\n---\n");
-    let groups = [
-        ("Program", IdeaKind::Program),
-        ("Modules", IdeaKind::Module),
-        ("Screens", IdeaKind::Screen),
-    ];
-    for (heading, kind) in groups {
-        let lines: Vec<String> = pages
+    let line = |p: &Page| {
+        format!(
+            "* [{}]({}) - {} Label: `{label}`.\n",
+            p.title, p.file, p.description
+        )
+    };
+    let of = |kind: IdeaKind| -> Vec<String> {
+        pages
             .iter()
             .filter(|p| p.kind == kind)
-            .map(|p| {
-                format!(
-                    "* [{}]({}) - {} Label: `{label}`.\n",
-                    p.title, p.file, p.description
-                )
-            })
-            .collect();
-        section(&mut out, heading, &lines);
-    }
+            .map(|p| line(p))
+            .collect()
+    };
+    out.push_str("\n# Back end\n");
+    section(&mut out, "## Program", &of(IdeaKind::Program));
+    section(&mut out, "## Modules", &of(IdeaKind::Module));
     let libraries: Vec<String> = parts
         .libraries
         .iter()
@@ -155,7 +165,7 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
             )
         })
         .collect();
-    section(&mut out, "Libraries", &libraries);
+    section(&mut out, "## Libraries", &libraries);
     let components: Vec<String> = parts
         .components
         .iter()
@@ -163,17 +173,145 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
             format!("* [{file}]({file}) - A component built from {built}. Label: `trusted`.\n")
         })
         .collect();
-    section(&mut out, "Components", &components);
+    section(&mut out, "## Components", &components);
+    let screens = of(IdeaKind::Screen);
+    if !screens.is_empty() {
+        out.push_str("\n# Front end\n");
+        section(&mut out, "## Screens", &screens);
+    }
+    if !parts.interface.routes.is_empty() {
+        section(
+            &mut out,
+            "# Interface",
+            &[format!("* [api](api.md) - {API_DESCRIPTION} Label: `{label}`.\n")],
+        );
+    }
+    let packages = parts.interface.packages;
+    let mut counts = Vec::new();
+    if parts.interface.crates > 0 {
+        counts.push(format!("* Crates: {}.\n", parts.interface.crates));
+    }
+    if !packages.is_empty() {
+        let names: Vec<String> = packages.iter().map(|(n, v)| format!("`{n}` {v}")).collect();
+        counts.push(format!(
+            "* npm packages: {} in `web/package.json` ({}), with the packages every front end has for its build and tests, pinned in `web/pnpm-lock.yaml`.\n",
+            packages.len(),
+            names.join(", ")
+        ));
+    }
+    section(&mut out, "# Dependencies", &counts);
     out
 }
 
+pub(crate) const API_DESCRIPTION: &str =
+    "The routes of the back end that the front end calls, with the shapes of their requests and answers.";
+
 fn section(out: &mut String, heading: &str, lines: &[String]) {
     if !lines.is_empty() {
-        out.push_str("\n# ");
+        out.push('\n');
         out.push_str(heading);
         out.push_str("\n\n");
         out.push_str(&lines.concat());
     }
+}
+
+fn idea_link(pages: &[Page], file: &str) -> String {
+    let title = pages
+        .iter()
+        .find(|p| p.file == file)
+        .map_or(file, |p| p.title.as_str());
+    format!("[{title}]({file})")
+}
+
+fn callers<'a>(pages: &'a [Page], interface: &Interface, function: &str) -> Vec<&'a Page> {
+    pages
+        .iter()
+        .filter(|p| {
+            interface
+                .calls
+                .iter()
+                .any(|(source, called)| *source == p.source && called.iter().any(|c| c == function))
+        })
+        .collect()
+}
+
+pub(crate) fn api_text(pages: &[Page], label: &str, interface: &Interface) -> String {
+    let mut out = format!(
+        "---\ntype: lengua Interface\ndescription: {}\nlabel: {label}\nclient_sha256: {}\n---\n\n# Routes\n",
+        quoted(API_DESCRIPTION),
+        interface.client_hash.as_deref().unwrap_or("none")
+    );
+    for route in interface.routes {
+        let (answer, failure) = if route.json {
+            (render(&route.answer), render(&route.failure))
+        } else {
+            ("string".to_string(), "string".to_string())
+        };
+        let body = route
+            .body
+            .as_ref()
+            .map_or("none".to_string(), |b| format!("`{}`", render(b)));
+        let served: Vec<String> = route.served_by.iter().map(|f| idea_link(pages, f)).collect();
+        let called: Vec<String> = callers(pages, interface, &route.function)
+            .iter()
+            .map(|p| format!("[{}]({})", p.title, p.file))
+            .collect();
+        let called = if called.is_empty() {
+            "no screen".to_string()
+        } else {
+            called.join(", ")
+        };
+        let _ = write!(
+            out,
+            "\n## `{} {}`\n\n* Function: `{}` in `web/lib/lengua.ts`.\n* Request body: {body}.\n* Answer: `{answer}`.\n* Failure: `{failure}`.\n* Served by: {}.\n* Called by: {called}.\n",
+            route.method,
+            route.path,
+            route.function,
+            served.join(", ")
+        );
+    }
+    out
+}
+
+pub(crate) fn links_text(page: &Page, pages: &[Page], used_by: &[String], interface: &Interface) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for used in &page.uses {
+        lines.push(format!("* Uses {}.\n", idea_link(pages, &format!("{used}.md"))));
+    }
+    for user in used_by {
+        lines.push(format!("* Used by {}.\n", idea_link(pages, &format!("{user}.md"))));
+    }
+    for route in interface.routes {
+        let name = format!("`{} {}`", route.method, route.path);
+        let calls = interface
+            .calls
+            .iter()
+            .any(|(s, c)| *s == page.source && c.iter().any(|f| *f == route.function));
+        if calls {
+            let served: Vec<String> = route.served_by.iter().map(|f| idea_link(pages, f)).collect();
+            lines.push(format!(
+                "* Calls [{name}](api.md), served by {}.\n",
+                served.join(", ")
+            ));
+        }
+        if route.served_by.contains(&page.file) {
+            let called: Vec<String> = callers(pages, interface, &route.function)
+                .iter()
+                .map(|p| format!("[{}]({})", p.title, p.file))
+                .collect();
+            let by = if called.is_empty() {
+                String::new()
+            } else {
+                format!(", called by {}", called.join(", "))
+            };
+            lines.push(format!("* Serves [{name}](api.md){by}.\n"));
+        }
+    }
+    let front = !interface.routes.is_empty() || pages.iter().any(|p| p.kind == IdeaKind::Screen);
+    if lines.is_empty() || !front {
+        return String::new();
+    }
+    format!("\n# Links\n\n{}", lines.concat())
 }
 
 fn change(previous: Option<&str>, now: Option<&str>) -> Option<&'static str> {
@@ -322,10 +460,17 @@ pub(crate) fn write(
             .collect();
         texts.push((
             page.file.clone(),
-            page_text(page, &used_by, label, parts.shape),
+            page_text(page, &used_by, label, parts.shape)
+                + &links_text(page, pages, &used_by, parts.interface),
         ));
     }
     texts.push(("index.md".to_string(), index_text(pages, label, parts)));
+    if !parts.interface.routes.is_empty() {
+        texts.push((
+            "api.md".to_string(),
+            api_text(pages, label, parts.interface),
+        ));
+    }
     let previous = fs::read_to_string(folder.join("log.md"))
         .unwrap_or_default()
         .replace("\r\n", "\n");

@@ -11,6 +11,7 @@ pub(crate) const CARGO_TOML: &str = "Cargo.toml";
 pub(crate) const WORLD: &str = "wit/world.wit";
 pub(crate) const WASI: &str = "0.2.12";
 pub(crate) const TARGET: &str = "wasm32-wasip2";
+pub const ASSETS: &str = "target/lengua/assets";
 
 const NOT_NAMES: [&str; 62] = [
     "abstract",
@@ -138,6 +139,7 @@ pub(crate) struct Package<'a> {
     pub sources: &'a [String],
     pub crates: &'a [(String, String)],
     pub libraries: &'a [(String, String)],
+    pub web: bool,
 }
 
 fn quoted_list(items: &[String]) -> String {
@@ -157,6 +159,12 @@ fn dependencies(package: &Package) -> Vec<String> {
             .iter()
             .map(|(name, path)| (name.clone(), format!("{name} = {{ path = \"{path}\" }}"))),
     );
+    if package.web {
+        lines.push((
+            "lengua_web".to_string(),
+            format!("lengua_web = {{ path = \"{ASSETS}\" }}"),
+        ));
+    }
     lines.sort();
     lines.into_iter().map(|(_, line)| line).collect()
 }
@@ -221,6 +229,9 @@ pub(crate) fn cargo_toml(package: &Package) -> String {
         "[workspace]",
     ] {
         lines.push(line.to_string());
+    }
+    if package.web {
+        lines.push("exclude = [\"target\"]".to_string());
     }
     let mut text = lines.join("\n");
     text.push('\n');
@@ -361,7 +372,12 @@ pub(crate) fn plan(
         });
     }
     let used = crates(pages, constraints, findings);
-    let sources: Vec<String> = pages.iter().map(|p| p.source.clone()).collect();
+    let sources: Vec<String> = pages
+        .iter()
+        .map(|p| p.source.clone())
+        .filter(|s| Path::new(s).extension().is_some_and(|e| e == "rs"))
+        .collect();
+    let web = pages.iter().any(|p| p.kind == crate::idea::IdeaKind::Screen);
     let linked: Vec<(String, String)> = libraries
         .iter()
         .map(|l| (l.name.clone(), l.path.clone()))
@@ -372,6 +388,7 @@ pub(crate) fn plan(
         sources: &sources,
         crates: &used,
         libraries: &linked,
+        web,
     };
     let files = [
         ("cargo_sha256", CARGO_TOML, cargo_toml(&package)),
@@ -400,6 +417,15 @@ pub(crate) fn plan(
 }
 
 pub(crate) fn collect(folder: &Path, relative: &str, out: &mut Vec<(String, Vec<u8>)>) {
+    collect_skipping(folder, relative, &[], out);
+}
+
+pub(crate) fn collect_skipping(
+    folder: &Path,
+    relative: &str,
+    skipped: &[&str],
+    out: &mut Vec<(String, Vec<u8>)>,
+) {
     let Ok(entries) = fs::read_dir(folder.join(relative)) else {
         return;
     };
@@ -415,8 +441,11 @@ pub(crate) fn collect(folder: &Path, relative: &str, out: &mut Vec<(String, Vec<
     names.sort();
     for (name, dir) in names {
         let path = format!("{relative}/{name}");
+        if skipped.contains(&path.as_str()) {
+            continue;
+        }
         if dir {
-            collect(folder, &path, out);
+            collect_skipping(folder, &path, skipped, out);
         } else if let Ok(bytes) = fs::read(folder.join(&path)) {
             out.push((path, bytes));
         }
@@ -496,6 +525,7 @@ codegen-units = 1
             sources: &sources,
             crates: &[],
             libraries: &[],
+            web: false,
         };
         assert_eq!(cargo_toml(&package), HELLO);
     }
@@ -510,6 +540,7 @@ codegen-units = 1
             sources: &sources,
             crates: &crates,
             libraries: &[("json".to_string(), "../json".to_string())],
+            web: false,
         };
         let text = cargo_toml(&package);
         assert!(text.starts_with("[package]\nname = \"word-count\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\ninclude = [\"src/main.rs\", \"src/words.rs\"]\nautobins = false\n\n[lib]\nname = \"word_count\"\npath = \"src/main.rs\"\n\n[dependencies]\ngpui = \"=0.2.0\"\njson = { path = \"../json\" }\n\n[lints.rust]\n"));
@@ -641,6 +672,7 @@ world program {
             sources: &sources,
             crates: &[],
             libraries: &[],
+            web: false,
         };
         let text = cargo_toml(&package);
         assert!(text.contains(
