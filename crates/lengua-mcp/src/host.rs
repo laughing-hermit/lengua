@@ -38,7 +38,8 @@ pub(crate) fn outside(imports: &[String], world: &[String]) -> Vec<String> {
         .filter(|name| {
             let (interface, version) = name.split_once('@').unwrap_or((name.as_str(), ""));
             let known = world.iter().any(|w| w == interface);
-            !(known && (version == "0.2" || version.starts_with("0.2.")))
+            let exact = world.iter().any(|w| w == *name);
+            !(exact || (known && (version == "0.2" || version.starts_with("0.2."))))
         })
         .cloned()
         .collect()
@@ -185,13 +186,18 @@ mod tests {
 
     #[test]
     fn imports_outside_the_world_are_named_and_any_0_2_version_is_taken() {
-        let world = vec!["wasi:cli/stdout".to_string(), "wasi:io/streams".to_string()];
+        let world = vec![
+            "wasi:cli/stdout".to_string(),
+            "wasi:io/streams".to_string(),
+            "lengua:tax/rates".to_string(),
+        ];
         let imports = vec![
             "wasi:cli/stdout@0.2.12".to_string(),
             "wasi:io/streams@0.2.0".to_string(),
             "wasi:random/random@0.2.12".to_string(),
             "wasi:cli/stdout@0.3.0".to_string(),
             "example:thing/other".to_string(),
+            "lengua:tax/rates".to_string(),
         ];
         assert_eq!(
             outside(&imports, &world),
