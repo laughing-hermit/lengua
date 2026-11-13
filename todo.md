@@ -1601,6 +1601,26 @@ Its runs, each a dispatch of ci.yml on the branch, on Linux on x86-64:
 - 43299033050 and 43299067452 (at a7c1364, with main's 443b91e merged in): the 19 tests of
   the library and the test of checksums with and without the formula passed.
 - 43299050025 (at a7c1364): the shout server and httpd checked, the table's lines.
+- 43312340945 (at 607721c): httpd done once B5's test was right, the table's line.
+- 43314108376 (at 607721c): the suite on Linux on x86-64, green.
+- **The landing rests on 43324747631** (at b122ce9, with main's 1c99208, W23's rest, merged
+  in): the suite on all five runners, green: format, the five test jobs and the gate, on
+  Linux on x86-64 and ARM64, macOS on ARM64 and Windows on x86-64 and ARM64. 43324774610, the
+  same head: the test of checksums with crc32's formula and without it, green on all five.
+- 43324761348 (the golden ledger, Linux on x86-64, b122ce9 against main's 1c99208): 230 proof
+  blocks agree and 34 differ, none for the worse and none out of time on one side. The 34:
+  checksums B1 and B2, crc32 B1 and B2 and crc32-library B1 and B2, each from proven to a
+  length of 1 or 2 to proven over the ledger's whole cut of their ranges; the shout server's
+  three, from the wait to proven; and httpd's 25, from the wait to 17 proven over the cut, 7
+  not proven (4 of more than 256 paths, 3 that read a file the program wrote) and one where
+  the model alone finds inputs, B24's two clients at once, which `check` runs for real and
+  then calls tested, not proven. (The ledger numbers httpd's blocks one on from B12, which
+  has two tables.) An earlier ledger, 43305916304 at d50a760, had httpd missing: its idea's
+  Purpose didn't state B5's new range yet.
+
+What was never run on a runner: `prove_further` on checksums, to see it reach every input in
+range; the five parts' mutants and httpd's with the new proofs (tests/mutation.rs, by
+dispatch); the bench; a release archive.
 
 What is left, for the owner:
 - **A function that writes has no formula.** `$decimal_parse`, `$decimal_format`,
