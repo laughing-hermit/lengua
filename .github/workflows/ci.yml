@@ -179,8 +179,11 @@ jobs:
           time cargo build -q --release --target wasm32-wasip2 --offline
       - name: lengua-run built alone, with no compiler in it
         run: |
-          if cargo tree --locked -p lengua-run -e normal --prefix none | grep -i cranelift; then
-            echo "::error::lengua-run depends on Cranelift"
+          tree=$(cargo tree --locked -p lengua-run -e normal --prefix none | sort -u)
+          echo "the crates of lengua-run named cranelift (the data structures Wasmtime's runtime uses):"
+          echo "$tree" | grep -i cranelift || echo "none"
+          if echo "$tree" | grep -E "^(cranelift-codegen|cranelift-frontend|cranelift-native|wasmtime-internal-cranelift|wasmtime-internal-winch|winch-codegen) "; then
+            echo "::error::lengua-run has a compiler in it"
             exit 1
           fi
           cargo build --release --locked -p lengua-run

@@ -331,7 +331,7 @@ next starts (Lengua3.md, section 8).
   signature. `run` verifies the lock in the server before anything else, so a changed file is
   named even when it would also be a finding.
 - **2026-11-13, L6: `lengua-run`**, a new binary crate on `lengua-host`, `lengua-seal` and
-  `lengua-idea`: no compiler (CI fails if `cargo tree -p lengua-run` has Cranelift, and builds
+  `lengua-idea`: no compiler (CI fails if `cargo tree -p lengua-run` has a code generator, and builds
   it alone); the lock verified as `run` does; standard input passed through only with
   `- Reads: standard input`; a thread ends it at the time and two seconds; exit codes: the
   program's, 124 out of time, 125 refused, 126 out of memory, 134 trapped.
@@ -340,6 +340,11 @@ next starts (Lengua3.md, section 8).
 - **2026-11-13, L6: `missing_errors_doc` allowed in the workspace's clippy lints**: the new public
   functions that return `Result` (the lock's) would need doc comments, which rule 11 forbids in
   lengua's own code.
+- **2026-11-13, L6: what "no compiler" means for `lengua-run`**: its tree has no code generator
+  (`cranelift-codegen`, `cranelift-frontend`, `cranelift-native`, `wasmtime-internal-cranelift`,
+  Winch). It does have `cranelift-entity`, `cranelift-bforest` and `cranelift-bitset`, data
+  structures that Wasmtime's runtime itself uses (run 43446712598 found them; CI first grepped
+  any `cranelift`).
 - **2026-11-13, L6: the example `sleepy`** sleeps 30 s with `- Time: 1 s`; its test expects
   `out of time`.
 
@@ -380,6 +385,9 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-13 | [43407010727](https://github.com/laughing-hermit/lengua/actions/runs/43407010727) | wip/l5 2feb776 | test, linux-x86_64 | Failed as planned on `clock`: its example's diff gave the fixed random number, `1859844318930836693`; and `small`'s `assert!(!name.is_empty())`, which clippy refuses in a program |
 | 2026-11-13 | [43407715800](https://github.com/laughing-hermit/lengua/actions/runs/43407715800) | wip/l5 8fbb147 | test, linux-x86_64 | Green: 65 + 12 (`lengua-idea`), 18 + 20 (`lengua-lint`, the mutator among them), 12 + 25 + 2 + 2 (`lengua-mcp`). Seconds from the first `check` to the end of the job: hello 3.1 (no mutant, `checked`), echo 6.9 (1 of 1), count 9.4 (1 of 2, `tested`), files 32.2 (6 of 6), clock 7.6 (1 of 2), forever 10.6 (0 of 2), greedy 8.8 (0 of 4), words 7.4 (1 of 1), small 25.4 (6 of 6, `checked`; again after a change of `main` 3.4 s, 4 of 6 from the cache), the weak `small` 26.3 (3 of 6, `tested`); a wrong output 4.3 and a failing boundary 3.7 to `tests_failed` |
 | 2026-11-13 | [43439284107](https://github.com/laughing-hermit/lengua/actions/runs/43439284107) | wip/l5 7ce9264 | test, all five | Green on five: the L5 landing run |
+| 2026-11-13 | [43445115025](https://github.com/laughing-hermit/lengua/actions/runs/43445115025) | wip/l6 fe752fb | test, linux-x86_64 | Failed as planned: `Cargo.lock` out of date (the three new path crates and `getrandom` as a direct dependency; no new external package) and a format patch, both applied |
+| 2026-11-13 | [43445909901](https://github.com/laughing-hermit/lengua/actions/runs/43445909901) | wip/l6 c22cdf4 | test, linux-x86_64 | Failed: clippy `similar_names` (`made`, `mode`) in a test of the lock |
+| 2026-11-13 | [43446712598](https://github.com/laughing-hermit/lengua/actions/runs/43446712598) | wip/l6 7c03317 | test, linux-x86_64 | Every test green: 71 + 12 (`lengua-idea`, HMAC's RFC 4231 vectors and the lock among them), 18 + 20 (`lengua-lint`), 2 (`lengua-run`), 1 (`lengua-seal`, the one `unsafe` call), 12 + 29 + 2 + 2 (`lengua-mcp`: a changed byte in each of the nine kinds of locked file refused, another key refused, `lengua-run` on `hello`, `files` and `count`, `sleepy` stopped at its time). Failed only at the new CI step: `cargo tree -p lengua-run` has `cranelift-entity`, `cranelift-bforest` and `cranelift-bitset`, data structures of Wasmtime's runtime, not its compiler; the step now looks for the code generators. Seconds to `done`: hello 3.1, sleepy 13.7, small 25.1 (as at L5, with every run now a process) |
 
 ## What the permission checks refused
 

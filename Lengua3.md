@@ -866,7 +866,9 @@ tests it.
 
 **`lengua-run`.** `lengua-run <folder> [arguments...]` runs a checked folder from a shell, on
 `lengua-host` and `lengua-seal` alone: Wasmtime with no compiler (`runtime`, `std` and
-`component-model`; CI fails if `cargo tree -p lengua-run` has Cranelift, and builds it alone so
+`component-model`; CI fails if `cargo tree -p lengua-run` has a code generator (`cranelift-codegen`,
+`cranelift-frontend`, `cranelift-native`, `wasmtime-internal-cranelift`, Winch), and builds it
+alone so
 that the features of `lengua-mcp` do not join it). It verifies the lock as `run` does, grants
 only what the idea grants (arguments only with `- Reads: arguments`; standard input passed
 through only with `- Reads: standard input`, otherwise empty; standard output and standard error
