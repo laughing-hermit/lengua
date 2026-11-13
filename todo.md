@@ -155,6 +155,7 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-13 | [43376326657](https://github.com/laughing-hermit/lengua/actions/runs/43376326657) | wip/l1 79fbe14 | test, linux-x86_64 | Green: format, lockfile, clippy, 63 tests passed (51 unit, 6 + 4 integration, 2 version), binary built |
 | 2026-11-13 | [43376901162](https://github.com/laughing-hermit/lengua/actions/runs/43376901162) | wip/l1 c3d1db1 | test, all five | Green on five: the L1 landing run |
 | 2026-11-13 | [43379311761](https://github.com/laughing-hermit/lengua/actions/runs/43379311761) | wip/l2 371f8dc | test, linux-x86_64 | Failed only on format (a patch, applied); tests green: 58 + 8 + 4 + 9 + 2 + 2 passed, hello world built in about 2 s; `hello.wasm` imports listed (Lengua3.md, section 10) |
+| 2026-11-13 | [43379930462](https://github.com/laughing-hermit/lengua/actions/runs/43379930462) | wip/l2 e340eb0 | test, linux-x86_64 | Green: format, lockfile, clippy, the tests (hello world built, a compile error mapped to `src/main.rs` line 2, a rebuild after a change, a hand-edited `Cargo.toml`, no toolchain, `doctor`), binary built |
 
 ## What the permission checks refused
 
