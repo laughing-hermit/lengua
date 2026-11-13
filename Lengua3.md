@@ -231,6 +231,14 @@ In the age of AI, an agent can write its own code, checked and tested to lengua'
 before a team would have taken a crate. Every external crate is code lengua didn't write and
 can't hold to its rules. An exception has to merit it, as GPUI does.
 
+A crate merits it only when all of these hold, and the idea's `- Uses crate:` line says which:
+- writing it would be a large project of its own (a UI framework, a GPU renderer), or it is the
+  component's own interface to its host, which can't be written any other way;
+- the standard library, lengua's shared libraries and the agent's own code can't do the job;
+- it builds for every target the application needs.
+
+Convenience never merits it: saving a few hundred lines is what the agent is for.
+
 The exceptions that merit it, each still declared in the idea with its reason:
 - **GPUI, its web crate and GPUI Kit**, for the front end: a GPU-drawn UI framework is not
   something to write again.
