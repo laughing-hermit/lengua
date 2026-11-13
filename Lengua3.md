@@ -111,6 +111,43 @@ failure fails the run.
 - every reply and `index.md` start with a "Where it runs" line, for example "One WebAssembly
   file. Runs on any OS and CPU. Sandboxed: it reaches only what the idea grants."
 
+### The vision: the best lengua solution, before the idea
+
+Before any idea is written, the `vision` skill works out with the person the best way to build
+what they want with lengua, and writes it to `vision.md` in the application's folder, in plain
+words for the person:
+
+- whether it fits lengua, and where it runs (one WebAssembly file, or which native part and why);
+- its shape: modules, screens, what is on the server and what in the GPUI front end, storage,
+  logins, calls to other services and AI models;
+- what it may reach: files, network, secrets, storage;
+- what it is built from: the standard library, lengua's shared libraries, the agent's own code,
+  and any crate that merits it, pure Rust first;
+- what lengua can't do yet for it, and the alternatives;
+- for each principle below, whether the plan meets it easily or pushes against it, and why.
+
+The person reads `vision.md` and approves it in their own words, like the idea. Then
+`write-idea` turns it into the ideas. `vision.md` is the top page of the application's wiki,
+with OKF frontmatter, and the lock signs it with everything else. If the ideas later grow past
+the vision (a new grant, a native part, a new crate), `check` says so, and the vision is
+updated and approved again.
+
+The principles and their do's and don'ts live in one page, the skill's
+`references/principles.md`, which this document also points to; `check` holds the page and this
+section to the same list, so they can't drift apart.
+
+| # | Principle | Do | Don't |
+|---|---|---|---|
+| 1 | An AI language | Write the idea as the source and the only documentation; let the AI compile it to Rust; let the machine verify it | Trust code because an AI wrote it; document anything outside the idea |
+| 2 | Maximum interoperability | Build one file that runs on any OS and CPU | Build per system when WebAssembly can do the job |
+| 3 | WebAssembly first | Make every part WebAssembly; declare a native part only for a named limit, with its reason | Go native for speed, convenience, or a crate that only builds natively when a WebAssembly path exists |
+| 4 | Nothing unless absolutely necessary | Use the standard library, then lengua's shared libraries, then the agent's own code; take a pure-Rust crate only when it merits it, declared with its reason | Add a crate to save a few hundred lines; take a crate that wraps C when a pure-Rust one exists; grant access the program doesn't need |
+| 5 | Full stack, web first | Put the GPUI front end, the server, storage, logins and AI calls in the one file | Split one application into separate deployables |
+| 6 | The Power of 10 | Plan small functions, bounded loops, plain data, every error handled | Plan recursion, unbounded loops, global state, `unwrap`, `unsafe` |
+| 7 | Trust you can see | Say up front what will be `checked`, `tested`, `trusted` or `native` | Hide a trusted component or a native part |
+| 8 | Documentation that can't drift | Keep the vision, the ideas and the code signed together; name every function in its idea | Write comments in code; change code without its idea, or an idea without a check |
+| 9 | The person decides | Ask the person to read and approve the vision and the idea in their own words | Write code before approval; decide for the person what only they can |
+
 ### The person approves the idea before any code
 
 The idea file is what the person asked for, so the person approves it before the agent writes
@@ -210,7 +247,8 @@ lengua is an Agent Plugin: skills and one Rust MCP server, nothing else.
 
 | Part | What it does |
 |---|---|
-| Skill `write-idea` | Turns a request into `idea.md` |
+| Skill `vision` | Turns what a person wants to build into `vision.md`: the best lengua solution for it, judged against lengua's principles and their do's and don'ts |
+| Skill `write-idea` | Turns an approved `vision.md` (or a small request) into `idea.md` |
 | Skill `build` | Turns `idea.md` into Rust in `src/` |
 | MCP tool `check` | Checks the idea, generates the build files, builds, checks the rules, runs the tests, writes the lock and the wiki |
 | MCP tool `run` | Runs a checked program under its grants |
@@ -1576,7 +1614,7 @@ Each one is green on all five runners before the next starts.
 | L8 | The GPUI front end: screens built for the browser, embedded in the one file; several screens with navigation and forms; their behaviours tested; what a screen reader can read, tested and written down; one Zed commit pinned; lengua's own std-only crates also built for WebAssembly in CI | A web application with GPUI screens ships as one file and opens in a browser |
 | L9 | Full stack: storage granted by the idea; outgoing HTTP calls (other services and AI models, with streaming replies); secrets given by the host and never written to the lock or logs; logins (sessions, password hashing, tokens) as a shared library; the front end calling its own server with shared Rust types; logs and errors of a running app; an embeddings and vector-search shared library; a tested way to deploy | A full-stack application (front end, server, storage, logins, an AI call) is `checked` and runs as one file |
 | L10 | Native parts: `- Native:` with a named reason, built for the user's system and on five runners, the same checks, the `native` label, the "Where it runs" line; an example desktop app with its own GPUI window whose logic stays WebAssembly; what a native part can reach, written down | A native part is built, checked and labelled; an undeclared native need is refused |
-| L11 | The skills rewritten for Rust, GPUI, full stack and native parts; the person reads the idea and approves it in their own words before any code, and again for changes (the approved hash in the lock, `build` refused without it); "Where it runs" before any code, pure Rust first, the merit test for crates, crates that aren't pure Rust flagged; the Agent Plugins version settled; a product test in an interactive session | An agent goes from a request to a `checked` full-stack application with the plugin alone |
+| L11 | The skills: a new `vision` skill (the best lengua solution for an idea, `vision.md`, the principles with their do's and don'ts in `references/principles.md`, approved by the person) and `write-idea` and `build` rewritten for Rust, GPUI, full stack and native parts; the person reads the idea and approves it in their own words before any code, and again for changes (the approved hash in the lock, `build` refused without it); "Where it runs" before any code, pure Rust first, the merit test for crates, crates that aren't pure Rust flagged; the Agent Plugins version settled; a product test in an interactive session | An agent goes from a request to a `checked` full-stack application with the plugin alone |
 | L12 | The scale test: a full-stack application (GPUI front end, server, storage, logins, an AI call) in one file, built and then changed three times | A report of cycles and breakages, next to lengua 2's 3,638-line record |
 | L13 | The finish line: trace and profile; a bench of lengua's overhead; release archives for the five systems with install steps; every path a milestone listed as never exercised, now exercised or its reason written; WASI 0.3 checked again; every document current; a short guide to the owner's own steps (publishing, loading the plugin, branch protection) | The finish-line run green on five; only main and tags remain |
 
