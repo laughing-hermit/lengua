@@ -1,6 +1,0 @@
-# Lines the golden comparison leaves out of both sides before it compares (cargo xtask golden-diff).
-# One regular expression a line, in the syntax of Rust's regex crate (which reads grep -E's common
-# forms the same); blank lines and lines starting with # are ignored.
-#
-# A line goes here only for a difference that is expected and understood, with a comment saying
-# which step expects it and why. An empty list means every recorded line must be identical.

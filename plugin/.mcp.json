@@ -1,7 +1,0 @@
-{
-  "mcpServers": {
-    "lengua": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/server/lengua-mcp"
-    }
-  }
-}

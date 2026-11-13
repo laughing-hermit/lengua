@@ -427,11 +427,52 @@ Unchanged from lengua 2:
 - Nothing may cost money.
 - Agent-level product tests only in the live interactive session, never headless.
 
+Decided for lengua 3 at L0 (2026-11-13):
+
+- **lengua's own code follows rule 11.** Its Rust files have no comments and no doc comments,
+  as lengua asks of the programs it builds. Its documentation is this document and each
+  crate's `README.md`, written like an idea (purpose, behaviours, structure). A language that
+  says comments drift should not ship comments of its own.
+- **lengua's own lints** are in the workspace's `[lints]`: every warning denied, clippy's
+  `pedantic` group denied, `unsafe_code` forbidden. The other rules of section 5 come with
+  lengua's lint at L4.
+- **Agent Plugins 1.0.0** is the plugin format: agent-plugins.org publishes 1.0.0 as its
+  current version, with its schemas under `schemas/1.0.0/` (there is no 1.1.0 there).
+
 ## 10. Risks and open questions
 
-- **WASI 0.2 or 0.3:** a third-party report says WASI 0.3, with async built in, came out in
-  February 2026, while `wstd-axum`'s guide still targets the stable 0.2 HTTP world. Check both
-  against the official WASI and Wasmtime documents at L0, and pin one.
+- **WASI 0.2, decided at L0 (2026-11-13): lengua 3 targets WASI 0.2, `wasm32-wasip2`.**
+  Checked against the official sources on 2026-11-13:
+  - WASI 0.3.0 shipped on 2026-06-11 and 0.3.1 on 2026-08-11 (not February, as the third-party
+    report said); 0.2 went on to 0.2.12 on the same train, and runtimes may keep supporting
+    0.2 next to 0.3 ([wasi.dev roadmap](https://wasi.dev/roadmap)).
+  - Rust 1.100.0 (2026-11-12) is the current stable
+    ([announcement](https://blog.rust-lang.org/2026/11/12/Rust-1.100.0/)). `wasm32-wasip2`,
+    `wasm32-wasip3` and `wasm32-unknown-unknown` are all tier 2 with full `std`
+    ([platform support](https://doc.rust-lang.org/stable/rustc/platform-support.html)).
+    `wasm32-wasip3` first reached stable in 1.100.0, its threads still fail to spawn, it is
+    not tested in Rust's CI, and its page names LLVM 23 and wasi-sdk 34 as build requirements
+    ([wasm32-wasip3](https://doc.rust-lang.org/nightly/rustc/platform-support/wasm32-wasip3.html));
+    `wasm32-wasip2` has been tier 2 since 1.82 and runs on Wasmtime 17 and later
+    ([wasm32-wasip2](https://doc.rust-lang.org/nightly/rustc/platform-support/wasm32-wasip2.html),
+    [tier 2 post](https://blog.rust-lang.org/2024/11/26/wasip2-tier-2/)).
+  - Wasmtime's current release is 50.0.1 (2026-10-29)
+    ([releases](https://github.com/bytecodealliance/wasmtime/releases/tag/v50.0.1)). The
+    component model and its async are tier 1
+    ([stability tiers](https://docs.wasmtime.dev/stability-tiers.html)), and wasi.dev says
+    WASI 0.3 is on by default since Wasmtime 46, but `wasmtime-wasi`'s API documents still
+    call its WASI 0.3 module "experimental, unstable and incomplete", while its WASI 0.2 module
+    carries no such label ([wasmtime_wasi](https://docs.wasmtime.dev/api/wasmtime_wasi/)).
+  - Tokio builds for `wasm32-wasip2`, networking included, since 1.51.0 (2026-04-03), but only
+    with `RUSTFLAGS="--cfg tokio_unstable"`
+    ([tokio#7933](https://github.com/tokio-rs/tokio/pull/7933)). That changes nothing here:
+    Tokio is not an exception (section 4).
+
+  Why 0.2: the user needs only `rustup target add wasm32-wasip2`; WASI 0.2 is the stable side
+  of Wasmtime's WASI; lengua's components have one thread, so 0.3's async adds little yet. The
+  pins: Rust 1.100.0 in `rust-toolchain.toml` with both WebAssembly targets, and Wasmtime
+  50.0.1, added as a dependency at L3. Look at 0.3 again at L3 and at L7 (HTTP): take it when
+  `wasmtime-wasi` calls it stable and its Rust target builds with `rustup` alone.
 - **Build time:** a cold `cargo build` can take longer than one tool call; the background job
   and a kept build folder per program must hide it.
 - **The user must have Rust installed**, with its two WebAssembly targets. lengua 2 needed nothing

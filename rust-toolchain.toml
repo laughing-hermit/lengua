@@ -1,6 +1,5 @@
-# The Rust lengua is built and tested with, on every runner and every computer: rustup installs it,
-# with clippy and rustfmt, when cargo first runs in this folder.
 [toolchain]
-channel = "1.99.1"
-components = ["clippy", "rustfmt"]
+channel = "1.100.0"
 profile = "minimal"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-wasip2", "wasm32-unknown-unknown"]

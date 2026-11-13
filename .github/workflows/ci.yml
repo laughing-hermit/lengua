@@ -1,645 +1,127 @@
 name: ci
 
-# lengua built and tested natively on five runners, GitHub's free ones (the repository is public):
-# Linux on x86-64 and ARM64, macOS on ARM64 (Apple stopped making Intel Macs), and Windows on
-# x86-64 and ARM64, each running the same WebAssembly programs.
-# xtask/targets.json names the five runners; xtask/tools.tsv pins what they install, which
-# `cargo xtask fetch` installs; rust-toolchain.toml pins Rust, which rustup installs. Each step
-# that does more than one thing is a task of the task crate, xtask/ (`cargo xtask <task>`).
-#
-# - A push to a branch runs the suite on all five (a branch named wip/... gets no push run: its
-#   author dispatches the run it wants, so work in progress doesn't cost a long suite per push).
-# - Every week it runs the suite, the slow ignored tests and the bench on all five.
-# - A dispatch picks the targets and the mode: compile (clippy and the tests built), test (the
-#   suite), ignored (the slow ignored tests, optionally one folder's check), golden (the checker's
-#   and the prover's recordings of every program, made at two commits and compared, or, in the
-#   runners view, made of the dispatched ref on each target and compared between them), bench (the
-#   gate: lengua against C, C++ and Rust compiled to WebAssembly and built natively, and against
-#   an earlier commit's programs) or release (each runner's archive, built there, then installed
-#   and checked on a clean runner of the same system and CPU).
-# - A bench's C, C++ and Rust are compiled to WebAssembly once, by the bench-wasm job on
-#   linux-x86_64, and every runner's bench measures those same modules.
-# - The suite's outside modules, tests/outside's Rust and C programs, are compiled to WebAssembly
-#   once too, by the outside-wasm job on linux-x86_64, and every runner's suite checks and runs
-#   those same modules (tests/outside.rs).
-# - `filter` matches test *names* only (libtest's filters, after `--`). To run a test *file*, name
-#   it in `test_files` (`lib` is the library's own tests): each becomes `--test <name>`. A run with
-#   a filter or files that matched no test fails, so a gate cannot pass by running nothing.
 on:
-  push:
-    branches-ignore:
-      - "wip/**"
-    paths:
-      - "src/**"
-      - "tests/**"
-      - "crates/**"
-      - "xtask/**"
-      - "plugin/**"
-      - "benches/**"
-      - "examples/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".cargo/**"
-      - ".github/**"
-  schedule:
-    - cron: "17 5 * * 1"
   workflow_dispatch:
     inputs:
-      targets:
-        description: "Which targets: all, or a comma-separated list from xtask/targets.json"
-        type: string
-        default: "all"
       mode:
-        description: "compile, test, ignored, golden, bench or release (golden: on linux-x86_64 alone, but its runners view on the targets asked for; bench and release: all five)"
+        description: "compile (clippy, the tests built, the binary built) or test (the tests run too)"
         type: choice
-        options:
-          - compile
-          - test
-          - ignored
-          - golden
-          - bench
-          - release
-        default: compile
-      filter:
-        description: "Only the tests whose names contain this (libtest's filters: several, separated by spaces)"
+        options: [compile, test]
+        default: test
+      targets:
+        description: "all, or a comma list of linux-x86_64, linux-aarch64, macos-aarch64, windows-x86_64, windows-aarch64"
         type: string
-        default: ""
-      test_files:
-        description: "Only these test files, by name, separated by spaces (wasm_limits wasm_red_team ...; lib for the library's own tests)"
-        type: string
-        default: ""
-      check_folder:
-        description: "Program folders, comma-separated, for the ignored check_one_folder test (LENGUA_CHECK_FOLDER)"
-        type: string
-        default: ""
-      mutate_only:
-        description: "The programs the mutation test runs alone (LENGUA_MUTATE_ONLY), in an ignored run"
-        type: string
-        default: ""
-      stall_seconds:
-        description: "Stop a test or ignored run after this many seconds, keeping where it stood (stall.txt; the two Linux targets)"
-        type: string
-        default: ""
-      explain:
-        description: "ignored: print each question a proof asks a solver, as terms (LENGUA_PROVE_EXPLAIN; 'path' adds the run's conditions), and each shape's time; with the filter records_the_programs and check_folder, one program's proofs"
-        type: string
-        default: ""
-      seed:
-        description: "The seed the randomized tests draw from (LENGUA_RANDOM_SEED), to run one again"
-        type: string
-        default: ""
-      golden_base:
-        description: "golden: the commit to record the goldens at, to compare the dispatched ref's with"
-        type: string
-        default: ""
-      golden_base_run:
-        description: "golden: an earlier golden run whose base recordings to reuse, instead of recording the base again"
-        type: string
-        default: ""
-      golden_view:
-        description: "golden: raw (the recordings byte for byte), ledger (only the proofs' verdicts, counts left out) or runners (the dispatched ref recorded on each target, compared between the targets; no base)"
-        type: choice
-        options:
-          - raw
-          - ledger
-          - runners
-        default: raw
-      bench_against:
-        description: "bench: a commit whose lengua programs the dispatched ref's are measured against, in the same run"
-        type: string
-        default: ""
-
-concurrency:
-  group: ci-${{ github.ref }}-${{ github.event_name }}-${{ inputs.mode }}-${{ inputs.targets }}-${{ inputs.filter }}-${{ inputs.test_files }}-${{ inputs.check_folder }}-${{ inputs.mutate_only }}-${{ inputs.golden_base }}-${{ inputs.golden_base_run }}-${{ inputs.golden_view }}-${{ inputs.bench_against }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+        default: linux-x86_64
+  schedule:
+    - cron: "23 5 * * 1"
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.event_name }}-${{ inputs.mode }}-${{ inputs.targets }}
+  cancel-in-progress: true
+
 env:
-  CARGO_TERM_COLOR: never
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  # The jobs to run, as a matrix, from the one list of runners: each target in each mode
-  # (`cargo xtask plan`, which says how a push, the weekly run and a dispatch choose them).
   plan:
-    name: plan
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
     outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
-      bench: ${{ steps.matrix.outputs.bench }}
-      outside: ${{ steps.matrix.outputs.outside }}
+      mode: ${{ steps.plan.outputs.mode }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
-
-      # Rust as rust-toolchain.toml pins it, which rustup installs when it first runs here; rustup
-      # itself where an image lacks it.
-      - name: Rust
-        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
-
-      - id: matrix
+      - id: plan
         env:
-          EVENT: ${{ github.event_name }}
-          MODE: ${{ inputs.mode }}
-          TARGETS: ${{ inputs.targets }}
-          GOLDEN_BASE: ${{ inputs.golden_base }}
-          GOLDEN_BASE_RUN: ${{ inputs.golden_base_run }}
-          GOLDEN_VIEW: ${{ inputs.golden_view }}
-          GH_TOKEN: ${{ github.token }}
-        run: cargo xtask plan
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'test' }}
+          TARGETS: ${{ github.event_name == 'workflow_dispatch' && inputs.targets || 'all' }}
+        run: |
+          all='[
+            {"target": "linux-x86_64", "runner": "ubuntu-24.04"},
+            {"target": "linux-aarch64", "runner": "ubuntu-24.04-arm"},
+            {"target": "macos-aarch64", "runner": "macos-26"},
+            {"target": "windows-x86_64", "runner": "windows-2025"},
+            {"target": "windows-aarch64", "runner": "windows-11-arm"}
+          ]'
+          wanted=$(jq -cn --arg t "$TARGETS" --argjson all "$all" \
+            'if $t == "all" then [$all[].target] else $t | split(",") | map(gsub("\\s"; "")) | map(select(. != "")) end')
+          unknown=$(jq -cn --argjson w "$wanted" --argjson all "$all" '$w - [$all[].target]')
+          if [ "$unknown" != "[]" ] || [ "$wanted" = "[]" ]; then
+            echo "::error::unknown or empty targets: $TARGETS"
+            exit 1
+          fi
+          matrix=$(jq -cn --argjson w "$wanted" --argjson all "$all" '[$all[] | select(.target as $x | $w | index($x))]')
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "mode $MODE on $matrix"
 
-  # Formatting is the same on every target, so it is checked once, beside the tests rather than in
-  # front of them: a difference never hides a test result. When there is one, the patch that
-  # formats it is kept (fmt.patch), to apply with git. The job runs cargo and git alone and builds
-  # nothing, so that its patch and its lock come whether or not the code builds: the task crate's
-  # own build may be what waits for the lock.
   format:
-    name: format
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    defaults:
-      run:
-        shell: bash
     steps:
-      - uses: actions/checkout@v4
-
-      # Rust as rust-toolchain.toml pins it, which rustup installs when it first runs here; rustup
-      # itself where an image lacks it.
-      - name: Rust
-        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
-
-      - name: Format
-        id: format
-        run: cargo fmt --check
-
-      # The patch: the files formatted, then git's diff of them.
-      - name: Formatted
-        id: formatted
-        if: ${{ failure() && steps.format.outcome == 'failure' }}
-        run: cargo fmt
-
-      - name: The patch
-        if: ${{ failure() && steps.formatted.outcome == 'success' }}
-        run: git diff --output=fmt.patch
-
-      - name: Keep the patch
-        if: failure()
-        uses: actions/upload-artifact@v4
+      - uses: actions/checkout@v5
+      - name: toolchain
+        run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal --component rustfmt
+      - name: cargo fmt --check
+        id: fmt
+        run: |
+          if cargo fmt --all --check; then
+            exit 0
+          fi
+          cargo fmt --all
+          git diff > fmt.patch
+          echo "differs=true" >> "$GITHUB_OUTPUT"
+          exit 1
+      - if: ${{ failure() && steps.fmt.outputs.differs == 'true' }}
+        uses: actions/upload-artifact@v5
         with:
           name: fmt-patch-${{ github.run_number }}
           path: fmt.patch
-          retention-days: 7
-          if-no-files-found: ignore
 
-      # Nothing builds on the owner's computer, so a new dependency's lock entries are made here:
-      # when Cargo.lock is behind Cargo.toml, the resolved Cargo.lock is kept (cargo-lock), to copy
-      # into the repository, and the job fails. cargo fetch resolves the workspace as a build does,
-      # and downloads what it resolved, but builds nothing; with --locked it fails where the lock
-      # is behind, and without, it writes the lock it made.
-      - name: Lock file
-        id: lock
-        if: ${{ !cancelled() }}
-        run: cargo fetch --locked
-
-      - name: The lock cargo makes
-        id: relock
-        if: ${{ failure() && steps.lock.outcome == 'failure' }}
-        run: cargo fetch
-
-      - name: Keep the lock file
-        if: ${{ failure() && steps.relock.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: cargo-lock-${{ github.run_number }}
-          path: Cargo.lock
-          retention-days: 7
-          if-no-files-found: ignore
-
-  # A bench's C, C++ and Rust compiled to WebAssembly once, with wasi-sdk (pinned in
-  # xtask/tools.tsv) and Rust's wasm32-wasip1 target, and kept for every runner's bench, which
-  # measures the same modules (`cargo xtask bench-wasm`). It runs only when a bench does.
-  bench-wasm:
-    name: bench-wasm
+  check:
     needs: plan
-    if: ${{ needs.plan.outputs.bench == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/cache@v4
-        with:
-          path: ~/wasi-sdk
-          key: wasi-sdk-${{ hashFiles('xtask/tools.tsv') }}
-
-      - name: Rust
-        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
-
-      - name: wasi-sdk and Rust's wasm32-wasip1 target
-        run: cargo xtask fetch linux-x86_64 wasi
-
-      - name: The modules
-        run: cargo xtask bench-wasm target/bench-wasm
-
-      # A run's every attempt keeps one set, the last built.
-      - name: Keep the modules
-        uses: actions/upload-artifact@v4
-        with:
-          name: bench-wasm-${{ github.run_number }}
-          path: target/bench-wasm
-          retention-days: 7
-          if-no-files-found: error
-          overwrite: true
-
-  # The programs of tests/outside, a Rust one and a C one, compiled to WebAssembly once, with
-  # Rust's wasm32-wasip1 target and wasi-sdk, and kept for every runner's suite, which checks
-  # and runs the same modules as outside modules (`cargo xtask outside-wasm`,
-  # tests/outside.rs). It runs only when the suite does.
-  outside-wasm:
-    name: outside-wasm
-    needs: plan
-    if: ${{ needs.plan.outputs.outside == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/cache@v4
-        with:
-          path: ~/wasi-sdk
-          key: wasi-sdk-${{ hashFiles('xtask/tools.tsv') }}
-
-      - name: Rust
-        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
-
-      - name: wasi-sdk and Rust's wasm32-wasip1 target
-        run: cargo xtask fetch linux-x86_64 wasi
-
-      - name: The modules
-        run: cargo xtask outside-wasm target/outside-wasm
-
-      # A run's every attempt keeps one set, the last built.
-      - name: Keep the modules
-        uses: actions/upload-artifact@v4
-        with:
-          name: outside-wasm-${{ github.run_number }}
-          path: target/outside-wasm
-          retention-days: 7
-          if-no-files-found: error
-          overwrite: true
-
-  test:
-    name: ${{ matrix.mode }} (${{ matrix.target }})${{ matrix.label && format(' {0}', matrix.label) || '' }}
-    # A bench needs the WebAssembly builds, and the suite the outside modules; every other job
-    # only waits for bench-wasm and outside-wasm to be skipped, and none runs when one failed.
-    needs: [plan, bench-wasm, outside-wasm]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.bench-wasm.result != 'failure' && needs.outside-wasm.result != 'failure' }}
+    name: ${{ needs.plan.outputs.mode }} (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    runs-on: ${{ matrix.runner }}
-    # A golden leg, the mutation test and the bench run longer than the suite: the first golden
-    # head leg (run 42152180357) was cut off at 120 minutes, where its base leg took 101.
-    timeout-minutes: ${{ (matrix.mode == 'test' || matrix.mode == 'compile') && 120 || 330 }}
-    defaults:
-      run:
-        shell: bash
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
-      # A golden base leg checks out the base commit; the others, the dispatched ref.
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ matrix.ref }}
-          fetch-depth: ${{ matrix.depth }}
-
-      # The base predates some of the task crate the steps below run (a base leg needs the full
-      # history, which brings the dispatched commit with it), so the leg runs the base's code with
-      # the dispatched ref's Rust and task crate: the crate checked out beside the base, where
-      # `cargo xtask` builds and runs it on the base's folder. The two files the solvers' cache
-      # key hashes come into the base's folder too, so that both legs' key names the pins the
-      # dispatched ref's crate installs (the base leg builds only the base's lengua-mcp).
-      - name: The dispatched ref's task crate
-        if: ${{ matrix.ref != '' }}
-        run: git checkout ${{ github.sha }} -- rust-toolchain.toml xtask/tools.tsv xtask/src/fetch.rs && git worktree add "$RUNNER_TEMP/tooling" ${{ github.sha }} && echo "CARGO_ALIAS_XTASK=run --locked --manifest-path $RUNNER_TEMP/tooling/Cargo.toml --package xtask --" >> "$GITHUB_ENV"
-
-      # Rust as rust-toolchain.toml pins it, which rustup installs when it first runs here; rustup
-      # itself where an image lacks it.
-      - name: Rust
-        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
-
-      # The ring crate builds its assembly with clang on Windows ARM64: the image's LLVM has it.
-      - name: Clang for ring
-        if: ${{ matrix.target == 'windows-aarch64' }}
-        run: echo "C:\Program Files\LLVM\bin" >> "$GITHUB_PATH"
-
-      # The tests read the CPU's counters, which Linux lets a user read with this.
-      - name: The CPU's counters
-        if: ${{ runner.os == 'Linux' }}
-        run: sudo sysctl kernel.perf_event_paranoid=1 > /dev/null || true
-
-      # target/ holds the task crate's build too, which the machine's step makes first.
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ci-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: ci-${{ matrix.target }}-
-
-      # The runner's facts, in the log and the summary: they decide nothing, so a task crate that
-      # doesn't build here stops nothing either, and clippy still says what doesn't build, every
-      # crate's at once.
-      - name: The machine
-        continue-on-error: true
-        run: cargo xtask machine ${{ matrix.target }}
-
-      # The solvers are kept between runs. A release doesn't need them: the archive brings its own,
-      # which `cargo xtask release` fetches as tools.tsv pins them.
-      - uses: actions/cache@v4
-        if: ${{ matrix.mode != 'compile' && matrix.mode != 'release' }}
-        with:
-          path: ~/solvers
-          key: tools-${{ matrix.target }}-${{ hashFiles('xtask/tools.tsv', 'xtask/src/fetch.rs') }}
-
-      - name: z3 and cvc5, pinned by checksum
-        if: ${{ matrix.mode != 'compile' && matrix.mode != 'release' }}
-        run: cargo xtask fetch ${{ matrix.target }} solvers
-
-      # --keep-going: every target's errors in one run, not the first target's alone. A release
-      # is built from a commit whose suite already ran.
-      - name: Clippy
-        if: ${{ matrix.mode != 'golden' && matrix.mode != 'release' }}
-        run: cargo clippy --release --all-targets --locked --workspace --keep-going -- -D warnings
-
-      # lengua-run by itself, as it ships: the lengua crate without the engine's compiler. Cargo
-      # gives a build of the whole workspace one set of features, so the step above and the tests
-      # build lengua-run with a compiler it never calls, and only this builds what a release
-      # and a bench build.
-      - name: Clippy, lengua-run with no compiler
-        if: ${{ matrix.mode != 'golden' && matrix.mode != 'release' }}
-        run: cargo clippy --release --locked --package lengua-run -- -D warnings
-
-      # Built first, so that the time a test run may take (stall_seconds) is the tests' and not the
-      # compiler's.
-      - name: Build the tests
-        if: ${{ matrix.mode == 'compile' || matrix.mode == 'test' || matrix.mode == 'ignored' }}
-        run: cargo test --release --locked --workspace --no-run
-
-      - name: The modules built from tests/outside's Rust and C
-        if: ${{ matrix.mode == 'test' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: outside-wasm-${{ github.run_number }}
-          path: ${{ runner.temp }}/outside-wasm
-
-      - name: Tests
-        if: ${{ matrix.mode == 'test' }}
-        env:
-          LENGUA_PROOF_SECONDS: "60"
-          RUST_TEST_THREADS: "2"
-          FILTER: ${{ inputs.filter }}
-          TEST_FILES: ${{ inputs.test_files }}
-          LENGUA_RANDOM_SEED: ${{ inputs.seed }}
-          STALL_SECONDS: ${{ inputs.stall_seconds }}
-          LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
-          LENGUA_OUTSIDE_WASM: ${{ runner.temp }}/outside-wasm
-        run: cargo xtask test
-
-      - name: The slow ignored tests
-        if: ${{ matrix.mode == 'ignored' }}
-        env:
-          LENGUA_PROOF_SECONDS: "60"
-          RUST_TEST_THREADS: "2"
-          FILTER: ${{ inputs.filter }}
-          TEST_FILES: ${{ inputs.test_files }}
-          LENGUA_RANDOM_SEED: ${{ inputs.seed }}
-          LENGUA_CHECK_FOLDER: ${{ inputs.check_folder }}
-          LENGUA_MUTATE_ONLY: ${{ inputs.mutate_only }}
-          EXPLAIN: ${{ inputs.explain }}
-          STALL_SECONDS: ${{ inputs.stall_seconds }}
-          LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
-        run: cargo xtask test --ignored
-
-      # The checker's and the prover's reports on every program, recorded. target/ is cached
-      # whole, the recordings included, so they go first: a restored old recording would be
-      # compared with silently. One test at a time: the prover's recordings run under fixed time
-      # budgets, and tests run side by side would make "out of time" differ between the two legs.
-      # (The two filters are the two goldens' tests; the helper explains_a_mutant matches neither.)
-      - name: The goldens, recorded
-        if: ${{ matrix.mode == 'golden' }}
-        env:
-          RUST_TEST_THREADS: "1"
-          LENGUA_SKIP_LOG: ${{ github.workspace }}/skips.log
-        run: cargo xtask golden
-
-      - name: The recordings, kept
-        if: ${{ matrix.mode == 'golden' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: golden-${{ matrix.label }}-${{ matrix.ref || github.sha }}
-          path: target/golden/*.txt
-          retention-days: 30
-
-      - name: The WebAssembly builds of C, C++ and Rust
-        if: ${{ matrix.mode == 'bench' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: bench-wasm-${{ github.run_number }}
-          path: ${{ runner.temp }}/bench-wasm
-
-      # The gate (benches/against_rust_and_c.rs): it fails where the run and KNOWN_BEHIND
-      # disagree, and writes BENCHMARKS-<target>.md from the run's results, which are kept below.
-      # Windows builds the native C and C++ with the image's LLVM clang.
-      - name: The gate against C, C++ and Rust
-        if: ${{ matrix.mode == 'bench' }}
-        env:
-          LENGUA_BENCH_AGAINST: ${{ inputs.bench_against }}
-          LENGUA_BENCH_WASM: ${{ runner.temp }}/bench-wasm
-        run: cargo xtask bench
-
-      - name: The report, in the summary
-        if: ${{ always() && matrix.mode == 'bench' }}
-        run: cargo xtask bench-report BENCHMARKS-${{ matrix.target }}.md
-
-      # This runner's archive (cargo xtask release, which also gives its version), and the release
-      # check built beside it, to run where the archive is installed, on a runner that builds
-      # nothing.
-      - name: The release archive
-        id: release
-        if: ${{ matrix.mode == 'release' }}
-        run: cargo xtask release ${{ matrix.target }}
-
-      - name: The release check, built
-        if: ${{ matrix.mode == 'release' }}
-        run: cargo xtask release-check
-
-      # The archive, named with its version, system and CPU; it is kept nowhere else.
-      - name: Keep the archive
-        if: ${{ matrix.mode == 'release' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: lengua-${{ steps.release.outputs.version }}-${{ matrix.target }}
-          path: |
-            dist/lengua-*.tar.gz
-            dist/lengua-*.zip
-            dist/lengua-*.sha256
-          retention-days: 30
-          compression-level: 0
-          if-no-files-found: error
-
-      - name: Keep the release check
-        if: ${{ matrix.mode == 'release' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-check-${{ matrix.target }}
-          path: dist/check/
-          retention-days: 7
-          if-no-files-found: error
-
-      # A green run says what it did not cover: libtest hides what a passing test prints, so a
-      # test that skips itself notes why (lengua::skiplog) and the notes are counted here.
-      - name: What the tests skipped
-        if: always()
-        run: cargo xtask skips skips.log
-
-      - name: Keep the logs and the server
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-${{ matrix.target }}-${{ matrix.mode }}${{ matrix.label && format('-{0}', matrix.label) || '' }}-${{ github.run_number }}
-          path: |
-            test.log
-            ignored.log
-            golden.log
-            skips.log
-            stall.txt
-            bench.log
-            BENCHMARKS-*.md
-            target/bench/results-*.json
-            target/bench/KNOWN_BEHIND-*.txt
-            target/release/lengua-mcp
-            target/release/lengua-mcp.exe
-            target/release/lengua-run
-            target/release/lengua-run.exe
-          retention-days: 7
-          if-no-files-found: ignore
-
-  # The goldens recorded at the dispatched ref and at the base, compared: byte for byte (raw) or
-  # as the proofs' verdicts alone (ledger); or, in the runners view, the dispatched ref's as each
-  # target recorded them, compared between the targets. See `cargo xtask golden-diff`
-  # (xtask/src/golden.rs).
-  golden-diff:
-    name: golden diff
-    needs: test
-    if: ${{ always() && inputs.mode == 'golden' && needs.test.result == 'success' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@v4
-
-      # Rust as rust-toolchain.toml pins it, which rustup installs when it first runs here; rustup
-      # itself where an image lacks it.
-      - name: Rust
-        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
-
-      # The base's: from this run, or from an earlier one whose recordings are reused. In the
-      # runners view, each target's recordings of the dispatched ref, into golden/head.
-      - name: The recordings of both commits
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN: ${{ github.run_id }}
-          BASE_RUN: ${{ inputs.golden_base_run }}
-          VIEW: ${{ inputs.golden_view }}
-        run: cargo xtask golden-download
-
-      # What it finds goes to the log and to the job's summary; its exit decides the job.
-      - name: Compare
-        env:
-          VIEW: ${{ inputs.golden_view }}
-        run: cargo xtask golden-diff "$VIEW" golden/base golden/head
-
-  # Each runner's release archive installed on a clean runner of its own system and CPU, as a
-  # user installs it: nothing of lengua's set up first (no checkout, no Rust, no solvers). The
-  # release check, tests/release_check.rs built beside the archive, unpacks the archive, installs
-  # it with its own `lengua-mcp install` and checks it through a plain MCP client. Doctor and the
-  # check run with PATH cut to the system's own folders, so that nothing the runner's image adds
-  # there (Git for Windows' MinGW libraries, say) stands in for a library the archive should ship.
-  install:
-    name: install (${{ matrix.target }})
-    needs: [plan, test]
-    if: ${{ always() && inputs.mode == 'release' && needs.test.result == 'success' }}
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: The archive and the release check
-        uses: actions/download-artifact@v4
-        with:
-          pattern: "*-${{ matrix.target }}"
-          path: downloaded
-          merge-multiple: true
-
-      # The release check does what a user does, in order: it checks the archive against its
-      # SHA-256 and unpacks it in a fresh folder; has the archive's own `lengua-mcp install
-      # --prefix` refuse to replace a lengua folder that isn't lengua's; installs it with
-      # `lengua-mcp install` where it installs for any user, which ends with doctor, whose exit
-      # code it keeps; then runs doctor and checks the installed plugin through a plain MCP client
-      # (tests/release_check.rs, which also holds this step to its name). Its last line says it
-      # passed: the step holds it to that line, as a run that matched no test passes too.
-      - name: Unpacked, installed and checked as a user does
-        env:
-          LENGUA_RELEASE: downloaded
-          CHECK: downloaded/release-check${{ runner.os == 'Windows' && '.exe' || '' }}
-        run: 'chmod +x "$CHECK" && "$CHECK" --ignored --exact the_archive_works_as_a_user_gets_it --nocapture 2>&1 | tee release-check.log && grep -q "^release check: ${{ matrix.target }} passed" release-check.log'
-
-      - name: Keep the release check's log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: install-log-${{ matrix.target }}-${{ github.run_number }}
-          path: release-check.log
-          retention-days: 7
-          if-no-files-found: ignore
-
-  # One check that says whether the whole run passed: plan, format and test must succeed;
-  # golden-diff runs in the golden mode only, bench-wasm when a bench runs, outside-wasm when
-  # the suite runs, and install in the release mode only, so each may be skipped (`cargo xtask
-  # gate`).
-  gate:
-    name: gate
-    needs: [plan, format, bench-wasm, outside-wasm, test, golden-diff, install]
-    if: ${{ always() }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      # Rust as rust-toolchain.toml pins it, which rustup installs when it first runs here; rustup
-      # itself where an image lacks it.
-      - name: Rust
-        run: command -v rustup > /dev/null || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && echo "$(cygpath -w "$HOME/.cargo/bin" 2> /dev/null || echo "$HOME/.cargo/bin")" >> "$GITHUB_PATH" && export PATH="$HOME/.cargo/bin:$PATH"; } && rustc --version --verbose
-
-      - name: Every job passed
-        env:
-          RESULTS: ${{ needs.plan.result }} ${{ needs.format.result }} ${{ needs.test.result }}
-          GOLDEN_DIFF: ${{ needs.golden-diff.result }}
-          BENCH_WASM: ${{ needs.bench-wasm.result }}
-          OUTSIDE_WASM: ${{ needs.outside-wasm.result }}
-          INSTALL: ${{ needs.install.result }}
-        run: cargo xtask gate
+      - uses: actions/checkout@v5
+      - name: rustup
+        run: |
+          if ! command -v rustup > /dev/null; then
+            if [ "${{ matrix.target }}" != windows-aarch64 ]; then
+              echo "::error::no rustup on ${{ matrix.runner }}"
+              exit 1
+            fi
+            curl -sSfL -o rustup-init.exe https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
+            ./rustup-init.exe -y --default-toolchain none --profile minimal
+            echo "$USERPROFILE\\.cargo\\bin" >> "$GITHUB_PATH"
+          fi
+      - name: toolchain
+        run: |
+          rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" \
+            --profile minimal --component rustfmt,clippy --target wasm32-wasip2,wasm32-unknown-unknown
+          rustc --version
+          cargo --version
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked
+      - name: tests built
+        if: ${{ needs.plan.outputs.mode == 'compile' }}
+        run: cargo test --workspace --locked --no-run
+      - name: tests run
+        if: ${{ needs.plan.outputs.mode == 'test' }}
+        run: cargo test --workspace --locked
+      - name: lengua-mcp built
+        run: |
+          cargo build --release --locked -p lengua-mcp
+          ./target/release/lengua-mcp --version
