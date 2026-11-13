@@ -1,16 +1,19 @@
 mod behaviours;
 mod cases;
 mod constraints;
+mod dependencies;
 mod frontmatter;
 mod generate;
 mod idea;
 mod library;
+mod okf;
 pub mod lock;
 mod rust;
 mod sha256;
 mod ste;
 mod structure;
 mod text;
+mod tree;
 mod wiki;
 
 use std::fs;
@@ -22,6 +25,7 @@ use crate::wiki::Page;
 
 pub use crate::cases::{CASES_DRAWN, Case, End, Range, Test, cases};
 pub use crate::library::Library;
+pub use crate::tree::{findings as wiki_findings, write_indexes as write_wiki_indexes};
 pub use lengua_lint::{Edit, Mutant, Mutation, apply};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -452,7 +456,9 @@ fn read_page(
             return None;
         }
     };
-    let front = frontmatter::split(&text, &mut sink);
+    let mut front = frontmatter::split(&text, &mut sink);
+    front.body = wiki::without_links(&front.body);
+    okf::check_values(&front, true, &mut sink);
     let idea = idea::parse(
         source.kind,
         &front.body,
@@ -469,7 +475,11 @@ fn read_page(
         file: source.file.clone(),
         kind: source.kind,
         name: source.name.clone(),
-        title: title.to_string(),
+        title: front
+            .value("title")
+            .map(okf::unquote)
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| title.to_string()),
         description: idea.description.clone(),
         uses: Vec::new(),
         idea_hash: sha256::hex(front.body_text().as_bytes()),
@@ -616,6 +626,7 @@ struct Read {
     pages: Vec<Page>,
     constraints: Vec<constraints::Constraints>,
     structures: Vec<Vec<(usize, String)>>,
+    named: Vec<Vec<(String, usize)>>,
     tests: Vec<Test>,
 }
 
@@ -628,6 +639,7 @@ fn read_all(folder: &Path, title: &str, findings: &mut Vec<Finding>) -> Read {
         pages: Vec::new(),
         constraints: Vec::new(),
         structures: Vec::new(),
+        named: Vec::new(),
         tests: Vec::new(),
     };
     for source in &sources {
@@ -640,10 +652,120 @@ fn read_all(folder: &Path, title: &str, findings: &mut Vec<Finding>) -> Read {
             read.pages.push(page);
             read.constraints.push(idea.constraints);
             read.structures.push(idea.structure);
+            read.named.push(idea.named);
             read.tests.extend(idea.tests);
         }
     }
     read
+}
+
+fn known_libraries(folder: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(start) = fs::canonicalize(folder) else {
+        return out;
+    };
+    for place in start.ancestors().skip(1) {
+        let Ok(entries) = fs::read_dir(place.join("libraries")) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.path().join("idea.md").is_file() {
+                out.push(entry.file_name().to_string_lossy().to_string());
+            }
+        }
+    }
+    out
+}
+
+fn last_name(path: &str) -> String {
+    let path = path.trim_end_matches('/');
+    path.rsplit('/').next().unwrap_or(path).to_string()
+}
+
+fn purpose_rules(
+    folder: &Path,
+    read: &Read,
+    top: &constraints::Constraints,
+    shape: Shape,
+    findings: &mut Vec<Finding>,
+) {
+    let modules: Vec<&str> = read.pages.iter().skip(1).map(|p| p.name.as_str()).collect();
+    let used: Vec<String> = top.libraries.iter().map(|(p, _)| last_name(p)).collect();
+    let mut libraries = if shape == Shape::Library {
+        Vec::new()
+    } else {
+        known_libraries(folder)
+    };
+    libraries.extend(used.iter().cloned());
+    for (k, page) in read.pages.iter().enumerate() {
+        let listed: Vec<&str> = if k == 0 {
+            top.modules.iter().map(|(n, _)| n.as_str()).collect()
+        } else {
+            read.constraints
+                .get(k)
+                .map(|c| c.uses.iter().map(|(n, _)| n.as_str()).collect())
+                .unwrap_or_default()
+        };
+        let key = if k == 0 { "Modules" } else { "Uses" };
+        for (name, line) in read.named.get(k).into_iter().flatten() {
+            let message = if *name == page.name {
+                None
+            } else if modules.contains(&name.as_str()) {
+                (!listed.contains(&name.as_str())).then(|| format!(
+                    "the purpose names the module `{name}`, and the constraints do not list it; add it to `- {key}:`, or name it another way"
+                ))
+            } else if libraries.contains(name) && !used.contains(name) {
+                Some(format!(
+                    "the purpose names the lengua library `{name}`, and the top idea does not use it; add its folder to the `- Uses:` of `idea.md`, or name it another way"
+                ))
+            } else {
+                None
+            };
+            if let Some(message) = message {
+                findings.push(Finding {
+                    file: page.file.clone(),
+                    line: *line,
+                    code: "purpose-unlisted",
+                    message,
+                });
+            }
+        }
+    }
+}
+
+fn conformance(
+    folder: &Path,
+    pages: &[Page],
+    components: &[(String, String, usize)],
+    findings: &mut Vec<Finding>,
+) {
+    let mut known: Vec<String> = pages.iter().map(|p| p.file.clone()).collect();
+    known.extend(components.iter().map(|(file, _, _)| wiki::component_page(file)));
+    for file in tree::markdown(folder, false) {
+        let name = file.rsplit('/').next().unwrap_or_default();
+        let reserved = name == "index.md" || name == "log.md";
+        if reserved || known.contains(&file) || file.starts_with("ideas/") {
+            continue;
+        }
+        let text = fs::read_to_string(folder.join(&file))
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
+        let mut sink = Sink::new(&file);
+        let front = frontmatter::split(&text, &mut sink);
+        let typed = front
+            .value("type")
+            .map(okf::unquote)
+            .is_some_and(|t| !t.is_empty());
+        if !typed {
+            sink.add(
+                1,
+                "okf-type",
+                "every page in the folder but `index.md` and `log.md` is an OKF concept, so it starts with frontmatter that has a `type`; add one, or move the file out of the folder".to_string(),
+            );
+        }
+        okf::check_values(&front, false, &mut sink);
+        findings.append(&mut sink.findings);
+    }
 }
 
 fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
@@ -677,6 +799,10 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
         findings.retain(|f| f.code != "structure-main-missing");
     }
     let libraries = library::resolve(folder, &top.libraries, &mut findings);
+    if program {
+        purpose_rules(folder, &read, &top, shape, &mut findings);
+        conformance(folder, &read.pages, &top.components, &mut findings);
+    }
     for (file, _, line) in &top.components {
         if !folder.join(file).is_file() {
             findings.push(top_finding(
@@ -711,6 +837,11 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
     if !findings.is_empty() {
         return Err(findings);
     }
+    if let Some(first) = read.pages.first_mut() {
+        first
+            .uses
+            .extend(libraries.iter().map(|l| format!("{}/idea", l.path)));
+    }
     Ok(Prepared {
         pages: read.pages,
         top,
@@ -723,11 +854,15 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
 
 #[must_use]
 pub fn check(folder: &Path, now: u64) -> Report {
-    check_with(folder, now, |_| Trust::default())
+    check_with(folder, now, |_| Some(Trust::default()))
 }
 
 #[must_use]
-pub fn check_with(folder: &Path, now: u64, trust: impl FnOnce(&Build) -> Trust) -> Report {
+pub fn check_with(
+    folder: &Path,
+    now: u64,
+    trust: impl FnOnce(&Build) -> Option<Trust>,
+) -> Report {
     let mut report = Report::default();
     let mut prepared = match prepare(folder) {
         Ok(prepared) => prepared,
@@ -740,18 +875,27 @@ pub fn check_with(folder: &Path, now: u64, trust: impl FnOnce(&Build) -> Trust) 
         top.generated.clone_from(&prepared.plan.stamps);
     }
     let planned = build(folder, &prepared);
-    report.trust = trust(&planned);
+    let given = trust(&planned);
+    report.trust = given.unwrap_or_default();
+    let title = prepared
+        .pages
+        .first()
+        .map(|p| p.title.clone())
+        .unwrap_or_default();
     let parts = wiki::Parts {
+        title: &title,
         shape: prepared.shape,
         libraries: &prepared.libraries,
         components: &prepared.top.components,
+        crates: dependencies::count(folder, &prepared.plan.used),
+        vision: folder.join("vision.md").is_file(),
     };
     let written = wiki::write(
         folder,
         &prepared.pages,
         &prepared.plan.texts,
         now,
-        &report.trust,
+        given.as_ref(),
         &parts,
     );
     report.written = written.files;

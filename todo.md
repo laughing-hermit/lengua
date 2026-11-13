@@ -1,3 +1,9 @@
+---
+type: lengua Plan
+title: "lengua 3: todo"
+description: "The milestones of lengua 3, their decisions and their CI runs."
+---
+
 # lengua 3: todo
 
 The design is [Lengua3.md](Lengua3.md). Each milestone is green on all five runners before the

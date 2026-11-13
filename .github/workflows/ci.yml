@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "compile (clippy, the tests built, the binary built) or test (the tests run too)"
+        description: "compile (clippy, the tests built, the binary built), test (the tests run too) or wiki (check writes the wiki of libraries/ and examples/ in place, as an artifact)"
         type: choice
-        options: [compile, test]
+        options: [compile, test, wiki]
         default: test
       targets:
         description: "all, or a comma list of linux-x86_64, linux-aarch64, macos-aarch64, windows-x86_64, windows-aarch64"
@@ -184,6 +184,26 @@ jobs:
       - name: tests run
         if: ${{ needs.plan.outputs.mode == 'test' }}
         run: cargo test --workspace --locked --no-fail-fast
+      - name: the wiki of libraries/ and examples/, written in place by check
+        if: ${{ needs.plan.outputs.mode == 'wiki' }}
+        run: cargo test --locked -p lengua-mcp --test wiki -- --ignored --nocapture
+      - if: ${{ !cancelled() && needs.plan.outputs.mode == 'wiki' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: wiki-${{ github.run_number }}-${{ matrix.target }}
+          path: |
+            index.md
+            libraries/index.md
+            examples/index.md
+            libraries/*/idea.md
+            libraries/*/ideas/**/*.md
+            libraries/*/index.md
+            libraries/*/log.md
+            examples/*/idea.md
+            examples/*/ideas/**/*.md
+            examples/*/index.md
+            examples/*/log.md
+            examples/*/components/*.md
       - name: the imports of the built examples, as Wasmtime reads them
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |

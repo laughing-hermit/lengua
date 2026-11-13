@@ -1,3 +1,9 @@
+---
+type: lengua Design
+title: lengua 3
+description: "The design of lengua 3, the source that every milestone is built from."
+---
+
 # lengua 3
 
 The design of lengua 3: a fresh start, in which the agent writes Rust, Rust is compiled to

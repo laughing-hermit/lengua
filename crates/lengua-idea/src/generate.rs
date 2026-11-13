@@ -337,6 +337,7 @@ fn crates(
 pub(crate) struct Plan {
     pub package: String,
     pub crates: usize,
+    pub used: Vec<(String, String)>,
     pub texts: Vec<(String, String)>,
     pub stamps: Vec<Stamp>,
 }
@@ -381,6 +382,7 @@ pub(crate) fn plan(
     let mut plan = Plan {
         package: title.to_string(),
         crates: used.len(),
+        used: used.clone(),
         texts: Vec::new(),
         stamps: Vec::new(),
     };

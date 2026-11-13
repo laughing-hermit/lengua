@@ -18,6 +18,7 @@ pub(crate) const SECTIONS: [&str; 4] = ["Purpose", "Behaviours", "Constraints", 
 #[derive(Debug, Default)]
 pub(crate) struct Idea {
     pub description: String,
+    pub named: Vec<(String, usize)>,
     pub constraints: Constraints,
     pub structure: Vec<(usize, String)>,
     pub tests: Vec<Test>,
@@ -124,6 +125,18 @@ fn purpose(heading: usize, lines: &[Line], dictionary: &Dictionary, sink: &mut S
     }
 }
 
+fn named(lines: &[Line]) -> Vec<(String, usize)> {
+    let mut out = Vec::new();
+    for line in lines {
+        let mut parts = line.text.split('`');
+        parts.next();
+        while let (Some(inside), Some(_)) = (parts.next(), parts.next()) {
+            out.push((inside.to_string(), line.number));
+        }
+    }
+    out
+}
+
 pub(crate) fn parse(
     kind: IdeaKind,
     body: &str,
@@ -146,6 +159,7 @@ pub(crate) fn parse(
     let mut idea = Idea::default();
     if let Some((heading, lines)) = sections[0] {
         idea.description = purpose(heading, lines, dictionary, sink);
+        idea.named = named(lines);
     }
     if let Some((heading, lines)) = sections[1] {
         idea.tests = behaviours::parse(kind, heading, lines, dictionary, sink);

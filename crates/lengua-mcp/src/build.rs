@@ -63,7 +63,7 @@ impl Stage {
         }
     }
 
-    fn running(self) -> bool {
+    pub(crate) fn running(self) -> bool {
         matches!(self, Self::Building | Self::Testing | Self::Mutating)
     }
 }
