@@ -43,7 +43,7 @@ fn signed(text: &str) -> Result<(bool, &str, usize), Error> {
     }
     let offset = text.len() - digits.len();
     debug_assert!(offset <= 1);
-    debug_assert!(!digits.is_empty());
+    debug_assert_ne!(digits.len(), 0);
     Ok((negative, digits, offset))
 }
 
@@ -70,8 +70,8 @@ fn accumulate(digits: &str, offset: usize, negative: bool, start: i64) -> Result
 #[must_use]
 pub fn format_integer(value: i64) -> String {
     let text = value.to_string();
-    debug_assert!(!text.is_empty());
-    debug_assert!(text.starts_with('-') == (value < 0));
+    debug_assert_ne!(text.len(), 0);
+    debug_assert_eq!(text.starts_with('-'), value < 0);
     text
 }
 

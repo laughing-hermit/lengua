@@ -26,7 +26,7 @@ pub fn write(value: &Value) -> String {
         }
     }
     debug_assert!(tasks.is_empty());
-    debug_assert!(!out.is_empty());
+    debug_assert_ne!(out.len(), 0);
     out
 }
 
@@ -60,7 +60,7 @@ fn expand<'a>(value: &'a Value, out: &mut String, tasks: &mut Vec<Task<'a>>) {
         }
     }
     debug_assert!(tasks.len() >= before);
-    debug_assert!(!out.is_empty());
+    debug_assert_ne!(out.len(), 0);
 }
 
 fn quote(text: &str, out: &mut String) {

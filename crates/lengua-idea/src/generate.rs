@@ -169,8 +169,11 @@ pub(crate) fn cargo_toml(package: &Package) -> String {
         "edition = \"2024\"".to_string(),
         "publish = false".to_string(),
         format!("include = {}", quoted_list(package.sources)),
-        String::new(),
     ];
+    if package.shape != Shape::Command {
+        lines.push("autobins = false".to_string());
+    }
+    lines.push(String::new());
     if package.shape == Shape::Command {
         lines.push("[[bin]]".to_string());
         lines.push(format!("name = \"{}\"", package.name));
@@ -509,7 +512,7 @@ codegen-units = 1
             libraries: &[("json".to_string(), "../json".to_string())],
         };
         let text = cargo_toml(&package);
-        assert!(text.starts_with("[package]\nname = \"word-count\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\ninclude = [\"src/main.rs\", \"src/words.rs\"]\n\n[lib]\nname = \"word_count\"\npath = \"src/main.rs\"\n\n[dependencies]\ngpui = \"=0.2.0\"\njson = { path = \"../json\" }\n\n[lints.rust]\n"));
+        assert!(text.starts_with("[package]\nname = \"word-count\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\ninclude = [\"src/main.rs\", \"src/words.rs\"]\nautobins = false\n\n[lib]\nname = \"word_count\"\npath = \"src/main.rs\"\n\n[dependencies]\ngpui = \"=0.2.0\"\njson = { path = \"../json\" }\n\n[lints.rust]\n"));
         assert!(text.contains("indexing_slicing = \"deny\"\nmissing_errors_doc = \"allow\"\nmissing_panics_doc = \"allow\"\n"));
         assert!(text.ends_with("codegen-units = 1\n\n[workspace]\n"));
     }

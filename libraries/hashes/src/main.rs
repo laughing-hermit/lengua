@@ -23,7 +23,7 @@ const POLYNOMIAL: u32 = 0xedb8_8320;
 #[must_use]
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     let message = padded(data);
-    debug_assert!(message.len() % 64 == 0);
+    debug_assert_eq!(message.len() % 64, 0);
     let mut state = START;
     for block in message.chunks_exact(64) {
         compress(&mut state, block);
@@ -32,7 +32,7 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     for (slot, word) in out.chunks_exact_mut(4).zip(state) {
         slot.copy_from_slice(&word.to_be_bytes());
     }
-    debug_assert!(out.len() == 32);
+    debug_assert_eq!(out.len(), 32);
     out
 }
 
@@ -42,7 +42,7 @@ pub fn sha256_hex(data: &[u8]) -> String {
     for byte in sha256(data) {
         let _ = write!(text, "{byte:02x}");
     }
-    debug_assert!(text.len() == 64);
+    debug_assert_eq!(text.len(), 64);
     debug_assert!(text.chars().all(|c| c.is_ascii_hexdigit()));
     text
 }
@@ -56,7 +56,7 @@ fn padded(data: &[u8]) -> Vec<u8> {
         .unwrap_or(u64::MAX)
         .wrapping_mul(8);
     message.extend_from_slice(&bits.to_be_bytes());
-    debug_assert!(message.len() % 64 == 0);
+    debug_assert_eq!(message.len() % 64, 0);
     debug_assert!(message.len() >= data.len() + 9);
     message
 }
@@ -79,8 +79,8 @@ fn schedule(block: &[u8]) -> [u32; 64] {
             *slot = oldest.wrapping_add(low).wrapping_add(middle).wrapping_add(high);
         }
     }
-    debug_assert!(block.len() == 64);
-    debug_assert!(words.len() == 64);
+    debug_assert_eq!(block.len(), 64);
+    debug_assert_eq!(words.len(), 64);
     words
 }
 
@@ -112,8 +112,8 @@ fn compress(state: &mut [u32; 8], block: &[u8]) {
     for (slot, add) in state.iter_mut().zip(work) {
         *slot = slot.wrapping_add(add);
     }
-    debug_assert!(block.len() == 64);
-    debug_assert!(ROUNDS.len() == 64);
+    debug_assert_eq!(block.len(), 64);
+    debug_assert_eq!(ROUNDS.len(), 64);
 }
 
 #[must_use]

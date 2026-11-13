@@ -41,7 +41,7 @@ fn merge<T: Clone, K: Ord, F: Fn(&T) -> K>(left: &[T], right: &[T], key: &F, out
         };
         out.extend(next.cloned());
     }
-    debug_assert!(out.len() == before + left.len() + right.len());
+    debug_assert_eq!(out.len(), before + left.len() + right.len());
     debug_assert!(from_left.next().is_none());
 }
 
@@ -59,6 +59,6 @@ pub fn binary_search<T: Ord>(items: &[T], wanted: &T) -> Option<usize> {
         }
     }
     debug_assert!(low <= items.len());
-    debug_assert!(low == high);
+    debug_assert_eq!(low, high);
     items.get(low).filter(|item| *item == wanted).map(|_| low)
 }

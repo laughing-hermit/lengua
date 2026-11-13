@@ -75,7 +75,7 @@ pub fn civil_from_days(days: i64) -> Date {
 #[must_use]
 pub fn days_between(from: Date, to: Date) -> i64 {
     let days = days_from_civil(to) - days_from_civil(from);
-    debug_assert!((days >= 0) == (to >= from));
+    debug_assert_eq!(days >= 0, to >= from);
     debug_assert!(days.abs() < i64::from(i32::MAX) * 400);
     days
 }
@@ -146,7 +146,7 @@ pub fn parse_timestamp(text: &str) -> Result<i64, Error> {
     if hour > 23 || minute > 59 || second > 59 {
         return Err(Error::Time);
     }
-    debug_assert!(clock.len() == 10);
+    debug_assert_eq!(clock.len(), 10);
     debug_assert!(hour < 24);
     Ok(days_from_civil(date) * DAY_SECONDS + hour * 3600 + minute * 60 + second)
 }

@@ -155,7 +155,7 @@ fn string_at(chars: &[char], at: usize) -> Result<(String, usize), Error> {
 fn hex4(chars: &[char], from: usize) -> Option<u32> {
     let text: String = chars.get(from..from + 4)?.iter().collect();
     let valid = text.chars().all(|character| character.is_ascii_hexdigit());
-    debug_assert!(text.chars().count() == 4);
+    debug_assert_eq!(text.chars().count(), 4);
     debug_assert!(from >= 2);
     u32::from_str_radix(&text, 16).ok().filter(|_| valid)
 }
@@ -189,7 +189,7 @@ fn escape_at(chars: &[char], at: usize) -> Result<(char, usize), Error> {
             .map(|found| (found, at + 12))
             .ok_or(Error::Escape(at));
     }
-    debug_assert!(kind == 'u');
+    debug_assert_eq!(kind, 'u');
     char::from_u32(first)
         .map(|found| (found, at + 6))
         .ok_or(Error::Escape(at))
@@ -211,7 +211,7 @@ fn place(stack: &mut [Frame], done: &mut Option<Value>, value: Value) -> Want {
             Want::CommaOrClose
         }
     };
-    debug_assert!(stack.len() == depth);
+    debug_assert_eq!(stack.len(), depth);
     debug_assert!(want != Want::Nothing || depth == 0);
     want
 }
@@ -228,7 +228,7 @@ fn close(
         (Some(Frame::Object(fields, None)), '}') => Value::Object(fields),
         _ => return Err(Error::Unexpected(at)),
     };
-    debug_assert!(stack.len() + 1 == depth);
+    debug_assert_eq!(stack.len() + 1, depth);
     debug_assert!(bracket == ']' || bracket == '}');
     Ok(place(stack, done, value))
 }

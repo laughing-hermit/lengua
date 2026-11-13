@@ -15,7 +15,7 @@ pub fn lines(text: &str) -> Vec<String> {
 #[must_use]
 pub fn split(text: &str, separator: char) -> Vec<String> {
     let out: Vec<String> = text.split(separator).map(str::to_string).collect();
-    debug_assert!(!out.is_empty());
+    debug_assert_ne!(out.len(), 0);
     debug_assert!(out.iter().all(|part| !part.contains(separator)));
     out
 }
@@ -66,7 +66,7 @@ pub fn check_utf8(bytes: &[u8]) -> Result<(), usize> {
 pub fn is_utf8(bytes: &[u8]) -> bool {
     let valid = check_utf8(bytes).is_ok();
     debug_assert!(valid || !bytes.is_empty());
-    debug_assert!(valid == std::str::from_utf8(bytes).is_ok());
+    debug_assert_eq!(valid, std::str::from_utf8(bytes).is_ok());
     valid
 }
 

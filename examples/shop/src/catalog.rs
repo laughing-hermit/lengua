@@ -22,7 +22,7 @@ const ITEMS: [Item; 3] = [
 pub fn find(name: &str) -> Option<Item> {
     let found = ITEMS.iter().find(|item| item.name == name).copied();
     debug_assert!(found.is_none_or(|item| item.price > 0));
-    debug_assert!(ITEMS.len() == 3);
+    debug_assert_eq!(ITEMS.len(), 3);
     found
 }
 
@@ -39,7 +39,7 @@ pub fn listing() -> json::Value {
             ])
         })
         .collect();
-    debug_assert!(items.len() == ITEMS.len());
-    debug_assert!(!items.is_empty());
+    debug_assert_eq!(items.len(), ITEMS.len());
+    debug_assert_ne!(items.len(), 0);
     json::Value::List(items)
 }

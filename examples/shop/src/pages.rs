@@ -8,7 +8,7 @@ pub fn route(path: &str) -> (u16, String) {
         _ => error(404, "no page"),
     };
     debug_assert!(answer.0 >= 200);
-    debug_assert!(!answer.1.is_empty());
+    debug_assert_ne!(answer.1.len(), 0);
     answer
 }
 

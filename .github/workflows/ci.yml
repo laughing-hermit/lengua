@@ -72,10 +72,13 @@ jobs:
       - name: cargo fmt --check
         id: fmt
         run: |
-          if cargo fmt --all --check; then
+          cargo fmt --all
+          for f in libraries/*/src/main.rs examples/*/src/main.rs; do
+            rustfmt --edition 2024 "$f"
+          done
+          if git diff --quiet; then
             exit 0
           fi
-          cargo fmt --all
           git diff > fmt.patch
           echo "differs=true" >> "$GITHUB_OUTPUT"
           exit 1

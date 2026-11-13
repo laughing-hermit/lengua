@@ -46,8 +46,8 @@ fn split_head(bytes: &[u8]) -> Result<(Vec<String>, &[u8]), Error> {
     let head = std::str::from_utf8(bytes.get(..end).unwrap_or_default()).map_err(|_| Error::Line)?;
     let rest = bytes.get(end + 4..).unwrap_or_default();
     let lines: Vec<String> = head.split("\r\n").map(str::to_string).collect();
-    debug_assert!(!lines.is_empty());
-    debug_assert!(rest.len() + end + 4 == bytes.len());
+    debug_assert_ne!(lines.len(), 0);
+    debug_assert_eq!(rest.len() + end + 4, bytes.len());
     Ok((lines, rest))
 }
 
@@ -109,7 +109,7 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, Error> {
     }
     let headers = headers_of(&lines)?;
     let body = body_of(&headers, rest, false)?;
-    debug_assert!(!method.is_empty());
+    debug_assert_ne!(method.len(), 0);
     debug_assert!(target.starts_with('/'));
     Ok(Request {
         method: (*method).to_string(),
