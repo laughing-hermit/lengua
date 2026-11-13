@@ -18,7 +18,7 @@ pub fn total(query: &str) -> (u16, String) {
         Err(message) => return error(400, &message),
     };
     let net = basket::net(&lines).unwrap_or(i64::MAX);
-    let tax = crate::tax_of(net);
+    let tax = crate::tax_for(net);
     let sum = decimal::add(net, tax).unwrap_or(i64::MAX);
     debug_assert!(sum >= net);
     debug_assert!(tax >= 0);

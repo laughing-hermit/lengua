@@ -2,7 +2,7 @@
 
 The program is the HTTP server of a small shop. It lists the items of its catalog with their
 prices, and it gives the total of a basket, with the tax, as JSON. It is one WebAssembly file
-of three modules, `catalog`, `basket` and `pages`. It uses two shared libraries of `lengua`,
+of three modules, `catalog`, `basket` and `pages`. It uses two libraries of `lengua`,
 `json` and `decimal`, and a component in C that gives the tax.
 
 # Behaviours
@@ -64,4 +64,4 @@ Then the answer is 404 with an error in JSON.
 # Structure
 
 - `Shop::handle`: answers a request with the status and the JSON body that the pages give.
-- `tax_of`: gives the tax of a number of cents, from the component in C.
+- `tax_for`: gives the tax of a number of cents, from the component in C.

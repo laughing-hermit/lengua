@@ -35,10 +35,7 @@ pub(crate) fn main_text(package: &str, cases: &[Case]) -> String {
     );
     for (index, case) in cases.iter().enumerate() {
         let call = case.test.call.as_deref().unwrap_or("()");
-        let _ = writeln!(
-            out,
-            "        \"{index}\" => println!(\"{{:?}}\", {call}),"
-        );
+        let _ = writeln!(out, "        \"{index}\" => println!(\"{{:?}}\", {call}),");
     }
     out.push_str("        _ => {}\n    }\n}\n");
     out

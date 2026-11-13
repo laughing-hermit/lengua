@@ -38,7 +38,7 @@ impl wasip2::exports::http::incoming_handler::Guest for Shop {
     }
 }
 
-fn tax_of(cents: i64) -> i64 {
+fn tax_for(cents: i64) -> i64 {
     let unsigned = u64::try_from(cents).unwrap_or_default();
     let tax = i64::try_from(lengua::tax::rates::tax_of(unsigned)).unwrap_or(i64::MAX);
     debug_assert!(tax >= 0);
