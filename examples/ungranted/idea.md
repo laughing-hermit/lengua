@@ -1,8 +1,7 @@
 # Purpose
 
 The program writes a random number to the file `note.txt` and to the standard output. Its idea
-grants no files and no random numbers, so the check refuses the program, and the host does not
-start it.
+grants no files, so the check refuses the program, and the host does not start it.
 
 # Behaviours
 

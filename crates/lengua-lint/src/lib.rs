@@ -3,6 +3,7 @@ mod graph;
 mod lex;
 mod loops;
 mod model;
+mod mutate;
 mod rules;
 
 use std::collections::BTreeSet;
@@ -10,6 +11,8 @@ use std::collections::BTreeSet;
 use crate::code::Code;
 use crate::model::Model;
 use crate::rules::{ASSERTS, Context};
+
+pub use crate::mutate::{Edit, Mutant, Mutation, apply, mutants};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Finding {

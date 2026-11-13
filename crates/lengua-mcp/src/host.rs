@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -35,6 +35,7 @@ pub(crate) struct Input {
     pub arguments: Vec<String>,
     pub stdin: Vec<u8>,
     pub fixed: bool,
+    pub root: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -240,14 +241,17 @@ fn context(
         builder.monotonic_clock(Steps::default());
         builder.wall_clock(Fixed);
     }
+    if input.fixed || !grants.reach(Reach::Random) {
+        builder.insecure_random_seed(u128::from(SEED));
+    }
     if input.fixed {
         builder
             .secure_random(Deterministic::new(seeded(SEED, RANDOM_BYTES)))
-            .insecure_random(Deterministic::new(seeded(SEED ^ 1, RANDOM_BYTES)))
-            .insecure_random_seed(u128::from(SEED));
+            .insecure_random(Deterministic::new(seeded(SEED ^ 1, RANDOM_BYTES)));
     }
+    let root = input.root.as_deref().unwrap_or(folder);
     for granted in &grants.folders {
-        let place = folder.join(&granted.path);
+        let place = root.join(&granted.path);
         if granted.write && !place.exists() {
             fs::create_dir_all(&place).map_err(|e| {
                 format!(

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -274,16 +274,35 @@ fn example_named(name: &str, test: &str) -> PathBuf {
 }
 
 fn until_built(server: &mut Server, folder: &Path, base: u64) -> Value {
-    for id in base..base + 1000 {
+    let started = Instant::now();
+    for id in base..base + 5000 {
         let reply = server.check(id, folder);
         let state = reply["build"]["state"].as_str().unwrap_or("").to_string();
-        if state != "building" {
+        if !["building", "testing", "mutating"].contains(&state.as_str()) {
+            let line = format!(
+                "{} {}: {state} in {:.1} s from the first check, the job's own {} s; tests {}, mutants {}\n",
+                folder
+                    .parent()
+                    .and_then(Path::file_name)
+                    .map_or(String::new(), |n| n.to_string_lossy().to_string()),
+                folder
+                    .file_name()
+                    .map_or(String::new(), |n| n.to_string_lossy().to_string()),
+                started.elapsed().as_secs_f64(),
+                reply["build"]["seconds"],
+                reply["build"]["tests"],
+                reply["build"]["mutants"]
+            );
+            let log = Path::new(env!("CARGO_TARGET_TMPDIR")).join("lengua-timings.txt");
+            if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(log) {
+                let _ = file.write_all(line.as_bytes());
+            }
             return reply;
         }
         assert!(reply["build"]["seconds"].is_u64(), "{reply:#}");
-        thread::sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_millis(200));
     }
-    panic!("the build did not end in about 1000 seconds");
+    panic!("the job did not end in about 1000 seconds");
 }
 
 #[test]
@@ -298,7 +317,7 @@ fn hello_world_builds_to_a_component() {
     assert!(written.iter().any(|f| f == "Cargo.toml"), "{first:#}");
     assert!(written.iter().any(|f| f == "wit/world.wit"), "{first:#}");
     let reply = until_built(&mut server, &folder, 10);
-    assert_eq!(reply["build"]["state"], "built", "{reply:#}");
+    assert_eq!(reply["build"]["state"], "done", "{reply:#}");
     assert_eq!(reply["ok"], true, "{reply:#}");
     let component = PathBuf::from(reply["build"]["component"].as_str().expect("a path"));
     assert!(component.ends_with("target/wasm32-wasip2/release/hello.wasm"));
@@ -314,7 +333,11 @@ fn hello_world_builds_to_a_component() {
     let sha = reply["build"]["sha256"].as_str().expect("a hash");
     assert_eq!(sha, lengua_idea::sha256_hex(&bytes));
     let again = server.check(2000, &folder);
-    assert_eq!(again["build"]["state"], "built", "{again:#}");
+    assert_eq!(again["build"]["state"], "done", "{again:#}");
+    assert_eq!(again["label"], "checked", "{again:#}");
+    assert!(again["score"].is_null(), "{again:#}");
+    assert_eq!(again["build"]["tests"]["total"], 1, "{again:#}");
+    assert_eq!(again["build"]["mutants"]["total"], 0, "{again:#}");
     assert_eq!(again["build"]["sha256"], sha);
 }
 
@@ -345,16 +368,16 @@ fn a_change_after_a_build_starts_a_new_build() {
     let folder = example("change");
     let mut server = Server::start();
     let built = until_built(&mut server, &folder, 10);
-    assert_eq!(built["build"]["state"], "built", "{built:#}");
+    assert_eq!(built["build"]["state"], "done", "{built:#}");
     fs::write(
         folder.join("src/main.rs"),
-        "fn main() {\n    println!(\"Hello, world!\");\n    println!();\n}\n",
+        "fn main() {\n    let text = \"Hello, world!\";\n    println!(\"{text}\");\n}\n",
     )
     .expect("a file");
     let reply = server.check(3000, &folder);
     assert_eq!(reply["build"]["state"], "building", "{reply:#}");
     let rebuilt = until_built(&mut server, &folder, 4000);
-    assert_eq!(rebuilt["build"]["state"], "built", "{rebuilt:#}");
+    assert_eq!(rebuilt["build"]["state"], "done", "{rebuilt:#}");
     assert_ne!(rebuilt["build"]["sha256"], built["build"]["sha256"]);
 }
 
@@ -393,17 +416,17 @@ fn a_missing_toolchain_gives_the_doctor_s_message() {
     assert!(message.contains("missing  cargo: not found"), "{message}");
 }
 
-fn built(name: &str, test: &str) -> (Server, PathBuf) {
+fn built(name: &str, test: &str) -> (Server, PathBuf, Value) {
     let folder = example_named(name, test);
     let mut server = Server::start();
     let reply = until_built(&mut server, &folder, 10);
-    assert_eq!(reply["build"]["state"], "built", "{reply:#}");
-    (server, folder)
+    assert_eq!(reply["build"]["state"], "done", "{reply:#}");
+    (server, folder, reply)
 }
 
 #[test]
 fn hello_world_runs_under_its_grants_and_gets_no_input() {
-    let (mut server, folder) = built("hello", "run-hello");
+    let (mut server, folder, _) = built("hello", "run-hello");
     let reply = server.run_to_end(5000, &folder, &json!({}));
     assert_eq!(reply["state"], "exited", "{reply:#}");
     assert_eq!(reply["exit_code"], 0, "{reply:#}");
@@ -429,7 +452,7 @@ fn hello_world_runs_under_its_grants_and_gets_no_input() {
 
 #[test]
 fn granted_arguments_reach_the_program() {
-    let (mut server, folder) = built("echo", "run-echo");
+    let (mut server, folder, _) = built("echo", "run-echo");
     let reply = server.run_to_end(5000, &folder, &json!({"arguments": ["one", "two words"]}));
     assert_eq!(reply["state"], "exited", "{reply:#}");
     assert_eq!(reply["stdout"], "one\ntwo words\n", "{reply:#}");
@@ -439,7 +462,7 @@ fn granted_arguments_reach_the_program() {
 
 #[test]
 fn granted_standard_input_reaches_the_program() {
-    let (mut server, folder) = built("count", "run-count");
+    let (mut server, folder, _) = built("count", "run-count");
     let reply = server.run_to_end(5000, &folder, &json!({"stdin": "hello world\n"}));
     assert_eq!(reply["state"], "exited", "{reply:#}");
     assert_eq!(reply["stdout"], "2\n", "{reply:#}");
@@ -459,7 +482,7 @@ fn link(target: &Path, at: &Path) -> std::io::Result<()> {
 
 #[test]
 fn a_granted_folder_is_read_and_written_and_nothing_outside_it_is() {
-    let (mut server, folder) = built("files", "run-files");
+    let (mut server, folder, _) = built("files", "run-files");
     fs::create_dir_all(folder.join("data")).expect("a folder");
     fs::write(folder.join("data/note.txt"), "a note\n").expect("a file");
     link(&Path::new("..").join("idea.md"), &folder.join("data/link")).expect("a relative link");
@@ -518,7 +541,10 @@ fn an_ungranted_import_is_refused_at_check_and_at_run() {
 
 #[test]
 fn an_endless_loop_stops_at_the_time_limit() {
-    let (mut server, folder) = built("forever", "run-forever");
+    let (mut server, folder, checked) = built("forever", "run-forever");
+    assert_eq!(checked["ok"], true, "{checked:#}");
+    assert_eq!(checked["build"]["tests"]["failed"], 0, "{checked:#}");
+    assert_ne!(checked["label"], "unchecked", "{checked:#}");
     let reply = server.run_to_end(5000, &folder, &json!({}));
     assert_eq!(reply["state"], "out_of_time", "{reply:#}");
     let taken = reply["milliseconds"].as_u64().expect("a time");
@@ -527,7 +553,7 @@ fn an_endless_loop_stops_at_the_time_limit() {
 
 #[test]
 fn memory_past_the_limit_stops_the_program() {
-    let (mut server, folder) = built("greedy", "run-greedy");
+    let (mut server, folder, _) = built("greedy", "run-greedy");
     let reply = server.run_to_end(5000, &folder, &json!({}));
     assert_eq!(reply["state"], "out_of_memory", "{reply:#}");
     assert_eq!(reply["stdout"], "", "{reply:#}");
@@ -535,7 +561,7 @@ fn memory_past_the_limit_stops_the_program() {
 
 #[test]
 fn the_clock_and_random_numbers_are_fixed_for_tests_and_real_when_granted() {
-    let (mut server, folder) = built("clock", "run-clock");
+    let (mut server, folder, _) = built("clock", "run-clock");
     let first = server.run_to_end(5000, &folder, &json!({"fixed": true}));
     assert_eq!(first["state"], "exited", "{first:#}");
     let second = server.run_to_end(6000, &folder, &json!({"fixed": true}));
@@ -608,4 +634,212 @@ fn clippy_holds_rule_7_and_its_errors_are_findings() {
             && f["message"].as_str().is_some_and(|m| m.contains("unwrap"))),
         "{reply:#}"
     );
+}
+
+fn line_of(folder: &Path, file: &str, text: &str) -> usize {
+    fs::read_to_string(folder.join(file))
+        .expect("the file")
+        .lines()
+        .position(|l| l == text)
+        .expect("the line")
+        + 1
+}
+
+fn notes_with(reply: &Value, part: &str) -> Vec<Value> {
+    reply["notes"]
+        .as_array()
+        .expect("a list of notes")
+        .iter()
+        .filter(|n| n["message"].as_str().is_some_and(|m| m.contains(part)))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn a_wrong_output_fails_its_example_with_what_was_expected_and_what_came() {
+    let folder = example("wrong");
+    fs::write(
+        folder.join("src/main.rs"),
+        "fn main() {\n    println!(\"Hello, World!\");\n}\n",
+    )
+    .expect("a file");
+    let mut server = Server::start();
+    let reply = until_built(&mut server, &folder, 10);
+    assert_eq!(reply["build"]["state"], "tests_failed", "{reply:#}");
+    assert_eq!(reply["ok"], false, "{reply:#}");
+    assert_eq!(reply["label"], "unchecked", "{reply:#}");
+    assert_eq!(codes(&reply), ["test-failed"], "{reply:#}");
+    let finding = &reply["findings"][0];
+    assert_eq!(finding["file"], "idea.md");
+    assert_eq!(
+        finding["line"],
+        line_of(&folder, "idea.md", "### Example: no input")
+    );
+    let message = finding["message"].as_str().expect("a message");
+    assert!(
+        message.contains("the example `no input` of the behaviour `Write the message` failed"),
+        "{message}"
+    );
+    assert!(
+        message.contains("standard output: expected \"Hello, world!\\n\" and got \"Hello, World!\\n\" (they differ at character 8)"),
+        "{message}"
+    );
+    assert_eq!(reply["build"]["tests"]["failed"], 1, "{reply:#}");
+    assert!(reply["build"]["sha256"].is_string(), "{reply:#}");
+    assert!(reply["build"]["mutants"].is_null(), "{reply:#}");
+    let index = fs::read_to_string(folder.join("index.md")).expect("the index");
+    assert!(index.contains("Label: `unchecked`."), "{index}");
+}
+
+#[test]
+fn a_case_at_a_boundary_fails_with_its_drawn_value() {
+    let folder = example_named("small", "boundary");
+    let code = fs::read_to_string(folder.join("src/main.rs")).expect("the code");
+    fs::write(
+        folder.join("src/main.rs"),
+        code.replace("number <= 9", "number < 9"),
+    )
+    .expect("a file");
+    let mut server = Server::start();
+    let reply = until_built(&mut server, &folder, 10);
+    assert_eq!(reply["build"]["state"], "tests_failed", "{reply:#}");
+    assert_eq!(codes(&reply), ["case-failed"], "{reply:#}");
+    let finding = &reply["findings"][0];
+    assert_eq!(
+        finding["line"],
+        line_of(&folder, "idea.md", "### Cases: numbers of one digit")
+    );
+    let message = finding["message"].as_str().expect("a message");
+    assert!(
+        message.contains("the case with `n` = 9 of `numbers of one digit`"),
+        "{message}"
+    );
+    assert!(
+        message.contains("expected \"small\\n\" and got \"large\\n\""),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_well_tested_program_is_checked_and_its_label_goes_into_the_wiki() {
+    let folder = example_named("small", "checked");
+    let mut server = Server::start();
+    let reply = until_built(&mut server, &folder, 10);
+    assert_eq!(reply["build"]["state"], "done", "{reply:#}");
+    assert_eq!(reply["ok"], true, "{reply:#}");
+    assert_eq!(reply["label"], "checked", "{reply:#}");
+    assert_eq!(reply["score"], 100, "{reply:#}");
+    let mutants = &reply["build"]["mutants"];
+    assert!(mutants["total"].as_u64().is_some_and(|n| n >= 4), "{reply:#}");
+    assert_eq!(mutants["survived"], 0, "{reply:#}");
+    assert_eq!(mutants["done"], mutants["total"], "{reply:#}");
+    assert!(notes_with(&reply, "a mutant survived").is_empty(), "{reply:#}");
+    assert!(
+        reply["build"]["tests"]["total"]
+            .as_u64()
+            .is_some_and(|n| n >= 6),
+        "{reply:#}"
+    );
+    let index = fs::read_to_string(folder.join("index.md")).expect("the index");
+    assert!(index.contains("Label: `checked`."), "{index}");
+    let idea = fs::read_to_string(folder.join("idea.md")).expect("the idea");
+    assert!(idea.contains("\nlabel: checked\n"), "{idea}");
+    let log = fs::read_to_string(folder.join("log.md")).expect("the log");
+    assert!(
+        log.contains("no problems; label `checked`, mutation score "),
+        "{log}"
+    );
+    let code = fs::read_to_string(folder.join("src/main.rs")).expect("the code");
+    fs::write(
+        folder.join("src/main.rs"),
+        code.replace(
+            "    let argument = std::env::args().nth(1).unwrap_or_default();",
+            "    let argument: String = std::env::args().nth(1).unwrap_or_default();",
+        ),
+    )
+    .expect("a file");
+    let again = until_built(&mut server, &folder, 6000);
+    assert_eq!(again["build"]["state"], "done", "{again:#}");
+    assert_eq!(again["label"], "checked", "{again:#}");
+    let cached = again["build"]["mutants"]["cached"]
+        .as_u64()
+        .expect("a count");
+    let total = again["build"]["mutants"]["total"]
+        .as_u64()
+        .expect("a count");
+    assert!(cached > 0 && cached < total, "{again:#}");
+}
+
+const WEAK: &str = "# Purpose
+
+The program tells if a number is small. It reads the number from its first argument.
+
+# Behaviours
+
+## Write small for a small number
+
+Given the argument 3,
+When the program runs,
+Then it writes `small` and a line end to the standard output.
+
+### Example: the number 3
+
+- Arguments: \"3\"
+- Expect standard output: \"small\\n\"
+- Expect exit code: 0
+
+# Constraints
+
+- Reads: arguments
+- Memory: 16 MiB
+- Time: 2 s
+
+# Structure
+
+- `main`: reads the first argument as a number and writes its size.
+- `size`: gives `small` for a number of 9 or less, and `large` for a number that is more than 9.
+";
+
+#[test]
+fn a_weakly_tested_program_is_tested_and_its_surviving_mutants_are_notes() {
+    let folder = example_named("small", "weak");
+    fs::write(folder.join("idea.md"), WEAK).expect("the idea");
+    let mut server = Server::start();
+    let reply = until_built(&mut server, &folder, 10);
+    assert_eq!(reply["build"]["state"], "done", "{reply:#}");
+    assert_eq!(reply["ok"], true, "{reply:#}");
+    assert_eq!(reply["label"], "tested", "{reply:#}");
+    assert!(
+        reply["score"].as_u64().is_some_and(|s| s < 80),
+        "{reply:#}"
+    );
+    let survivors = notes_with(&reply, "a mutant survived");
+    assert!(!survivors.is_empty(), "{reply:#}");
+    let line = line_of(
+        &folder,
+        "src/main.rs",
+        "    let name = if number <= 9 { \"small\" } else { \"large\" };",
+    );
+    assert!(
+        survivors.iter().any(|n| n["file"] == "src/main.rs"
+            && n["line"] == line
+            && n["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("in `size`, `<=` became `<`"))),
+        "{reply:#}"
+    );
+    let index = fs::read_to_string(folder.join("index.md")).expect("the index");
+    assert!(index.contains("Label: `tested`."), "{index}");
+}
+
+#[test]
+fn a_hash_map_works_without_a_grant_of_random_numbers() {
+    let (mut server, folder, reply) = built("words", "run-words");
+    assert_eq!(reply["ok"], true, "{reply:#}");
+    let world = fs::read_to_string(folder.join("wit/world.wit")).expect("the world");
+    assert!(world.contains("wasi:random/insecure-seed"), "{world}");
+    assert!(!world.contains("wasi:random/random"), "{world}");
+    let first = server.run_to_end(5000, &folder, &json!({"stdin": "b a b c\n"}));
+    assert_eq!(first["state"], "exited", "{first:#}");
+    assert_eq!(first["stdout"], "3\n", "{first:#}");
 }

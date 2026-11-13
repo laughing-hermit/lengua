@@ -15,6 +15,8 @@ pub(crate) struct Token {
     pub text: String,
     pub line: usize,
     pub joint: bool,
+    pub start: usize,
+    pub end: usize,
 }
 
 impl Token {
@@ -45,6 +47,7 @@ fn digit(c: char) -> bool {
 
 struct Lexer {
     chars: Vec<char>,
+    offsets: Vec<usize>,
     at: usize,
     line: usize,
     out: Vec<Token>,
@@ -84,11 +87,15 @@ impl Lexer {
             .iter()
             .collect();
         let joint = kind == Kind::Punct && self.peek(0).is_some_and(|c| PUNCT.contains(c));
+        let start = self.offsets.get(start).copied().unwrap_or(0);
+        let end = self.offsets.get(self.at).copied().unwrap_or(start);
         self.out.push(Token {
             kind,
             text,
             line,
             joint,
+            start,
+            end,
         });
     }
 
@@ -335,8 +342,17 @@ fn unterminated(line: usize, what: &str) -> Error {
 }
 
 pub(crate) fn tokens(text: &str) -> Result<Vec<Token>, Error> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut offsets = Vec::with_capacity(chars.len() + 1);
+    let mut offset = 0;
+    for c in &chars {
+        offsets.push(offset);
+        offset += c.len_utf8();
+    }
+    offsets.push(offset);
     let mut lexer = Lexer {
-        chars: text.chars().collect(),
+        chars,
+        offsets,
         at: 0,
         line: 1,
         out: Vec::new(),

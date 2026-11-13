@@ -236,8 +236,10 @@ fn the_hello_example_has_no_findings_and_gets_its_build_files() {
     assert!(read(&to, "Cargo.toml").starts_with("[package]\nname = \"hello\"\n"));
     let world = read(&to, "wit/world.wit");
     assert!(world.contains("  import wasi:cli/stdin@0.2.12;\n"));
+    assert!(world.contains("  import wasi:random/insecure-seed@0.2.12;\n"));
     for ungranted in [
-        "wasi:random",
+        "wasi:random/random",
+        "wasi:random/insecure@",
         "wasi:filesystem",
         "wasi:sockets",
         "wall-clock",
@@ -306,4 +308,70 @@ fn code_that_breaks_the_rules_is_refused_with_the_idea_s_findings() {
     );
     assert_eq!(report.written, Vec::<String>::new());
     assert_eq!(report.build, None);
+}
+
+#[test]
+fn the_label_and_the_score_go_into_the_wiki() {
+    use lengua_idea::{Label, Trust};
+    let folder = fixture("good", "label");
+    let report = lengua_idea::check_with(&folder, NOV_13_2026, |_| Trust {
+        label: Label::Checked,
+        score: Some((9, 10)),
+    });
+    assert_eq!(report.findings, []);
+    assert_eq!(report.trust.label, Label::Checked);
+    assert!(read(&folder, "idea.md").contains("\nlabel: checked\n"));
+    assert!(read(&folder, "ideas/words.md").contains("\nlabel: checked\n"));
+    assert!(read(&folder, "index.md").contains(" Label: `checked`.\n"));
+    assert!(!read(&folder, "index.md").contains("`unchecked`"));
+    assert!(
+        read(&folder, "log.md")
+            .contains("no problems; label `checked`, mutation score 9 of 10 (90%).\n")
+    );
+    let tested = lengua_idea::check_with(&folder, NOV_13_2026 + 1, |_| Trust {
+        label: Label::Tested,
+        score: Some((1, 4)),
+    });
+    assert_eq!(
+        tested.written,
+        [
+            "idea.md",
+            "ideas/words.md",
+            "ideas/ui/summary.md",
+            "index.md",
+            "log.md"
+        ]
+    );
+    assert!(read(&folder, "log.md").starts_with("# Log\n\n## 2026-11-13\n\n* **Check** at 00:00:01Z: no problems; label `tested`, mutation score 1 of 4 (25%); nothing changed.\n"));
+}
+
+#[test]
+fn the_build_carries_every_test_of_every_idea() {
+    let folder = fixture("good", "tests");
+    let report = lengua_idea::check(&folder, NOV_13_2026);
+    let build = report.build.expect("a build");
+    let names: Vec<(&str, &str, bool)> = build
+        .tests
+        .iter()
+        .map(|t| (t.file.as_str(), t.name.as_str(), t.screen))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("idea.md", "two words", false),
+            ("idea.md", "one word", false),
+            ("idea.md", "empty input", false),
+            ("ideas/words.md", "two words", false),
+            ("ideas/ui/summary.md", "two words", true)
+        ]
+    );
+    assert_eq!(
+        build.sources,
+        ["src/main.rs", "src/words.rs", "src/ui/summary.rs"]
+    );
+    assert_eq!(build.tests[1].ranges.len(), 1);
+    assert_eq!(build.tests[2].stdout.as_deref(), Some("0\n"));
+    assert_eq!(build.tests_hash.len(), 64);
+    let again = lengua_idea::program(&folder).build.expect("a build");
+    assert_eq!(again.inputs, build.inputs);
 }

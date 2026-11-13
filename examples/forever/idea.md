@@ -13,7 +13,7 @@ Then the host stops it.
 
 ### Example: no input
 
-- Expect exit code: 1
+- Expect end: out of time
 
 # Constraints
 

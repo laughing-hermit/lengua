@@ -1,4 +1,5 @@
 mod behaviours;
+mod cases;
 mod constraints;
 mod frontmatter;
 mod generate;
@@ -13,9 +14,12 @@ mod wiki;
 use std::fs;
 use std::path::Path;
 
-use crate::idea::IdeaKind;
+use crate::idea::{Idea, IdeaKind};
 use crate::ste::Dictionary;
 use crate::wiki::Page;
+
+pub use crate::cases::{CASES_DRAWN, Case, End, Range, Test, cases};
+pub use lengua_lint::{Edit, Mutant, Mutation, apply};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Finding {
@@ -29,6 +33,46 @@ pub struct Finding {
 pub struct Note {
     pub file: String,
     pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Label {
+    #[default]
+    Unchecked,
+    Tested,
+    Checked,
+}
+
+impl Label {
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Unchecked => "unchecked",
+            Self::Tested => "tested",
+            Self::Checked => "checked",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Trust {
+    pub label: Label,
+    pub score: Option<(usize, usize)>,
+}
+
+impl Trust {
+    #[must_use]
+    pub fn text(&self) -> String {
+        let label = format!("label `{}`", self.label.name());
+        match self.score {
+            Some((_, 0)) => format!("{label}, no mutant counted"),
+            Some((caught, counted)) => format!(
+                "{label}, mutation score {caught} of {counted} ({}%)",
+                caught * 100 / counted
+            ),
+            None => label,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,6 +115,10 @@ pub struct Build {
     pub inputs: String,
     pub grants: Grants,
     pub world: Vec<String>,
+    pub library: bool,
+    pub sources: Vec<String>,
+    pub tests: Vec<Test>,
+    pub tests_hash: String,
 }
 
 fn grants(top: &constraints::Constraints) -> Grants {
@@ -110,6 +158,7 @@ pub struct Report {
     pub notes: Vec<Note>,
     pub written: Vec<String>,
     pub build: Option<Build>,
+    pub trust: Trust,
 }
 
 #[must_use]
@@ -218,15 +267,13 @@ fn concept(name: &str) -> String {
     format!("ideas/{name}")
 }
 
-type PageRead = (Page, constraints::Constraints, Vec<(usize, String)>);
-
 fn read_page(
     folder: &Path,
     source: &Source,
     title: &str,
     dictionary: &Dictionary,
     findings: &mut Vec<Finding>,
-) -> Option<PageRead> {
+) -> Option<(Page, Idea)> {
     let mut sink = Sink::new(&source.file);
     let text = match fs::read(folder.join(&source.file)).map(String::from_utf8) {
         Ok(Ok(text)) => text.replace("\r\n", "\n"),
@@ -263,7 +310,7 @@ fn read_page(
         kind: source.kind,
         name: source.name.clone(),
         title: title.to_string(),
-        description: idea.description,
+        description: idea.description.clone(),
         uses: Vec::new(),
         idea_hash: sha256::hex(front.body_text().as_bytes()),
         front,
@@ -271,7 +318,7 @@ fn read_page(
         source_hash,
         generated: Vec::new(),
     };
-    Some((page, idea.constraints, idea.structure))
+    Some((page, idea))
 }
 
 fn link(pages: &mut [Page], constraints: &[constraints::Constraints], findings: &mut Vec<Finding>) {
@@ -344,22 +391,34 @@ struct Prepared {
     pages: Vec<Page>,
     top: constraints::Constraints,
     plan: generate::Plan,
+    tests: Vec<Test>,
+}
+
+#[must_use]
+pub fn tests_hash(tests: &[Test], grants: &Grants) -> String {
+    sha256::hex(format!("{tests:?}\0{grants:?}").as_bytes())
 }
 
 fn build(folder: &Path, prepared: &Prepared) -> Build {
     let plan = &prepared.plan;
+    let grants = grants(&prepared.top);
+    let tests_hash = tests_hash(&prepared.tests, &grants);
     Build {
         artifact: generate::artifact(&plan.package, plan.library),
         package: plan.package.clone(),
         target: generate::TARGET,
         crates: plan.crates,
         code: folder.join("src/main.rs").is_file(),
-        inputs: generate::inputs(folder),
-        grants: grants(&prepared.top),
+        inputs: generate::inputs(folder, &plan.texts, &tests_hash),
+        grants,
         world: generate::world_names(&prepared.top.grants)
             .into_iter()
             .map(str::to_string)
             .collect(),
+        library: plan.library,
+        sources: prepared.pages.iter().map(|p| p.source.clone()).collect(),
+        tests: prepared.tests.clone(),
+        tests_hash,
     }
 }
 
@@ -384,13 +443,14 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
     let mut pages = Vec::new();
     let mut constraints = Vec::new();
     let mut structures = Vec::new();
+    let mut tests = Vec::new();
     for source in &sources {
         let page_title = if source.kind == IdeaKind::Program {
             title.as_str()
         } else {
             source.name.as_str()
         };
-        if let Some((page, constraint, structure)) = read_page(
+        if let Some((page, idea)) = read_page(
             folder,
             source,
             page_title,
@@ -398,8 +458,9 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
             &mut report.findings,
         ) {
             pages.push(page);
-            constraints.push(constraint);
-            structures.push(structure);
+            constraints.push(idea.constraints);
+            structures.push(idea.structure);
+            tests.extend(idea.tests);
         }
     }
     if pages.first().is_some_and(|p| p.kind == IdeaKind::Program) {
@@ -423,11 +484,17 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
         pages,
         top: constraints.into_iter().next().unwrap_or_default(),
         plan,
+        tests,
     })
 }
 
 #[must_use]
 pub fn check(folder: &Path, now: u64) -> Report {
+    check_with(folder, now, |_| Trust::default())
+}
+
+#[must_use]
+pub fn check_with(folder: &Path, now: u64, trust: impl FnOnce(&Build) -> Trust) -> Report {
     let mut report = Report::default();
     let mut prepared = match prepare(folder) {
         Ok(prepared) => prepared,
@@ -439,12 +506,20 @@ pub fn check(folder: &Path, now: u64) -> Report {
     if let Some(top) = prepared.pages.first_mut() {
         top.generated.clone_from(&prepared.plan.stamps);
     }
-    let written = wiki::write(folder, &prepared.pages, &prepared.plan.texts, now);
+    let planned = build(folder, &prepared);
+    report.trust = trust(&planned);
+    let written = wiki::write(
+        folder,
+        &prepared.pages,
+        &prepared.plan.texts,
+        now,
+        &report.trust,
+    );
     report.written = written.files;
     report.notes = written.notes;
     report.findings = written.findings;
     if report.findings.is_empty() {
-        report.build = Some(build(folder, &prepared));
+        report.build = Some(prepare(folder).map_or(planned, |again| build(folder, &again)));
     }
     report
 }
@@ -461,4 +536,22 @@ pub fn program(folder: &Path) -> Report {
             ..Report::default()
         },
     }
+}
+
+#[must_use]
+pub fn mutants(folder: &Path, build: &Build, cap: usize) -> Mutation {
+    let sources: Vec<lengua_lint::Source> = build
+        .sources
+        .iter()
+        .filter_map(|file| {
+            let text = fs::read_to_string(folder.join(file)).ok()?;
+            Some(lengua_lint::Source {
+                file: file.clone(),
+                idea: String::new(),
+                text: text.replace("\r\n", "\n"),
+                structure: Vec::new(),
+            })
+        })
+        .collect();
+    lengua_lint::mutants(&sources, cap)
 }

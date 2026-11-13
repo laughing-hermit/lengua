@@ -3,14 +3,18 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Instant;
 
-use lengua_idea::Build;
+use lengua_idea::{Build, Label, Trust};
 
 use crate::doctor;
 use crate::host::{Host, grant_for, outside};
+use crate::{mutation, testing};
+
+pub(crate) const THRESHOLD: usize = 80;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Problem {
@@ -21,28 +25,119 @@ pub(crate) struct Problem {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum State {
-    Building,
-    Built {
-        component: PathBuf,
-        size: u64,
-        sha256: String,
-    },
-    Failed {
-        problems: Vec<Problem>,
-    },
+pub(crate) struct Remark {
+    pub file: String,
+    pub line: Option<usize>,
+    pub message: String,
 }
 
-pub(crate) struct Status {
-    pub state: State,
-    pub seconds: u64,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Component {
+    pub path: PathBuf,
+    pub size: u64,
+    pub sha256: String,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Stage {
+    Building,
+    BuildFailed,
+    Testing,
+    TestsFailed,
+    Mutating,
+    Done,
+}
+
+impl Stage {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Building => "building",
+            Self::BuildFailed => "build_failed",
+            Self::Testing => "testing",
+            Self::TestsFailed => "tests_failed",
+            Self::Mutating => "mutating",
+            Self::Done => "done",
+        }
+    }
+
+    fn running(self) -> bool {
+        matches!(self, Self::Building | Self::Testing | Self::Mutating)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Tests {
+    pub total: usize,
+    pub run: usize,
+    pub failed: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Mutants {
+    pub total: usize,
+    pub done: usize,
+    pub caught: usize,
+    pub survived: usize,
+    pub unbuilt: usize,
+    pub same: usize,
+    pub cached: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Status {
+    pub stage: Stage,
+    pub seconds: u64,
+    pub component: Option<Component>,
+    pub problems: Vec<Problem>,
+    pub remarks: Vec<Remark>,
+    pub tests: Tests,
+    pub mutants: Mutants,
+}
+
+impl Status {
+    fn new(stage: Stage) -> Self {
+        Self {
+            stage,
+            seconds: 0,
+            component: None,
+            problems: Vec::new(),
+            remarks: Vec::new(),
+            tests: Tests::default(),
+            mutants: Mutants::default(),
+        }
+    }
+
+    pub(crate) fn score(&self) -> (usize, usize) {
+        let caught = self.mutants.caught;
+        (caught, caught + self.mutants.survived)
+    }
+
+    pub(crate) fn trust(&self) -> Trust {
+        if self.stage != Stage::Done {
+            return Trust::default();
+        }
+        let (caught, counted) = self.score();
+        let label = if counted == 0 || caught * 100 >= THRESHOLD * counted {
+            Label::Checked
+        } else {
+            Label::Tested
+        };
+        Trust {
+            label,
+            score: Some((caught, counted)),
+        }
+    }
+}
+
+pub(crate) type Shared = Arc<Mutex<Status>>;
+pub(crate) type Slot = Arc<Mutex<Option<Child>>>;
 
 struct Job {
     inputs: String,
     started: Instant,
-    state: Arc<Mutex<(State, u64)>>,
-    child: Arc<Mutex<Option<Child>>>,
+    state: Shared,
+    child: Slot,
+    stopped: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -51,11 +146,11 @@ pub(crate) struct Builds {
     host: Host,
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn problem(file: &str, line: usize, code: &str, message: String) -> Problem {
+pub(crate) fn problem(file: &str, line: usize, code: &str, message: String) -> Problem {
     Problem {
         file: file.to_string(),
         line,
@@ -64,28 +159,108 @@ fn problem(file: &str, line: usize, code: &str, message: String) -> Problem {
     }
 }
 
+pub(crate) struct Worker {
+    pub folder: PathBuf,
+    pub build: Build,
+    pub host: Host,
+    pub state: Shared,
+    pub child: Slot,
+    pub stopped: Arc<AtomicBool>,
+    pub started: Instant,
+}
+
+impl Worker {
+    pub(crate) fn update(&self, change: impl FnOnce(&mut Status)) {
+        change(&mut lock(&self.state));
+    }
+
+    pub(crate) fn stopped(&self) -> bool {
+        self.stopped.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn finish(&self, stage: Stage, problems: Vec<Problem>) {
+        let seconds = self.started.elapsed().as_secs();
+        self.update(|s| {
+            s.stage = stage;
+            s.problems = problems;
+            s.seconds = seconds;
+        });
+    }
+
+    fn work(&self) {
+        let component = match compile(&self.folder, &self.build, &self.child, &self.host) {
+            Ok(component) => component,
+            Err(problems) => return self.finish(Stage::BuildFailed, problems),
+        };
+        let screens: Vec<Remark> = self
+            .build
+            .tests
+            .iter()
+            .filter(|t| t.screen)
+            .map(|t| Remark {
+                file: t.file.clone(),
+                line: Some(t.line),
+                message: format!(
+                    "the screen example `{}` runs at L8, with GPUI's test context; it was not run",
+                    t.name
+                ),
+            })
+            .collect();
+        let cases = testing::cases(&self.build);
+        self.update(|s| {
+            s.component = Some(component);
+            s.stage = Stage::Testing;
+            s.remarks = screens;
+            s.tests.total = cases.len();
+        });
+        if self.build.library {
+            return self.finish(Stage::Done, Vec::new());
+        }
+        let mut problems = Vec::new();
+        for case in &cases {
+            if self.stopped() {
+                return;
+            }
+            let failed = testing::run_case(&self.host, &self.folder, &self.build, case);
+            if let Some(detail) = &failed {
+                problems.push(testing::problem(case, detail));
+            }
+            self.update(|s| {
+                s.tests.run += 1;
+                s.tests.failed += usize::from(failed.is_some());
+            });
+        }
+        if !problems.is_empty() {
+            return self.finish(Stage::TestsFailed, problems);
+        }
+        self.update(|s| s.stage = Stage::Mutating);
+        if mutation::run(self, &cases) {
+            self.finish(Stage::Done, Vec::new());
+        }
+    }
+}
+
 impl Job {
     fn status(&self) -> Status {
-        let (state, seconds) = lock(&self.state).clone();
-        let seconds = if state == State::Building {
-            self.started.elapsed().as_secs()
-        } else {
-            seconds
-        };
-        Status { state, seconds }
+        let mut status = lock(&self.state).clone();
+        if status.stage.running() {
+            status.seconds = self.started.elapsed().as_secs();
+        }
+        status
     }
 
     fn current(&self, inputs: &str) -> bool {
         if self.inputs != inputs {
             return false;
         }
-        match &lock(&self.state).0 {
-            State::Built { component, .. } => component.is_file(),
-            State::Building | State::Failed { .. } => true,
-        }
+        lock(&self.state)
+            .component
+            .as_ref()
+            .is_none_or(|c| c.path.is_file())
     }
 
     fn stop(&self) {
+        self.stopped.store(true, Ordering::Relaxed);
         if let Some(child) = lock(&self.child).as_mut() {
             let _ = child.kill();
         }
@@ -95,19 +270,20 @@ impl Job {
         let job = Self {
             inputs: build.inputs.clone(),
             started: Instant::now(),
-            state: Arc::new(Mutex::new((State::Building, 0))),
+            state: Arc::new(Mutex::new(Status::new(Stage::Building))),
             child: Arc::new(Mutex::new(None)),
+            stopped: Arc::new(AtomicBool::new(false)),
         };
-        let folder = folder.to_path_buf();
-        let build = build.clone();
-        let state = Arc::clone(&job.state);
-        let child = Arc::clone(&job.child);
-        let started = job.started;
-        let host = host.clone();
-        thread::spawn(move || {
-            let result = run(&folder, &build, &child, &host);
-            *lock(&state) = (result, started.elapsed().as_secs());
-        });
+        let worker = Worker {
+            folder: folder.to_path_buf(),
+            build: build.clone(),
+            host: host.clone(),
+            state: Arc::clone(&job.state),
+            child: Arc::clone(&job.child),
+            stopped: Arc::clone(&job.stopped),
+            started: job.started,
+        };
+        thread::spawn(move || worker.work());
         job
     }
 }
@@ -118,6 +294,13 @@ impl Builds {
             jobs: Arc::new(Mutex::new(HashMap::new())),
             host,
         }
+    }
+
+    pub(crate) fn snapshot(&self, folder: &Path, build: &Build) -> Option<Status> {
+        let jobs = lock(&self.jobs);
+        jobs.get(folder)
+            .filter(|job| job.current(&build.inputs))
+            .map(Job::status)
     }
 
     pub(crate) fn status(&self, folder: &Path, build: &Build) -> Status {
@@ -131,17 +314,14 @@ impl Builds {
         jobs.remove(folder);
         let doctor = doctor::examine(folder);
         if !doctor.ok() {
-            return Status {
-                state: State::Failed {
-                    problems: vec![problem(
-                        "Cargo.toml",
-                        1,
-                        "toolchain-missing",
-                        doctor.problems(),
-                    )],
-                },
-                seconds: 0,
-            };
+            let mut status = Status::new(Stage::BuildFailed);
+            status.problems = vec![problem(
+                "Cargo.toml",
+                1,
+                "toolchain-missing",
+                doctor.problems(),
+            )];
+            return status;
         }
         let job = Job::start(folder, build, &self.host);
         let status = job.status();
@@ -150,7 +330,7 @@ impl Builds {
     }
 }
 
-fn cargo(
+pub(crate) fn cargo(
     folder: &Path,
     args: &[&str],
     slot: &Mutex<Option<Child>>,
@@ -239,14 +419,17 @@ fn step(folder: &Path, args: &[&str], slot: &Mutex<Option<Child>>) -> Result<(),
     }
 }
 
-fn run(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>, host: &Host) -> State {
-    if let Err(problems) = fetch(folder, build, slot) {
-        return State::Failed { problems };
-    }
+fn compile(
+    folder: &Path,
+    build: &Build,
+    slot: &Mutex<Option<Child>>,
+    host: &Host,
+) -> Result<Component, Vec<Problem>> {
+    fetch(folder, build, slot)?;
     if let Ok((false, text)) = cargo(folder, &["fmt", "--check"], slot) {
         let found = format_problems(folder, &text);
         if !found.is_empty() {
-            return State::Failed { problems: found };
+            return Err(found);
         }
     }
     let target = build.target;
@@ -261,7 +444,7 @@ fn run(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>, host: &Host) -
         "-D",
         "warnings",
     ];
-    let compile = [
+    let building = [
         "build",
         "--release",
         "--target",
@@ -269,12 +452,12 @@ fn run(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>, host: &Host) -
         "--offline",
         "--message-format=short",
     ];
-    for args in [&clippy[..], &compile[..]] {
-        if let Err(problems) = step(folder, args, slot) {
-            return State::Failed { problems };
-        }
+    for args in [&clippy[..], &building[..]] {
+        step(folder, args, slot)?;
     }
     built(folder, build, host)
+}
+
 }
 
 pub(crate) const SIZE_LIMIT: usize = 64 << 20;
@@ -332,32 +515,31 @@ fn ungranted(bytes: &[u8], sha256: &str, build: &Build, host: &Host) -> Vec<Prob
         .collect()
 }
 
-fn built(folder: &Path, build: &Build, host: &Host) -> State {
+
+fn built(folder: &Path, build: &Build, host: &Host) -> Result<Component, Vec<Problem>> {
     let component = folder.join(&build.artifact);
     match fs::read(&component) {
         Ok(bytes) => {
             let sha256 = lengua_idea::sha256_hex(&bytes);
             let problems = ungranted(&bytes, &sha256, build, host);
             if !problems.is_empty() {
-                return State::Failed { problems };
+                return Err(problems);
             }
-            State::Built {
+            Ok(Component {
                 size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
                 sha256,
-                component,
-            }
+                path: component,
+            })
         }
-        Err(error) => State::Failed {
-            problems: vec![problem(
-                "Cargo.toml",
-                1,
-                "build-error",
-                format!(
-                    "the build ended, but lengua could not read `{}`: {error}",
-                    build.artifact
-                ),
-            )],
-        },
+        Err(error) => Err(vec![problem(
+            "Cargo.toml",
+            1,
+            "build-error",
+            format!(
+                "the build ended, but lengua could not read `{}`: {error}",
+                build.artifact
+            ),
+        )]),
     }
 }
 

@@ -1,7 +1,9 @@
 mod build;
 mod doctor;
 mod host;
+mod mutation;
 mod runs;
+mod testing;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -11,9 +13,10 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::transport::stdio;
 use rmcp::{Json, ServerHandler, ServiceExt, schemars, serde, tool, tool_handler, tool_router};
 
-use crate::build::{Builds, State, Status};
+use crate::build::{Builds, Stage, Status};
 use crate::host::{Ending, Host, Input, Outcome};
 use crate::runs::{Progress, Runs};
+use lengua_idea::Trust;
 
 const VERSION: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
 
@@ -45,8 +48,45 @@ struct FindingReply {
 #[serde(crate = "rmcp::serde")]
 #[schemars(crate = "rmcp::schemars")]
 struct NoteReply {
+    #[schemars(description = "The file, relative to the folder, with / between names")]
     file: String,
+    #[schemars(description = "The line in the file, from 1, when the note has one")]
+    line: Option<usize>,
     message: String,
+}
+
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+#[serde(crate = "rmcp::serde")]
+#[schemars(crate = "rmcp::schemars")]
+struct TestsReply {
+    #[schemars(description = "The runs of the examples and the drawn cases, screens left out")]
+    total: usize,
+    #[schemars(description = "The runs done so far")]
+    run: usize,
+    #[schemars(description = "The runs that failed so far")]
+    failed: usize,
+}
+
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+#[serde(crate = "rmcp::serde")]
+#[schemars(crate = "rmcp::schemars")]
+struct MutantsReply {
+    #[schemars(description = "The mutants made from the code, at most 40")]
+    total: usize,
+    #[schemars(description = "The mutants done so far")]
+    done: usize,
+    #[schemars(description = "Mutants that a test failed on")]
+    caught: usize,
+    #[schemars(description = "Mutants that every test passed on; each is a note")]
+    survived: usize,
+    #[schemars(description = "Mutants that did not build; they do not count")]
+    unbuilt: usize,
+    #[schemars(
+        description = "Mutants that built to the same component as the code; they do not count"
+    )]
+    same: usize,
+    #[schemars(description = "Mutants whose result came from the last check")]
+    cached: usize,
 }
 
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
@@ -54,10 +94,10 @@ struct NoteReply {
 #[schemars(crate = "rmcp::schemars")]
 struct BuildReply {
     #[schemars(
-        description = "no_code (there is no src/main.rs yet), building, built or build_failed"
+        description = "no_code (there is no src/main.rs yet), building, build_failed, testing (the examples run), tests_failed, mutating (the mutation score is measured) or done"
     )]
     state: String,
-    #[schemars(description = "The seconds the build has taken so far, or took")]
+    #[schemars(description = "The seconds the job has taken so far, or took")]
     seconds: u64,
     #[schemars(description = "The target the program is built for")]
     target: String,
@@ -67,6 +107,10 @@ struct BuildReply {
     size: Option<u64>,
     #[schemars(description = "When built: the SHA-256 of the component, in hex")]
     sha256: Option<String>,
+    #[schemars(description = "From testing on: the runs of the tests")]
+    tests: Option<TestsReply>,
+    #[schemars(description = "From mutating on: the mutants")]
+    mutants: Option<MutantsReply>,
 }
 
 #[derive(Debug, serde::Serialize, schemars::JsonSchema)]
@@ -74,22 +118,33 @@ struct BuildReply {
 #[schemars(crate = "rmcp::schemars")]
 struct CheckReply {
     #[schemars(
-        description = "True when there are no problems; while the state of the build is building, call check again to get its result"
+        description = "True when there are no problems; while the state of the build is building, testing or mutating, call check again to get its result"
     )]
     ok: bool,
     #[schemars(description = "The name and version of the lengua that checked")]
     checked_by: String,
     #[schemars(
-        description = "Every problem of every idea, or every error of the build, sorted by file and line"
+        description = "Every problem of every idea, or every error of the build, or every failed test, sorted by file and line"
     )]
     findings: Vec<FindingReply>,
-    #[schemars(description = "Things to know that are not problems")]
+    #[schemars(
+        description = "Things to know that are not problems, the mutants that survived among them"
+    )]
     notes: Vec<NoteReply>,
     #[schemars(description = "The files that check wrote")]
     written: Vec<String>,
+    #[schemars(
+        description = "The trust label: unchecked until the job is done, then checked (every test passes and the mutation score is 80% or more) or tested (the score is under 80%)"
+    )]
+    label: String,
+    #[schemars(
+        description = "When done: the mutation score in percent, the mutants caught of those counted; none when no mutant counted"
+    )]
+    score: Option<usize>,
     #[schemars(description = "The build, when the ideas have no problems")]
     build: Option<BuildReply>,
 }
+
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 #[serde(crate = "rmcp::serde")]
@@ -211,42 +266,61 @@ fn now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-fn build_reply(target: &str, status: Status, findings: &mut Vec<FindingReply>) -> BuildReply {
-    let mut out = BuildReply {
-        state: "building".to_string(),
+fn build_reply(
+    target: &str,
+    status: Status,
+    findings: &mut Vec<FindingReply>,
+    notes: &mut Vec<NoteReply>,
+) -> BuildReply {
+    let tested = !matches!(status.stage, Stage::Building | Stage::BuildFailed);
+    let mutated = matches!(status.stage, Stage::Mutating | Stage::Done);
+    let t = status.tests;
+    let m = status.mutants;
+    findings.extend(status.problems.into_iter().map(|p| FindingReply {
+        file: p.file,
+        line: p.line,
+        code: p.code,
+        message: p.message,
+    }));
+    notes.extend(status.remarks.into_iter().map(|r| NoteReply {
+        file: r.file,
+        line: r.line,
+        message: r.message,
+    }));
+    let component = status.component;
+    BuildReply {
+        state: status.stage.name().to_string(),
         seconds: status.seconds,
         target: target.to_string(),
-        component: None,
-        size: None,
-        sha256: None,
-    };
-    match status.state {
-        State::Building => {}
-        State::Built {
-            component,
-            size,
-            sha256,
-        } => {
-            out.state = "built".to_string();
-            out.component = Some(component.to_string_lossy().to_string());
-            out.size = Some(size);
-            out.sha256 = Some(sha256);
-        }
-        State::Failed { problems } => {
-            out.state = "build_failed".to_string();
-            findings.extend(problems.into_iter().map(|p| FindingReply {
-                file: p.file,
-                line: p.line,
-                code: p.code,
-                message: p.message,
-            }));
-        }
+        component: component
+            .as_ref()
+            .map(|c| c.path.to_string_lossy().to_string()),
+        size: component.as_ref().map(|c| c.size),
+        sha256: component.map(|c| c.sha256),
+        tests: tested.then_some(TestsReply {
+            total: t.total,
+            run: t.run,
+            failed: t.failed,
+        }),
+        mutants: mutated.then_some(MutantsReply {
+            total: m.total,
+            done: m.done,
+            caught: m.caught,
+            survived: m.survived,
+            unbuilt: m.unbuilt,
+            same: m.same,
+            cached: m.cached,
+        }),
     }
-    out
 }
 
 impl Lengua {
-    fn reply(&self, folder: &Path, report: lengua_idea::Report) -> CheckReply {
+    fn reply(
+        &self,
+        folder: &Path,
+        report: lengua_idea::Report,
+        snapshot: Option<(String, Status)>,
+    ) -> CheckReply {
         let mut findings: Vec<FindingReply> = report
             .findings
             .into_iter()
@@ -257,10 +331,21 @@ impl Lengua {
                 message: f.message,
             })
             .collect();
+        let mut notes: Vec<NoteReply> = report
+            .notes
+            .into_iter()
+            .map(|n| NoteReply {
+                file: n.file,
+                line: None,
+                message: n.message,
+            })
+            .collect();
         let build = report.build.map(|plan| {
             if plan.code {
-                let status = self.builds.status(folder, &plan);
-                build_reply(plan.target, status, &mut findings)
+                let status = snapshot
+                    .filter(|(inputs, _)| *inputs == plan.inputs)
+                    .map_or_else(|| self.builds.status(folder, &plan), |(_, status)| status);
+                build_reply(plan.target, status, &mut findings, &mut notes)
             } else {
                 BuildReply {
                     state: "no_code".to_string(),
@@ -269,22 +354,23 @@ impl Lengua {
                     component: None,
                     size: None,
                     sha256: None,
+                    tests: None,
+                    mutants: None,
                 }
             }
         });
+        let score = report
+            .trust
+            .score
+            .and_then(|(caught, counted)| caught.checked_mul(100)?.checked_div(counted));
         CheckReply {
             ok: findings.is_empty(),
             checked_by: self.name.to_string(),
             findings,
-            notes: report
-                .notes
-                .into_iter()
-                .map(|n| NoteReply {
-                    file: n.file,
-                    message: n.message,
-                })
-                .collect(),
+            notes,
             written: report.written,
+            label: report.trust.label.name().to_string(),
+            score,
             build,
         }
     }
@@ -293,7 +379,7 @@ impl Lengua {
 #[tool_router]
 impl Lengua {
     #[tool(
-        description = "Checks a lengua program: its ideas (idea.md, ideas/*.md, ideas/ui/*.md), then builds it to a WebAssembly component in the background. Returns every problem at once, each with its file, line, code and message. When the ideas have no problems, it writes the frontmatter of each idea, index.md, log.md, Cargo.toml and wit/world.wit, and starts the build; the reply gives the build's state: building, built (with the component's path, size and SHA-256) or build_failed (with the compiler's errors as findings). Call check again to get the state of a build."
+        description = "Checks a lengua program: its ideas (idea.md, ideas/*.md, ideas/ui/*.md) and the rules of its Rust code, then, in the background, builds it to a WebAssembly component, runs the examples of its ideas as tests, and measures the tests with mutants of the code. Returns every problem at once, each with its file, line, code and message. When the ideas have no problems, it writes the frontmatter of each idea, index.md, log.md, Cargo.toml and wit/world.wit, and starts the job; the reply gives its state: building, build_failed, testing, tests_failed (each failed test a finding, with what was expected and what came), mutating or done, and the trust label: checked when every test passes and the mutation score is 80% or more, tested when the score is under 80%, unchecked until then. Each mutant that survived is a note with its file and line. Call check again to get the state of the job."
     )]
     fn check(
         &self,
@@ -303,8 +389,20 @@ impl Lengua {
         if !folder.is_dir() {
             return Err(format!("{} is not a folder", folder.display()));
         }
-        let report = lengua_idea::check(&folder, now());
-        Ok(Json(self.reply(&folder, report)))
+        let mut snapshot: Option<(String, Status)> = None;
+        let report = lengua_idea::check_with(&folder, now(), |plan| {
+            snapshot = if plan.code {
+                self.builds
+                    .snapshot(&folder, plan)
+                    .map(|status| (plan.inputs.clone(), status))
+            } else {
+                None
+            };
+            snapshot
+                .as_ref()
+                .map_or_else(Trust::default, |(_, status)| status.trust())
+        });
+        Ok(Json(self.reply(&folder, report, snapshot)))
     }
 
     #[tool(
@@ -338,6 +436,7 @@ impl Lengua {
             arguments: params.arguments,
             stdin: params.stdin.unwrap_or_default().into_bytes(),
             fixed: params.fixed,
+            root: None,
         };
         Ok(Json(run_reply(self.runs.run(&folder, build, input))))
     }
@@ -345,7 +444,7 @@ impl Lengua {
 
 #[tool_handler(
     name = "lengua-mcp",
-    instructions = "lengua checks, builds and runs programs written as idea files and Rust. Call check with the absolute path of a program's folder; while the build's state is building, call check again. When it is built, call run to run it under the grants of its idea."
+    instructions = "lengua checks, builds, tests and runs programs written as idea files and Rust. Call check with the absolute path of a program's folder; while the state is building, testing or mutating, call check again. When it is done, the reply has the trust label; call run to run the program under the grants of its idea."
 )]
 #[allow(clippy::unused_async_trait_impl)]
 impl ServerHandler for Lengua {}

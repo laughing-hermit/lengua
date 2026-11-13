@@ -1,5 +1,6 @@
 use crate::Sink;
 use crate::behaviours;
+use crate::cases::Test;
 use crate::constraints::{self, Constraints};
 use crate::ste::Dictionary;
 use crate::structure;
@@ -19,6 +20,7 @@ pub(crate) struct Idea {
     pub description: String,
     pub constraints: Constraints,
     pub structure: Vec<(usize, String)>,
+    pub tests: Vec<Test>,
 }
 
 type Section<'l> = Option<(usize, &'l [Line])>;
@@ -146,7 +148,7 @@ pub(crate) fn parse(
         idea.description = purpose(heading, lines, dictionary, sink);
     }
     if let Some((heading, lines)) = sections[1] {
-        behaviours::parse(kind, heading, lines, dictionary, sink);
+        idea.tests = behaviours::parse(kind, heading, lines, dictionary, sink);
     }
     if let Some((heading, lines)) = sections[2] {
         idea.constraints = constraints::parse(kind, heading, lines, dictionary, sink);

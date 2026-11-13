@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::Sink;
+use crate::cases::{End, Range, Test};
 use crate::idea::IdeaKind;
 use crate::ste::Dictionary;
 use crate::text::{
@@ -8,7 +9,7 @@ use crate::text::{
 };
 
 const KEYWORDS: [&str; 4] = ["Given", "When", "Then", "And"];
-const PROGRAM_KEYS: &str = "`Standard input`, `Arguments`, `File `path``, `Expect standard output`, `Expect standard error`, `Expect exit code`, `Expect file `path``";
+const PROGRAM_KEYS: &str = "`Standard input`, `Arguments`, `File `path``, `Expect standard output`, `Expect standard error`, `Expect exit code`, `Expect end`, `Expect file `path``";
 const SCREEN_KEYS: &str =
     "`State `field``, `Click`, `Type into `element``, `Expect state `field``, `Expect text`";
 pub(crate) const MAX_TEXT_LENGTH: u64 = 65_536;
@@ -21,6 +22,7 @@ enum Key {
     Output,
     ErrorOutput,
     ExitCode,
+    End,
     OutputFile(String),
     State(String),
     Click,
@@ -43,6 +45,7 @@ impl Key {
             "Expect standard output" => Self::Output,
             "Expect standard error" => Self::ErrorOutput,
             "Expect exit code" => Self::ExitCode,
+            "Expect end" => Self::End,
             "Click" => Self::Click,
             "Expect text" => Self::ExpectText,
             _ => {
@@ -71,6 +74,7 @@ impl Key {
             | Self::Output
             | Self::ErrorOutput
             | Self::ExitCode
+            | Self::End
             | Self::OutputFile(_) => Some(false),
             Self::State(_)
             | Self::Click
@@ -87,6 +91,7 @@ impl Key {
             Self::Output
                 | Self::ErrorOutput
                 | Self::ExitCode
+                | Self::End
                 | Self::OutputFile(_)
                 | Self::ExpectState(_)
                 | Self::ExpectText
@@ -257,60 +262,62 @@ fn template_names(text: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-fn range(item: &Item, value: &str, sink: &mut Sink) {
-    let problem = if let Some(bounds) = value.strip_prefix("integers from ") {
-        integer_range(bounds)
+fn range(name: &str, item: &Item, value: &str, sink: &mut Sink) -> Option<Range> {
+    let read = if let Some(bounds) = value.strip_prefix("integers from ") {
+        integer_range(name, bounds)
     } else if let Some(bounds) = value.strip_prefix("text of ") {
-        text_range(bounds)
+        text_range(name, bounds)
     } else {
-        Some(
+        Err(
             "a range is `integers from <low> to <high>` or `text of <low> to <high> characters from \"<characters>\"`",
         )
     };
-    if let Some(message) = problem {
-        sink.add(item.line, "case-range", message.to_string());
+    match read {
+        Ok(found) => Some(found),
+        Err(message) => {
+            sink.add(item.line, "case-range", message.to_string());
+            None
+        }
     }
 }
 
-fn integer_range(bounds: &str) -> Option<&'static str> {
+fn integer_range(name: &str, bounds: &str) -> Result<Range, &'static str> {
     let usage = "write `integers from <low> to <high>`";
-    let Some((low, high)) = bounds.split_once(" to ") else {
-        return Some(usage);
-    };
-    let parsed = low
-        .trim()
-        .parse::<i64>()
-        .ok()
-        .zip(high.trim().parse::<i64>().ok());
-    let Some((low, high)) = parsed else {
-        return Some(usage);
-    };
-    (low > high).then_some("the first bound is greater than the second")
+    let (low, high) = bounds.split_once(" to ").ok_or(usage)?;
+    let low = low.trim().parse::<i64>().map_err(|_| usage)?;
+    let high = high.trim().parse::<i64>().map_err(|_| usage)?;
+    if low > high {
+        return Err("the first bound is greater than the second");
+    }
+    Ok(Range::Integers {
+        name: name.to_string(),
+        low,
+        high,
+    })
 }
 
-fn text_range(bounds: &str) -> Option<&'static str> {
+fn text_range(name: &str, bounds: &str) -> Result<Range, &'static str> {
     let usage = "write `text of <low> to <high> characters from \"<characters>\"`";
-    let Some((low, rest)) = bounds.split_once(" to ") else {
-        return Some(usage);
-    };
-    let Some((high, alphabet)) = rest.split_once(" characters from ") else {
-        return Some(usage);
-    };
-    let parsed = low
-        .trim()
-        .parse::<u64>()
-        .ok()
-        .zip(high.trim().parse::<u64>().ok());
-    let Some((low, high)) = parsed else {
-        return Some(usage);
-    };
+    let (low, rest) = bounds.split_once(" to ").ok_or(usage)?;
+    let (high, alphabet) = rest.split_once(" characters from ").ok_or(usage)?;
+    let low = low.trim().parse::<u64>().map_err(|_| usage)?;
+    let high = high.trim().parse::<u64>().map_err(|_| usage)?;
     if low > high || high > MAX_TEXT_LENGTH {
-        return Some(
+        return Err(
             "the lengths are from 0 to 65536, and the first is not greater than the second",
         );
     }
-    let good = matches!(literal(alphabet.trim()), Ok((chars, rest)) if !chars.is_empty() && rest.trim().is_empty());
-    (!good).then_some("the characters are one string in quotes, with one character or more")
+    match literal(alphabet.trim()) {
+        Ok((characters, rest)) if !characters.is_empty() && rest.trim().is_empty() => {
+            Ok(Range::Text {
+                name: name.to_string(),
+                low,
+                high,
+                characters: characters.chars().collect(),
+            })
+        }
+        _ => Err("the characters are one string in quotes, with one character or more"),
+    }
 }
 
 fn values(key: &Key, item: &Item, value: &str, sink: &mut Sink) -> Vec<String> {
@@ -334,6 +341,16 @@ fn values(key: &Key, item: &Item, value: &str, sink: &mut Sink) -> Vec<String> {
             }
             Vec::new()
         }
+        Key::End => {
+            if End::parse(value).is_none() {
+                sink.add(
+                    item.line,
+                    "example-end",
+                    "a run ends `exited`, `out of time`, `out of memory` or `trapped`".to_string(),
+                );
+            }
+            Vec::new()
+        }
         Key::Click => {
             if backticked(value).is_none() {
                 sink.add(
@@ -344,10 +361,29 @@ fn values(key: &Key, item: &Item, value: &str, sink: &mut Sink) -> Vec<String> {
             }
             Vec::new()
         }
-        Key::Range(_) => {
-            range(item, value, sink);
-            Vec::new()
-        }
+        Key::Range(_) => Vec::new(),
+    }
+}
+
+fn record(key: &Key, value: &str, found: &[String], test: &mut Test) {
+    let first = found.first().cloned();
+    match key {
+        Key::Input => test.stdin = first,
+        Key::Arguments => test.arguments = Some(found.to_vec()),
+        Key::File(path) => test.files.push((path.clone(), first.unwrap_or_default())),
+        Key::Output => test.stdout = first,
+        Key::ErrorOutput => test.stderr = first,
+        Key::OutputFile(path) => test
+            .expect_files
+            .push((path.clone(), first.unwrap_or_default())),
+        Key::ExitCode => test.exit_code = value.parse().ok(),
+        Key::End => test.end = End::parse(value).unwrap_or_default(),
+        Key::State(_)
+        | Key::Click
+        | Key::TypeInto(_)
+        | Key::ExpectState(_)
+        | Key::ExpectText
+        | Key::Range(_) => {}
     }
 }
 
@@ -385,8 +421,9 @@ fn key_place(key: &Key, key_text: &str, screen: bool, cases: bool, line: usize, 
     }
 }
 
-fn block(kind: IdeaKind, cases: bool, lines: &[Line], head: usize, sink: &mut Sink) {
+fn block(kind: IdeaKind, cases: bool, lines: &[Line], head: usize, test: &mut Test, sink: &mut Sink) {
     let screen = kind == IdeaKind::Screen;
+    test.screen = screen;
     let mut keys: Vec<Key> = Vec::new();
     let mut ranges: Vec<(String, usize)> = Vec::new();
     let mut texts: Vec<(String, usize)> = Vec::new();
@@ -423,16 +460,29 @@ fn block(kind: IdeaKind, cases: bool, lines: &[Line], head: usize, sink: &mut Si
         }
         if let Key::Range(name) = &key {
             ranges.push((name.clone(), item.line));
+            test.ranges.extend(range(name, &item, value, sink));
         }
         let found = values(&key, &item, value, sink);
+        record(&key, value, &found, test);
         texts.extend(found.into_iter().map(|v| (v, item.line)));
         keys.push(key);
     }
-    if !screen && !keys.contains(&Key::ExitCode) {
+    let exited = test.end == End::Exited;
+    if !screen && exited && !keys.contains(&Key::ExitCode) {
         sink.add(
             head,
             "example-exit-code-missing",
             "this block has no `- Expect exit code:` item".to_string(),
+        );
+    }
+    if !screen && !exited && keys.contains(&Key::ExitCode) {
+        sink.add(
+            head,
+            "example-exit-code-end",
+            format!(
+                "a run that ends `{}` has no exit code; remove `- Expect exit code:`",
+                test.end.name()
+            ),
         );
     }
     if screen && !keys.iter().any(Key::expects) {
@@ -570,7 +620,8 @@ pub(crate) fn parse(
     lines: &[Line],
     dictionary: &Dictionary,
     sink: &mut Sink,
-) {
+) -> Vec<Test> {
+    let mut tests = Vec::new();
     let (before, behaviours) = split_headings(lines, "## ");
     for line in before.iter().filter(|l| !l.text.trim().is_empty()) {
         sink.add(
@@ -636,9 +687,18 @@ pub(crate) fn parse(
                 );
             }
             name_words(part.head, label, dictionary, sink);
-            block(kind, cases, part.body, part.head.number, sink);
+            let mut test = Test {
+                file: sink.file.clone(),
+                line: part.head.number,
+                behaviour: name.to_string(),
+                name: label.trim().to_string(),
+                ..Test::default()
+            };
+            block(kind, cases, part.body, part.head.number, &mut test, sink);
+            tests.push(test);
         }
     }
+    tests
 }
 
 #[cfg(test)]
@@ -726,5 +786,54 @@ mod tests {
         );
         assert!(template_names("{a").is_err());
         assert!(template_names("a}").is_err());
+    }
+
+    #[test]
+    fn the_end_of_a_run_is_a_key_and_an_exit_code_goes_with_exited_only() {
+        let base = "## Stop\nGiven no input,\nWhen the program runs,\nThen the host stops it.\n### Example: a\n";
+        let with = |items: &str| codes(IdeaKind::Program, &format!("{base}{items}"));
+        assert_eq!(with("- Expect end: out of time\n"), Vec::<&str>::new());
+        assert_eq!(
+            with("- Expect end: out of time\n- Expect exit code: 1\n"),
+            ["example-exit-code-end"]
+        );
+        assert_eq!(
+            with("- Expect end: exited\n"),
+            ["example-exit-code-missing"]
+        );
+        assert_eq!(
+            with("- Expect end: later\n"),
+            ["example-end", "example-exit-code-missing"]
+        );
+    }
+
+    #[test]
+    fn each_block_is_a_test_with_its_input_and_its_expectations() {
+        let mut sink = Sink::new("idea.md");
+        let tests = parse(
+            IdeaKind::Program,
+            1,
+            &lines(GOOD, 2),
+            &Dictionary::load(),
+            &mut sink,
+        );
+        assert_eq!(sink.findings, []);
+        assert_eq!(tests.len(), 2);
+        let first = &tests[0];
+        assert_eq!(first.file, "idea.md");
+        assert_eq!(first.behaviour, "Count the words");
+        assert_eq!(first.name, "two words");
+        assert_eq!(first.line, 9);
+        assert_eq!(first.stdin.as_deref(), Some("a b\n"));
+        assert_eq!(
+            first.arguments,
+            Some(vec!["-w".to_string(), "--all".to_string()])
+        );
+        assert_eq!(first.files, [("in/a.txt".to_string(), "x".to_string())]);
+        assert_eq!(first.stdout.as_deref(), Some("2\n"));
+        assert_eq!(first.exit_code, Some(0));
+        assert_eq!(first.expect_files, [("out.txt".to_string(), String::new())]);
+        assert_eq!(tests[1].ranges.len(), 2);
+        assert_eq!(tests[1].arguments, Some(vec!["{n}".to_string()]));
     }
 }

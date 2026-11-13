@@ -3,9 +3,7 @@ use std::path::Path;
 
 use crate::frontmatter::Front;
 use crate::idea::IdeaKind;
-use crate::{Finding, Note};
-
-pub(crate) const LABEL: &str = "unchecked";
+use crate::{Finding, Note, Trust};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Stamp {
@@ -97,7 +95,7 @@ fn type_name(kind: IdeaKind) -> &'static str {
     }
 }
 
-pub(crate) fn page_text(page: &Page, used_by: &[String]) -> String {
+pub(crate) fn page_text(page: &Page, used_by: &[String], label: &str) -> String {
     let source_hash = page
         .source_hash
         .clone()
@@ -109,7 +107,7 @@ pub(crate) fn page_text(page: &Page, used_by: &[String]) -> String {
         ("source", page.source.clone()),
         ("uses", flow(&page.uses)),
         ("used_by", flow(used_by)),
-        ("label", LABEL.to_string()),
+        ("label", label.to_string()),
         ("idea_sha256", page.idea_hash.clone()),
         ("source_sha256", source_hash),
     ];
@@ -117,7 +115,7 @@ pub(crate) fn page_text(page: &Page, used_by: &[String]) -> String {
     page.front.render(&keys)
 }
 
-pub(crate) fn index_text(pages: &[Page]) -> String {
+pub(crate) fn index_text(pages: &[Page], label: &str) -> String {
     let mut out = String::from("---\nokf_version: \"0.2\"\n---\n");
     let groups = [
         ("Program", IdeaKind::Program),
@@ -130,7 +128,7 @@ pub(crate) fn index_text(pages: &[Page]) -> String {
             .filter(|p| p.kind == kind)
             .map(|p| {
                 format!(
-                    "* [{}]({}) - {} Label: `{LABEL}`.\n",
+                    "* [{}]({}) - {} Label: `{label}`.\n",
                     p.title, p.file, p.description
                 )
             })
@@ -154,7 +152,7 @@ fn change(previous: Option<&str>, now: Option<&str>) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn log_entry(pages: &[Page], now: u64) -> (String, Vec<Note>) {
+pub(crate) fn log_entry(pages: &[Page], now: u64, trust: &Trust) -> (String, Vec<Note>) {
     let mut lines = Vec::new();
     let mut notes = Vec::new();
     for page in pages {
@@ -203,8 +201,9 @@ pub(crate) fn log_entry(pages: &[Page], now: u64) -> (String, Vec<Note>) {
         ""
     };
     let head = format!(
-        "* **Check** at {}: no problems; label `{LABEL}`{nothing}.\n",
-        time_text(now)
+        "* **Check** at {}: no problems; {}{nothing}.\n",
+        time_text(now),
+        trust.text()
     );
     (format!("{head}{}", lines.concat()), notes)
 }
@@ -270,13 +269,15 @@ pub(crate) fn write(
     pages: &[Page],
     generated: &[(String, String)],
     now: u64,
+    trust: &Trust,
 ) -> Written {
     let mut out = Written {
         files: Vec::new(),
         notes: Vec::new(),
         findings: Vec::new(),
     };
-    let (entry, notes) = log_entry(pages, now);
+    let label = trust.label.name();
+    let (entry, notes) = log_entry(pages, now, trust);
     out.notes = notes;
     let mut texts: Vec<(String, String)> = Vec::new();
     for page in pages {
@@ -285,9 +286,9 @@ pub(crate) fn write(
             .filter(|other| other.uses.iter().any(|u| u == page.id()))
             .map(|other| other.id().to_string())
             .collect();
-        texts.push((page.file.clone(), page_text(page, &used_by)));
+        texts.push((page.file.clone(), page_text(page, &used_by, label)));
     }
-    texts.push(("index.md".to_string(), index_text(pages)));
+    texts.push(("index.md".to_string(), index_text(pages, label)));
     let previous = fs::read_to_string(folder.join("log.md"))
         .unwrap_or_default()
         .replace("\r\n", "\n");

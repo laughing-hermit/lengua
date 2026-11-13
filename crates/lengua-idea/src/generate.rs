@@ -77,7 +77,7 @@ const NOT_NAMES: [&str; 62] = [
     "while",
 ];
 
-const ALWAYS: [&str; 14] = [
+const ALWAYS: [&str; 15] = [
     "wasi:cli/environment",
     "wasi:cli/exit",
     "wasi:cli/stderr",
@@ -92,6 +92,7 @@ const ALWAYS: [&str; 14] = [
     "wasi:io/error",
     "wasi:io/poll",
     "wasi:io/streams",
+    "wasi:random/insecure-seed",
 ];
 
 pub(crate) fn interfaces(grant: Grant) -> &'static [&'static str] {
@@ -376,14 +377,13 @@ fn collect(folder: &Path, relative: &str, out: &mut Vec<(String, Vec<u8>)>) {
     }
 }
 
-pub(crate) fn inputs(folder: &Path) -> String {
-    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
-    for file in [CARGO_TOML, WORLD] {
-        if let Ok(bytes) = fs::read(folder.join(file)) {
-            files.push((file.to_string(), bytes));
-        }
-    }
+pub(crate) fn inputs(folder: &Path, generated: &[(String, String)], tests: &str) -> String {
+    let mut files: Vec<(String, Vec<u8>)> = generated
+        .iter()
+        .map(|(file, text)| (file.clone(), text.as_bytes().to_vec()))
+        .collect();
     collect(folder, "src", &mut files);
+    files.push(("tests".to_string(), tests.as_bytes().to_vec()));
     let mut all = Vec::new();
     for (path, bytes) in files {
         all.extend_from_slice(path.as_bytes());
@@ -482,6 +482,7 @@ world program {
   import wasi:io/error@0.2.12;
   import wasi:io/poll@0.2.12;
   import wasi:io/streams@0.2.12;
+  import wasi:random/insecure-seed@0.2.12;
 
   export wasi:cli/run@0.2.12;
 }
@@ -531,10 +532,11 @@ world program {
             none
         );
         let clock = world(&[Grant::Clock], false);
-        assert_eq!(clock.matches("import").count(), 15);
+        assert_eq!(clock.matches("import").count(), 16);
         assert!(clock.contains("  import wasi:clocks/wall-clock@0.2.12;\n"));
         assert!(!none.contains("wall-clock"));
-        assert!(!none.contains("wasi:random"));
+        assert!(!none.contains("wasi:random/random"));
+        assert!(none.contains("  import wasi:random/insecure-seed@0.2.12;\n"));
         assert!(!none.contains("wasi:filesystem"));
     }
 

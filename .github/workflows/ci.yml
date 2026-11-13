@@ -150,6 +150,14 @@ jobs:
             echo "$f: $(wc -c < "$f") bytes"
             cargo run --locked -q -p lengua-mcp -- imports "$f"
           done
+      - name: the time of each check, from the first call to the end of its job
+        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+        run: |
+          if [ -f target/tmp/lengua-timings.txt ]; then
+            sort target/tmp/lengua-timings.txt
+          else
+            echo "no timings"
+          fi
       - name: the time clippy adds to the build of hello world
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |

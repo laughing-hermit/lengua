@@ -14,6 +14,7 @@ Then it writes 1767225600, a line end, a random number and a line end to the sta
 
 ### Example: the fixed clock
 
+- Expect standard output: "1767225600\n0\n"
 - Expect exit code: 0
 
 # Constraints
