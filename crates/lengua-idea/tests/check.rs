@@ -234,5 +234,9 @@ fn the_hello_example_has_no_findings_and_gets_its_build_files() {
     assert_eq!(build.crates, 0);
     assert!(build.code);
     assert!(read(&to, "Cargo.toml").starts_with("[package]\nname = \"hello\"\n"));
-    assert!(!read(&to, "wit/world.wit").contains("stdin"));
+    let world = read(&to, "wit/world.wit");
+    assert!(world.contains("  import wasi:cli/stdin@0.2.12;\n"));
+    for ungranted in ["wasi:random", "wasi:filesystem", "wasi:sockets", "wall-clock"] {
+        assert!(!world.contains(ungranted), "{ungranted} in {world}");
+    }
 }
