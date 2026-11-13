@@ -226,31 +226,36 @@ and random numbers come from a seed, so every run gives the same output on every
 
 ### Crates: few, and only ones that build for WebAssembly
 
-**Always try to reduce external dependencies.** In the age of AI, an agent can write its own
-code, checked and tested to lengua's rules, where before a team would have taken a crate. Every
-external crate is code lengua didn't write and can't hold to its rules. But be flexible: some
-crates are worth far more than writing them again, and those are the exceptions.
+**Use the Rust standard library; take an external crate only when it is absolutely necessary.**
+In the age of AI, an agent can write its own code, checked and tested to lengua's rules, where
+before a team would have taken a crate. Every external crate is code lengua didn't write and
+can't hold to its rules. An exception has to merit it, as GPUI does.
 
-Recognised exceptions, each still declared in the idea with its reason:
-- **GPUI and GPUI Kit**, for the front end: a GPU-drawn UI framework is not something to write
-  again.
-- **Axum**, for a server's routes, run inside the WASI HTTP world through `wstd-axum`
-  ([docs](https://docs.rs/wstd-axum)), which builds for `wasm32-wasip2`.
-- **Tokio**, only where it builds: a WASI component has one thread, so only Tokio's
-  current-thread runtime applies. For HTTP, `wstd` drives the request and Tokio does not. To
-  verify against Tokio's own release notes at the milestone that adds the network.
-- Others the same way: a crate with wide use, that builds for the targets, and that would cost
-  much more to write than to declare.
+The exceptions that merit it, each still declared in the idea with its reason:
+- **GPUI, its web crate and GPUI Kit**, for the front end: a GPU-drawn UI framework is not
+  something to write again.
+- **The WASI bindings** for what the standard library does not cover, such as WASI's HTTP world
+  for a server: the generated interface code (`wit-bindgen` or the `wasi` crate). It is the
+  component's own interface, not a library of features.
+
+Not exceptions: **Axum** and **Tokio**. A server's routing and its requests are written on the
+standard library and lengua's shared HTTP library, over the WASI bindings. A WASI component has
+one thread, so an async runtime brings little. (Axum can run in the WASI HTTP world through
+`wstd-axum`, [docs](https://docs.rs/wstd-axum), if an application ever truly needs it.)
 
 The `build` skill chooses in this order:
 
-1. **A lengua library** already in the bundle, or in lengua's own shared libraries (section
-   below). Written to the same rules, checked and tested like the application.
-2. **A crate from crates.io that builds for both targets**, `wasm32-wasip2` and, for the front
-   end, `wasm32-unknown-unknown`. Pure-Rust crates usually do.
-3. **If no such crate exists**, or the one that exists pulls in much more than it is worth, the
-   agent writes its own as a lengua library: its own idea, its own tests, no comments, the
-   Power of 10. It then serves every later application too.
+1. **The Rust standard library** ([std](https://doc.rust-lang.org/std/)), as far as it goes.
+   It is part of the toolchain, so it is no dependency at all, and most of it works in a WASI
+   component: collections, strings, formatting, files, the clock, standard input and output.
+   What it lacks for WebAssembly (threads, for one) the application does without.
+2. **A lengua library** already in the bundle, or in lengua's own shared libraries (section
+   below), themselves built on the standard library alone. Written to the same rules, checked
+   and tested like the application.
+3. **The agent writes its own** as a lengua library, on the standard library: its own idea, its
+   own tests, no comments, the Power of 10. It then serves every later application too.
+4. **A crate from crates.io**, only as an exception (above), and only if it builds for both
+   targets, `wasm32-wasip2` and, for the front end, `wasm32-unknown-unknown`.
 
 What `check` does with each external crate:
 - It must be declared in the idea with `- Uses crate: <name> <version>, for <what>`. The reason
@@ -263,7 +268,7 @@ What `check` does with each external crate:
 
 ### lengua's shared libraries
 
-lengua ships a small set of its own libraries, written as lengua programs, so the common needs
+lengua ships a small set of its own libraries, written as lengua programs on the standard library alone, so the common needs
 of an application don't send it to crates.io: reading and writing JSON, parsing and building
 HTTP messages, decimal numbers, text and lines, sorting, CRC and hashes, dates and times. Each
 has its own idea, tests and lock, and builds for both targets. GPUI and GPUI Kit stay external:
@@ -332,7 +337,7 @@ Added for an AI language:
 |---|---|---|
 | 11 | No comments and no doc comments in code files. The idea is the documentation. | lengua's lint |
 | 12 | Every function is named in its module's `# Structure`, and nothing else is. | `check` |
-| 13 | Few external crates: a lengua library first; a crate from the ecosystem only if the idea declares it (`- Uses crate: name version, for what`) and it builds for every target the application needs; otherwise the agent writes its own as a lengua library. Each is pinned by checksum, signed in the lock, and counted in the reply with whether it uses `unsafe`. | The generated `Cargo.toml`, `Cargo.lock`, the lock and the reply |
+| 13 | The standard library first; an external crate only when absolutely necessary (GPUI, its web crate, GPUI Kit, the WASI bindings), declared in the idea (`- Uses crate: name version, for what`), building for every target the application needs, pinned by checksum, signed in the lock, and counted in the reply with whether it uses `unsafe`. Otherwise the agent writes its own, on the standard library. | The generated `Cargo.toml`, `Cargo.lock`, the lock and the reply |
 
 And on the built component: imports only from the world; no threads, no relaxed SIMD and no other
 feature whose result can differ between machines; a size limit.
