@@ -874,7 +874,13 @@ only what the idea grants (arguments only with `- Reads: arguments`; standard in
 through only with `- Reads: standard input`, otherwise empty; standard output and standard error
 passed through; the real clocks only when granted), and stops with the program's exit code, or
 its own: 124 out of time, 125 refused, 126 out of memory, 134 trapped, each with a line
-`lengua-run: <what>: <message>` on standard error. MEASURE-LENGUA-RUN
+`lengua-run: <what>: <message>` on standard error.
+Measured on Linux x86-64 (run 43448303904, release builds): `lengua-run` is 6,816,864 bytes and
+`lengua-mcp` 27,970,944 (4.1 times larger, with Cranelift, `rmcp` and Tokio); hello world from
+its sealed code takes 5.3 ms a run with `lengua-run` and 5.5 ms with `lengua-mcp worker` (20 runs
+each: 0.105 s and 0.109 s), and `--version` 1.4 ms and 1.6 ms, so start-up is mostly the
+process, not the binary. The release `lengua-run`, with no compiler, loaded the code that the
+tests' `lengua-mcp` sealed. The other four systems: todo.md, the landing run.
 
 ### The wiki and the log: documentation that can't drift
 
