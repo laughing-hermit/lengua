@@ -79,8 +79,7 @@ fn word_at(chars: &[char], at: usize) -> Result<(Token, usize), Error> {
         let length = word.len();
         let found: String = chars
             .get(at..at + length)
-            .map(|part| part.iter().collect())
-            .unwrap_or_default();
+            .map_or_else(String::new, |part| part.iter().collect());
         debug_assert!(length <= 5);
         if found == word {
             return Ok((Token::Scalar(value), at + length));

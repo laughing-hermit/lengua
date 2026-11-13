@@ -100,8 +100,7 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, Error> {
     let (lines, rest) = split_head(bytes)?;
     let first: Vec<&str> = lines
         .first()
-        .map(String::as_str)
-        .unwrap_or_default()
+        .map_or("", String::as_str)
         .split(' ')
         .collect();
     let [method, target, version] = first.as_slice() else {
@@ -127,7 +126,7 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, Error> {
 
 pub fn parse_response(bytes: &[u8]) -> Result<Response, Error> {
     let (lines, rest) = split_head(bytes)?;
-    let first = lines.first().map(String::as_str).unwrap_or_default();
+    let first = lines.first().map_or("", String::as_str);
     let mut parts = first.splitn(3, ' ');
     let version = parts.next().unwrap_or_default();
     if version != "HTTP/1.1" && version != "HTTP/1.0" {

@@ -85,12 +85,12 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     let message = padded(data);
     debug_assert_eq!(message.len() % 64, 0);
     let mut state = START;
-    for block in message.chunks_exact(64) {
+    for block in message.as_chunks::<64>().0 {
         compress(&mut state, block);
     }
     let mut out = [0u8; 32];
-    for (slot, word) in out.chunks_exact_mut(4).zip(state) {
-        slot.copy_from_slice(&word.to_be_bytes());
+    for (slot, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(state) {
+        *slot = word.to_be_bytes();
     }
     debug_assert_eq!(out.len(), 32);
     out
@@ -123,10 +123,8 @@ fn padded(data: &[u8]) -> Vec<u8> {
 
 fn schedule(block: &[u8]) -> [u32; 64] {
     let mut words = [0u32; 64];
-    for (slot, bytes) in words.iter_mut().zip(block.chunks_exact(4)) {
-        *slot = <[u8; 4]>::try_from(bytes)
-            .map(u32::from_be_bytes)
-            .unwrap_or_default();
+    for (slot, bytes) in words.iter_mut().zip(block.as_chunks::<4>().0) {
+        *slot = u32::from_be_bytes(*bytes);
     }
     for at in 16..words.len() {
         let far = words.get(at - 15).copied().unwrap_or_default();
