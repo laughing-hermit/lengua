@@ -417,7 +417,9 @@ Unchanged from lengua 2:
   against the official WASI and Wasmtime documents at L0, and pin one.
 - **Build time:** a cold `cargo build` can take longer than one tool call; the background job
   and a kept build folder per program must hide it.
-- **The user must have Rust installed.** lengua 2 needed nothing but lengua itself.
+- **The user must have Rust installed**, with its two WebAssembly targets. lengua 2 needed nothing
+  but lengua itself. Accepted by the owner on 2026-11-13: "I acknowledge that having Rust
+  installed is a dependency now." `lengua-mcp doctor` checks it and says how to install it.
 - **Component size and start-up time** against lengua 2's hand-written modules: measured at L11.
   GPUI makes the file much larger.
 - **GPUI's web target is new** and lives in Zed's repository: pin one commit, and expect to
