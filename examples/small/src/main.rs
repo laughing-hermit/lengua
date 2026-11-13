@@ -8,7 +8,7 @@ fn main() {
 
 fn size(number: u32) -> &'static str {
     let name = if number <= 9 { "small" } else { "large" };
-    assert!(!name.is_empty());
+    assert!(name.starts_with('s') || name.starts_with('l'));
     assert_eq!(name.len(), 5);
     name
 }
