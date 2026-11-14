@@ -114,6 +114,9 @@ fn the_wiki_of_every_folder_is_written_in_place() {
     let mut summary = Vec::new();
     let mut all = folders(&root, "libraries");
     all.extend(folders(&root, "examples"));
+    all.sort_by_key(|f| {
+        !fs::read_to_string(f.join("idea.md")).is_ok_and(|t| t.contains("\n- Exports:"))
+    });
     for folder in all {
         let mut reply = Value::Null;
         for _ in 0..5000 {
