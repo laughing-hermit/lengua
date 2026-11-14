@@ -115,7 +115,7 @@ pub(crate) fn rename_outputs(folder: &Path, from: &str, to: &str) -> std::io::Re
             continue;
         }
         let target = folder.join(name.replace(from, to));
-        if name.ends_with(".d") {
+        if Path::new(&name).extension().is_some_and(|e| e.eq_ignore_ascii_case("d")) {
             let text = fs::read_to_string(entry.path())?;
             fs::write(&target, text.replace(from, to))?;
             fs::remove_file(entry.path())?;
@@ -208,8 +208,11 @@ mod tests {
             std::env::temp_dir().join(format!("lengua-mcp-{}-renamed", std::process::id()));
         std::fs::create_dir_all(&folder).expect("a folder");
         std::fs::write(folder.join("libwasip2-ours.rlib"), "code").expect("a file");
-        std::fs::write(folder.join("wasip2-ours.d"), "libwasip2-ours.rlib: src/lib.rs\n")
-            .expect("a file");
+        std::fs::write(
+            folder.join("wasip2-ours.d"),
+            "libwasip2-ours.rlib: src/lib.rs\n",
+        )
+        .expect("a file");
         super::rename_outputs(&folder, "-ours", "-cargo").expect("renamed");
         assert!(folder.join("libwasip2-cargo.rlib").is_file());
         assert_eq!(
