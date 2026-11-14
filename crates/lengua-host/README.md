@@ -52,6 +52,13 @@ component that `lengua-seal` loaded from sealed precompiled code. The grants and
   `ai.lengua`, then the host answers from the example's `- Model answers:` in a fixed run, or from
   the model server of `LENGUA_MODEL_URL` in a live one, within the calls and tokens of the grant
   (429 past them) (since L9).
+- Given ``- Calls: HTTPS at `host:port` ``, when the program sends an `https` request there, then
+  the host speaks TLS with `rustls` and `ring`, trusting Mozilla's roots and those of
+  `LENGUA_TLS_ROOTS`; a certificate no trusted root signed is refused (since L10).
+- Given ``- Native: `<folder>`, for ...``, when the program sends `POST` to `<name>.native`, then
+  the host checks the native part's program against its lock, runs it with the body as its
+  standard input within the program's time, and answers 200 with its standard output, or 502
+  with its standard error (since L10).
 - Given ``- Calls: HTTP at `host:port` ``, when the program sends a request there, then the host
   sends it over TCP and streams the answer back; any other address is denied (since L9).
 - Given ``- Reads: the secret `NAME` ``, when the program reads its environment, then it finds
@@ -83,8 +90,13 @@ component that `lengua-seal` loaded from sealed precompiled code. The grants and
   `answer_bytes` and `response_bytes` write the answer; `Host::answer` and `Host::handle` serve
   one request; `Host::serve`, `Host::serve_one`, `request_line`, `log_line` and `read_request`
   serve a TCP port, `WORKERS` at a time.
-- `outgoing.rs`: `Hooks` are the hooks of the granted calls; `send` sends a request over TCP;
+- `outgoing.rs`: `Hooks` are the hooks of the granted calls; `send` sends a request over TCP, or
+  TLS for `https` (`send_with`, `secure`, `granted_name`);
   `Pieces`, `whole`, `done` and `reply` make an answer; `authority_of` gives `host:port`.
+- `tls.rs` (since L10): `connector` makes the TLS settings once (Mozilla's roots and those of
+  `LENGUA_TLS_ROOTS`, the `ring` provider); `wrap` makes a TCP stream a TLS one; its tests serve
+  TLS with a certificate they make.
+- `native.rs` (since L10): `call` answers `<name>.native`; `run_part` checks and runs the part.
 - `model.rs`: `ask` answers the address `ai.lengua`; `Budget` holds the calls and tokens left;
   `Model` and `Endpoint` are the given answer or the model server; `given`, `live`,
   `request_body` and `finish` make the answer; `Events` and `event_text` read a streamed one.

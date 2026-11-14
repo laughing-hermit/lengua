@@ -117,13 +117,13 @@ pub(crate) async fn send(
     } else {
         None
     };
-    send_with(request, options, tls).await
+    send_with(request, options, tls.as_ref()).await
 }
 
 pub(crate) async fn send_with(
     request: hyper::Request<WasiBody>,
     options: Option<RequestOptions>,
-    tls: Option<TlsConnector>,
+    tls: Option<&TlsConnector>,
 ) -> Reply {
     let address = authority_of(request.uri()).ok_or(HttpError::HttpRequestUriInvalid)?;
     let wait = options.and_then(|o| o.connect_timeout).unwrap_or(CONNECT);
@@ -134,7 +134,7 @@ pub(crate) async fn send_with(
     match tls {
         Some(connector) => {
             let host = request.uri().host().unwrap_or_default().to_string();
-            let wrapped = tls::wrap(&connector, &host, stream)
+            let wrapped = tls::wrap(connector, &host, stream)
                 .await
                 .map_err(HttpError::Tls)?;
             over(wrapped, request).await

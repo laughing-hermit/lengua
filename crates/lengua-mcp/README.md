@@ -145,8 +145,9 @@ and 7.
   `THRESHOLD` is 80), `Stage` (with `Stage::name` and `Stage::running`), `Tests`, `Mutants`,
   `Component`, `Problem` and `Remark` are the job's state; `lock` and `problem` are helpers.
 - `testing.rs`: `cases` expands the tests of the ideas (screens left out) into runs;
-  `run_case` runs one in a new folder (`place`) in a worker process (`worker::run`, with the
-  component's test lock), refuses input the idea does not grant (`ungranted`), and compares
+  `run_case` runs one in a new folder (`place`) through its `Runner`: a worker process
+  (`worker::run`, with the component's test lock) or, for a native part, its program
+  (`native::run`); it refuses input the idea does not grant (`ungranted`), and compares
   the end, the exit code, the output and the files (`compare`, with `diff` and `shown`);
   `problem` makes the finding, with `values_text` for a case's drawn values.
 - `mutation.rs`: `run` gets the mutants from `lengua_idea::mutants`, at most `MUTANTS` (40),
@@ -154,6 +155,9 @@ and 7.
   `key`) or builds the mutant in its package (`workspace`, `mutant_name`), seals it, runs the
   tests on it (`verdict`, `judge`) and removes its sealed code, and makes a note of each
   survivor (`remark`); `Verdict` (with `name` and `parse`) and `Workspace` are its data.
+- `native.rs` (since L10): `run` runs a native part's program as a process with the input,
+  stopped at its time; `build.rs` builds a native part for this computer (`target_args`,
+  `native_built`) and labels it `native`.
 - `host.rs`: `Host::new` makes `lengua_host`'s engine with `config` (`lengua_host::config`
   and NaNs canonical); `Host::engine` gives it; `Host::component` compiles a component once
   per SHA-256; `Host::imports` lists its imports, and `outside` and `grant_for` hold them to

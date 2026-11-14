@@ -274,7 +274,7 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].line, 2);
         assert_eq!(found[0].code, "native-undeclared");
-        assert!(undeclared("src/main.rs", "fn main() {}\n").is_empty());
+        assert_eq!(undeclared("src/main.rs", "fn main() {}\n"), []);
     }
 
     #[test]

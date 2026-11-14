@@ -3,7 +3,7 @@
 The program is a desktop app. Its window shows a screen with a form for a prompt, and the
 server gives the prompt to a small language model. The model is the native part `model` in the
 folder next to it. The server is one WebAssembly file, and `lengua-run` runs it beside the window.
-The host starts the native part for each request, outside the sandbox.
+The host starts the native part for each request, as a program of the computer.
 
 The server reads the prompt from a JSON body with the library `json`, and it sends the prompt to
 the native part. Then it gives the text of the model in JSON. Any other path is a file of the
@@ -93,7 +93,7 @@ Then the answer is the file, or 404.
 
 - `Desk::handle`: answers a request with what `answer` gives.
 - `answer`: answers `POST /api/write` with the text of the model, and any other path with a file of the front end.
-- `write`: reads the prompt of a body, asks the model, and gives the status and the JSON.
+- `written`: reads the prompt of a body, asks the model, and gives the status and the JSON.
 - `prompt_of`: gives the prompt of a JSON body, or nothing when the prompt is empty or too long.
 - `error`: gives the JSON of an error.
 - `ask`: sends the prompt to the native part and gives its text.

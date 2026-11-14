@@ -590,7 +590,8 @@ impl Lengua {
         }
         if lengua_idea::program(&folder)
             .build
-            .is_some_and(|b| b.native())
+            .as_ref()
+            .is_some_and(lengua_idea::Build::native)
         {
             return Ok(Json(plain("refused", Some(NATIVE_RUN.to_string()), 0)));
         }

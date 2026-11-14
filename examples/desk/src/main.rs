@@ -31,7 +31,7 @@ fn answer(post: bool, path: &str, body: &str) -> (u16, &'static str, Vec<u8>) {
     debug_assert!(path.len() < 1 << 16);
     debug_assert!(body.len() < 1 << 24);
     if post && path == "/api/write" {
-        let (status, text) = write(body);
+        let (status, text) = written(body);
         return (status, "application/json", text.into_bytes());
     }
     match lengua_web::asset(path) {
@@ -52,7 +52,7 @@ fn prompt_of(body: &str) -> Option<String> {
     fits.then_some(prompt)
 }
 
-fn write(body: &str) -> (u16, String) {
+fn written(body: &str) -> (u16, String) {
     let Some(prompt) = prompt_of(body) else {
         return (400, error(TOO_LONG));
     };

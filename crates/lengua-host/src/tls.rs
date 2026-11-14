@@ -148,7 +148,7 @@ mod tests {
         runtime().block_on(async {
             let port = serve_once(&made).await;
             let connector = connector_with(std::slice::from_ref(&made.root)).expect("a connector");
-            let (response, _) = send_with(request(port), None, Some(connector))
+            let (response, _) = send_with(request(port), None, Some(&connector))
                 .await
                 .expect("an answer over TLS");
             assert_eq!(response.status().as_u16(), 200);
@@ -168,7 +168,7 @@ mod tests {
         runtime().block_on(async {
             let port = serve_once(&made).await;
             let connector = connector_with(&[]).expect("a connector");
-            let refused = send_with(request(port), None, Some(connector)).await;
+            let refused = send_with(request(port), None, Some(&connector)).await;
             assert!(
                 matches!(refused, Err(wasmtime_wasi_http::Error::Tls(_))),
                 "{:?}",
