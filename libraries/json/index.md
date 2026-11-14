@@ -2,6 +2,10 @@
 okf_version: "0.2"
 ---
 
+# Where it runs
+
+* A lengua library, built into each program that uses it, as WebAssembly. It reaches nothing of its own.
+
 # Back end: program
 
 * [json](idea.md) - The library reads and writes JSON text, as RFC 8259 gives it, with a value type of its own. Label: `checked`.

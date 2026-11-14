@@ -2,6 +2,10 @@
 okf_version: "0.2"
 ---
 
+# Where it runs
+
+* A lengua library, built into each program that uses it, as WebAssembly. It reaches nothing of its own.
+
 # Back end: program
 
 * [dates](idea.md) - The library works with civil dates of the Gregorian calendar and with times in UTC. Label: `checked`.

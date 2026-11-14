@@ -1,3 +1,23 @@
+---
+type: lengua Server
+description: "The program is a desktop app."
+module: main
+source: src/main.rs
+uses: [ideas/ui/home, ../../libraries/json/idea]
+used_by: []
+label: checked
+idea_sha256: ce8028a930da2bf0df4453774ed2040cebc231baacdb87ed549d49018bb41ffe
+source_sha256: 8fe52be33c3a9f52bd888c7c600e4f85a0a6d1974546c7e85536041b6f86ce83
+cargo_sha256: dbb9541af7745d495a909e05bec141a6f7705ead1d094829219d6d1709cbc5ff
+world_sha256: e1fa39b4514b921fb087df71d46f9bda8c247415e4e9fee0409382456311ad86
+web_sha256: 8923afea4e11e30318ff68513e9b7cd9ea930bba05c0cad4b1a321cb3d93c9c3
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T13:34:47Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-14T13:34:47Z }
+title: desk
+status: draft
+---
+
 # Purpose
 
 The program is a desktop app. Its window shows a screen with a form for a prompt, and the
@@ -99,3 +119,10 @@ Then the answer is the file, or 404.
 - `ask`: sends the prompt to the native part and gives its text.
 - `body_of`: reads the body of a request as text.
 - `respond`: writes the answer to the client.
+
+# Links
+
+* Uses: [ui/home](ideas/ui/home.md), [json](../../libraries/json/idea.md).
+* Serves: [`POST /api/write`](api.md).
+* Called by: [ui/home](ideas/ui/home.md).
+* Index: [desk](index.md).

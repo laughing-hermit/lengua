@@ -2,6 +2,10 @@
 okf_version: "0.2"
 ---
 
+# Where it runs
+
+* One WebAssembly file. Runs on any OS and CPU. Sandboxed: it reaches only what the idea grants.
+
 # Back end: program
 
 * [tally](idea.md) - The program counts the lines and the words of a text. Label: `checked`.

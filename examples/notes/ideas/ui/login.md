@@ -6,11 +6,11 @@ source: web/screens/login.tsx
 uses: [ideas/notes]
 used_by: [idea]
 label: checked
-idea_sha256: 8c025d3ae4581d45dadcae910f16d7dbe0551b35a6d58fd66be47f11ce0047af
-source_sha256: ddb30d34a0dbfd0c54ec4b40b75fe84aa171c0a081bffd0688f4c54f53a16e7d
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T10:11:53Z }
+idea_sha256: a1359cf33dfc23f0eccdae0b4d1f10ac3fb886dc1a2454a40ab1bcd22ccf7bc9
+source_sha256: bce9f430b5153b773267b5834fa40af17842be909ae8cdcb6945769c76e0d557
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T13:39:46Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T10:11:53Z }
+  - { by: process:lengua-check, at: 2026-11-14T13:39:46Z }
 title: ui/login
 status: draft
 ---
@@ -65,5 +65,5 @@ Then the screen shows the error of the server.
 
 * Uses: [notes](../notes.md).
 * Used by: [notes](../../idea.md).
-* Calls: [`POST /api/login`](../../api.md).
+* Calls: [`POST /api/login`](../../api.md), [`GET /api/me`](../../api.md).
 * Index: [notes](../../index.md).

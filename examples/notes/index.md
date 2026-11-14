@@ -2,6 +2,10 @@
 okf_version: "0.2"
 ---
 
+# Where it runs
+
+* One WebAssembly file that serves its own front end. Opens in any current browser. The server reaches only what the idea grants; the browser's sandbox holds the front end.
+
 # Back end: program
 
 * [notes](idea.md) - The program is a small web application for notes. Label: `checked`.

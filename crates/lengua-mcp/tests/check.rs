@@ -2128,10 +2128,7 @@ fn the_desktop_app_gets_electron_and_its_window_in_the_generated_files() {
     let package = read(&folder, "web/package.json");
     assert!(package.contains("\"electron\": \"45.3.2\""), "{package}");
     let workspace = read(&folder, "web/pnpm-workspace.yaml");
-    assert!(
-        !workspace.contains("allowBuilds"),
-        "{workspace}"
-    );
+    assert!(!workspace.contains("allowBuilds"), "{workspace}");
     assert!(read(&folder, "web/desktop/main.mjs").contains("LENGUA_URL"));
     assert!(
         reply["where_it_runs"]

@@ -1,3 +1,22 @@
+---
+type: lengua Program
+description: "The program is a small language model, and it is a native part."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: native
+idea_sha256: e7c99d5bcc972091b820b39c52fbf5161f1301205f29e1816574537feadceba6
+source_sha256: 3469953d5631a636a665553998c73402df837f2b9a32717658a06de5eb85e61a
+cargo_sha256: 7aaa85bbabf5ff35790be6618b02dd948831c94cbb2e2cd43659a47341e4dd96
+world_sha256: 0a7313a3dd0aa5c41e90b244f039886104d47ce35544350dbfa738da23ba0d2c
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T13:30:13Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-14T13:30:13Z }
+title: model
+status: draft
+---
+
 # Purpose
 
 The program is a small language model, and it is a native part. It runs on a GPU of the computer
@@ -72,3 +91,7 @@ Then it writes the eight letters that the model gives after a space.
 - `next`: gives the next letter from the last two letters.
 - `highest`: gives the place of the highest score, the first one when two are equal.
 - `generate`: gives the prompt and the eight letters after it.
+
+# Links
+
+* Index: [model](index.md).

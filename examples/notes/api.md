@@ -2,7 +2,7 @@
 type: lengua Interface
 description: "The routes of the back end that the front end calls, with the shapes of their requests and answers."
 label: checked
-client_sha256: 69924862e0da990c926232815c1b203b0df73e957075a4f9c307e92795b4d2fe
+client_sha256: 3f76456a011eb35135d9b90d15e2f99ac0f16c5f9d4ab3d7f3927327c3ea45ad
 ---
 
 # Routes
@@ -75,7 +75,7 @@ client_sha256: 69924862e0da990c926232815c1b203b0df73e957075a4f9c307e92795b4d2fe
 * Failure: `{ "error": string }`.
 * Statuses: 200, 401.
 * Served by: [accounts](ideas/accounts.md).
-* Called by: no screen.
+* Called by: [ui/login](ideas/ui/login.md).
 
 # Links
 
