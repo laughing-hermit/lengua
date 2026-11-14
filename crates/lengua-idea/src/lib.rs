@@ -975,6 +975,10 @@ pub(crate) fn idea_findings(folder: &Path) -> Vec<Finding> {
     {
         link(&mut read.pages, &read.constraints, &mut findings);
     }
+    let top = read.constraints.first().cloned().unwrap_or_default();
+    if shape_of(&top) != Shape::Command {
+        findings.retain(|f| f.code != "structure-main-missing");
+    }
     vision_rules(folder, &mut findings);
     findings.sort();
     findings

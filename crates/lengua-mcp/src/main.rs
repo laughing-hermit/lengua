@@ -214,9 +214,13 @@ struct ApproveParams {
 struct ApproveReply {
     #[schemars(description = "True when the ideas and the vision are now approved as they are")]
     approved: bool,
-    #[schemars(description = "The SHA-256 of the ideas' behaviours and constraints that the person approved")]
+    #[schemars(
+        description = "The SHA-256 of the ideas' behaviours and constraints that the person approved"
+    )]
     ideas_sha256: Option<String>,
-    #[schemars(description = "The SHA-256 of vision.md that the person approved, when there is one")]
+    #[schemars(
+        description = "The SHA-256 of vision.md that the person approved, when there is one"
+    )]
     vision_sha256: Option<String>,
     #[schemars(description = "The files that approve wrote: idea.md, vision.md and log.md")]
     written: Vec<String>,

@@ -2143,8 +2143,11 @@ fn chrome_labels(chrome: &Path, port: u16) -> Vec<String> {
 fn code_is_built_only_from_ideas_the_person_approved() {
     let folder = example("approval");
     let idea = fs::read_to_string(folder.join("idea.md")).expect("the idea");
-    fs::write(folder.join("idea.md"), idea.replace("- Time: 2 s", "- Time: 3 s"))
-        .expect("a changed grant");
+    fs::write(
+        folder.join("idea.md"),
+        idea.replace("- Time: 2 s", "- Time: 3 s"),
+    )
+    .expect("a changed grant");
     let mut server = Server::start();
     let refused = server.check_only(2, &folder);
     assert_eq!(refused["ok"], false, "{refused:#}");
@@ -2184,8 +2187,11 @@ fn code_is_built_only_from_ideas_the_person_approved() {
     assert_eq!(kept["approved"], true, "{kept:#}");
     assert_eq!(kept["ok"], true, "{kept:#}");
     let idea = fs::read_to_string(folder.join("idea.md")).expect("the idea");
-    fs::write(folder.join("idea.md"), idea.replace("- Time: 3 s", "- Time: 2 s"))
-        .expect("a changed grant");
+    fs::write(
+        folder.join("idea.md"),
+        idea.replace("- Time: 3 s", "- Time: 2 s"),
+    )
+    .expect("a changed grant");
     let again = server.check_only(6001, &folder);
     assert_eq!(codes(&again), ["idea-unapproved"], "{again:#}");
     let bad = server.call(

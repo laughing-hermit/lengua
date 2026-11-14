@@ -227,7 +227,9 @@ pub fn approve(folder: &Path, by: &str, words: &str, now: u64) -> Result<Approve
     let by = person(by)?;
     let words = words.trim();
     if words.is_empty() {
-        return Err("`words` holds the person's own words of approval, as they said them".to_string());
+        return Err(
+            "`words` holds the person's own words of approval, as they said them".to_string(),
+        );
     }
     let before = approval(folder);
     if before.ideas.is_none() && before.vision.is_none() {
@@ -248,8 +250,18 @@ pub fn approve(folder: &Path, by: &str, words: &str, now: u64) -> Result<Approve
     let mut written = Vec::new();
     let mut parts = Vec::new();
     let pairs = [
-        ("idea.md", before.ideas.clone(), before.ideas_approved(), "the ideas"),
-        (VISION, before.vision.clone(), before.vision.is_some() && before.vision_approved(), "the vision"),
+        (
+            "idea.md",
+            before.ideas.clone(),
+            before.ideas_approved(),
+            "the ideas",
+        ),
+        (
+            VISION,
+            before.vision.clone(),
+            before.vision.is_some() && before.vision_approved(),
+            "the vision",
+        ),
     ];
     for (file, hash, done, what) in pairs {
         let Some(hash) = hash.filter(|_| !done) else {
@@ -270,8 +282,11 @@ pub fn approve(folder: &Path, by: &str, words: &str, now: u64) -> Result<Approve
             wiki::quoted(words)
         );
         let previous = read(folder, "log.md").unwrap_or_default();
-        fs::write(folder.join("log.md"), wiki::log_text(&previous, &entry, now))
-            .map_err(|e| format!("lengua could not write `log.md`: {e}"))?;
+        fs::write(
+            folder.join("log.md"),
+            wiki::log_text(&previous, &entry, now),
+        )
+        .map_err(|e| format!("lengua could not write `log.md`: {e}"))?;
         written.push("log.md".to_string());
     }
     Ok(Approved {
@@ -301,11 +316,21 @@ mod tests {
             "---\napproved: { a: b }\n---\n\n# Purpose\n"
         );
         assert_eq!(
-            with_entry("---\ntitle: x\napproved: old\n---\n\n# Purpose\n", "idea.md", "approved", "new"),
+            with_entry(
+                "---\ntitle: x\napproved: old\n---\n\n# Purpose\n",
+                "idea.md",
+                "approved",
+                "new"
+            ),
             "---\ntitle: x\napproved: new\n---\n\n# Purpose\n"
         );
         assert_eq!(
-            with_entry("---\ntitle: x\n---\n\n# Purpose\n", "idea.md", "approved", "new"),
+            with_entry(
+                "---\ntitle: x\n---\n\n# Purpose\n",
+                "idea.md",
+                "approved",
+                "new"
+            ),
             "---\ntitle: x\napproved: new\n---\n\n# Purpose\n"
         );
     }

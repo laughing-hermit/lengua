@@ -2,6 +2,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
+use crate::approval::{Record, VISION};
 use crate::dependencies::Count;
 use crate::frontmatter::{self, Front};
 use crate::idea::IdeaKind;
@@ -9,7 +10,6 @@ use crate::okf::{self, GENERATED_BY, LENGUA_CHECK};
 use crate::text::is_fence;
 use crate::types::render;
 use crate::web::Route;
-use crate::approval::{Record, VISION};
 use crate::{Approval, Finding, Label, Library, Note, Shape, Sink, Trust};
 
 pub(crate) struct Parts<'a> {
@@ -246,12 +246,8 @@ fn with_status(front: &Front, approved: bool) -> Front {
         }
         let first = entry.text.lines().next().unwrap_or_default();
         let now = okf::unquote(first.get("status:".len()..).unwrap_or_default());
-        let wanted = match now.as_str() {
-            "deprecated" => continue,
-            "stable" | "draft" => status_for(approved),
-            _ => continue,
-        };
-        if now != wanted {
+        let wanted = status_for(approved);
+        if (now == "stable" || now == "draft") && now != wanted {
             entry.text = format!("status: {wanted}\n");
         }
     }
@@ -568,7 +564,9 @@ fn vision_text(folder: &Path, approval: &Approval) -> Option<(String, String)> {
         .value("description")
         .map(okf::unquote)
         .filter(|d| !d.is_empty())
-        .unwrap_or_else(|| "The best lengua solution for the request, before the ideas.".to_string());
+        .unwrap_or_else(|| {
+            "The best lengua solution for the request, before the ideas.".to_string()
+        });
     Some((text, description))
 }
 

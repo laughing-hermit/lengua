@@ -802,8 +802,11 @@ fn an_approval_marks_the_ideas_stable_until_a_behaviour_or_a_grant_changes() {
     .expect("a change of the purpose");
     assert!(lengua_idea::approval(&folder).approved());
     let idea = read(&folder, "idea.md");
-    fs::write(folder.join("idea.md"), idea.replace("- Time: 2 s", "- Time: 3 s"))
-        .expect("a change of a grant");
+    fs::write(
+        folder.join("idea.md"),
+        idea.replace("- Time: 2 s", "- Time: 3 s"),
+    )
+    .expect("a change of a grant");
     assert!(!lengua_idea::approval(&folder).approved());
     assert_eq!(lengua_idea::check(&folder, NOV_13_2026 + 3).findings, []);
     let words = read(&folder, "ideas/words.md");
@@ -820,7 +823,10 @@ fn a_vision_is_an_okf_page_first_in_the_index() {
         .iter()
         .map(|f| f.code)
         .collect();
-    assert!(found.contains(&"vision-type") && found.contains(&"vision-section"), "{found:?}");
+    assert!(
+        found.contains(&"vision-type") && found.contains(&"vision-section"),
+        "{found:?}"
+    );
     fs::write(
         folder.join("vision.md"),
         "---\ntype: lengua Vision\ndescription: \"A word counter.\"\n---\n\n# Request\n\nCount words.\n\n# Where it runs\n\nOne WebAssembly file.\n",
@@ -833,13 +839,21 @@ fn a_vision_is_an_okf_page_first_in_the_index() {
         "{index}"
     );
     assert!(read(&folder, "vision.md").contains("\nstatus: draft\n"));
-    let done = lengua_idea::approve(&folder, "ana", "I approve", NOV_13_2026 + 1).expect("an approval");
+    let done =
+        lengua_idea::approve(&folder, "ana", "I approve", NOV_13_2026 + 1).expect("an approval");
     assert_eq!(done.written, ["idea.md", "vision.md", "log.md"]);
     assert_eq!(lengua_idea::check(&folder, NOV_13_2026 + 2).findings, []);
     let vision = read(&folder, "vision.md");
     assert!(vision.contains("\nstatus: stable\n"), "{vision}");
-    assert!(vision.contains("verified:\n  - { by: human:ana, at: 2026-11-13T00:00:01Z }\n"), "{vision}");
-    fs::write(folder.join("vision.md"), vision.replace("One WebAssembly file.", "A web app.")).expect("a change");
+    assert!(
+        vision.contains("verified:\n  - { by: human:ana, at: 2026-11-13T00:00:01Z }\n"),
+        "{vision}"
+    );
+    fs::write(
+        folder.join("vision.md"),
+        vision.replace("One WebAssembly file.", "A web app."),
+    )
+    .expect("a change");
     let approval = lengua_idea::approval(&folder);
     assert!(approval.ideas_approved() && !approval.vision_approved());
 }

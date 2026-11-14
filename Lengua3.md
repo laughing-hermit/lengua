@@ -118,7 +118,7 @@ heaviest GPU computation (large local models at full speed), threads sharing mem
 with no host grant.
 
 Decided by the owner on 2026-11-13. The split between the front end and the back end, which the
-`vision` skill's principles page quotes (L11). For every idea, the skill tells the person which
+`vision` skill's principles page (`plugin/skills/vision/references/principles.md`) quotes. For every idea, the skill tells the person which
 row each part of it falls into.
 
 | Work | Where | Built with | Native? |
@@ -250,7 +250,7 @@ the vision (a new grant, a native part, a new crate), `check` says so, and the v
 updated and approved again.
 
 The principles and their do's and don'ts live in one page, the skill's
-`references/principles.md`, which this document also points to; `check` holds the page and this
+`references/principles.md`, which this document also points to; a repository test holds the page and this
 section to the same list, so they can't drift apart.
 
 | # | Principle | Do | Don't |
@@ -283,6 +283,25 @@ code, and again whenever a change alters what the program does or may reach. It 
 
 What lengua can't do: it can't prove a person, and not the agent, said yes. The skill asks,
 and the lock and the log record when and what was approved.
+
+**As built at L11.**
+- **The tool `approve`** (`folder`, `person`, `words`) records the approval, and refuses ideas
+  with problems and empty words. Its description and the skills say to call it only after the
+  person's own words.
+- **What is approved:** the SHA-256 of the `# Behaviours` and `# Constraints` of every idea
+  (with each file's name), so a change of a behaviour, a grant, a native part, a crate or a
+  package needs approval again and one of `# Purpose` or `# Structure` does not; and the SHA-256
+  of `vision.md`'s text, when there is one.
+- **Where it is kept:** `approved: { sha256, by: human:<id>, at }` in the frontmatter of
+  `idea.md` and of `vision.md`, committed with the ideas, since the lock is per user; an
+  `**Approval**` entry in `log.md` with the person's words; and, at `done`, an `approved
+  <sha256> <file>` line in the signed lock. While it holds, `check` writes `status: stable` and
+  the person first in `verified` on every idea; after a change, `draft` and the person's entry
+  removed.
+- **The refusal:** with code and no approval that holds, `check` replies `idea-unapproved` (or
+  `vision-unapproved`), `approved: false`, and builds nothing; with no code yet, a note. The
+  repository's tree test refuses an example or a library with code whose ideas are not approved
+  (`wiki-unapproved`).
 
 ### Programs that ask AI models
 
@@ -415,6 +434,7 @@ lengua is an Agent Plugin: three skills (`vision`, `write-idea`, `build`) and on
 | Skill `write-idea` | Turns an approved `vision.md` (or a small request) into `idea.md` |
 | Skill `build` | Turns the ideas into code: Rust in `src/` for the back end, TSX in `web/screens/` for the front end |
 | MCP tool `check` | Checks the ideas, generates the build files (Rust and front end), builds, checks the rules on Rust and TypeScript, runs the tests, writes the lock and the wiki |
+| MCP tool `approve` | Records that the person approved the ideas and `vision.md`, in their own words (L11) |
 | MCP tool `run` | Runs a checked program under its grants |
 | `lengua-run` | The lean runner, for running a checked program from a shell |
 
@@ -532,12 +552,12 @@ space or `-`), a blank line or a `#` comment. A key may be there one time only.
   writes `title` (the folder's name for the top idea, the module's name for the others) and
   `status: draft` when they are absent, after the agent's keys, and from then on keeps them as
   the agent's. It checks the values OKF defines (OKF sections 5 and 7): `status` is `draft` or
-  `deprecated` (`stable` only after the person's approval, L11; `okf-status` otherwise);
+  `deprecated` (`okf-status` otherwise), and since L11 `check` writes `stable` while the person's approval holds and `draft` when it does not, and keeps `deprecated`;
   `stale_after`, and each `at` and `last_modified`, an ISO 8601 time with its offset
   (`okf-time`); each `by` and each source's `author` an OKF actor, `human:<id>`,
   `process:<id>` or `<producer>/<version>` (`okf-actor`); each source has a `resource`
   (`okf-sources`); `verified` is a `{ by, at }` mapping or a list of them (`okf-trust`).
-- **`verified`** (since L9) keeps the entries of other actors (a person's, at L11) and holds
+- **`verified`** (since L9) keeps the entries of other actors, puts the person who approved first while the approval holds (since L11), and holds
   one entry of lengua's own, `{ by: process:lengua-check, at: <time> }`, while the label is
   `checked` or `tested`: the time of the first check that confirmed the files as they are.
   When the label goes back to `unchecked`, lengua's entry is removed.
@@ -1388,7 +1408,7 @@ Next.js, stays external: writing a UI framework is not lengua's work.
 Built at L7, in `libraries/` at the repository's root. Each is a lengua library on the standard
 library alone, with no recursion, no `unsafe` and every rule of section 5, checked to the label
 `checked` by the tests, and built for `wasm32-unknown-unknown` too by CI. A program names one
-with ``- Uses: `<path>/libraries/<name>` ``; the `build` skill (L11) will point to them. Since L9 a library may use another (`- Uses: `../json``): its lock has a `library` line for each, which `verify` checks in turn, so a program that uses `ai` holds `json` to its lock too.
+with ``- Uses: `<path>/libraries/<name>` ``; the `build` skill's back-end page lists them. Since L9 a library may use another (`- Uses: `../json``): its lock has a `library` line for each, which `verify` checks in turn, so a program that uses `ai` holds `json` to its lock too.
 
 | Library | Exports |
 |---|---|
@@ -1675,7 +1695,7 @@ the folder's root are OKF's reserved files (OKF sections 8 and 9).
   `title` (above).
 - **Every page in the folder is a concept** (since L9): each `.md` file of the folder other than
   `index.md` and `log.md` (the ideas, the component pages, and any page the agent adds, such
-  as `vision.md` at L11) has frontmatter with a non-empty `type` (`okf-type` otherwise), and
+  as `vision.md`, of type `lengua Vision`) has frontmatter with a non-empty `type` (`okf-type` otherwise), and
   its OKF values are checked as an idea's are. `target/`, hidden folders and a folder with an
   `idea.md` of its own are not part of the folder.
 - **Secrets** (since L9, ``- Reads: the secret `NAME` ``). A secret's value is given by the host at
@@ -1775,10 +1795,10 @@ it reads any code.
 - **`index.md` has a section for each side:** `# Back end` (`## Program`, `## Modules`,
   `## Libraries`, `## Components`, and L9's crate count as `## Crates`), `# Front end`
   (`## Screens`, and `## npm packages`: the packages of `web/package.json`, and those over 1 MiB in
-  pnpm's copy once the build installed them), `# Interface` (`api.md`), and later `# Vision`
-  (L11) and `# Desktop` (L10); each line with its label.
+  pnpm's copy once the build installed them), `# Interface` (`api.md`), and `# Vision` first
+  (since L11) and `# Desktop` (L10); each line with its label.
 - **The query path.** An agent reads `index.md`, then `api.md`, then the pages of the side it
-  changes, and only then the code. The skills say so at L11; the builder of lengua works that
+  changes, and only then the code. The skills say so (since L11); the builder of lengua works that
   way now.
 - **OKF conformance** covers the screens and `api.md` (both have frontmatter with a `type`), and
   the tree check of L13 covers the `web/` side too.
@@ -2208,15 +2228,19 @@ milestone named:
     reply, tested with a marked value ("The wiki's formats", "Secrets").
 - **L10:** the "Where it runs" line first in `index.md`.
 - **L11, the query path and the person's part:**
-  - `vision.md` as an OKF page (`type: lengua Vision`), first in `index.md`, quoting the
-    person's request, linked from every idea's `sources`, and in the lock's file list.
-  - Every skill's first step: read `index.md`, then the pages it names, before any code; a
-    design answer goes back into `vision.md`.
-  - On approval, `verified` gains `human:<id>` and `status` becomes `stable`; `log.md` gets an
-    `**Approval**` entry with the person's words, plus entries for the vision and for lint.
-  - `check` holds the ideas to `vision.md` and says when they grow past it.
-  - The idea grammar ships in the skill's references, so an agent needs nothing outside the
-    plugin.
+  - Done: `vision.md` as an OKF page (`type: lengua Vision`, `vision-type`), with its
+    `# Request` quoted and `# Where it runs` (`vision-section`), first in `index.md`, linked
+    from every idea's `# Links`, and in the lock's file list. Not done: a link in each idea's
+    `sources` (the `# Links` line does the work).
+  - Done: every skill's first step reads `index.md`, then the pages it names, before any code.
+  - Done: on approval, `verified` gains `human:<id>` and `status` becomes `stable`; `log.md`
+    gets an `**Approval**` entry with the person's words.
+  - Open: `check` holding the ideas to `vision.md` and saying when they grow past it. `check`
+    refuses only a changed vision that is not approved; the skills say to change the vision
+    first when the ideas grow past it. Holding the two needs a grammar for the vision's
+    grants, which no idea needs yet.
+  - Done: the idea grammar ships in the skill's references (`write-idea/references/grammar.md`),
+    so an agent needs nothing outside the plugin.
 - **L13, one wiki across the repository:** done ahead of L13, on 2026-11-13 (the five-runner
   landing run is named in the landing report), as "One wiki across the repository" says.
   - Done: the generated frontmatter, `# Links`, component pages, `index.md` and `log.md` of
@@ -2497,7 +2521,7 @@ Decided for lengua 3 at L9 (2026-11-14):
 - **The user must have Rust installed**, with its two WebAssembly targets. lengua 2 needed nothing
   but lengua itself. Accepted by the owner on 2026-11-13: "I acknowledge that having Rust
   installed is a dependency now." `lengua-mcp doctor` checks it and says how to install it.
-- **Component size and start-up time** against lengua 2's hand-written modules: measured at L11.
+- **Component size and start-up time** against lengua 2's hand-written modules: not measured yet; L12's scale test measures it.
   A front end's static export makes the file larger (measured at L8, todo.md).
 - **Node.js and pnpm on the user's machine.** An application with screens needs them to build;
   `doctor` checks them, and a program with no front end needs neither. pnpm downloads the
@@ -2558,7 +2582,7 @@ Decided for lengua 3 at L9 (2026-11-14):
 - **Open at L7: `generate!` and the folder `wit/`.** `wit-bindgen`'s `generate!` reads `wit/` by
   default, and lengua's `wit/world.wit` is a statement for the host, not WIT for a binding
   generator (it imports WASI with no `wit/deps/`). A program writes `path: []` with `inline`; the
-  `build` skill (L11) says so.
+  `build` skill's back-end page says so.
 - **Found at L8: why a program with crates was not the same file on every system.** Programs
   with no external crate matched on all five runners; `greet` and the shop did not, in versions
   of the same size where functions stood in another order (`wasm-tools print`, runs 43543315033

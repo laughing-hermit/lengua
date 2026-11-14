@@ -36,7 +36,8 @@ Name `App::handle` in the structure. Answer the routes under `/api/` with JSON, 
 `GET` from the front end: `lengua_web::asset(path)` gives `Some((media_type, bytes))` for a file
 of the static export. The same helpers (`method_name`, `body_of`, `respond`, `header`) are in
 every server: write them with `wasip2::http::types` (`Fields`, `OutgoingResponse`,
-`OutgoingBody`).
+`OutgoingBody`). With `wit-bindgen`'s `generate!`, write `path: []` and `inline`:
+`wit/world.wit` is for the host, not for a binding generator.
 
 ## An AI model
 

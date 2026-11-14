@@ -24,7 +24,7 @@ next starts (Lengua3.md, section 8).
 | L8 | The Next.js front end, exported statically and embedded in the one file; TypeScript held like Rust; the wiki across both sides | Built on `wip/l8-next`; the five-runner landing run is named in the landing report |
 | L9 | Full stack: AI models as a grant, storage, outgoing calls, secrets, logins, shared types, logs, embeddings, deployment, libraries using libraries, concurrent serving | Built on `wip/l9`; the five-runner landing run is named in the landing report |
 | L10 | Native parts and the Electron desktop app | Not started |
-| L11 | The three skills (`vision`, `write-idea`, `build`), approval, "Where it runs", a product test in an interactive session | Not started |
+| L11 | The three skills (`vision`, `write-idea`, `build`), approval, "Where it runs", a product test in an interactive session | Built on `wip/l11`; the five-runner landing run is named in the landing report; the product test is the coordinator's |
 | L12 | The scale test: a Next.js and Rust full-stack application with an AI call | Not started |
 | L13 | The finish line: release, the never-exercised sweep, WASI 0.3 again, documents, the owner's guide, the final run | Not started |
 
@@ -557,7 +557,7 @@ next starts (Lengua3.md, section 8).
     `checked` or `tested`. Their times change only when the page's text changes, so a check that
     changes nothing writes nothing, not even a log entry.
   - `title` and `status: draft` are written when absent and then kept as the agent's;
-    `status: stable` from the agent is a finding until L11's approval.
+    since L11 `check` writes `status` itself from the person's approval.
   - A check whose job has not ended keeps the label the wiki has when the files are the same, so
     a new session or a fresh clone does not log `unchecked` and then `checked`. The old lock
     stays valid only while every file is as it signed them.
@@ -617,6 +617,53 @@ next starts (Lengua3.md, section 8).
   `time`), `http` 1 and `http-body-util` 0.1 for its outgoing sender, and `hyper`'s `client` and
   `http1` features; all were in the graph through Wasmtime, so `Cargo.lock` gains no package
   (run 43563716392's lockfile job). No new crate or npm package for a program.
+- **2026-11-14, L11: approval is a tool, `approve`**, not a field of `check`: the person's words
+  are an input of their own, and a call of `check` never approves by accident. Its record is
+  `approved` in the frontmatter of `idea.md` and `vision.md`, since the lock is per user and
+  not committed; the lock repeats it at `done`. To reverse: a field of `check`.
+- **2026-11-14, L11: what an approval covers**: the `# Behaviours` and `# Constraints` of every
+  idea, and the whole of `vision.md`. A purpose or structure edit needs none, as the design
+  says; a new example does, since it is a behaviour.
+- **2026-11-14, L11: the refusal is in `lengua-mcp`**, where the build starts: `lengua_idea::check`
+  writes the wiki as before, and `check` drops the build with `idea-unapproved`. So the
+  library's own tests need no approval; the tool's tests approve through `approve` before each
+  check of a folder with code (the test `code_is_built_only_from_ideas_the_person_approved`
+  calls `check` alone).
+- **2026-11-14, L11: the examples' and libraries' approvals** are recorded as `human:owner`,
+  with the words "Approved with milestone L11: lengua's own examples and libraries, as the
+  owner's milestones asked for them." No person read each one at L11; the owner may reverse it
+  by approving each in their own words.
+- **2026-11-14, L11: `status: stable` from the agent is no longer a finding**: `check` writes
+  `stable` or `draft` itself from the approval, so a stale `stable` can't block a check.
+- **2026-11-14, L11: a crate that is not pure Rust** (the same test as `index.md`'s count) is a
+  note in the reply of `check`, not a finding: L10's host and `examples/model` take one with
+  their reasons.
+- **2026-11-14, L11: Agent Plugins 1.0.0.** The site (agent-plugins.org, read on 2026-11-14)
+  publishes only the 1.0.0 specification and schemas; there is no 1.1.0. `plugin/plugin.json`
+  and `plugin/mcp.json` already name the 1.0.0 schemas and only keys that `plugin.schema.json`
+  allows (`additionalProperties: false`), so they stay as they are.
+- **2026-11-14, L11: the skills** are `vision`, `write-idea` and `build`, each a short
+  `SKILL.md` with pages in `references/`: the principles (the design's table, held to it by a
+  test), the grammar, the test format, STE, the rules, the back end and the front end. L10's
+  native parts and desktop apps are described as L10 built them on `wip/l10`, marked (L10).
+
+## L11: the product test in an interactive session
+
+The coordinator runs it in the live session, with the plugin alone, after L11 lands:
+
+1. A request for a small full-stack app (a server, two screens, storage, one AI call): the
+   agent uses `vision`, says "Where it runs" and the GPU case first, and writes `vision.md`.
+2. The agent asks for approval and waits; "looks good, go ahead" leads to one `approve` call
+   with those words; `log.md` has the entry.
+3. `write-idea` writes the ideas, `check` is `ok` with `approved: false` and a note, and the
+   agent asks again before any code.
+4. With code and no approval, `check` gives `idea-unapproved`; after approval, `build` reaches
+   `done` and `checked`.
+5. A change of a behaviour or a grant: the agent asks again; a change of the structure alone
+   does not.
+6. A request that pushes against a principle (a crate to save a few lines, a native part for
+   speed, GPU training): the vision says so and offers the WebAssembly way.
+7. The agent never calls `approve` without the person's words.
 
 ## Never exercised
 
@@ -630,6 +677,8 @@ What the milestones built and no run has used, with the reason.
 - The container image on `linux/arm64`, and of an app with screens (CI builds `examples/greet`).
 - MCP sampling (Claude Code does not support it).
 - `lengua-run` serving under real load past eight requests at a time.
+- The three skills read by an agent at work, and an approval from a real person (L11's product
+  test, the coordinator's, after the landing).
 
 ## Runs
 
@@ -730,3 +779,6 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 - **2026-11-13, the wiki fix:** a shell command that ran `python3 --version` (a slip, while
   checking a file) was refused. Nothing needed it; the work went on with the editor's tools and
   `sed`.
+- **2026-11-14, L11:** a shell command of the builder that ended in `perl -v` (a slip, while
+  making a scratch file) was refused. A mistake, not a need: the edits went on with the editor's
+  tools and `sed`.
