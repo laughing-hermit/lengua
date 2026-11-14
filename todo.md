@@ -21,10 +21,12 @@ next starts (Lengua3.md, section 8).
 | L5 | Tests from the idea, generated cases, mutation score, trust labels | Landed on main at 7ce9264 (run 43439284107, green on five) |
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | Landed on main at cb314b2 (run 43450491850, green on five) |
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Landed on main at af89139 (run 43483075983, green on five) |
-| L8 | Reproducible builds and the same-SHA check on five runners; lengua's own std-only crates built for WebAssembly in CI | Done on `wip/l8b`; the five-runner landing run is named in the landing report |
-| L9 | The skills rewritten for Rust and GPUI; a product test in an interactive session | Not started |
-| L10 | The scale test | Not started |
-| L11 | Trace and profile; a bench of lengua's overhead; documents; the finish line | Not started |
+| L8 | The Next.js front end, exported statically and embedded in the one file; TypeScript held like Rust; the wiki across both sides | Built on `wip/l8-next`; the five-runner landing run is named in the landing report |
+| L9 | Full stack: AI models as a grant, storage, outgoing calls, secrets, logins, shared types, logs, embeddings, deployment, libraries using libraries, concurrent serving | Not started |
+| L10 | Native parts and the Electron desktop app | Not started |
+| L11 | The three skills (`vision`, `write-idea`, `build`), approval, "Where it runs", a product test in an interactive session | Not started |
+| L12 | The scale test: a Next.js and Rust full-stack application with an AI call | Not started |
+| L13 | The finish line: release, the never-exercised sweep, WASI 0.3 again, documents, the owner's guide, the final run | Not started |
 
 ## Decisions
 
@@ -419,26 +421,132 @@ next starts (Lengua3.md, section 8).
   need (`client`, `listen`, `get`, `hash`, `chunk`, `bracket`, `escape`, `overflow`, `tax`, ...),
   each with its part of speech.
 
-- **2026-11-13, L8:** GPUI and GPUI Kit were tried at L8 for the browser and dropped on 2026-11-13 (a 21 MB front end, no accessibility on the web); the attempt is kept at the tag archive/l8-gpui.
-- **2026-11-13, L8: no path remapping.** `--remap-path-prefix` (Cargo home, folder, path
-  dependencies) was tried and taken back: the shop still differed between systems with it (run
-  43524778056), its differences coming from Cargo's crate hashes. The build job keeps
-  `CARGO_NET_RETRY=10`.
-- **2026-11-13, L8: `strip = true` in the generated release profile**, so a component has no
-  `name` section, whose mangled names carry Cargo's crate hashes (runs 43524778056, 43528549629);
-  `hello` is then one SHA-256 on all five runners (run 43536298022). To reverse: remove the line,
-  and a component keeps its names for a debugger.
-- **2026-11-13, L8: `lengua-mcp` is the rustc wrapper of the build job** (`RUSTC_WRAPPER`, marked by
-  `LENGUA_RUSTC_WRAPPER`) and gives each crate built for `wasm32` a `-C metadata` of its own
-  identity (name, crate types, edition, target, `--cfg`, extern names, version). Reason: Cargo's
-  metadata mixes in that of build scripts and proc macros, built for the host and holding its
-  triple, and the crate hashes order the functions, so `greet` and the shop were different files
-  on different systems (runs 43543315033, 43548327435). To reverse: drop the two variables in
-  `build.rs`, and the components differ between systems again.
-- **2026-11-13, L8: CI holds every built example to one SHA-256 on every runner** (job
-  `same-bytes`, 14 components).
-- **2026-11-13, L8: CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2`**, and a failure
-  fails the run (Lengua3.md, section 1).
+- **2026-11-13, L8: the owner's decision, final: Rust and TypeScript.** The back end stays Rust
+  compiled to WebAssembly; the front end is Next.js in TSX with shadcn/ui and Vercel's AI-UI
+  tools, built with pnpm and Turbopack, exported statically (`output: 'export'`) and carried and
+  served by the back end, so a web app is one file; desktop apps are Electron (L10). GPUI, GPUI
+  Kit, Leptos and Tauri are dropped; the GPUI attempt is at the tag `archive/l8-gpui`.
+  Lengua3.md was rewritten for it first (commits 37c67e1, 3cf4c74, 76ccde8, the last a coherence
+  pass of the whole document).
+- **2026-11-13, L8: "the UI SDK from Vercel Labs" is json-render**
+  ([github.com/vercel-labs/json-render](https://github.com/vercel-labs/json-render), Apache-2.0,
+  first published 2026-01; `@json-render/core` and `@json-render/react` 0.22.0): generative UI,
+  in which a model answers with a JSON description of a screen (`root` and a flat map of
+  `elements`) and the front end draws it only with the components of a catalog it defines
+  (`defineCatalog` with `zod` shapes, `defineRegistry`, `Renderer`). No other Vercel Labs
+  project is called a UI SDK (searched on 2026-11-13). Used in `examples/notes`: the screen
+  `note` asks the back end (`POST /api/ui`) and draws the answer with a catalog of two shadcn
+  components; the answer is fixed until L9's `- Asks: an AI model`. AI Elements and the AI SDK's
+  `useChat` were looked at and are not used at L8: both are made for chat and a streaming
+  route in the AI SDK's own protocol, and bring more packages.
+- **2026-11-13, L8: TypeScript is read in Rust by `oxc_parser` 0.158.0** (with `oxc_allocator`,
+  `oxc_ast`, `oxc_ast_visit`, `oxc_span`, `oxc_syntax`, all `=0.158.0`), in a new crate
+  `crates/lengua-ts`, used by `lengua-mcp` only, so `lengua-idea` stays on the standard library
+  and `lengua-run` has no parser. It merits it: a TypeScript parser is a large project of its
+  own. What it brings, counted in the `Cargo.lock` the lockfile job resolved (run 43529537966):
+  40 new packages, the `oxc_*` crates (`allocator`, `ast`, `ast_macros`, `ast_visit`,
+  `data_structures`, `diagnostics`, `ecmascript`, `estree`, `index`, `parser`,
+  `regular_expression`, `span`, `str`, `syntax`), `bytecount`, `castaway`, `compact_str`,
+  `cow-utils`, `fastrand`, `nonmax`, `num-bigint`, `num-integer`, `phf` and its four crates,
+  `seq-macro`, `siphasher`, `smawk`, `static_assertions`, `textwrap`, `unicode-id-start`,
+  `unicode-segmentation`, `unicode-width`, `zmij_ecma`, and three more `icu_*` crates.
+- **2026-11-13, L8: the TypeScript rules are Rust's, rule for rule** (Lengua3.md, section 5,
+  "The same checks for Rust and TypeScript"). Decisions inside them, each to reverse if the
+  owner wants:
+  - rule 5 in TypeScript is `assert(condition, message)` from the generated `@/lib/lengua`, two
+    a function on average, each screen's main component not counted (as `main` is not);
+  - `any`, casts (but `as const`), the non-null `!`, `@ts-ignore` and the like are refused with
+    no way to give a reason: a reason would be a comment, which rule 11 forbids, and nothing in
+    the example needs one;
+  - an arrow function inside a function is part of it, as a closure is in Rust; a `function`
+    declaration inside one is `ts-nested`; the arrow functions passed to json-render's
+    `defineRegistry` at the top of a file are closures of no named function (as a closure passed
+    to a crate is);
+  - a `for` is bounded with a counter from a number, `<` or `<=` against a number, an
+    `UPPER_CASE` constant or a `.length`, `++` or `+= 1`, not changed in the body; no `while`;
+  - module-level `let`, `var` and `new` are global state (`ts-global`);
+  - a promise is handled when awaited, returned, or ended with `.catch` or a two-argument
+    `.then`; an `async` arrow in a JSX attribute and `void` of a call are refused;
+  - screens import only `react`, `next/link`, `@/lib/...`, `@/components/ui/...`, other screens
+    and declared packages;
+  - no formatter for TypeScript at L8 (no Prettier in the base): rule 4 counts lines as written.
+- **2026-11-13, L8: the generated files of `web/`** are `package.json` (exact versions,
+  `packageManager: pnpm@12.18.0`), `pnpm-workspace.yaml` (`strictDepBuilds: false`, no
+  `allowBuilds`, so no install script runs; `minimumReleaseAge: 0`, since every version is
+  pinned by hand; `verifyDepsBeforeRun: false`), `next.config.mjs` (static export, trailing
+  slashes, unoptimized images, a fixed build id `lengua` so the export is the same bytes,
+  `typescript.ignoreBuildErrors` since lengua runs `tsc` itself), `tsconfig.json` (strict and
+  the rest; `noUncheckedSideEffectImports: false`, so the layout's `import "./globals.css"`
+  needs no declaration), `vitest.config.mts`, `postcss.config.mjs`, `app/layout.tsx`,
+  `app/globals.css`, a `page.tsx` route per screen, shadcn's components and `lib/utils.ts`,
+  `lib/lengua.ts` (the typed client, `assert`, `useScreen`, `queryParam`), the screen tests and
+  `lengua.sum`. "The lint config" is lengua's own checks in Rust, so there is no ESLint config.
+  The previous text of each is in `web/lengua.sum`, whose hash is the top idea's `web_sha256`.
+- **2026-11-13, L8: the npm packages, 19 direct in `examples/notes`**: the base, `next` 16.4.6,
+  `react` and `react-dom` 19.3.1, `typescript` 7.0.2, `@types/react` and `@types/react-dom`
+  19.3.0, `@types/node` 26.6.6, `tailwindcss` and `@tailwindcss/postcss` 4.3.5, `vitest`
+  5.1.0, `vite` 8.3.8, `happy-dom` 21.0.4, `@testing-library/react` 16.3.3,
+  `@testing-library/dom` 10.4.2 (14, the current release of each on 2026-11-13, read from the
+  npm registry); `clsx` 2.1.1 and `tailwind-merge` 3.7.0 with shadcn; and the example's own
+  `@json-render/core` and `@json-render/react` 0.22.0 and `zod` 4.6.7. No
+  `class-variance-authority`, Radix or `lucide-react`: lengua's copies of shadcn's components
+  use a plain table of classes and plain elements. No `@vitejs/plugin-react`: Vite's own JSX
+  transform is enough. happy-dom, not jsdom (far fewer packages); no `user-event`. TypeScript 7
+  works with Next.js 16.4, whose build runs the project's `tsc`.
+- **2026-11-13, L8: the front end is built in a copy, `target/lengua/web/`,** so `next build`
+  can't change the held files (it applies its own `tsconfig` settings) and `node_modules` stays
+  out of `web/`. pnpm writes `web/pnpm-lock.yaml` at the first build (copied back), and later
+  builds are `--frozen-lockfile`.
+- **2026-11-13, L8: the typed client is generated from `- Route:` lines** (new grammar: a route's
+  path parameters can't be read from examples alone) and the JSON of the server's examples: a
+  type per route's body, answer and failure, a check of each answer's shape at run time, and a
+  function per route. Every route has an example (`route-untested`). Screen tests answer each
+  request from the server's examples, so both sides are held to the same examples.
+- **2026-11-13, L8: screens are server ideas' parts** (`screen-server`); their state for the
+  tests is the object of `useScreen`; their routes are `/` for `home` and `/<name>/`; `Click`
+  once per example; a new key `Expect label`.
+- **2026-11-13, L8: the 40 mutants are spread over the Rust and the TypeScript functions
+  together**; a screen's mutant is written over its file in the build's copy of `web/`, Vitest
+  runs, and the file is put back. (A first way, a Vite plugin that gave the mutant's text in place
+  of the file, let every screen mutant survive in run 43544397848, so it was dropped.)
+- **2026-11-13, L8: the export is served from a generated crate, `lengua_web`,** in
+  `target/lengua/assets`, a path dependency of the program (`exclude = ["target"]` in its
+  `[workspace]`); the server calls `lengua_web::asset(path)`.
+- **2026-11-13, L8: the browser check is Chrome through its DevTools protocol**, from a small
+  client in `lengua-mcp`'s tests on the standard library and `serde_json`, on Linux x86-64 in CI
+  (`LENGUA_CHROME`); no Playwright, which downloads its own browsers.
+- **2026-11-13, L8: the wiki joins both sides**: `api.md` (`lengua Interface`), `# Links` on every
+  idea of an application with screens or routes (out of the idea's hash), `index.md`'s
+  `# Back end` (with main's sections and crate count), `# Front end` (screens, npm packages) and
+  `# Interface`; `# Links` gains `Calls`, `Serves` and `Called by` (merged with main's wiki at
+  40659bb).
+- **2026-11-13, L8: the two connections of Next.js to the Rust side** (owner: "yes both, add
+  it"): HTTP to the back end through the typed client, and the lengua libraries the application
+  uses built for the browser. **wasm-bindgen, not jco**: a generated wrapper crate
+  (`target/lengua/browser/<library>/`) has one `#[wasm_bindgen]` function per exported function
+  of the library whose types the browser takes, calling the library, so the library's code and
+  its checks stay as they are; it is built for `wasm32-unknown-unknown`, where `std` imports
+  nothing; jco would need the WASI shims (`@bytecodealliance/preview2-shim`) and its own
+  packages in the browser for the interfaces `std` always imports. Pinned `wasm-bindgen`
+  0.2.130 (the current release, 2026-10-30) in the wrapper and `wasm-bindgen-cli` 0.2.130 on the
+  user's machine (`doctor` checks it when a screen app uses a library; CI installs it with
+  `cargo install`). The module starts from inline bytes (`initSync`), so neither Turbopack nor
+  Vite has to serve a `.wasm` file. Only top-level `pub fn` of the library's `src/main.rs` with
+  `&str`, `String`, `bool`, integers up to 32 bits and floats are exposed (to widen later). A
+  library has no grants (`library-grant`, L7), so nothing it can't do in the browser can reach
+  it. The example library `examples/titles` checks a title in the screen `write` and in the
+  server's `POST /api/notes`.
+- **2026-11-13, L8: the owner's line**, written in Lengua3.md: "Rust to WebAssembly for anything
+  that can be; native Rust only for the specific parts that can't." Native stays narrow:
+  training or fine-tuning, the heaviest GPU work (large local models at full speed),
+  shared-memory threads, a device with no host grant, and Electron's shell. L10 proves the native
+  path with one example, a local model on the GPU with Candle or Burn.
+- **2026-11-13, L8: one SHA-256 per component on every system.** The generated release profile
+  strips symbols, and `lengua-mcp` is the rustc wrapper of the build job: crates built for
+  `wasm32` get a `-C metadata` and `-C extra-filename` of their own identity, since Cargo's mix in
+  the host's triple through build scripts and proc macros and so reorder functions (runs
+  43543315033, 43560066261). CI's `same-bytes` holds every example; CI also builds `lengua-idea`
+  and `lengua-lint` for `wasm32-wasip2`.
 - **2026-11-13, the LLM wiki and OKF fixed ahead of L9 and L13** (`wip/wiki`; Lengua3.md,
   section 8, "The LLM wiki and OKF, by milestone", and section 4, "The wiki's formats" and "One
   wiki across the repository"). The decisions taken:
@@ -534,6 +642,14 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-13 | [43516471987](https://github.com/laughing-hermit/lengua/actions/runs/43516471987) | wip/wiki 2f3b5c4 | wiki, linux-x86_64 | Green: every library and example checked in place (`ungranted` `build_failed`, as it should), `lengua-mcp wiki` with no finding; `prettyplease` read as not pure Rust from its `links` key alone (fixed) |
 | 2026-11-13 | [43519544263](https://github.com/laughing-hermit/lengua/actions/runs/43519544263) | wip/wiki eb43c24 | wiki, linux-x86_64 | Green, but the shop's crate count was kept before Cargo had downloaded five crates (now kept only once every source is read); a format patch |
 | 2026-11-13 | [43522428412](https://github.com/laughing-hermit/lengua/actions/runs/43522428412) | wip/wiki c0d7201 | wiki, linux-x86_64 | Green: the committed wiki (84 files, artifact `wiki-670-linux-x86_64`); the shop: 2 crates declared, 32 brought in, 20 with `unsafe`, none not pure Rust |
+| 2026-11-13 | [43529537966](https://github.com/laughing-hermit/lengua/actions/runs/43529537966) | wip/l8-next 806c4ea | test, linux-x86_64 | Failed as planned: `Cargo.lock` out of date (oxc 0.158.0: 40 new packages, resolved by the lockfile job) and a format patch |
+| 2026-11-13 | [43530227476](https://github.com/laughing-hermit/lengua/actions/runs/43530227476) to [43531807894](https://github.com/laughing-hermit/lengua/actions/runs/43531807894) | wip/l8-next ad16a36 to 540efbd | test, linux-x86_64 | Failed on compile and clippy findings, one crate at a time (a lost match arm, oxc 0.158's `ExportDeclaration`, clippy's pedantic lints), each fixed |
+| 2026-11-14 | [43532140144](https://github.com/laughing-hermit/lengua/actions/runs/43532140144) | wip/l8-next 7f7a9a6 | test, linux-x86_64 | First full test run: 45 of 47 green; pnpm installed, `tsc` ran and found one unused name in the generated checks |
+| 2026-11-14 | [43535137922](https://github.com/laughing-hermit/lengua/actions/runs/43535137922) | wip/l8-next 5dc39fa | test, linux-x86_64 | The pnpm lockfile job resolved `examples/notes/web/pnpm-lock.yaml` (207 packages), committed as it gave it |
+| 2026-11-14 | [43539294793](https://github.com/laughing-hermit/lengua/actions/runs/43539294793) to [43542784452](https://github.com/laughing-hermit/lengua/actions/runs/43542784452) | wip/l8-next ecac84c to c70d71b | test, linux-x86_64 | The front end built, typed and tested; json-render needed its `VisibilityProvider`; the export 39 files, 1,017,065 bytes |
+| 2026-11-14 | [43544397848](https://github.com/laughing-hermit/lengua/actions/runs/43544397848) | wip/l8-next b15c296 | test, linux-x86_64 | `notes` done but `tested`, 23 of 38: every screen mutant survived, since the Vite plugin did not take the mutant's text (now the file is replaced in the copy) |
+| 2026-11-14 | [43546518725](https://github.com/laughing-hermit/lengua/actions/runs/43546518725) | wip/l8-next c2cf402 | test, linux-x86_64 | Cancelled at the job's 60 minutes: the notes test did not end (now Vitest and `next build` have time limits, and the tests' sockets read timeouts) |
+| 2026-11-14 | [43552069900](https://github.com/laughing-hermit/lengua/actions/runs/43552069900) | wip/l8-next eb7398e | test, linux-x86_64 | Every test green but the committed wiki (`wiki-stale` for the new examples). `notes` `checked`, 37 of 38 mutants, 21 tests (screens and server), done in 305.9 s; one file of 1,095,636 bytes, the export 39 files and 1,017,050 bytes; `lengua-run`'s first page 414 ms after its start; Chrome read every label of the three screens; `titles` `checked`, 7 of 7, in 15 to 22 s |
 
 ## What the permission checks refused
 
@@ -549,6 +665,9 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 - **2026-11-13, L7:** a shell command of the builder that began with `python3 -` (a slip, before
   an edit of `lengua-lint`'s model) was refused. Again a mistake, not a need: the edit went on
   with the editor's tools.
+- **2026-11-13, L8:** a shell command of the builder that began with `perl -v` (a slip, before a
+  `grep`) was refused. Again a mistake, not a need: the work went on with `grep` and the
+  editor's tools.
 - **2026-11-13, the wiki fix:** a shell command that ran `python3 --version` (a slip, while
   checking a file) was refused. Nothing needed it; the work went on with the editor's tools and
   `sed`.

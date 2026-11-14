@@ -19,4 +19,9 @@
 # Servers
 
 * [greet](greet/index.md) - The program is an HTTP server. Label: `checked`.
+* [notes](notes/index.md) - The program is a small web application for notes. Label: `checked`.
 * [shop](shop/index.md) - The program is the HTTP server of a small shop. Label: `checked`.
+
+# Libraries
+
+* [titles](titles/index.md) - The library checks the title of a note. Label: `checked`. Used by: [notes](notes/index.md).

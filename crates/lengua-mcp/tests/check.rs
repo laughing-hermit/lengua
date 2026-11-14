@@ -201,7 +201,7 @@ fn a_good_folder_is_ok_and_gets_its_wiki() {
     assert!(folder.join("index.md").is_file());
     assert!(folder.join("log.md").is_file());
     let written = reply["written"].as_array().expect("a list of files");
-    assert_eq!(written.len(), 7);
+    assert_eq!(written.len(), 6);
     assert_eq!(reply["build"]["state"], "no_code", "{reply:#}");
     assert!(folder.join("Cargo.toml").is_file());
     assert!(folder.join("wit/world.wit").is_file());
@@ -1168,7 +1168,8 @@ fn a_program_uses_a_checked_library_and_refuses_one_that_changed() {
     );
     let index = fs::read_to_string(program.join("index.md")).expect("the index");
     assert!(
-        index.contains("\n# Libraries\n\n* [decimal](../../libraries/decimal/idea.md) - ")
+        index
+            .contains("\n# Back end: libraries\n\n* [decimal](../../libraries/decimal/idea.md) - ")
             && index.contains("Label: `checked`."),
         "{index}"
     );
@@ -1214,6 +1215,7 @@ fn http_get(port: u16, path: &str) -> String {
     let started = Instant::now();
     loop {
         if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
             let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n");
             stream.write_all(request.as_bytes()).expect("a request");
             let mut answer = String::new();
@@ -1322,10 +1324,10 @@ fn the_shop_is_one_file_of_three_modules_two_libraries_and_a_c_component() {
     assert_eq!(lock.matches("\ncomponent ").count(), 1, "{lock}");
     let index = fs::read_to_string(shop.join("index.md")).expect("the index");
     for part in [
-        "# Program",
-        "# Modules",
-        "# Libraries",
-        "# Components",
+        "# Back end: program",
+        "# Back end: modules",
+        "# Back end: libraries",
+        "# Back end: components",
         "Label: `trusted`.",
         "Label: `checked`.",
     ] {
@@ -1368,4 +1370,511 @@ fn the_shop_is_one_file_of_three_modules_two_libraries_and_a_c_component() {
     fs::remove_file(shop.join("components/tax.wasm")).expect("the component removed");
     let refused = server.check(10_000, &shop);
     assert_eq!(codes(&refused), ["component-missing"], "{refused:#}");
+}
+
+fn notes_ideas_only(test: &str) -> PathBuf {
+    let root = bundle(test, &["examples/titles", "examples/notes"]);
+    let folder = root.join("examples/notes");
+    fs::remove_dir_all(folder.join("src")).expect("the Rust removed");
+    folder
+}
+
+fn titles_checked(server: &mut Server, notes: &Path, base: u64) {
+    let titles = notes.parent().expect("examples").join("titles");
+    let reply = done(server, &titles, base);
+    assert_eq!(reply["label"], "checked", "{reply:#}");
+}
+
+fn read(folder: &Path, file: &str) -> String {
+    fs::read_to_string(folder.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"))
+}
+
+#[test]
+fn the_wiki_joins_the_screens_and_the_server_through_api_md() {
+    let folder = notes_ideas_only("notes-wiki");
+    let mut server = Server::start();
+    titles_checked(&mut server, &folder, 2000);
+    let reply = server.check(10, &folder);
+    assert_eq!(reply["ok"], true, "{reply:#}");
+    assert_eq!(reply["build"]["state"], "no_code", "{reply:#}");
+    let api = read(&folder, "api.md");
+    assert!(api.starts_with("---\ntype: lengua Interface\n"), "{api}");
+    assert!(api.contains("\n## `GET /api/notes`\n"), "{api}");
+    assert!(
+        api.contains("* Function: `getNotesById` in `web/lib/lengua.ts`."),
+        "{api}"
+    );
+    assert!(
+        api.contains("* Called by: [ui/home](ideas/ui/home.md)."),
+        "{api}"
+    );
+    let home = read(&folder, "ideas/ui/home.md");
+    assert!(home.contains("type: lengua Screen\n"), "{home}");
+    assert!(home.contains("source: web/screens/home.tsx\n"), "{home}");
+    assert!(
+        home.contains("\n# Links\n") && home.contains("* Calls: [`GET /api/notes`](../../api.md)."),
+        "{home}"
+    );
+    let top = read(&folder, "idea.md");
+    assert!(
+        top.contains("* Serves: [`GET /api/notes`](api.md), ")
+            && top.contains("* Called by: [")
+            && top.contains("](ideas/ui/home.md)"),
+        "{top}"
+    );
+    let index = read(&folder, "index.md");
+    for part in [
+        "# Back end: program",
+        "# Front end: screens",
+        "# Front end",
+        "# Interface",
+        "# Front end: npm packages",
+        "* In the browser, `titles` is `@/lib/wasm/titles`.\n",
+        "`@json-render/react` 0.22.0",
+    ] {
+        assert!(index.contains(part), "{part} in {index}");
+    }
+    for file in [
+        "web/package.json",
+        "web/tsconfig.json",
+        "web/lib/lengua.ts",
+        "web/app/page.tsx",
+        "web/app/note/page.tsx",
+        "web/components/ui/button.tsx",
+        "web/tests/write.test.tsx",
+        "web/lengua.sum",
+    ] {
+        assert!(folder.join(file).is_file(), "{file}");
+    }
+    for file in [
+        "web/lib/lengua.ts",
+        "web/tests/write.test.tsx",
+        "web/tests/server.ts",
+        "web/app/layout.tsx",
+        "web/app/page.tsx",
+    ] {
+        assert_eq!(
+            lengua_ts::comment_lines(&read(&folder, file)),
+            Vec::<usize>::new(),
+            "{file}"
+        );
+    }
+    let tsconfig = read(&folder, "web/tsconfig.json");
+    for part in [
+        "\"strict\": true",
+        "\"noUncheckedIndexedAccess\": true",
+        "\"exactOptionalPropertyTypes\": true",
+        "\"allowJs\": false",
+    ] {
+        assert!(tsconfig.contains(part), "{part} in {tsconfig}");
+    }
+    assert!(read(&folder, "web/next.config.mjs").contains("output: \"export\""));
+    let package = read(&folder, "web/package.json");
+    assert!(
+        package.contains("\"next\": \"16.4.6\"") && package.contains("\"zod\": \"4.6.7\""),
+        "{package}"
+    );
+    assert!(
+        !package.contains('^') && !package.contains('~'),
+        "{package}"
+    );
+}
+
+#[test]
+fn a_changed_screen_and_a_changed_route_show_in_the_log_and_in_api_md() {
+    let folder = notes_ideas_only("notes-wiki-changes");
+    let mut server = Server::start();
+    titles_checked(&mut server, &folder, 2000);
+    assert_eq!(server.check(10, &folder)["ok"], true);
+    let screen = read(&folder, "web/screens/home.tsx").replace(
+        "<CardTitle>Notes</CardTitle>",
+        "<CardTitle>All notes</CardTitle>",
+    );
+    fs::write(folder.join("web/screens/home.tsx"), screen).expect("a change");
+    let again = server.check(11, &folder);
+    assert!(
+        !notes_with(
+            &again,
+            "the code `web/screens/home.tsx` changed and its idea `ideas/ui/home.md` did not"
+        )
+        .is_empty(),
+        "{again:#}"
+    );
+    assert!(read(&folder, "log.md").contains("  * Code `web/screens/home.tsx`, changed: `"));
+    let before = read(&folder, "api.md");
+    let idea = read(&folder, "idea.md").replace(
+        "\\\"text\\\":\\\"Buy two bottles.\\\"},{\\\"id\\\":2",
+        "\\\"text\\\":\\\"Buy two bottles.\\\",\\\"done\\\":true},{\\\"id\\\":2",
+    );
+    fs::write(folder.join("idea.md"), idea).expect("a change of a route's example");
+    let changed = server.check(12, &folder);
+    assert_eq!(changed["ok"], true, "{changed:#}");
+    let after = read(&folder, "api.md");
+    assert_ne!(before, after);
+    assert!(after.contains("\"done\"?: boolean"), "{after}");
+    assert!(read(&folder, "web/lib/lengua.ts").contains("\"done\"?: boolean"));
+}
+
+#[test]
+fn typescript_that_breaks_a_rule_and_hand_edits_of_the_front_end_are_refused() {
+    let cases: [(&str, &str, &str, &str); 4] = [
+        (
+            "web/screens/home.tsx",
+            "export function HomeScreen() {",
+            "// the list\nexport function HomeScreen() {",
+            "ts-comment",
+        ),
+        (
+            "web/screens/home.tsx",
+            "export function HomeScreen() {",
+            "export function extra(): number {\n  return 1;\n}\n\nexport function HomeScreen() {",
+            "ts-unnamed",
+        ),
+        (
+            "web/screens/home.tsx",
+            "export function countText(count: number): string {",
+            "export function countText(count: any): string {",
+            "ts-any",
+        ),
+        (
+            "idea.md",
+            "`zod` 4.6.7, for",
+            "`zod` 4.6, for",
+            "package-version",
+        ),
+    ];
+    let mut server = Server::start();
+    for (k, (file, from, to, code)) in cases.iter().enumerate() {
+        let folder = notes_ideas_only(&format!("notes-refused-{k}"));
+        let text = read(&folder, file);
+        assert!(text.contains(from), "{from} in {file}");
+        fs::write(folder.join(file), text.replacen(from, to, 1)).expect("a change");
+        let reply = server.check(20 + k as u64, &folder);
+        assert!(
+            codes(&reply).contains(&(*code).to_string()),
+            "{code}: {reply:#}"
+        );
+        assert!(
+            !folder.join("web/package.json").exists(),
+            "nothing written for {code}"
+        );
+    }
+    let folder = notes_ideas_only("notes-held");
+    titles_checked(&mut server, &folder, 2000);
+    assert_eq!(server.check(40, &folder)["ok"], true);
+    let tsconfig =
+        read(&folder, "web/tsconfig.json").replace("\"strict\": true", "\"strict\": false");
+    fs::write(folder.join("web/tsconfig.json"), tsconfig).expect("a hand edit");
+    let reply = server.check(41, &folder);
+    let found: Vec<(String, String)> = reply["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .map(|f| {
+            (
+                f["file"].as_str().unwrap_or("").to_string(),
+                f["code"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        found.contains(&(
+            "web/tsconfig.json".to_string(),
+            "generated-edited".to_string()
+        )),
+        "{reply:#}"
+    );
+    fs::write(
+        folder.join("web/screens/extra.tsx"),
+        "export const x = 1;\n",
+    )
+    .expect("a file");
+    let unlisted = server.check(42, &folder);
+    assert!(
+        codes(&unlisted).contains(&"ts-source-unlisted".to_string()),
+        "{unlisted:#}"
+    );
+}
+
+#[test]
+fn notes_is_checked_as_one_file_that_serves_its_front_end() {
+    let root = bundle("notes", &["examples/titles", "examples/notes"]);
+    let folder = root.join("examples/notes");
+    let mut server = Server::start();
+    titles_checked(&mut server, &folder, 2000);
+    let reply = done(&mut server, &folder, 10);
+    assert_eq!(reply["label"], "checked", "{reply:#}");
+    let tests = &reply["build"]["tests"];
+    assert_eq!(tests["failed"], 0, "{reply:#}");
+    assert!(tests["total"].as_u64().unwrap_or(0) >= 18, "{reply:#}");
+    let export = &reply["build"]["export"];
+    assert!(export["files"].as_u64().unwrap_or(0) > 3, "{reply:#}");
+    assert!(folder.join("web/pnpm-lock.yaml").is_file());
+    let lock = read(&folder, "lengua.lock");
+    for line in [
+        " web/screens/home.tsx\n",
+        "\nbrowser ",
+        " target/lengua/web/lib/wasm\n",
+        " ../titles/lengua.lock\n",
+        " web/pnpm-lock.yaml\n",
+        " web/lib/lengua.ts\n",
+        " api.md\n",
+        "\nexport ",
+        " target/lengua/web/out\n",
+    ] {
+        assert!(lock.contains(line), "{line} in {lock}");
+    }
+    let mut child = Command::new(lengua_run())
+        .arg(&folder)
+        .env("LENGUA_HOME", home())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("lengua-run starts");
+    let started = Instant::now();
+    let page = http_get(7812, "/");
+    let milliseconds = started.elapsed().as_millis();
+    let notes = http_get(7812, "/api/notes");
+    let note_page = http_get(7812, "/note/?id=1");
+    let browser = std::env::var_os("LENGUA_CHROME")
+        .filter(|c| !c.is_empty())
+        .map(|chrome| chrome_labels(&PathBuf::from(chrome), 7812));
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        page.starts_with("HTTP/1.1 200") && page.contains("<html"),
+        "{page}"
+    );
+    assert!(
+        notes.ends_with("\"text\":\"Call the shop at noon.\"}]"),
+        "{notes}"
+    );
+    assert!(note_page.starts_with("HTTP/1.1 200"), "{note_page}");
+    if let Some(found) = browser {
+        for label in [
+            "Write a note",
+            "The notes",
+            "Milk",
+            "Explain",
+            "Title",
+            "Text",
+            "Save",
+        ] {
+            assert!(
+                found.iter().any(|f| f == label),
+                "{label} in the accessibility tree: {found:?}"
+            );
+        }
+    }
+    let log = Path::new(env!("CARGO_TARGET_TMPDIR")).join("lengua-timings.txt");
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(log) {
+        let _ = writeln!(
+            file,
+            "notes: one file of {} bytes, the export {} files and {} bytes; lengua-run's first page {milliseconds} ms after its start; mutants {}",
+            reply["build"]["size"], export["files"], export["bytes"], reply["build"]["mutants"]
+        );
+    }
+}
+
+struct Socket {
+    stream: std::net::TcpStream,
+}
+
+impl Socket {
+    fn open(port: u16, path: &str) -> Self {
+        let mut stream =
+            std::net::TcpStream::connect(("127.0.0.1", port)).expect("the browser's port");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .expect("a timeout");
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).expect("the upgrade");
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            std::io::Read::read_exact(&mut stream, &mut byte).expect("the upgrade's answer");
+            head.push(byte[0]);
+        }
+        assert!(
+            head.starts_with(b"HTTP/1.1 101"),
+            "{}",
+            String::from_utf8_lossy(&head)
+        );
+        Self { stream }
+    }
+
+    fn send(&mut self, text: &str) {
+        let payload = text.as_bytes();
+        let mut frame = vec![0x81u8];
+        if payload.len() < 126 {
+            frame.push(0x80 | u8::try_from(payload.len()).expect("a short length"));
+        } else if payload.len() < 65_536 {
+            frame.push(0x80 | 0x7e);
+            frame.extend_from_slice(
+                &u16::try_from(payload.len())
+                    .expect("a length")
+                    .to_be_bytes(),
+            );
+        } else {
+            frame.push(0x80 | 0x7f);
+            frame.extend_from_slice(
+                &u64::try_from(payload.len())
+                    .expect("a length")
+                    .to_be_bytes(),
+            );
+        }
+        let mask = [7u8, 11, 13, 17];
+        frame.extend_from_slice(&mask);
+        frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+        self.stream.write_all(&frame).expect("a frame");
+    }
+
+    fn exact(&mut self, count: usize) -> Vec<u8> {
+        let mut bytes = vec![0u8; count];
+        std::io::Read::read_exact(&mut self.stream, &mut bytes).expect("a frame from the browser");
+        bytes
+    }
+
+    fn message(&mut self) -> String {
+        let mut all = Vec::new();
+        loop {
+            let head = self.exact(2);
+            let length = match head[1] & 0x7f {
+                126 => {
+                    let bytes = self.exact(2);
+                    usize::from(u16::from_be_bytes([bytes[0], bytes[1]]))
+                }
+                127 => {
+                    let bytes = self.exact(8);
+                    usize::try_from(u64::from_be_bytes(bytes.try_into().expect("8 bytes")))
+                        .expect("a length")
+                }
+                short => usize::from(short),
+            };
+            let payload = self.exact(length);
+            if head[0] & 0x0f == 9 {
+                continue;
+            }
+            all.extend_from_slice(&payload);
+            if head[0] & 0x80 != 0 {
+                return String::from_utf8_lossy(&all).to_string();
+            }
+        }
+    }
+
+    fn call(&mut self, id: u64, method: &str, params: &Value) -> Value {
+        self.send(&json!({"id": id, "method": method, "params": params}).to_string());
+        loop {
+            let reply: Value = serde_json::from_str(&self.message()).unwrap_or(Value::Null);
+            if reply["id"] == id {
+                return reply;
+            }
+        }
+    }
+}
+
+fn http_put(port: u16, path: &str) -> String {
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("the browser's port");
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+    let request = format!(
+        "PUT {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).expect("a request");
+    let mut answer = String::new();
+    let _ = std::io::Read::read_to_string(&mut stream, &mut answer);
+    answer
+}
+
+fn names(tree: &Value) -> Vec<String> {
+    tree["result"]["nodes"].as_array().map_or_default(|nodes| {
+        nodes
+            .iter()
+            .filter_map(|n| n["name"]["value"].as_str())
+            .filter(|n| !n.trim().is_empty())
+            .map(|n| n.trim().to_string())
+            .collect()
+    })
+}
+
+fn chrome_labels(chrome: &Path, port: u16) -> Vec<String> {
+    let profile = Path::new(env!("CARGO_TARGET_TMPDIR")).join("lengua-chrome");
+    let _ = fs::remove_dir_all(&profile);
+    fs::create_dir_all(&profile).expect("a profile");
+    let mut browser = Command::new(chrome)
+        .args([
+            "--headless=new",
+            "--no-sandbox",
+            "--no-first-run",
+            "--disable-gpu",
+            "--remote-debugging-port=0",
+        ])
+        .arg(format!("--user-data-dir={}", profile.display()))
+        .arg("about:blank")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("Chrome starts");
+    let started = Instant::now();
+    let active = loop {
+        if let Ok(text) = fs::read_to_string(profile.join("DevToolsActivePort"))
+            && text.lines().count() >= 2
+        {
+            break text;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "Chrome gave no port"
+        );
+        thread::sleep(Duration::from_millis(100));
+    };
+    let devtools: u16 = active
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .parse()
+        .expect("a port");
+    let created = http_put(devtools, &format!("/json/new?http://127.0.0.1:{port}/"));
+    let body = created.split("\r\n\r\n").nth(1).unwrap_or("");
+    let target: Value = serde_json::from_str(body).expect("a target");
+    let socket_url = target["webSocketDebuggerUrl"]
+        .as_str()
+        .expect("a socket")
+        .to_string();
+    let path = socket_url
+        .splitn(4, '/')
+        .nth(3)
+        .map(|p| format!("/{p}"))
+        .expect("a path");
+    let mut socket = Socket::open(devtools, &path);
+    let mut found = Vec::new();
+    let mut id = 1;
+    for (route, wanted) in [
+        ("/", "Milk"),
+        ("/note/?id=1", "Explain"),
+        ("/write/", "Save"),
+    ] {
+        socket.call(
+            id,
+            "Page.navigate",
+            &json!({"url": format!("http://127.0.0.1:{port}{route}")}),
+        );
+        let started = Instant::now();
+        loop {
+            id += 1;
+            let tree = socket.call(id, "Accessibility.getFullAXTree", &json!({}));
+            let now = names(&tree);
+            if now.iter().any(|n| n == wanted) || started.elapsed() > Duration::from_secs(20) {
+                found.extend(now);
+                break;
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
+        id += 1;
+    }
+    let _ = browser.kill();
+    let _ = browser.wait();
+    found
 }

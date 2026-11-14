@@ -5,6 +5,7 @@ mod dependencies;
 mod frontmatter;
 mod generate;
 mod idea;
+mod json;
 mod library;
 pub mod lock;
 mod okf;
@@ -14,6 +15,8 @@ mod ste;
 mod structure;
 mod text;
 mod tree;
+mod types;
+mod web;
 mod wiki;
 
 use std::fs;
@@ -23,10 +26,15 @@ use crate::idea::{Idea, IdeaKind};
 use crate::ste::Dictionary;
 use crate::wiki::Page;
 
-pub use crate::cases::{CASES_DRAWN, Case, End, Range, Test, cases};
+pub use crate::cases::{CASES_DRAWN, Case, End, Range, StateValue, Test, cases};
+pub use crate::generate::ASSETS;
 pub use crate::library::Library;
 pub use crate::tree::{findings as wiki_findings, write_indexes as write_wiki_indexes};
-pub use lengua_lint::{Edit, Mutant, Mutation, apply};
+pub use crate::web::{
+    Browser, BrowserFn, CLIENT, Front, PNPM, SUM, ScreenRun, browser_functions, component_name,
+    screen_route, screen_runs,
+};
+pub use lengua_lint::{Edit, Mutant, Mutation, apply, choose};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Finding {
@@ -157,7 +165,32 @@ pub struct Build {
     pub sources: Vec<String>,
     pub tests: Vec<Test>,
     pub tests_hash: String,
+    pub front: Option<Front>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebSource {
+    pub file: String,
+    pub idea: String,
+    pub text: String,
+    pub structure: Vec<(usize, String)>,
+    pub main: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WebLintInput {
+    pub screens: Vec<WebSource>,
+    pub packages: Vec<String>,
+    pub client: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WebLintOutput {
+    pub findings: Vec<Finding>,
+    pub calls: Vec<(String, Vec<String>)>,
+}
+
+pub type WebLint = fn(&WebLintInput) -> WebLintOutput;
 
 impl Build {
     #[must_use]
@@ -423,7 +456,11 @@ fn discover(folder: &Path, sink: &mut Sink) -> Vec<Source> {
 fn source_file(source: &Source) -> String {
     match source.kind {
         IdeaKind::Program => "src/main.rs".to_string(),
-        IdeaKind::Module | IdeaKind::Screen => format!("src/{}.rs", source.name),
+        IdeaKind::Module => format!("src/{}.rs", source.name),
+        IdeaKind::Screen => format!(
+            "web/screens/{}.tsx",
+            source.name.strip_prefix("ui/").unwrap_or(&source.name)
+        ),
     }
 }
 
@@ -564,6 +601,9 @@ struct Prepared {
     libraries: Vec<Library>,
     plan: generate::Plan,
     tests: Vec<Test>,
+    web: Option<web::WebPlan>,
+    routes: Vec<web::Route>,
+    calls: Vec<(String, Vec<String>)>,
 }
 
 #[must_use]
@@ -605,7 +645,10 @@ fn build(folder: &Path, prepared: &Prepared) -> Build {
         })
         .collect();
     let tests_hash = tests_hash(&placed, &grants);
-    let extra = outside_inputs(folder, prepared);
+    let mut extra = outside_inputs(folder, prepared);
+    if prepared.web.is_some() {
+        generate::collect_skipping(folder, "web", &WEB_SKIPPED, &mut extra);
+    }
     Build {
         artifact: generate::artifact(&plan.package, prepared.shape),
         package: plan.package.clone(),
@@ -631,11 +674,19 @@ fn build(folder: &Path, prepared: &Prepared) -> Build {
                 line: *line,
             })
             .collect(),
-        sources: prepared.pages.iter().map(|p| p.source.clone()).collect(),
+        sources: prepared
+            .pages
+            .iter()
+            .filter(|p| p.kind != IdeaKind::Screen)
+            .map(|p| p.source.clone())
+            .collect(),
         tests: prepared.tests.clone(),
         tests_hash,
+        front: prepared.web.as_ref().map(|w| w.front.clone()),
     }
 }
+
+const WEB_SKIPPED: [&str; 3] = ["web/node_modules", "web/.next", "web/out"];
 
 struct Read {
     pages: Vec<Page>,
@@ -672,6 +723,85 @@ fn read_all(folder: &Path, title: &str, findings: &mut Vec<Finding>) -> Read {
         }
     }
     read
+}
+
+fn screen_rules(read: &Read, shape: Shape, findings: &mut Vec<Finding>) {
+    let screens = read.pages.iter().any(|p| p.kind == IdeaKind::Screen);
+    let top = read.constraints.first().cloned().unwrap_or_default();
+    if screens && shape != Shape::Server {
+        findings.push(top_finding(
+            1,
+            "screen-server",
+            "an idea with screens is a server, since its back end serves the front end; add `- Serves: HTTP on TCP port <number>`".to_string(),
+        ));
+    }
+    let front_keys =
+        !top.shadcn.is_empty() || read.constraints.iter().any(|c| !c.packages.is_empty());
+    if front_keys && !screens {
+        findings.push(top_finding(
+            1,
+            "screen-missing",
+            "`- Uses package:` and `- Uses shadcn:` are for the front end, and the idea has no screens in `ideas/ui/`".to_string(),
+        ));
+    }
+    if !top.routes.is_empty() && shape != Shape::Server {
+        findings.push(top_finding(
+            top.routes.first().map_or(1, |r| r.2),
+            "route-server",
+            "`- Route:` is for a server, an idea with `- Serves:`".to_string(),
+        ));
+    }
+}
+
+fn web_lint(
+    folder: &Path,
+    read: &Read,
+    routes: &[web::Route],
+    lint: WebLint,
+    findings: &mut Vec<Finding>,
+) -> Vec<(String, Vec<String>)> {
+    let mut input = WebLintInput {
+        client: routes.iter().map(|r| r.function.clone()).collect(),
+        ..WebLintInput::default()
+    };
+    for constraint in &read.constraints {
+        input
+            .packages
+            .extend(constraint.packages.iter().map(|p| p.name.clone()));
+    }
+    for (page, structure) in read.pages.iter().zip(&read.structures) {
+        if page.kind != IdeaKind::Screen {
+            continue;
+        }
+        let screen = page.name.strip_prefix("ui/").unwrap_or(&page.name);
+        match fs::read(folder.join(&page.source)).map(String::from_utf8) {
+            Ok(Ok(text)) => input.screens.push(WebSource {
+                file: page.source.clone(),
+                idea: page.file.clone(),
+                text: text.replace("\r\n", "\n"),
+                structure: structure.clone(),
+                main: component_name(screen),
+            }),
+            Ok(Err(_)) => findings.push(Finding {
+                file: page.source.clone(),
+                line: 1,
+                code: "ts-read",
+                message: "the file is not UTF-8 text".to_string(),
+            }),
+            Err(_) => findings.push(Finding {
+                file: page.source.clone(),
+                line: 1,
+                code: "rule-12-source-missing",
+                message: format!(
+                    "the screen idea `{}` has no file `{}`; write it, or remove the idea",
+                    page.file, page.source
+                ),
+            }),
+        }
+    }
+    let output = lint(&input);
+    findings.extend(output.findings);
+    output.calls
 }
 
 fn known_libraries(folder: &Path) -> Vec<String> {
@@ -786,7 +916,19 @@ fn conformance(
     }
 }
 
-fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
+fn component_rules(folder: &Path, top: &constraints::Constraints, findings: &mut Vec<Finding>) {
+    for (file, _, line) in &top.components {
+        if !folder.join(file).is_file() {
+            findings.push(top_finding(
+                *line,
+                "component-missing",
+                format!("the component `{file}` is not there; build it, or remove the line"),
+            ));
+        }
+    }
+}
+
+fn prepare(folder: &Path, lint: Option<WebLint>) -> Result<Prepared, Vec<Finding>> {
     if !folder.join("idea.md").is_file() {
         return Err(vec![top_finding(
             1,
@@ -812,6 +954,7 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
     if program {
         shape_rules(&top, &mut findings);
         test_rules(&read.tests, shape, &mut findings);
+        screen_rules(&read, shape, &mut findings);
     }
     if shape != Shape::Command {
         findings.retain(|f| f.code != "structure-main-missing");
@@ -821,15 +964,8 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
         purpose_rules(folder, &read, &top, shape, &mut findings);
         conformance(folder, &read.pages, &top.components, &mut findings);
     }
-    for (file, _, line) in &top.components {
-        if !folder.join(file).is_file() {
-            findings.push(top_finding(
-                *line,
-                "component-missing",
-                format!("the component `{file}` is not there; build it, or remove the line"),
-            ));
-        }
-    }
+    component_rules(folder, &top, &mut findings);
+    let routes = web::routes(&top, &read.tests, &mut findings);
     if folder.join("src/main.rs").is_file() {
         findings.extend(rust::lint(
             folder,
@@ -839,11 +975,15 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
             &libraries,
         ));
     }
+    let calls = match lint {
+        Some(lint) => web_lint(folder, &read, &routes, lint, &mut findings),
+        None => Vec::new(),
+    };
     findings.sort();
     if !findings.is_empty() {
         return Err(findings);
     }
-    let plan = generate::plan(
+    let mut plan = generate::plan(
         folder,
         &title,
         &read.pages,
@@ -851,6 +991,18 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
         (shape, &libraries),
         &mut findings,
     );
+    let web = web::plan(
+        folder,
+        &title,
+        &read.pages,
+        &read.constraints,
+        (&routes, &read.tests, &libraries),
+        &mut findings,
+    );
+    if let Some(found) = &web {
+        plan.texts.extend(found.texts.iter().cloned());
+        plan.stamps.push(found.stamp.clone());
+    }
     findings.sort();
     if !findings.is_empty() {
         return Err(findings);
@@ -867,6 +1019,9 @@ fn prepare(folder: &Path) -> Result<Prepared, Vec<Finding>> {
         libraries,
         plan,
         tests: read.tests,
+        web,
+        routes,
+        calls,
     })
 }
 
@@ -877,8 +1032,18 @@ pub fn check(folder: &Path, now: u64) -> Report {
 
 #[must_use]
 pub fn check_with(folder: &Path, now: u64, trust: impl FnOnce(&Build) -> Option<Trust>) -> Report {
+    check_web(folder, now, trust, None)
+}
+
+#[must_use]
+pub fn check_web(
+    folder: &Path,
+    now: u64,
+    trust: impl FnOnce(&Build) -> Option<Trust>,
+    lint: Option<WebLint>,
+) -> Report {
     let mut report = Report::default();
-    let mut prepared = match prepare(folder) {
+    let mut prepared = match prepare(folder, lint) {
         Ok(prepared) => prepared,
         Err(findings) => {
             report.findings = findings;
@@ -892,6 +1057,25 @@ pub fn check_with(folder: &Path, now: u64, trust: impl FnOnce(&Build) -> Option<
     let given = trust(&planned);
     report.trust = given.unwrap_or_default();
     let title = prepared.pages.first().map_or_default(|p| p.title.clone());
+    let large = prepared
+        .web
+        .as_ref()
+        .map_or_else(Vec::new, |w| large_packages(folder, &w.front.packages));
+    let interface = wiki::Interface {
+        routes: &prepared.routes,
+        calls: &prepared.calls,
+        client_hash: prepared
+            .plan
+            .texts
+            .iter()
+            .find(|(f, _)| f == CLIENT)
+            .map(|(_, t)| sha256::hex(t.as_bytes())),
+        packages: prepared
+            .web
+            .as_ref()
+            .map_or(&[][..], |w| w.front.packages.as_slice()),
+        large: &large,
+    };
     let parts = wiki::Parts {
         title: &title,
         shape: prepared.shape,
@@ -899,6 +1083,7 @@ pub fn check_with(folder: &Path, now: u64, trust: impl FnOnce(&Build) -> Option<
         components: &prepared.top.components,
         crates: dependencies::count(folder, &prepared.plan.used),
         vision: folder.join("vision.md").is_file(),
+        interface: &interface,
     };
     let written = wiki::write(
         folder,
@@ -912,14 +1097,14 @@ pub fn check_with(folder: &Path, now: u64, trust: impl FnOnce(&Build) -> Option<
     report.notes = written.notes;
     report.findings = written.findings;
     if report.findings.is_empty() {
-        report.build = Some(prepare(folder).map_or(planned, |again| build(folder, &again)));
+        report.build = Some(prepare(folder, lint).map_or(planned, |again| build(folder, &again)));
     }
     report
 }
 
 #[must_use]
 pub fn program(folder: &Path) -> Report {
-    match prepare(folder) {
+    match prepare(folder, None) {
         Ok(prepared) => Report {
             build: Some(build(folder, &prepared)),
             ..Report::default()
@@ -947,4 +1132,60 @@ pub fn mutants(folder: &Path, build: &Build, cap: usize) -> Mutation {
         })
         .collect();
     lengua_lint::mutants(&sources, cap)
+}
+
+#[must_use]
+pub fn mutant_groups(folder: &Path, build: &Build) -> (Vec<Vec<Mutant>>, String) {
+    let sources: Vec<lengua_lint::Source> = build
+        .sources
+        .iter()
+        .filter_map(|file| {
+            let text = fs::read_to_string(folder.join(file)).ok()?;
+            Some(lengua_lint::Source {
+                file: file.clone(),
+                idea: String::new(),
+                text: text.replace("\r\n", "\n"),
+                structure: Vec::new(),
+            })
+        })
+        .collect();
+    lengua_lint::groups(&sources)
+}
+
+fn dir_size(root: &Path) -> u64 {
+    let Ok(start) = fs::canonicalize(root) else {
+        return 0;
+    };
+    let mut stack = vec![start];
+    let mut total = 0u64;
+    let mut seen = 0usize;
+    while let Some(dir) = stack.pop() {
+        seen += 1;
+        if seen > 100_000 {
+            break;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+                continue;
+            };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else if meta.is_file() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+fn large_packages(folder: &Path, packages: &[(String, String)]) -> Vec<(String, u64)> {
+    let modules = folder.join("target/lengua/web/node_modules");
+    packages
+        .iter()
+        .map(|(name, _)| (name.clone(), dir_size(&modules.join(name))))
+        .filter(|(_, size)| *size > 1 << 20)
+        .collect()
 }

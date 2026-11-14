@@ -1,6 +1,6 @@
 use crate::Sink;
 
-pub(crate) const LENGUA_KEYS: [&str; 13] = [
+pub(crate) const LENGUA_KEYS: [&str; 14] = [
     "type",
     "description",
     "module",
@@ -12,6 +12,7 @@ pub(crate) const LENGUA_KEYS: [&str; 13] = [
     "source_sha256",
     "cargo_sha256",
     "world_sha256",
+    "web_sha256",
     "generated",
     "verified",
 ];

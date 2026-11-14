@@ -162,9 +162,13 @@ and 7.
 - `runs.rs`: `Runs::run` starts a run in a worker process on its own thread, or waits for the
   one with the same `key`, up to 30 seconds (`Job::start`, `Job::wait`), and gives its
   `Progress`; `GRACE` is the two seconds.
+- `front.rs` (since L8): `build` copies `web/` to `target/lengua/web/`, runs `pnpm install`
+  (frozen when `web/pnpm-lock.yaml` is there, else it keeps pnpm's lock), `tsc --noEmit`
+  (`type_problems`), Vitest with its JSON report (`test_problems`) and `next build`, and writes the
+  crate `lengua_web` of the export (`assets_text`, `media_type`); `judge` runs a screen's mutant.
 - `doctor.rs`: `examine` checks `cargo`, `rustc` (`version`), `rustfmt`, `clippy` and the targets
   (`installed_targets`), with `output` and `install_rust`; `Doctor::ok`, `Doctor::text`,
-  `Doctor::problems`, `Doctor::rustc` and `Doctor::line` give the result.
+  `Doctor::problems`, `Doctor::rustc` and `Doctor::line` give the result. Since L8 `front_items` checks `node` and `pnpm` (`find` on the `PATH`, `numbers`), and `Doctor::front_ok` and `Doctor::front_problems` give theirs.
 - `tests/version.rs`: runs the binary with `--version` and with other arguments.
 - `tests/doctor.rs`: runs `doctor` with the toolchain and with an empty path.
 - `tests/check.rs`: starts the server (with `LENGUA_HOME` in Cargo's test folder), sends

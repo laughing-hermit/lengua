@@ -6,8 +6,10 @@ description: "The design of lengua 3, the source that every milestone is built f
 
 # lengua 3
 
-The design of lengua 3: a fresh start, in which the agent writes Rust, Rust is compiled to
-WebAssembly, and the idea file is the program's only documentation.
+The design of lengua 3: a fresh start, in which lengua is a full-stack framework and an AI
+language. The agent writes Rust for the back end, compiled to WebAssembly, and TypeScript for
+the Next.js front end, carried in the same one file; and the idea file is the program's only
+documentation.
 
 Decided by the owner on 2026-11-13. lengua 2 (hand-written WebAssembly text, `main.wat`) is
 finished and kept at the tag `lengua2-final`; main starts over from an empty tree.
@@ -31,6 +33,13 @@ fresh start dont be biased with past implementation").
 
 ## 1. The vision
 
+lengua is a full-stack framework and an AI language. The idea files are the source; the agent
+compiles them into code; the back end is Rust compiled to WebAssembly, the front end is Next.js
+in TypeScript, a desktop app is Electron around the same two; and everything is checked and
+locked by lengua. It bridges the two ecosystems that matter most for AI: Rust and TypeScript. The
+line is "Rust to WebAssembly for anything that can be; native Rust only for the specific parts
+that can't."
+
 In the owner's words:
 
 - "The purpose of this is basically using the LLM as a compiler. Modernizing the programming
@@ -44,6 +53,7 @@ In the owner's words:
 - "entire software applications should be compiled to one WebAssembly file from Rust... And
   idea.md is like the documentation of that file"
 - "for the frontend we can use gpui/gpui-kit … but remember all has to be in 1 wasm file"
+  (2026-11-13; replaced the same day by Next.js, below, and kept here as history)
 - "ensure documentation doesnt drift, all documentation must be current and in sync thats why
   we have a lock file"
 - "lengua must be the evolution of a programming language, it needs to be an artificial
@@ -52,49 +62,124 @@ In the owner's words:
 - "lengua should also compile rust to webassembly as much as possible but i know that there
   will be exeptions"
 - "it should be able to do a full stack way of doing things"
+- "I want lengua to be a full stack framework for the evolution of a programming language it
+  will be an ai language"
+- "There will be no comments and lengua will also check nextjs stuff the same as rust stuff."
+
+The owner's decision of 2026-11-13 (final): lengua bridges Rust and TypeScript. The back end is
+Rust compiled to WebAssembly, one file, sandboxed, fully checked. The front end is Next.js in
+TSX with shadcn/ui and Vercel's AI-UI tools, built with pnpm and Turbopack, exported as static
+files that the WebAssembly back end carries and serves, so a web app still ships as one file. A
+desktop app is Electron, showing the same front end and running the same back end with
+`lengua-run` beside it. AI keys never reach the browser. GPUI, GPUI Kit, Leptos and Tauri are
+dropped (GPUI's attempt is kept at the tag `archive/l8-gpui`).
 
 What that means for lengua 3:
 
 - **A person writes what they want; the agent is the compiler.** The person states a request.
   The agent writes an idea file: what the program does, its behaviours as tests, and what it may
-  touch. Then the agent writes the Rust that does it. lengua checks the Rust against the idea
+  touch. Then the agent writes the code that does it: Rust for the back end, TypeScript for the
+  front end. lengua checks the code against the idea
   and runs it.
 - **The idea file is the source of truth and the only documentation.** Code files have no
-  comments. Every function the code has is named and described in the idea, and nothing else
-  is. `check` holds the two to each other, and the lock refuses one changed without the other.
+  comments, in Rust and in TypeScript. Every function and component the code has is named and
+  described in the idea, and nothing else is. `check` holds the two to each other, and the lock
+  refuses one changed without the other.
 - **Runs anywhere.** What lengua builds is one WebAssembly component: the same bytes on every
-  CPU and every operating system.
-- **One application, one file.** A whole application, however many modules it has, server and
-  front end, compiles from Rust into one `.wasm` file, signed by one lock. Its idea files are
-  that file's documentation, and the lock keeps them current with it.
+  CPU and every operating system. Its front end runs in any current browser, or in Electron for a
+  desktop app; only a part that truly needs it is native, declared and labelled.
+- **One application, one file.** A whole application, however many modules it has, compiles
+  into one `.wasm` file, signed by one lock: the server from Rust, and the front end's static
+  export carried inside it and served by it. Its idea files are that file's documentation, and
+  the lock keeps them current with it.
+- **Rust and TypeScript, held the same.** The back end is Rust and the front end TypeScript, and
+  lengua checks both to the same rules (section 5, "The same checks for Rust and TypeScript"):
+  no comments, every function in its idea, the Power of 10, Given/When/Then tests, the mutation
+  score, the lock.
 - **Maximum compatibility, few dependencies.** One WebAssembly file runs on any computer,
   whatever its operating system and CPU. Always minimise external dependencies: the standard
-  library first, and an external crate only when it merits it (section 4).
+  library first for Rust, the fewest npm packages (through pnpm) for the front end, each only when
+  it merits it, downloaded only when an app needs it, pinned, locked and counted (section 4).
 - **The machine checks the AI's work.** The AI is fast and tireless but makes mistakes, so
   nothing it writes is trusted because it wrote it. Trust comes from the compiler, the rules,
   the tests and the host, and lengua says plainly how far each check went.
-- **Full stack.** One lengua application can hold a GPUI front end, a server, storage,
+- **Full stack.** One lengua application can hold a Next.js front end, a server, storage,
   logins, calls to other services and to AI models, all in the one file. Full-stack web
-  development is what lengua does first and best.
+  development is what lengua does first and best; a desktop app is the same application in an
+  Electron window.
+
+### Which part does what
+
+**The line: "Rust to WebAssembly for anything that can be; native Rust only for the specific parts
+that can't."** The line is what the work needs, not web against desktop. A web app is Next.js in the
+browser and a Rust back end compiled to WebAssembly; a desktop app is Next.js in Electron and the
+same back end. Native Rust parts, in either, are only for training or fine-tuning models, the
+heaviest GPU computation (large local models at full speed), threads sharing memory, and hardware
+with no host grant.
+
+Decided by the owner on 2026-11-13. The split between the front end and the back end, which the
+`vision` skill's principles page quotes (L11). For every idea, the skill tells the person which
+row each part of it falls into.
+
+| Work | Where | Built with | Native? |
+|---|---|---|---|
+| Screens, forms, navigation, layout, visualisations, AI chat UI | Front end | Next.js (TSX), shadcn/ui, Vercel's AI-UI tools | No |
+| 3D, charts, effects, image and video processing | Front end | WebGPU in the browser or Electron's Chromium | No |
+| Small to medium AI models on the user's machine | Front end | WebGPU (for example WebLLM) | No |
+| Data, business rules, storage, logins, secrets, APIs, calls to other services | Back end | Rust compiled to WebAssembly (one file) | No |
+| Calling a cloud model or a local model server (for example Ollama on the same machine) | Back end | WebAssembly, through the `- Asks:` grant (L9) | No |
+| Shared pure logic (validation, calculations, formatting) | Front end and back end | A lengua library, imported by Next.js as WebAssembly and linked into the back end | No |
+| Large AI models, the fastest local inference, training or fine-tuning | Back end | A native Rust part (Candle or Burn, on CUDA or Metal) | Yes, declared and labelled |
+| Heavy compute that needs threads sharing memory | Back end | A native Rust part | Yes, declared and labelled |
+| A hardware device with no host grant | Back end | A native Rust part | Yes, declared and labelled |
+| Desktop window and shell | Desktop | Electron, running the same front end and back end | Yes (the shell), declared |
+| Shared types between the front end and the back end | Interface | Generated from the back end's routes (`api.md`, `web/lib/lengua.ts`) | No |
+
+**Native stays narrow** (decided by the owner on 2026-11-13). A native Rust part is allowed only
+for large local AI models or the fastest local inference, training or fine-tuning; heavy compute
+that needs threads sharing memory; and a hardware device that has no host grant (and the
+Electron shell of a desktop app). Everything else is the WebAssembly back end or the Next.js
+front end. L10 builds the native path once and proves it with one example: a back-end part that
+runs a local model on the GPU with Candle or Burn.
+
+**Why WebGPU stops short**, said plainly: a browser limits the memory of a page and of the GPU,
+and 32-bit WebAssembly reaches 4 GB at most today; it is slower than native CUDA or Metal; a
+large model's weights are downloads of several gigabytes; training is not practical; and a page
+gets one GPU. And the WebAssembly back end has no GPU at all: WebGPU is an interface of the
+browser, and wasi-gfx is not mature. The watch list (section 10) has Memory64 and wasi-gfx.
+
+A worked example, not something to build: a tool for open-weight models. Browsing the weights,
+visualising them (with WebGPU), editing, merging, converting, and testing the model through a
+local model server (`- Asks:`) are the Next.js front end and the WebAssembly back end; only
+training or fine-tuning is a native Rust part. As a web app it is Next.js in the browser and the
+back end in WebAssembly; as a desktop app, Next.js in Electron and the same back end.
 
 ### WebAssembly first; native only when necessary
 
 All Rust that lengua builds compiles to WebAssembly unless WebAssembly truly can't do the job.
 
-| Kind of application or part | Builds to | Why |
-|---|---|---|
-| Web apps: front end and server | WebAssembly | The browser and WASI servers are where WebAssembly is strongest |
-| Command-line tools, servers, background services | WebAssembly | No window is needed, so one file runs on any computer |
-| GPUI apps in a browser window | WebAssembly | They look like desktop apps and run in the browser |
-| Calling AI models over the network, embeddings, search | WebAssembly | Outgoing HTTP is enough |
-| Desktop apps with their own window | Native | A real window and the GPU outside the browser are not in WebAssembly yet |
-| Running or training AI models locally | Native | Needs the GPU directly |
-| Threads that share memory | Native | Not in WebAssembly yet |
-| Hardware devices (serial, USB, Bluetooth) | Native, or a host grant | Not in WebAssembly; a specific device can instead be a grant the host provides |
+| Kind of application or part | Where | Builds to | Why |
+|---|---|---|---|
+| Web apps: the server | back end | WebAssembly | WASI servers are where WebAssembly is strongest |
+| Web apps: the front end | front end | A Next.js static export (TSX), carried and served by the WebAssembly back end | The browser runs it; it is files inside the one `.wasm` file |
+| Command-line tools, servers, background services | back end | WebAssembly | No window is needed, so one file runs on any computer |
+| Desktop apps with their own window | both | Electron showing the same front end; the same WebAssembly back end run by `lengua-run` beside it (L10) | Electron's Chromium is the same on every system; the shell is native, so the idea declares it (`- Native: a desktop window, for ...`, L10) and it is labelled; the app's own code stays WebAssembly and TSX |
+| 3D, charts, maps, effects | front end (WebGPU) | WebAssembly and the browser, no native | The browser, or Electron's Chromium, gives the front end WebGPU |
+| Small or medium AI models on the user's machine | front end (WebGPU) | No native | WebLLM or Transformers.js run them in the browser on WebGPU |
+| Image and video processing | front end (WebGPU) | No native | WebGPU and the browser's media interfaces |
+| Calling a cloud model or a local model server (Ollama), embeddings, search | back end | WebAssembly, through `- Asks:` | Outgoing HTTP is enough |
+| Large AI models, the fastest local inference, training or fine-tuning | back end | A native Rust part (Candle or Burn on CUDA or Metal) | Needs the GPU directly, outside a browser, past WebGPU's limits ("Why WebGPU stops short") |
+| Heavy compute that needs threads sharing memory | back end | Native | Not in WebAssembly yet |
+| Hardware devices (serial, USB, Bluetooth) with no host grant | back end | Native, or a host grant | Not in WebAssembly; a specific device can instead be a grant the host provides |
+| Shared pure logic (validation, calculations, formatting, parsing) | both | A lengua library: WebAssembly in the browser (imported by Next.js) and linked into the WebAssembly back end | The same code on both sides, so they can't disagree |
 
 The rule for a native part:
 1. The idea declares it with `- Native: <part>, for <reason>`, and the reason must be one of the
-   kinds marked Native above. Any other reason is refused.
+   kinds marked Native above (large AI models, the fastest local inference, training or
+   fine-tuning on the GPU; heavy compute with threads
+   that share memory; a hardware device with no host grant; and the desktop shell, Electron, for a
+   desktop app).
+   Any other reason is refused. Front-end GPU work is never a reason: the front end has WebGPU.
 2. Only the part that needs it is native; the rest of the application stays WebAssembly.
 3. The same checks apply: the Power of 10, the idea's tests, the mutation score, the lock.
 4. Its label is `native`, shown in every reply and in the wiki, because it is not sandboxed: it
@@ -108,14 +193,35 @@ libraries are also built for WebAssembly, so the checker could one day run as We
 since L8, CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2` on every runner, and a
 failure fails the run.
 
+**GPU access with this stack** (decided by the owner on 2026-11-13):
+1. **GPU work in the front end needs no native code.** The browser, or Electron's Chromium,
+   gives the front end WebGPU (WebGL on older browsers). This covers 3D, charts, maps and
+   effects (for example three.js), small and medium AI models run in the user's browser (for
+   example WebLLM or Transformers.js), and image and video processing. On the desktop,
+   Electron's Chromium makes WebGPU the same on every system.
+2. **GPU work in the back end needs a declared native part:** large AI models, the fastest local
+   inference, training or fine-tuning,
+   heavy compute. It is Rust, pure Rust first (Candle or Burn on wgpu; CUDA or Metal only where
+   needed), declared with `- Native:` and its reason, labelled `native`, and only that part; in
+   a desktop app Electron starts it beside the WebAssembly back end.
+3. **The watch list:** wasi-gfx, wasi-nn and Memory64 would let back-end GPU work return to the one
+   WebAssembly file (section 10).
+
+The `vision` skill tells the person up front which of these an idea falls into, and which row
+of "Which part does what" each part of it is.
+
 **Where it runs, said plainly.** The user is never surprised:
-- before any code is written, the `write-idea` skill says whether the request will be one
-  WebAssembly file or needs a native part, and why, and offers a WebAssembly alternative when
-  one exists;
+- before any code is written, the `vision` skill (and the `write-idea` skill for a small request
+  with no vision) says whether the request will be one WebAssembly file, a web app, a desktop
+  app, or needs a native part, and why, and offers a WebAssembly alternative when one exists;
 - the idea file says it (WebAssembly is the default; native parts are declared);
 - `check` refuses code that needs native without the idea declaring it, and says what needs it;
 - every reply and `index.md` start with a "Where it runs" line, for example "One WebAssembly
-  file. Runs on any OS and CPU. Sandboxed: it reaches only what the idea grants."
+  file. Runs on any OS and CPU. Sandboxed: it reaches only what the idea grants." For a web
+  app: "One WebAssembly file that serves its own front end. Opens in any current browser. The
+  server reaches only what the idea grants; the browser's sandbox holds the front end." For a
+  desktop app (L10): "An Electron app: the same front end in a window, and the same WebAssembly
+  file run by `lengua-run` beside it. Runs on Linux, macOS and Windows."
 
 ### The vision: the best lengua solution, before the idea
 
@@ -123,12 +229,17 @@ Before any idea is written, the `vision` skill works out with the person the bes
 what they want with lengua, and writes it to `vision.md` in the application's folder, in plain
 words for the person:
 
-- whether it fits lengua, and where it runs (one WebAssembly file, or which native part and why);
-- its shape: modules, screens, what is on the server and what in the GPUI front end, storage,
-  logins, calls to other services and AI models;
+- whether it fits lengua, and where it runs (one WebAssembly file, a web app, a desktop app, or
+  which native part and why);
+- which GPU case it falls into, if any: front-end GPU work (WebGPU, no native) or back-end GPU
+  work (a native Rust part);
+- its shape: modules, screens, what is on the server and what in the Next.js front end,
+  storage, logins, calls to other services and AI models;
 - what it may reach: files, network, secrets, storage;
+- where it will be deployed (Vercel with a `lengua-run` container, any server, or desktop through
+  Electron);
 - what it is built from: the standard library, lengua's shared libraries, the agent's own code,
-  and any crate that merits it, pure Rust first;
+  and any crate or npm package that merits it, pure Rust first;
 - what lengua can't do yet for it, and the alternatives;
 - for each principle below, whether the plan meets it easily or pushes against it, and why.
 
@@ -144,12 +255,12 @@ section to the same list, so they can't drift apart.
 
 | # | Principle | Do | Don't |
 |---|---|---|---|
-| 1 | An AI language | Write the idea as the source and the only documentation; let the AI compile it to Rust; let the machine verify it | Trust code because an AI wrote it; document anything outside the idea |
-| 2 | Maximum interoperability | Build one file that runs on any OS and CPU | Build per system when WebAssembly can do the job |
-| 3 | WebAssembly first | Make every part WebAssembly; declare a native part only for a named limit, with its reason | Go native for speed, convenience, or a crate that only builds natively when a WebAssembly path exists |
-| 4 | Nothing unless absolutely necessary | Use the standard library, then lengua's shared libraries, then the agent's own code; take a pure-Rust crate only when it merits it, declared with its reason | Add a crate to save a few hundred lines; take a crate that wraps C when a pure-Rust one exists; grant access the program doesn't need |
-| 5 | Full stack, web first | Put the GPUI front end, the server, storage, logins and AI calls in the one file | Split one application into separate deployables |
-| 6 | The Power of 10 | Plan small functions, bounded loops, plain data, every error handled | Plan recursion, unbounded loops, global state, `unwrap`, `unsafe` |
+| 1 | An AI language | Write the idea as the source and the only documentation; let the AI compile it to Rust for the back end and TypeScript for the front end; let the machine verify both | Trust code because an AI wrote it; document anything outside the idea |
+| 2 | Maximum interoperability | Build one file that runs on any OS and CPU, whose front end opens in any current browser and in Electron; deploy the web front end on Vercel natively and the back end as a `lengua-run` container serving the one .wasm; or `lengua-run` on any server; Electron for desktop | Build per system when WebAssembly can do the job; rewrite the back end natively or through a JavaScript shim to fit a host |
+| 3 | WebAssembly first | Rust to WebAssembly for anything that can be; native Rust only for the specific parts that truly need it (training or fine-tuning models, the heaviest GPU work, shared-memory threads, hardware without a host grant). Put shared pure logic in a lengua library that runs in the browser and on the server; do GPU work for the screen (3D, charts, effects, small to medium AI models with WebGPU, for example WebLLM) in the front end; call a cloud model or a local model server through `- Asks:` from the WebAssembly back end; say for each part which row of "Which part does what" it is, and why WebGPU stops short when it does | Go native for convenience, speed alone, or to fit one host |
+| 4 | Nothing unless absolutely necessary | Use the standard library, then lengua's shared libraries, then the agent's own code; take a pure-Rust crate or an npm package only when it merits it, declared with its reason and pinned; download front-end tools only when the app needs them | Add a crate or a package to save a few hundred lines; take a crate that wraps C when a pure-Rust one exists; bundle tools an app does not use; grant access the program doesn't need |
+| 5 | Full stack, web first | Put the Next.js front end, the server, storage, logins and AI calls in the one file; keep AI keys on the back end | Split one application into separate deployables; use a Next.js feature that needs a Node server; call a model from the browser with a key |
+| 6 | The Power of 10 | Plan small functions, bounded loops, plain data, every error and promise handled, in Rust and in TypeScript | Plan recursion, unbounded loops, global state, `unwrap`, `unsafe`, `any`, casts, a floating promise |
 | 7 | Trust you can see | Say up front what will be `checked`, `tested`, `trusted` or `native` | Hide a trusted component or a native part |
 | 8 | Documentation that can't drift | Keep the vision, the ideas and the code signed together; name every function in its idea | Write comments in code; change code without its idea, or an idea without a check |
 | 9 | The person decides | Ask the person to read and approve the vision and the idea in their own words | Write code before approval; decide for the person what only they can |
@@ -167,7 +278,7 @@ code, and again whenever a change alters what the program does or may reach. It 
 4. When the person approves, the agent tells `check`, and `check` writes the hash of the
    approved ideas into the lock. Nothing else is asked of the person.
 5. The `build` skill starts only from an approved idea. If an idea's behaviours, grants, native
-   parts or crates change after approval, `check` refuses to build until the person approves
+   parts, crates or npm packages change after approval, `check` refuses to build until the person approves
    again; a change to wording or `# Structure` alone does not need it.
 
 What lengua can't do: it can't prove a person, and not the agent, said yes. The skill asks,
@@ -199,6 +310,10 @@ In lengua it is a grant like any other.
   refuses anything else); the Power of 10's "every result handled" applies.
 - **Still one WebAssembly file.** The interface is a WIT interface the host links only with
   the grant. (`wasi-nn` is for running a model inside the program; it is on the watch list.)
+- **The front end never holds a key.** Its AI UI (json-render, section 4) calls the back end,
+  and the back end asks a cloud or local model under this grant, so AI keys never reach the
+  browser. A small model that runs inside the browser on WebGPU ("Which part does what") needs no
+  key and no grant.
 - **A shared library, `ai`,** on the standard library alone: prompt templates, structured
   replies, retries, and steps chained one after another.
 - **Where it runs and what it costs are said plainly:** the "Where it runs" line names the
@@ -207,20 +322,26 @@ In lengua it is a grant like any other.
 ### Nothing unless absolutely necessary
 
 One principle runs through lengua:
-1. No external dependencies unless absolutely necessary; pure-Rust crates first.
+1. No external dependencies unless absolutely necessary; pure-Rust crates first; npm packages
+   only when they merit it, pinned. The plugin ships only the skills, `lengua-mcp` and
+   `lengua-run`: front-end tools are downloaded only when an app needs them, never bundled
+   (Next.js and its packages through pnpm the first time an app with a front end is built;
+   Electron only when an app is built as a desktop app, so a web app never fetches it), each
+   pinned in the app's `pnpm-lock.yaml`, signed in the lock and cached for later builds.
 2. No native builds unless absolutely necessary.
 3. No access unless the idea grants it.
-4. No `unsafe` code: lengua's single `unsafe` call runs only after verification.
-5. No randomness or real time unless granted.
-6. No memory or time beyond what the idea declares.
+4. No `unsafe` code, and in TypeScript none of the ways a page runs text as code: lengua's
+   single `unsafe` call runs only after verification.
+5. No randomness or real time unless granted (on the back end; the browser holds the front end).
+6. No memory or time beyond what the idea declares (on the back end).
 7. No unchecked code unless it is labelled `trusted`.
 8. No new grammar in the idea file unless something can't be said without it.
 9. No human steps unless only a person can take them.
 
-And three with no exceptions: no comments in code; no code without its idea and no idea without
-its code; no change without a new check.
+And three with no exceptions: no comments in code, Rust or TypeScript; no code without its idea
+and no idea without its code; no change without a new check.
 
-### Why Rust compiled to WebAssembly
+### Why Rust compiled to WebAssembly, and Next.js for the front end
 
 - **The AI knows Rust well**, far better than WebAssembly text. lengua 2's scale test (a web
   server of 3,638 lines of WebAssembly text) showed the AI could write it, but the bookkeeping
@@ -235,6 +356,10 @@ its code; no change without a new check.
 - **Interoperability.** WASI is a standard interface and the component model is a standard way
   to link components. A component built from another language can be linked with a lengua
   program, and a lengua program can be used by other hosts.
+- **TypeScript and Next.js are where AI front ends are made.** The AI knows them as well as Rust;
+  shadcn/ui and Vercel's AI-UI tools are made for them; and a static export is plain files that
+  the one WebAssembly file can carry and serve, so the front end costs no second deployable.
+  `tsc` at its strictest and lengua's own TypeScript checks give it the same bar as the Rust.
 
 ## 2. What lengua 3 keeps from lengua 2, as ideas
 
@@ -249,7 +374,7 @@ start" above).
 - **Trust labels:** every result says how far the checks went.
 - **The lock:** one file ties the idea, the code and the build together, signed with the user's
   key.
-- **The wiki and the log** (Karpathy's LLM wiki): every idea, the top one and each module's, is a
+- **The wiki and the log** (Karpathy's LLM wiki): every idea, the top one, each module's and each screen's, is a
   page; `check` keeps an `index.md` and an append-only `log.md`, so the documentation can't
   drift from the code.
 - **Open Knowledge Format** frontmatter on every idea, module ideas included, so programs and
@@ -280,16 +405,22 @@ start" above).
 
 ### The plugin
 
-lengua is an Agent Plugin: skills and one Rust MCP server, nothing else.
+lengua is an Agent Plugin: three skills (`vision`, `write-idea`, `build`) and one Rust MCP server
+(`lengua-mcp`), with the lean runner `lengua-run`; nothing else.
 
 | Part | What it does |
 |---|---|
 | Skill `vision` | Turns what a person wants to build into `vision.md`: the best lengua solution for it, judged against lengua's principles and their do's and don'ts |
 | Skill `write-idea` | Turns an approved `vision.md` (or a small request) into `idea.md` |
-| Skill `build` | Turns `idea.md` into Rust in `src/` |
-| MCP tool `check` | Checks the idea, generates the build files, builds, checks the rules, runs the tests, writes the lock and the wiki |
+| Skill `build` | Turns the ideas into code: Rust in `src/` for the back end, TSX in `web/screens/` for the front end |
+| MCP tool `check` | Checks the ideas, generates the build files (Rust and front end), builds, checks the rules on Rust and TypeScript, runs the tests, writes the lock and the wiki |
 | MCP tool `run` | Runs a checked program under its grants |
 | `lengua-run` | The lean runner, for running a checked program from a shell |
+
+The plugin ships only these: the skills, `lengua-mcp` and `lengua-run`. Front-end tools are not
+bundled. pnpm downloads Next.js and its packages the first time an app with a front end is built,
+and Electron only when an app is built as a desktop app (L10); each is pinned in the app's
+`web/pnpm-lock.yaml`, signed in the lock, and kept in pnpm's store for later builds.
 
 Standards followed:
 [Agent Plugins](https://agent-plugins.org/),
@@ -302,27 +433,46 @@ Standards followed:
 
 ```
 shop/
-  idea.md            written by the agent: the application, its behaviours and grants
-  ideas/cart.md      written by the agent: one idea per module (small programs need none)
-  ideas/pages.md
-  ideas/ui/basket.md written by the agent: one idea per screen of the front end
-  src/main.rs        written by the agent: Rust, no comments
-  src/cart.rs        one Rust file per module idea
-  src/pages.rs
-  src/ui/basket.rs   one Rust file per screen idea, written with GPUI
-  Cargo.toml         generated by check from the ideas; not edited by hand
-  wit/world.wit      generated by check from the grants
-  lengua.lock        written by check
+  idea.md                   written by the agent: the application, its behaviours and grants
+  ideas/cart.md             written by the agent: one idea per module (small programs need none)
+  ideas/ui/home.md          written by the agent: one idea per screen of the front end
+  ideas/ui/basket.md
+  src/main.rs               written by the agent: Rust, no comments
+  src/cart.rs               one Rust file per module idea
+  web/screens/home.tsx      written by the agent: one TSX file per screen idea, no comments
+  web/screens/basket.tsx
+  Cargo.toml                generated by check from the ideas; not edited by hand
+  wit/world.wit             generated by check from the grants
+  web/package.json          generated: the npm packages, each pinned to one version
+  web/pnpm-workspace.yaml   generated: pnpm's settings (no install scripts run)
+  web/next.config.mjs       generated: a static export, nothing that needs a Node server
+  web/tsconfig.json         generated: TypeScript at its strictest
+  web/vitest.config.mts     generated: how the screen tests run
+  web/postcss.config.mjs    generated: Tailwind CSS for shadcn/ui
+  web/app/layout.tsx        generated: the page around every screen
+  web/app/globals.css       generated: Tailwind and shadcn/ui's theme
+  web/app/page.tsx          generated: the route of the screen `home`, `/`
+  web/app/basket/page.tsx   generated: the route of each other screen, `/<name>/`
+  web/components/ui/*.tsx   generated: the shadcn/ui components the idea names, copied source
+  web/lib/utils.ts          generated: shadcn/ui's `cn`
+  web/lib/lengua.ts         generated: the typed client of the back end, `assert`, `useScreen`
+  web/tests/*.test.tsx      generated: each screen idea's examples as component tests
+  web/lengua.sum            generated: the SHA-256 of each generated file of `web/`
+  web/pnpm-lock.yaml        written by pnpm at the first build, then held and signed
+  lengua.lock               written by check
 ```
 
-All of it compiles into one file, `shop.wasm`. One idea file can't hold a large application
-(lengua 2's 3,638-line server needed an idea of 594 lines), so each module has its own idea,
-with its own behaviours and its own `# Structure`, and the top `idea.md` names the modules and
-holds the grants.
+All of it compiles into one file, `shop.wasm`: the Rust server, with the front end's static
+export inside it. One idea file can't hold a large application (lengua 2's 3,638-line server
+needed an idea of 594 lines), so each module and each screen has its own idea, with its own
+behaviours and its own `# Structure`, and the top `idea.md` names the modules and holds the
+grants.
 
-The agent writes only the ideas and `src/`. `check` generates `Cargo.toml` (name, edition, the
-lints of section 5, a release profile with `panic = "abort"`, only the crates the idea declares, as rule 13
-allows) and `wit/world.wit`, and holds them unchanged: a hand edit is a finding.
+The agent writes only the ideas, `src/` and `web/screens/`. `check` generates `Cargo.toml`
+(name, edition, the lints of section 5, a release profile with `panic = "abort"`, only the
+crates the idea declares, as rule 13 allows), `wit/world.wit` and the generated files of `web/`
+above, and holds them unchanged: a hand edit is a finding. Any other file in `web/` that is
+TypeScript is a finding too (`ts-source-unlisted`), as a Rust file of no idea is.
 
 ### The idea file
 
@@ -334,11 +484,13 @@ okf: ...                      Open Knowledge Format frontmatter
 # Behaviours                  Given / When / Then, each with its examples; each is a test
 # Constraints                 grants (- Reads: files in ..., - Connects to: ...),
                               memory, time, exports, modules
-# Structure                   every function of the module, one sentence each
+# Structure                   every function (and, in a screen, component), one sentence each
+# Links                       written by check (since L8): the ideas, routes and screens it meets
 ```
 
 `# Structure` is new. It is how the ideas become the documentation: `check` reads every
-function in a module's Rust file and every name in that module's `# Structure`, and each must
+function in a module's Rust file, and every function and component in a screen's TSX file, and
+every name in that idea's `# Structure`, and each must
 have the other.
 
 ### The idea file's grammar
@@ -362,7 +514,7 @@ space or `-`), a blank line or a `#` comment. A key may be there one time only.
   L7; `lengua Module` or `lengua Screen`; a component page, not an idea, is `lengua Component`,
   since L9), `description` (the first sentence of
   `# Purpose`), `module` (`main` for the top idea), `source` (`src/main.rs`, `src/<name>.rs`,
-  `src/ui/<name>.rs`), `uses` and `used_by` (OKF concept ids, the file without `.md`: `idea`,
+  `web/screens/<name>.tsx` since L8), `uses` and `used_by` (OKF concept ids, the file without `.md`: `idea`,
   `ideas/cart`, `ideas/ui/basket`; since L9 a library's id too, its folder and `/idea`:
   `../../libraries/json/idea`), `label` (`unchecked`, `tested` or `checked`, section 6;
   since L5 the program's label, on every idea of it),
@@ -370,8 +522,10 @@ space or `-`), a blank line or a `#` comment. A key may be there one time only.
   start and the `# Links` section left out, the text ending with one line end) and
   `source_sha256` (of the Rust file, or `none`); on the top idea only,
   `cargo_sha256` and `world_sha256`, the SHA-256 of the `Cargo.toml` and `wit/world.wit` that
-  check wrote (since L2, see "The generated files" below); since L9, OKF's trust fields
-  `generated` (`{ by: lengua-mcp/<version>, at: <time> }`) and `verified` (below).
+  check wrote (since L2, see "The generated files" below), and since L8 `web_sha256`, the
+  SHA-256 of `web/lengua.sum`, which lists the SHA-256 of every generated file of `web/`; since
+  L9, OKF's trust fields `generated` (`{ by: lengua-mcp/<version>, at: <time> }`) and
+  `verified` (below).
 - **The agent may write any other key**, and lengua keeps it byte for byte: OKF's `title`,
   `tags`, `status`, `sources`, `stale_after`, `resource`, or a key of its own. Since L9 lengua
   writes `title` (the folder's name for the top idea, the module's name for the others) and
@@ -401,7 +555,9 @@ section is `section-unknown`.
 **The sections** are level-1 headings, in this order, each one time: `# Purpose`,
 `# Behaviours`, `# Constraints`, `# Structure`. Every idea has Purpose, Behaviours and
 Structure; the top idea has Constraints too, and a module or screen idea may have them. Only
-blank lines come before `# Purpose`. A heading inside a fenced block is not a section.
+blank lines come before `# Purpose`. A heading inside a fenced block is not a section. Since L8
+a last section, `# Links`, is written by `check` and read by nothing: it is left out of the idea's
+hash and its checks, like the frontmatter.
 
 **`# Purpose`**: one paragraph or more of description in STE, with no headings and no fenced
 blocks. A list item (`- ` or `* `) counts as its own paragraph. Its first sentence is the
@@ -450,11 +606,17 @@ The keys of a screen example (state and text are compared; pixels are not, secti
 
 | Key | Value | Means |
 |---|---|---|
-| ``State `<field>` `` | a string, an integer, `true` or `false` | the screen's state before |
-| `Click` | `` `<element>` `` | the user clicks the element |
-| ``Type into `<element>` `` | a string | the user types the text into the element |
+| ``State `<field>` `` | a string, an integer, `true` or `false` | the screen's state before: a field of the object the screen keeps with `useScreen` |
+| ``Type into `<element>` `` | a string | the user types the text into the field whose label is the element |
+| `Click` | `` `<element>` `` | the user clicks the button or link whose name is the element |
 | ``Expect state `<field>` `` | a string, an integer, `true` or `false` | the state after |
-| `Expect text` | a string | text the screen shows |
+| `Expect text` | a string | text the screen shows, anywhere on it |
+| `Expect label` | `` `<label>` `` | an element the accessibility tree names so (since L8) |
+
+The steps run in the order State, Type into, Click, then the expectations; an example has one
+`Click` at most (since L8). While a screen runs in its test, each request it makes to the back
+end gets the answer of the server's example with the same method, path and body (since L8), so
+the screens and the server are held to the same examples.
 
 The keys of a network fixture, a library call and a server request (since L7):
 
@@ -521,6 +683,9 @@ run").
 | `Uses` | module names, or folders of lengua libraries (a name with a `/`, relative to the folder: `` `../../libraries/json` ``), in backticks, commas between them | any idea; a library only in the top idea |
 | `Uses crate` | `` `<name>` <major.minor.patch>, for <reason> `` | any idea |
 | `Uses component` | `` `<file>.wasm`, built from <words> ``: a component from another language, a file inside the folder (since L7) | top idea |
+| `Uses package` | `` `<name>` <major.minor.patch>, for <reason> ``: an npm package of the front end, pinned (since L8) | any idea |
+| `Uses shadcn` | shadcn/ui component names in backticks, commas between them: `button`, `card`, `input`, `label`, `textarea` (since L8) | top idea |
+| `Route` | `` `<METHOD> <path>` ``, a path from `/` whose parts may be `{<name>}`: a route of the server that the front end calls (since L8) | top idea of a server |
 
 Standard output and standard error are always granted. Every file in `ideas/` must be in
 `- Modules:`, and every name there must have its file. A `Uses` name with no `/` must be a module
@@ -540,7 +705,14 @@ its `mod <name>;` line in `src/main.rs` (`module-undeclared`), and each name of 
 function, `snake_case`, or a method, `Type::snake_case` with the type in `UpperCamelCase`. The
 sentence may continue on indented lines; it is one STE sentence and ends with a full stop. A
 name is there one time only. The top idea's structure has `main`. Since L4 `check` holds
-these names to the functions of the Rust file (rule 12, section 5).
+these names to the functions of the Rust file (rule 12, section 5). In a screen idea (since L8)
+a name is a TypeScript function, `lowerCamelCase`, or a component, `UpperCamelCase`, and the
+screen's main component, the one its route shows, is its name in `UpperCamelCase` and
+`Screen`: `HomeScreen` for `ui/home`, `NoteFormScreen` for `ui/note_form`.
+
+**Screens, since L8.** A program with screen ideas is a server (`- Serves:`), since its back
+end serves the front end. A screen's route is `/` for the screen `home` and `/<name>/` for any
+other; its code is `web/screens/<name>.tsx`.
 
 **What `check` replies.** One pass reads every idea file and collects every finding of every
 kind: the frontmatter, the sections, the behaviours and their blocks, the constraints, the
@@ -578,42 +750,151 @@ checked are the purpose, the clauses of the behaviours, the names of behaviours 
 (words only), the structure's sentences and the reasons of `Uses crate` (words only).
 Constraints, keys and values are not prose and are not checked.
 
-### Web applications: the server and the GPUI front end
+### Web applications: the Rust server and the Next.js front end
 
-A web application has two halves, and both are in the one file:
+Decided by the owner on 2026-11-13. A web application has two halves, and both are in the one
+file:
 
-- **The server side** receives requests and sends back pages, data and images. It is a WASI
-  component that implements WASI's HTTP world, built for `wasm32-wasip2`. lengua's host runs it
-  under the idea's grants.
+- **The back end** receives requests and sends back data. It is Rust compiled to a WASI component
+  that implements WASI's HTTP world, built for `wasm32-wasip2`, fully checked, and run by
+  lengua's host under the idea's grants. It is where every secret and every call to an AI model
+  is: AI keys never reach the browser.
 - **The front end** runs inside the visitor's browser and reacts at once to clicks and typing.
-  It is written with [GPUI](https://gpui.rs/) and [GPUI Kit](https://gpui-kit.com/), Zed's
-  GPU-drawn Rust UI framework and a library of components on it. GPUI runs in the browser
-  through Zed's `gpui_web` crate (merged upstream in February 2026), built for
-  `wasm32-unknown-unknown`, drawing on one canvas with WebGPU and WebGL2 as the fallback.
+  It is a [Next.js](https://nextjs.org/) application in TSX with
+  [shadcn/ui](https://ui.shadcn.com/)'s components and Vercel's AI-UI tools (below), built with
+  [pnpm](https://pnpm.io/) and Turbopack, and exported as static files (`output: 'export'`).
 
-A browser can't run a WASI component, and a WASI host can't run a browser module, so no single
-WebAssembly binary can be both. The one file holds both: the server component carries the
-front end's compiled `.wasm`, the small loader a browser needs to start it, its fonts and its
-images, and serves them itself. One file to ship, one lock, two compiled parts inside.
+**One file.** The static export (HTML, JavaScript, CSS, fonts and images) is carried inside the
+server component and served by it: at each build, lengua writes a small Rust crate,
+`lengua_web`, that holds every file of the export with `include_bytes!` and answers
+`lengua_web::asset(path)` with the file's media type and bytes, and the server serves
+`/_next/...`, `/` and each screen's `/<name>/` from it. One file to ship, one lock; the server
+answers its own routes (by convention under `/api/`) and every other `GET` from the export.
+Measured at L8 (run 43552069900, Linux x86-64): `examples/notes` is one file of 1,095,636
+bytes, of which the export is 39 files and 1,017,050 bytes (Next.js 16.4.6, React 19.3.1, the json-render
+catalog and the `titles` library's browser module); `lengua-run` served its first page 414 ms after
+it started.
 
-- Each screen of the front end has its own idea in `ideas/ui/`, in Given/When/Then and STE like
-  every other idea, and its own Rust file in `src/ui/`. Rules 11 and 12 hold for them too.
-- The front end reaches only its own server. lengua's grants hold the server; the browser's
-  sandbox holds the front end.
-- Limits, from GPUI's web target: one window per page; WebGPU preferred, WebGL2 when not; the
-  fonts are shipped in the file, since a browser gives a canvas no fonts. To verify at the
-  milestone.
+**What is not used, and why.** The export is plain files, so any Next.js feature that needs a
+Node server at request time is not used; the WebAssembly back end does that work instead:
+
+| Next.js feature | Why it is not used | What lengua does instead |
+|---|---|---|
+| Route Handlers that run per request, Server Actions | They run in a Node server | The Rust back end's routes, called through the generated client |
+| Server Components that read data per request, `cookies()`, `headers()`, draft mode | Rendered per request on a server | The screen asks the back end in the browser |
+| Middleware (the proxy), rewrites, redirects and headers in `next.config` | Run by the Next.js server | The back end answers each request |
+| Incremental Static Regeneration, `revalidate`, on-demand revalidation | Need a server to build pages again | The export is built once per check |
+| Dynamic routes without `generateStaticParams` (`/note/[id]`) | Each path must be a file | A screen reads its query string (`/note/?id=3`) |
+| Image Optimization (`next/image` with a loader) | Needs the image server | `images.unoptimized`, plain images |
+| Internationalized routing | Needs the server | A screen's own text |
+
+Server Components that render once at build time are allowed by Next.js in an export; lengua's
+screens are client components (`"use client"` is not needed: the generated route pages render
+them), so every screen can be tested in the same way.
+
+**Vercel's AI-UI tools.** The owner asked for "the UI SDK from Vercel Labs". It is
+[json-render](https://github.com/vercel-labs/json-render) (Vercel Labs, Apache-2.0, first
+published in January 2026; npm `@json-render/core` and `@json-render/react`, 0.22.0 on
+2026-11-13): generative UI, in which an AI model answers with a JSON description of a screen
+(`root` and a flat map of `elements`, each a `type`, `props` and `children`) and the front end
+draws it only with components from a catalog it defines (`defineCatalog`, with `zod` shapes for
+each component's props, and `defineRegistry`, the React components), so the model can't put
+anything on the screen the app did not allow. It fits lengua well: the back end asks the model
+(L9's `- Asks:` grant) and answers JSON; the front end validates and draws it. The other two
+tools were looked at: [AI Elements](https://elements.ai-sdk.dev/) (shadcn/ui components for chat
+apps, copied into the app like shadcn's) and the [AI SDK](https://ai-sdk.dev/)'s UI hooks
+(`useChat` from `@ai-sdk/react`, which reads the AI SDK's stream protocol). They are not used at
+L8: both are made for chat and for a route that streams in the AI SDK's own protocol, which the
+back end would have to speak, and they bring more packages. They stay candidates for a chat app
+at L9, under the merit test below.
+
+**Screens.** Each screen of the front end has its own idea in `ideas/ui/`, in Given/When/Then
+and STE like every other idea, and its own TSX file in `web/screens/`. Every rule holds for them
+(section 5, "The same checks for Rust and TypeScript"). The front end reaches only its own
+server: lengua's grants hold the server; the browser's sandbox holds the front end.
+
+**The typed connection.** From the server idea's `- Route:` lines and its examples, `check`
+generates `web/lib/lengua.ts`: a TypeScript type for each route's request body and answer
+(read from the JSON of the examples), a function per route that calls it with `fetch`, and a
+check of each answer's shape when it arrives, since TypeScript's types are gone at run time. A
+screen calls the back end only through these functions (`ts-fetch` otherwise), so a change of
+the server that the front end does not follow fails `tsc`.
+
+**The two connections of Next.js to the Rust side** (decided by the owner on 2026-11-13, "yes
+both, add it"):
+
+1. **HTTP to the back end**, for everything with data, storage, logins, secrets or AI calls:
+   typed by `api.md` and the generated client above.
+2. **Lengua libraries in the browser**, for pure logic (validation, calculations, formatting,
+   parsing): a lengua library (`- Exports:`) that the application uses (`- Uses:`) is also built
+   for the browser, and a screen imports it as `@/lib/wasm/<library>` and calls its functions
+   directly, with generated TypeScript types. The same Rust code runs in the browser and, linked
+   as a crate, on the server, so the two can't disagree: the example's form checks a title in
+   the browser and the server checks it again with the same function.
+
+How a library reaches the browser, as built: at each build of the front end, lengua writes a
+small crate of its own, `target/lengua/browser/<library>/` (`crate-type = ["cdylib"]`), that
+depends on the library as a path crate and has one `#[wasm_bindgen]` function per exported
+function of the library whose types the browser takes (`&str`, `String`, `bool`, the integers up
+to 32 bits, `f64`), each calling the library's function; builds it for `wasm32-unknown-unknown`;
+runs `wasm-bindgen --target web` on it; and writes `lib/wasm/<library>.ts`, which starts the
+module with the bytes inline (`initSync`) and re-exports its functions, in the copy of `web/`
+that the build uses. `wasm-bindgen` was chosen over jco (which turns a WASI component into
+JavaScript): the library's code and its checks stay as they are (the wrapper is lengua's,
+generated, and calls only the library's exports), the library is already built for
+`wasm32-unknown-unknown` and its standard library imports nothing there, while a WASI component
+in the browser needs shims for the WASI interfaces `std` always imports (`@bytecodealliance/
+preview2-shim`) and jco's own packages. The wrapper names `wasm-bindgen` 0.2.130 exactly, and the
+user needs `wasm-bindgen-cli` of the same version (`cargo install wasm-bindgen-cli --version
+0.2.130`), which `doctor` checks when an application with screens uses a library.
+
+A library in the browser reaches nothing: a lengua library has no grants of its own
+(`library-grant`, since L7), so no files, network, secrets, storage or AI calls can reach the
+browser through it. The lock signs the browser build and its types with the export (the `browser`
+line, the hash of `target/lengua/web/lib/wasm`). In the wiki, the program's `index.md` names each
+library with its browser module (`In the browser: @/lib/wasm/<library>`), next to `api.md` for
+HTTP.
+
+**Desktop apps, at L10.** [Electron](https://www.electronjs.org/), chosen by the owner for its
+identical Chromium on every system and its stability, shows the same front end in a window, and
+starts the same WebAssembly back end with `lengua-run` beside it, on a local port. Nothing in
+L8 depends on a browser that Electron lacks: the front end is a static export, it calls only
+relative paths, and the back end serves it, so the same files serve a browser and an Electron
+window. Electron is downloaded only for an app built as a desktop app. The shell is native, so
+the idea declares it with `- Native:` and the reply and the wiki label it; the app's own code
+stays WebAssembly and TSX.
+
+### Deployment
+
+Decided by the owner on 2026-11-13; a tested target of L9. The rule stays: native Rust only where
+absolutely necessary, so deploying never turns the back end native.
+
+- **Vercel.** The Next.js front end deploys natively on Vercel, as its own static export. The
+  Rust back end deploys as a small container (Vercel's container-image Functions on Fluid
+  compute) that runs `lengua-run` serving the one `.wasm` file, so the back end is the same file,
+  with lengua's sandbox and grants kept. Not Vercel's Rust runtime (native, in beta) and not jco
+  (an experimental shim). To verify at L9: the container's CPU architecture, its size limits and
+  the feature's status; storage goes through the storage grant to an external store, since the
+  container has no persistent disk.
+- **Any server or virtual machine** that runs `lengua-run`, serving the one file (the front end
+  inside it).
+- **The desktop**, through Electron (L10).
 
 ### The build
 
-`check` runs `cargo build --offline --release` on the user's machine as a background job: for
-`wasm32-unknown-unknown` first when the application has a front end (L8), then for
-`wasm32-wasip2` with the front end embedded. It replies `building` until the build ends, then
-goes on. The result is one WebAssembly component, the one file. The job, its states and the
-reply are in "The generated files, the build job and `doctor`" below.
+`check` runs the build on the user's machine as a background job. For an application with
+screens, the front end first (L8), in a copy of `web/` in `target/lengua/web/` (so that `web/`
+holds only what the agent and `check` wrote, and Next.js can't change the generated files):
+`pnpm install --frozen-lockfile`, `tsc --noEmit`, the screen tests (Vitest), the mutants of
+the screens, `next build`; then the Rust server for `wasm32-wasip2`, with the export embedded.
+It replies `building` until the build ends, then goes on. The result is one WebAssembly
+component, the one file. The job, its states and the reply are in "The generated files, the
+build job and `doctor`" below.
 
-The user needs Rust and its `wasm32-wasip2` and `wasm32-unknown-unknown` targets installed.
-`lengua-mcp doctor` checks both and says the one command to run if either is missing.
+The user needs Rust with its `wasm32-wasip2` target, and, for an application with a front end,
+Node.js (an LTS release, 22.12 or later) and pnpm (10 or later; the generated `package.json`
+names the exact pnpm, which pnpm then uses). `lengua-mcp doctor` checks all three and says the
+one command to run for each that is missing.
 
 ### Grants become the component's world
 
@@ -697,8 +978,12 @@ strip = true
   letters, digits, `-` and `_`, and not be a Rust keyword or a name Cargo keeps (`std`, `test`,
   `build`, `deps`, `examples`, `con`, ...); otherwise the finding `package-name`.
 - `include` lists the Rust file of every idea, in the order of the ideas: `src/main.rs`, then
-  `src/<module>.rs` and `src/ui/<screen>.rs`. Rust finds a module through its `mod` line, so
-  this is the package's list of files, not how it is built.
+  `src/<module>.rs`. Rust finds a module through its `mod` line, so this is the package's list
+  of files, not how it is built. A screen's file is TypeScript, not in `include`.
+- Since L8, a server with screens has one more dependency, `lengua_web = { path =
+  "target/lengua/assets" }`, the crate of the front end's export that the build job writes, and
+  its `[workspace]` has `exclude = ["target"]`, so that crate is not a member of the program's
+  workspace.
 - A program is a `[[bin]]`. A library (`- Exports:`, L7) is a `[lib]` instead, with the name in
   `snake_case` and `path = "src/main.rs"`, and its `[lints.clippy]` also allow
   `missing_errors_doc` and `missing_panics_doc` (rule 11 forbids the doc comments they ask for).
@@ -788,9 +1073,17 @@ background, in the program's folder, on a thread with one child process:
   (section 5);
 - then `cargo build --release --target wasm32-wasip2 --offline --message-format=short`;
 - since L5, when the component checks pass, the tests (`testing`), then the mutants
-  (`mutating`), on the same thread (section 7).
+  (`mutating`), on the same thread (section 7);
+- since L8, for an application with screens, before the steps above and in the state
+  `building`: the front end in `target/lengua/web/` (a copy of `web/` without `node_modules`),
+  with `pnpm install --frozen-lockfile` (or `pnpm install` when there is no
+  `web/pnpm-lock.yaml` yet, whose lock is then copied back to `web/`), `tsc --noEmit`, the screen
+  tests, `next build` (the export in `target/lengua/web/out`), and the crate `lengua_web` written
+  in `target/lengua/assets`; a failure is a finding (`ts-error`, `test-failed`, `web-build`) and
+  the state `build_failed` or `tests_failed`; the screens' mutants run with the Rust ones.
 
-The job's key is the SHA-256 of `Cargo.toml`, `wit/world.wit`, every file in `src/` and,
+The job's key is the SHA-256 of `Cargo.toml`, `wit/world.wit`, every file in `src/`, since L8
+every file of `web/` (but `node_modules`, `.next` and `out`), and,
 since L5, the tests of every idea with the grants (so a change of an example runs the tests
 again, and a change of the purpose alone does not). A
 `check` with the same key replies with the job's state and starts nothing; a `check` with a
@@ -834,6 +1127,16 @@ lengua can build, and stops with exit code 0, or 1 when a part is missing. The c
 `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` (on Windows `winget install
 --id Rustlang.Rustup`) for Rust, `rustup update stable` for an old `rustc`, and `rustup target
 add <target>` for a target.
+
+Since L8 `doctor` also checks the front end's tools: that `node --version` is 22.12 or later
+(the oldest Node.js that Vitest and Next.js take) and that `pnpm --version` is 10 or later. Their
+lines say `ok` or `missing` in the same way, with the commands `https://nodejs.org/en/download`
+(on Windows `winget install --id OpenJS.NodeJS.LTS`) and `npm install --global pnpm` (or
+`winget install --id pnpm.pnpm`); they decide the exit code only for an application with screens,
+so a program with no front end needs neither. A build of an application with screens runs these
+checks too, and a missing tool is `toolchain-missing` with `doctor`'s line. On Windows lengua
+finds `pnpm.cmd` and `pnpm.exe` on the `PATH` itself, since a command line there does not run a
+`.cmd` file by its bare name.
 
 ### The host
 
@@ -969,26 +1272,24 @@ trusted component, and `index.md` has a `# Components` section. The example `sho
 `wit-bindgen` 0.62.0 command line, both pinned by SHA-256 and downloaded in CI only; no binary
 is in the repository.
 
-### Crates: few, and only ones that build for WebAssembly
+### Crates and npm packages: few, and only ones that merit it
 
 **Use the Rust standard library; take an external crate only when it is absolutely necessary.**
 In the age of AI, an agent can write its own code, checked and tested to lengua's rules, where
 before a team would have taken a crate. Every external crate is code lengua didn't write and
-can't hold to its rules. An exception has to merit it, as GPUI does.
+can't hold to its rules. An exception has to merit it.
 
 A crate merits it only when all of these hold, and the idea's `- Uses crate:` line says which:
-- writing it would be a large project of its own (a UI framework, a GPU renderer), or it is the
-  component's own interface to its host, which can't be written any other way;
+- writing it would be a large project of its own (a GPU renderer, a model runtime), or it is
+  the component's own interface to its host, which can't be written any other way;
 - the standard library, lengua's shared libraries and the agent's own code can't do the job;
 - it builds for every target the application needs.
 
 Convenience never merits it: saving a few hundred lines is what the agent is for.
 
-The exceptions that merit it, each still declared in the idea with its reason:
-- **GPUI, its web crate and GPUI Kit**, for the front end: a GPU-drawn UI framework is not
-  something to write again.
+The exception that merits it, still declared in the idea with its reason:
 - **The WASI bindings** for what the standard library does not cover, such as WASI's HTTP world
-  for a server: the generated interface code (`wit-bindgen` or the `wasi` crate). It is the
+  for a server: the generated interface code (`wit-bindgen` or the `wasip2` crate). It is the
   component's own interface, not a library of features.
 
 Not exceptions: **Axum** and **Tokio**. A server's routing and its requests are written on the
@@ -1007,8 +1308,8 @@ The `build` skill chooses in this order:
    and tested like the application.
 3. **The agent writes its own** as a lengua library, on the standard library: its own idea, its
    own tests, no comments, the Power of 10. It then serves every later application too.
-4. **A crate from crates.io**, only as an exception (above), and only if it builds for both
-   targets, `wasm32-wasip2` and, for the front end, `wasm32-unknown-unknown`.
+4. **A crate from crates.io**, only as an exception (above), and only if it builds for
+   `wasm32-wasip2`.
 
 What `check` does with each external crate:
 - It must be declared in the idea with `- Uses crate: <name> <version>, for <what>`. The reason
@@ -1019,13 +1320,40 @@ What `check` does with each external crate:
 - The reply counts the external crates, the crates they bring in with them, and which of them
   use `unsafe`. That count is in `index.md`, so it can be watched as the application grows.
 
+**npm packages** (since L8) follow the same rule. The front end's packages are the fewest that
+do the job:
+
+- **The base**, which every application with screens has and no idea names, because the front
+  end can't be built, typed or tested without them: `next`, `react` and `react-dom`;
+  `typescript`, `@types/react`, `@types/react-dom` and `@types/node` (which `next`'s own types
+  need); `tailwindcss` and `@tailwindcss/postcss` (shadcn/ui's styles); and for the tests
+  `vitest`, `vite`, `happy-dom`, `@testing-library/react` and `@testing-library/dom`.
+- **With `- Uses shadcn:`**, `clsx` and `tailwind-merge`, which shadcn/ui's `cn` needs.
+- **Any other package** only with ``- Uses package: `<name>` <version>, for <reason>`` in an
+  idea, under the same merit test as a crate (a large project of its own, or the interface to
+  something the app must use; nothing the agent can write in a few hundred lines; it works in a
+  static export, with no Node server), pinned to one exact version: a range (`^1.2.0`, `~1.2`,
+  `latest`) or a version that is not `major.minor.patch` is the finding `package-version`, and
+  the same package at two versions is `package-version` too.
+- `check` writes them, pinned exactly, into `web/package.json`; pnpm pins what they bring in
+  `web/pnpm-lock.yaml`, which pnpm writes at the first build and `check` then holds
+  (`--frozen-lockfile`) and the lock signs. No install script of a package is run
+  (`web/pnpm-workspace.yaml`: `strictDepBuilds: false` and no `allowBuilds`), since a script
+  is code that runs on the user's machine outside every sandbox.
+- **shadcn/ui's components are copied source, not dependencies**: lengua carries its own copy of
+  each (`button`, `card`, `input`, `label` and `textarea` at L8), with no comments and to every
+  rule, and `check` writes the ones `- Uses shadcn:` names into `web/components/ui/` and holds
+  them like any generated file. A component lengua does not carry is not available yet.
+- The reply counts the packages in `web/package.json` and every package in
+  `web/pnpm-lock.yaml`, and `index.md` lists the direct ones.
+
 ### lengua's shared libraries
 
 lengua ships a small set of its own libraries, written as lengua programs on the standard library alone, so the common needs
 of an application don't send it to crates.io: reading and writing JSON, parsing and building
 HTTP messages, decimal numbers, text and lines, sorting, CRC and hashes, dates and times. Each
-has its own idea, tests and lock, and builds for both targets. GPUI and GPUI Kit stay external:
-writing a UI framework is not lengua's work.
+has its own idea, tests and lock, and builds for both Rust targets. The front end's framework,
+Next.js, stays external: writing a UI framework is not lengua's work.
 
 Built at L7, in `libraries/` at the repository's root. Each is a lengua library on the standard
 library alone, with no recursion, no `unsafe` and every rule of section 5, checked to the label
@@ -1047,10 +1375,11 @@ with ``- Uses: `<path>/libraries/<name>` ``; the `build` skill (L9) will point t
 The lock is what keeps every document current. `lengua.lock` holds, signed together with an
 HMAC under the user's key, the hashes of:
 - every idea, the top one and each module's and screen's;
-- `index.md` and `log.md`, and the component pages (since L9);
-- every file in `src/` and the generated files;
-- `Cargo.lock`, which pins every dependency by checksum, and the toolchain's version;
-- both compiled parts and the one file.
+- `index.md` and `log.md`, and the component pages (since L9) and `api.md` (since L8);
+- every file in `src/` and `web/screens/`, and the generated files, those of `web/` among them;
+- `Cargo.lock` and `web/pnpm-lock.yaml`, which pin every crate and every npm package by
+  checksum, and the toolchain's version;
+- the front end's static export (one hash over all its files) and the one file.
 
 It also names the sealed, precompiled form of the component that `run` and `lengua-run` load.
 
@@ -1125,8 +1454,10 @@ hmac-sha256 2c5d…
   byte before that line. lengua's own SHA-256 and HMAC, on the standard library, are tested
   with the vectors of RFC 4231.
 
-The lock holds the front end's compiled part and the one file when there is a front end (L8);
-until then the component is the one file.
+Since L8, with screens, the lock also has a `file` line for every file of `web/screens/`,
+every generated file of `web/` and `web/pnpm-lock.yaml`, and an
+`export <sha256> target/lengua/web/out` line, the SHA-256 of the export's files (each path and
+its bytes, sorted); the component, which carries the export, is the one file.
 
 **Since L7:** `kind` is also `library`, the lock of a lengua library: its files, its `component`
 (the `.rlib` Cargo made) and no `sealed` line. A program's lock has, after its files, one
@@ -1320,6 +1651,9 @@ the folder's root are OKF's reserved files (OKF sections 8 and 9).
   component page, the lock or a reply. The idea names a secret, never its value. When the grant
   is built, a test gives a secret whose value is a marked string and asserts that no file
   `check` or `run` writes, and no reply, holds it.
+- **Since L8, `index.md` groups the sections by side** ("The two sides in one wiki" below):
+  `# Back end` with `## Program`, `## Modules`, `## Libraries`, `## Components` and `## Crates`;
+  `# Front end` with `## Screens` and `## npm packages`; and `# Interface`, the line of `api.md`.
 - **`log.md`** starts with `# Log`. OKF orders a log newest first, under `## YYYY-MM-DD`
   headings, so a check puts its entry at the top of today's heading, or adds today's heading
   above the older ones. "Append-only" means that no entry already there is changed or removed.
@@ -1381,10 +1715,46 @@ Decided at L9 for L13's part (2026-11-13). The repository is an OKF bundle whose
   design documents (this file, `todo.md`, `README.md` and each crate's `README.md`) have a
   `type` of their own: `lengua Design`, `lengua Plan`, `lengua Overview`, `lengua Crate`.
 
-## 5. The Power of 10, for Rust compiled to WebAssembly
+#### The two sides in one wiki (since L8)
+
+Decided at L8 (2026-11-13), at the owner's request: the LLM wiki and OKF join the Next.js side
+and the Rust side, so an agent (or a person) finds what each side does and how they meet before
+it reads any code.
+
+- **Screen ideas are pages like every idea.** `ideas/ui/<screen>.md` has the type `lengua
+  Screen`; its `source` is `web/screens/<screen>.tsx` and its `source_sha256` that file's hash,
+  so the log lists a TypeScript file changed with or without its idea exactly as it lists a Rust
+  file (``Note: the code `web/screens/home.tsx` changed and its idea `ideas/ui/home.md` did
+  not``).
+- **`api.md`, the contract between the two sides.** When the server has `- Route:` lines,
+  `check` writes `api.md` at the folder's root, an OKF concept of type `lengua Interface`: for
+  each route its method and path, the shape of its request body and of its answers (the
+  TypeScript types, read from the server's examples), the function of `web/lib/lengua.ts` that
+  calls it, a link to each idea whose examples request it (the back-end idea that serves it), and
+  a link to each screen that calls it (read from the screens' code by lengua's TypeScript reader).
+  Its frontmatter has `client_sha256`, the hash of `web/lib/lengua.ts`, so the page describes the
+  generated types and is signed with them in the lock. When a route changes, `api.md` and the
+  client change together.
+- **`# Links` joins the sides.** To the `# Links` of L9 (uses, used by, components, the index),
+  `check` adds `Calls` on a screen (each route it calls, linked to `api.md`), `Serves` on a
+  back-end idea (each route its examples request) and `Called by` (the screens that call a route
+  it serves).
+- **`index.md` has a section for each side:** `# Back end` (`## Program`, `## Modules`,
+  `## Libraries`, `## Components`, and L9's crate count as `## Crates`), `# Front end`
+  (`## Screens`, and `## npm packages`: the packages of `web/package.json`, and those over 1 MiB in
+  pnpm's copy once the build installed them), `# Interface` (`api.md`), and later `# Vision`
+  (L11) and `# Desktop` (L10); each line with its label.
+- **The query path.** An agent reads `index.md`, then `api.md`, then the pages of the side it
+  changes, and only then the code. The skills say so at L11; the builder of lengua works that
+  way now.
+- **OKF conformance** covers the screens and `api.md` (both have frontmatter with a `type`), and
+  the tree check of L13 covers the `web/` side too.
+
+## 5. The Power of 10, for Rust and TypeScript
 
 NASA's [Power of 10](https://en.wikipedia.org/wiki/The_Power_of_10:_Rules_for_Developing_Safety-Critical_Code),
-adapted for Rust that runs as a WebAssembly component and is written by an AI.
+adapted for Rust that runs as a WebAssembly component and is written by an AI, and held the same
+way on the TypeScript of the front end (below, "The same checks for Rust and TypeScript").
 
 | # | NASA's rule | lengua 3's rule | Held by |
 |---|---|---|---|
@@ -1405,10 +1775,60 @@ Added for an AI language:
 |---|---|---|
 | 11 | No comments and no doc comments in code files. The idea is the documentation. | lengua's lint |
 | 12 | Every function is named in its module's `# Structure`, and nothing else is. | `check` |
-| 13 | The standard library first; an external crate only when absolutely necessary (GPUI, its web crate, GPUI Kit, the WASI bindings), declared in the idea (`- Uses crate: name version, for what`), building for every target the application needs, pinned by checksum, signed in the lock, and counted in the reply with whether it uses `unsafe`. Otherwise the agent writes its own, on the standard library. | The generated `Cargo.toml`, `Cargo.lock`, the lock and the reply |
+| 13 | The standard library first; an external crate only when absolutely necessary (the WASI bindings), and an npm package only when it merits it (`- Uses package:`, pinned), declared in the idea (`- Uses crate: name version, for what`), building for every target the application needs, pinned by checksum, signed in the lock, and counted in the reply with whether it uses `unsafe`. Otherwise the agent writes its own, on the standard library. | The generated `Cargo.toml`, `Cargo.lock`, the lock and the reply |
 
 And on the built component: imports only from the world; no threads, no relaxed SIMD and no other
 feature whose result can differ between machines; a size limit.
+
+### The same checks for Rust and TypeScript
+
+Decided at L8 (2026-11-13), in the owner's words: "There will be no comments and lengua will also
+check nextjs stuff the same as rust stuff." The front end is held to the same bar as the back
+end, rule for rule. lengua reads TypeScript itself, with a pure-Rust parser (`oxc_parser` and
+its AST, in the crate `crates/lengua-ts`), and every finding has the same format (file, line,
+code, message) and comes in the same reply. "Every function" means, in TypeScript, every
+top-level `function`, every top-level `const` whose value is an arrow function or a function
+expression, and every component (a function whose name is `UpperCamelCase`); an arrow function
+inside one of them is part of it, as a closure is part of a Rust function.
+
+| # | Rule | Rust: held by | TypeScript: held by |
+|---|---|---|---|
+| 1 | No recursion | the call graph from the source (`rule-1-recursion`); no `dyn`, no function pointers | the call graph over every function and component of the screens, calls and JSX (`<Card />`) and a function's name used as a value all edges (`ts-recursion`); no `class` (`ts-class`). A callback is allowed, since React needs them; its name used as a value is an edge, so a cycle through it is still found |
+| 2 | Bounded loops | `for` over a range or a collection; `while`/`loop` with a counter (`rule-2-loop`) | `for...of`, `for...in`, and the array methods; a `for` with a counter from a number, compared with `<` or `<=` to a number, an `UPPER_CASE` constant or a `.length`, stepped by `++` or `+= 1` and not changed in the body; no `while`, no `do...while` (`ts-loop`) |
+| 3 | Memory | `- Memory:` and the host's limit | the browser's own limits; the back end's memory limit holds the server. Not held more strictly: a browser gives a page no limit to set |
+| 4 | 60 lines | lengua's lint (`rule-4-length`), after `rustfmt` | `ts-length`, as written. TypeScript has no formatter step at L8 (the base has no Prettier); the count is of the lines as written |
+| 5 | Assertions | two `assert!` a function on average, `main` not counted (`rule-5-assertions`) | two calls of `assert(condition, message)` a function on average (from `@/lib/lengua`, generated: it throws an `Error` when the condition is false, in a production build too), each screen's main component not counted, as `main` is not (`ts-assertions`) |
+| 6 | Data in the smallest scope | no `static mut`, no global with interior mutability (`rule-6-static`) | no module-level `let` or `var`, and no module-level `new` (a `Map`, a `Set`, an object of a class) (`ts-global`) |
+| 7 | Every result handled | `unused_must_use`; no `unwrap`, `expect` or panicking index (clippy) | every promise is awaited, returned, or ends in `.catch(...)` or a `.then` with two arguments; no `async` function as an event handler in JSX, since React drops its promise; no `void` of a call (all `ts-promise`); no non-null `!` (`ts-non-null`), the `unwrap` of TypeScript; `noUncheckedIndexedAccess`, so an index gives `T \| undefined`, as `indexing_slicing` asks |
+| 8 | Limit the preprocessor | no `macro_rules!` that writes items, no `build.rs`, macros only from declared crates (`rule-8-*`) | no decorators, no `eval`, no `new Function`, no `require`, no `import()`; imports only from the base and declared packages (`- Uses package:`), `react`, `next/link`, `@/lib/...`, `@/components/ui/...` and the other screens (`@/screens/...`) (all `ts-import`) |
+| 9 | No `unsafe` | `unsafe_code = "forbid"` | no `dangerouslySetInnerHTML`, no assignment to `innerHTML` or `outerHTML`, no `document.write` (`ts-unsafe`): the ways a page runs text as code |
+| 10 | All warnings on | every warning an error, clippy `pedantic`; no `#[allow]` (`rule-10-allow`) | `tsc --noEmit` with the generated `tsconfig.json` at its strictest (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitReturns`, `noImplicitOverride`, `noUnusedLocals`, `noUnusedParameters`, `noFallthroughCasesInSwitch`, `noPropertyAccessFromIndexSignature`, `allowUnreachableCode: false`, `allowUnusedLabels: false`, no `allowJs`); its errors are `ts-error` findings at their file and line; no `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck` or `eslint-disable` (`ts-ignore`) |
+| 11 | No comments | every comment and doc comment (`rule-11-comment`) | every comment in every TypeScript file of `web/`: `//`, `/* */`, JSDoc `/** */`, and `{/* */}` in JSX, the generated files too (`ts-comment`) |
+| 12 | Every function in `# Structure` | `rule-12-*` | every function and component of `web/screens/<name>.tsx` named in `ideas/ui/<name>.md`, and nothing else (`ts-unnamed`, and `rule-12-unknown` for a name with no function); a `function` declaration inside a function (`ts-nested`); a TypeScript file of `web/` that is no screen's and not generated (`ts-source-unlisted`); a screen with no file (`rule-12-source-missing`) |
+| 13 | Few dependencies | `- Uses crate:`, pinned, `Cargo.lock` | the base and `- Uses package:`, pinned exactly (`package-version`), `web/pnpm-lock.yaml`, no install scripts |
+| — | No escape from the types | the compiler | no `any`, written or as `as any` (`ts-any`); no cast with `as` but `as const`, no `<T>value` (`ts-cast`); `satisfies` is allowed, since it checks and casts nothing |
+| — | Tests | each example runs against the component | each screen example is a Vitest test with Testing Library on happy-dom, generated into `web/tests/`; a real browser loads the served app in CI and reads its accessibility tree |
+| — | Mutation score | lengua's mutator on Rust | the same mutations on the TypeScript AST (operators, constants, booleans, conditions), within the same cap of 40, spread over the functions of both languages; the same threshold, 80% |
+| — | Labels and the lock | one label for the program; the lock signs every file | the same label, for the whole application; the same lock |
+
+**Where TypeScript can't be held as strictly as Rust, and what makes up for it.**
+- **Its types are gone at run time.** A Rust value is the type the compiler says; a TypeScript
+  value from the network can be anything. So every answer of the back end is checked against its
+  shape when it arrives, by the generated client (`web/lib/lengua.ts`), before a screen sees it;
+  `assert` holds the rest at run time; and the types come from the server's examples, so the two
+  sides can't drift.
+- **A package's own types can say `any`.** lengua checks the screens, not the packages' `.d.ts`
+  files (`skipLibCheck`), as it does not lint a crate's code; the packages are few, declared and
+  pinned.
+- **No memory or time limit in the browser.** The browser holds the page; the back end, where the
+  data and the secrets are, keeps the idea's limits.
+- **A loop in React's own calls** (an effect that sets its own state on every render) is not a
+  loop of the code and is not seen by rule 2 or the call graph; a screen test that never settles
+  fails at its time limit (5 s), and the browser check in CI loads every screen.
+- **An equivalent mutant can't be told apart.** A Rust mutant that builds to the same bytes is
+  `same` and not counted; a TypeScript mutant is not compiled to bytes lengua compares, so it
+  always counts. The threshold stays 80%.
+
 
 ### What each rule accepts and refuses
 
@@ -1482,7 +1902,7 @@ through these is not refused at check; at run, the stack overflows and the progr
 the time limit stops it.
 
 **The component checks**, when the build ends: the size, at most 64 MiB (`component-size`),
-since the one file holds a GPUI front end with its fonts and images (section 4), and Cranelift's
+since the one file holds a front end's static export with its fonts and images (section 4), and Cranelift's
 time to compile a larger file at the first run passes the 40 seconds of a tool call; the
 imports, only from the world (`import-ungranted`, since L3); and Wasmtime compiling the
 component with lengua's engine, whose `wasmtime::Config` refuses what can give a different
@@ -1500,8 +1920,10 @@ NaNs are canonical.
 | `checked` | Built by lengua, every rule holds, every test passes, and the mutation score is at or above the threshold, 80% |
 | `tested` | Built by lengua, every rule holds and every test passes, but the tests are weak: the mutation score is under 80% |
 | `trusted` | A component lengua did not build; it runs under the grants, and its tests run, but nothing about its code is checked (L7) |
+| `native` | A part that runs outside the sandbox (back-end GPU work, the Electron shell, a device, shared-memory threads), declared with `- Native:`; the same checks hold, and it can do what the user's account can (L10) |
 
-`check`'s reply and the wiki show the label of every program. A program that uses a `trusted`
+`check`'s reply and the wiki show the label of every program, its Rust and its TypeScript
+together. A program that uses a `trusted`
 component says so.
 
 Decided at L5 (2026-11-13):
@@ -1531,9 +1953,11 @@ Decided at L5 (2026-11-13):
 - **Mutation score:** lengua changes the Rust source in small ways (an operator, a constant, a
   comparison), builds each mutant, and runs the tests. The share of mutants the tests catch is
   the score. It says how strong the tests are, and decides between `checked` and `tested`.
-- **The front end:** each screen's behaviours run against the screen's state through GPUI's test
-  context: given the state, when the user clicks or types, then the state and what is shown.
-  The screen is not compared pixel by pixel; the tests compare state and text, not images.
+- **The front end:** each screen's behaviours run as component tests (Vitest, with Testing
+  Library on happy-dom): given the screen's state, when the user types and clicks, then its
+  state, its text and its labels. The screen is not compared pixel by pixel; the tests compare
+  state and text, not images. In CI a real browser (Chrome, already on GitHub's runners) loads the
+  app that the one file serves and reads its accessibility tree.
 - **Deterministic:** the same input gives the same output on every system, every time.
 
 ### How the tests run
@@ -1545,7 +1969,8 @@ drawing of cases in `crates/lengua-idea/src/cases.rs` and the mutator in
 **Which tests.** Every `### Example:` and `### Cases:` block of every idea, the top one and
 each module's, in the order of the ideas and then of the file, runs against the program's one
 component: a module's examples are examples of the program. A screen's examples
-(`ideas/ui/`) run at L8 with GPUI's test context; until then each is a note, "it was not run".
+(`ideas/ui/`) run since L8 as component tests in the front end's build (section 7, "The screen
+tests"); before L8 each was a note, "it was not run".
 
 **One run.** For each run, lengua makes a new empty folder under the system's temporary folder,
 makes in it every folder the idea grants (read and write), writes each ``File `<path>` `` of
@@ -1633,6 +2058,55 @@ and takes the others from the cache (the reply's `cached`); a change outside the
 type, a `use`, a constant), of the tests, of the grants or of lengua measures them all again.
 The file keeps only the mutants of the last check.
 
+### The screen tests
+
+Decided at L8 (2026-11-13), as built in `crates/lengua-idea/src/web.rs` (the generated files)
+and `crates/lengua-mcp/src/front.rs` (the front end's part of the build job).
+
+**The tools.** [Vitest](https://vitest.dev/) runs the tests, with
+[Testing Library](https://testing-library.com/docs/react-testing-library/intro/)'s React
+renderer and [happy-dom](https://github.com/capricorn86/happy-dom) as the page: happy-dom brings
+far fewer packages than jsdom, and Vitest is the runner that Vite, already the base of the
+tests, comes with. No `user-event`: `fireEvent` from Testing Library types and clicks.
+
+**One test per example.** `check` writes `web/tests/<screen>.test.tsx` from each screen idea, one
+`test` per `### Example:` (and one per drawn case of a `### Cases:` block, with its values), named
+by the behaviour and the example. Each test:
+1. stubs `fetch` with the server idea's examples: a request whose method, path (with its query)
+   and body are those of an example's `- Request:`, `- Request body:` gets that example's
+   status and body; any other request fails the test with ``no example of the server answers
+   `<METHOD> <path>` ``;
+2. renders the screen's main component inside the provider of `useScreen` with the example's
+   `State` fields over the screen's own first state;
+3. types each ``Type into `<element>` `` into the field whose label is the element, then clicks
+   the `Click` element, a button or a link of that name;
+4. waits up to 5 s until each expectation holds: each ``Expect state `<field>` `` is the value
+   of the state's field, each `Expect text` is in the page's text, and each `Expect label` names
+   an element in the accessibility tree (Testing Library's `getByRole` and `getByLabelText`).
+
+A failed test is `test-failed` (or `case-failed`) at the example's heading in the screen idea,
+with Vitest's message, in the same format as the server's.
+
+**The screen's state.** A screen keeps the state its examples name in one object, with the
+generated hook `useScreen(first)`, which returns the state and a function that sets it; in a test,
+the provider puts the example's `State` over `first` and reads the state back after each step.
+Other React state (`useState`) is allowed, but only `useScreen`'s fields can be named in an
+example.
+
+**Mutants of the screens.** The mutations of section 7 are made on the TypeScript AST read by
+`oxc_parser`: the arithmetic, comparison and logical operators, decimal constants plus one,
+`true` and `false`, and an `if`'s condition negated, not inside `assert(...)`. The 40 mutants are
+spread over the functions of the Rust files and of the screens together, round robin. A screen's
+mutant is written over the screen's file in the build's copy of `web/` (`target/lengua/web/`, never
+`web/` itself), Vitest runs, and the file is put back. A test that fails catches it.
+
+**In a real browser.** In CI, on Linux x86-64, a test of `lengua-mcp` serves `examples/notes`
+with `lengua-run`, starts the Chrome that GitHub's runner already has, headless, through its
+DevTools protocol (a WebSocket, in a small client of the test's own on the standard library),
+opens each screen's route, waits for it to load, and reads `Accessibility.getFullAXTree`: each
+label that a screen idea's examples name must be there. No Playwright: it would download its own
+browsers, and Chrome is already on the runner.
+
 ## 8. Milestones
 
 Each one is green on all five runners before the next starts.
@@ -1647,11 +2121,11 @@ Each one is green on all five runners before the next starts.
 | L5 | Tests from the idea, generated cases, mutation score, trust labels | A program goes from idea to `checked` |
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | A changed idea or file is refused at run |
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries (JSON, HTTP, decimal, text, sorting, hashes, dates); a component from another language | An application of several module ideas builds to one file; it uses a library and a C component, each labelled |
-| L8 | The GPUI front end: screens built for the browser, embedded in the one file; several screens with navigation and forms; their behaviours tested; what a screen reader can read, tested and written down; one Zed commit pinned; lengua's own std-only crates also built for WebAssembly in CI | A web application with GPUI screens ships as one file and opens in a browser |
-| L9 | Full stack: programs that ask AI models (`- Asks: an AI model`, with call and token limits; the host's interface to a cloud or local model, structured and streamed replies; model answers given in the tests; the `ai` shared library); storage granted by the idea; outgoing HTTP calls (other services and AI models, with streaming replies); secrets given by the host and never written to the lock or logs; logins (sessions, password hashing, tokens) as a shared library; the front end calling its own server with shared Rust types; logs and errors of a running app; an embeddings and vector-search shared library; a tested way to deploy | A full-stack application (front end, server, storage, logins, an AI call) is `checked` and runs as one file |
-| L10 | Native parts: `- Native:` with a named reason, built for the user's system and on five runners, the same checks, the `native` label, the "Where it runs" line; an example desktop app with its own GPUI window whose logic stays WebAssembly; what a native part can reach, written down | A native part is built, checked and labelled; an undeclared native need is refused |
-| L11 | The skills: a new `vision` skill (the best lengua solution for an idea, `vision.md`, the principles with their do's and don'ts in `references/principles.md`, approved by the person) and `write-idea` and `build` rewritten for Rust, GPUI, full stack and native parts; the person reads the idea and approves it in their own words before any code, and again for changes (the approved hash in the lock, `build` refused without it); "Where it runs" before any code, pure Rust first, the merit test for crates, crates that aren't pure Rust flagged; the Agent Plugins version settled; a product test in an interactive session | An agent goes from a request to a `checked` full-stack application with the plugin alone |
-| L12 | The scale test: a full-stack application (GPUI front end, server, storage, logins, an AI call) in one file, built and then changed three times | A report of cycles and breakages, next to lengua 2's 3,638-line record |
+| L8 | The Next.js front end: screens in TSX with shadcn/ui, built with pnpm and Turbopack, exported statically and embedded in the one file; the generated `web/` files held; TypeScript checked to the same rules as Rust (`oxc_parser`), `tsc` at its strictest; the two connections of Next.js to the Rust side: HTTP to the back end through a typed client generated from the server's routes, and the lengua libraries the app uses built for the browser (wasm-bindgen) and imported by the screens with generated types, the same code as on the server; several screens with navigation and forms, their behaviours as component tests, a real browser and its accessibility tree in CI; the mutation score over both languages; one AI-UI component from Vercel's tools (json-render) wired to the back end; `doctor` checks Node.js and pnpm | A web application with Next.js screens ships as one file, is `checked`, and opens in a browser |
+| L9 | Full stack: programs that ask AI models (`- Asks: an AI model`, with call and token limits; the host's interface to a cloud or local model, structured and streamed replies; model answers given in the tests; the `ai` shared library; json-render's answers made by a real model); storage granted by the idea; outgoing HTTP calls (other services and AI models, with streaming replies); secrets given by the host and never written to the lock or logs; logins (sessions, password hashing, tokens) as a shared library; the front end and the back end sharing more types (the generated client grown to every route and error shape); logs and errors of a running app; an embeddings and vector-search shared library; deployment as a tested target (the front end natively on Vercel, the back end as a container of `lengua-run` serving the one file on Vercel's container-image Functions; any server with `lengua-run`; to verify: the container's CPU, limits and status, storage through the grant); lengua libraries that use other lengua libraries; a server that answers requests at the same time (concurrent serving) | A full-stack application (front end, server, storage, logins, an AI call) is `checked` and runs as one file |
+| L10 | Native parts and desktop apps: `- Native:` with a named reason, kept narrow (large AI models, the fastest local inference, training or fine-tuning; heavy compute with shared-memory threads; a device with no host grant; the Electron shell of a desktop app), the native path built once and proven by one example, a back-end part that runs a local model on the GPU with Candle or Burn, built for the user's system and on five runners, the same checks, the `native` label, the "Where it runs" line; desktop apps in Electron (downloaded only for them), showing the same front end with the same WebAssembly back end run by `lengua-run` beside it, and a native part started beside it when the idea has one; what a native part can reach, written down | A native part is built, checked and labelled; an undeclared native need is refused; an example desktop app runs on five |
+| L11 | The skills: a new `vision` skill (the best lengua solution for an idea, `vision.md`, the principles with their do's and don'ts in `references/principles.md`, the GPU case said up front, approved by the person) and `write-idea` and `build` rewritten for Rust, Next.js, full stack, desktop and native parts; the person reads the idea and approves it in their own words before any code, and again for changes (the approved hash in the lock, `build` refused without it); "Where it runs" before any code, pure Rust first, the merit test for crates and npm packages, crates that aren't pure Rust flagged; the Agent Plugins version settled; a product test in an interactive session | An agent goes from a request to a `checked` full-stack application with the plugin alone |
+| L12 | The scale test: a full-stack application (Next.js front end, server, storage, logins, an AI call) in one file, built and then changed three times | A report of cycles and breakages, next to lengua 2's 3,638-line record |
 | L13 | The finish line: trace and profile; a bench of lengua's overhead; release archives for the five systems with install steps; every path a milestone listed as never exercised, now exercised or its reason written; WASI 0.3 checked again; every document current; a short guide to the owner's own steps (publishing, loading the plugin, branch protection) | The finish-line run green on five; only main and tags remain |
 
 The watch list (section 10) is not a milestone: each item waits on a standard.
@@ -1664,6 +2138,15 @@ A review on 2026-11-13 against
 structure sound (concept ids, `index.md`, `log.md`) and these gaps. Each is part of the
 milestone named:
 
+- **L8, joining the front end and the back end** (section 4, "The two sides in one wiki"):
+  - screen ideas as `lengua Screen` pages whose `source_sha256` is their TSX file, with TypeScript
+    changes in the log like Rust ones;
+  - `api.md` (`lengua Interface`), generated from the routes and the examples, linking each route
+    to the ideas that serve it and the screens that call it, and signed with the generated types;
+  - `# Links` joins the sides: `Calls`, `Serves` and `Called by` lines, added to the links of L9;
+  - `index.md`'s sections for the back end, the front end and the interface, with the crate and
+    npm package counts;
+  - the query path: `index.md`, then `api.md`, then the side's pages.
 - **L9, in `check`:** all done ahead of L9, on 2026-11-13, on `wip/wiki` (the five-runner
   landing run is named in the landing report); "The idea file's grammar" and "The wiki's formats"
   say how each works.
@@ -1847,33 +2330,33 @@ Decided for lengua 3 at L7 (2026-11-13):
 - **New dependencies of lengua's own**: `wasmtime-wasi-http` 50.0.1 (`p2`) and `hyper` 1 (no
   features, for its re-exported types; already in the graph), both in `lengua-host`.
 
-Decided for lengua 3 at L8 (2026-11-13), the parts that do not depend on the front end:
+Decided for lengua 3 at L8 (2026-11-13):
 
-- **No path remapping.** `--remap-path-prefix` for the Cargo home, the folder and the path
-  dependencies was tried and taken back: the shop still differed between systems with it (run
-  43524778056), since its differences come from Cargo's crate hashes (section 10), and `hello`
-  holds no paths. Cargo's network retries are 10 (`CARGO_NET_RETRY`) in every cargo call of the
-  job.
-- **`strip = true` in the generated release profile**: the component has no `name` section.
-  Its mangled names carry Cargo's crate hashes, which differ between computers, so the same
-  program built on Linux x86-64 and on Linux ARM64 differed there and nowhere else (runs
-  43524778056 and 43528549629). With it, `hello` has 54,690 bytes and one SHA-256 on all five
-  runners (run 43536298022).
-- **Every cargo call of the build job runs rustc through `lengua-mcp` itself** (`RUSTC_WRAPPER`,
-  with `LENGUA_RUSTC_WRAPPER` set so that `lengua-mcp` acts as the wrapper), which, for a crate
-  built for a `wasm32` target only, gives rustc a `-C metadata` made from the crate's identity
-  alone: its name, crate types, edition, target, `--cfg` values, the names of its `--extern`
-  crates and its version. Cargo's own `-C metadata` mixes in the metadata of every dependency,
-  build scripts and proc macros among them, and those are built for the host, whose metadata
-  holds the host's triple; the crate hashes it makes order the functions that rustc writes, so
-  the same program differed between systems (section 10, "Found at L8: why the same program was
-  not the same file on every system"). Crates built for the host keep Cargo's metadata.
-- **CI holds every built example to one SHA-256 on every runner** (the job `same-bytes`: `hello`,
-  `tally`, `greet`, `echo`, `count`, `files`, `clock`, `forever`, `greedy`, `words`, `fetch`, `upper`,
-  `sleepy` and the shop, from the components each check job uploads, with the difference
-  printed by `wasm-tools` 1.263.0 when there is one).
-- **CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2`** on every runner, and a
-  failure fails the run (section 1).
+- **The front end is Next.js**, exported statically and served by the back end from a generated
+  crate, `lengua_web`; the front end is built in `target/lengua/web/` with pnpm, `tsc`, Vitest and
+  `next build` before the Rust (section 4, "Web applications" and "The build job").
+- **TypeScript is held like Rust** by a new crate, `crates/lengua-ts`, on `oxc_parser` 0.158.0
+  (section 5, "The same checks for Rust and TypeScript"); `lengua-idea` stays on the standard
+  library and takes the TypeScript check as a function from `lengua-mcp`.
+- **The generated files of `web/`** are held through `web/lengua.sum` and the top idea's
+  `web_sha256`; shadcn/ui's components are lengua's own copies, written by `check`.
+- **The typed client** comes from `- Route:` lines and the server's examples, with a check of each
+  answer's shape at run time; screens call the back end only through it.
+- **The screens' examples** are Vitest tests on happy-dom with Testing Library, answered by the
+  server's examples; Chrome reads the served app's accessibility tree in CI.
+- **The mutants** of the Rust and of the screens share the cap of 40 and the threshold of 80%.
+- **The wiki joins both sides**: `api.md`, `# Links`, the two-sided `index.md`.
+- **The npm packages** are the base, shadcn's two, and those the idea declares, each pinned; the
+  list and the reasons are in `todo.md`.
+- **Every component has one SHA-256 on every system.** The generated release profile has
+  `strip = true`, and `lengua-mcp` is the rustc wrapper of the build job (`RUSTC_WRAPPER`, marked
+  by `LENGUA_RUSTC_WRAPPER`): a crate built for `wasm32` gets a `-C metadata` and an
+  `-C extra-filename` from its own identity (name, crate types, edition, target, `--cfg`, extern
+  names, version), and its outputs get Cargo's names back. Cargo's own values mix in the host's
+  triple through build scripts and proc macros, and they order the functions rustc writes
+  (section 10). CI's job `same-bytes` holds every example's component to one SHA-256 on the
+  five runners.
+- **CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2`**, and a failure fails the run.
 
 ## 10. Risks and open questions
 
@@ -1960,32 +2443,42 @@ Decided for lengua 3 at L8 (2026-11-13), the parts that do not depend on the fro
   but lengua itself. Accepted by the owner on 2026-11-13: "I acknowledge that having Rust
   installed is a dependency now." `lengua-mcp doctor` checks it and says how to install it.
 - **Component size and start-up time** against lengua 2's hand-written modules: measured at L11.
-  GPUI makes the file much larger.
-- **GPUI's web target is new** and lives in Zed's repository: pin one commit, and expect to
-  follow it as it changes.
+  A front end's static export makes the file larger (measured at L8, todo.md).
+- **Node.js and pnpm on the user's machine.** An application with screens needs them to build;
+  `doctor` checks them, and a program with no front end needs neither. pnpm downloads the
+  packages the first time, so the first build of a front end needs the network and takes longer;
+  later builds take them from pnpm's store.
+- **npm's supply chain.** Packages bring code lengua did not write, and npm packages can run
+  scripts when installed. lengua keeps the list short (the base and `- Uses package:`), pins each
+  exactly, holds `web/pnpm-lock.yaml` with its checksums, signs it in the lock, and runs no
+  install script.
+- **Next.js changes often.** The base is pinned (Next.js 16.4.6 at L8); a newer one comes with
+  a newer lengua, whose generated `package.json` changes and so resolves the lock again.
+  `next build` applies its own settings to `tsconfig.json`; it runs in a copy of `web/`, so the
+  held files are never changed by it.
 - **Crates:** the whole Rust ecosystem is open, but not every crate builds for WebAssembly: a
   crate that needs threads, a C library or one operating system's own calls fails the build,
   and `check` says which. Crates bring code lengua did not write, some with `unsafe`; each is
   declared in the idea, pinned by checksum and named in the reply. They are downloaded once,
   at the first build, and kept.
 - **Browser support:** WebGPU is in current Chrome, Edge, Firefox and Safari; older browsers get
-  WebGL2.
-- **GPUI's test context** must run on all five systems for the front end's tests.
+  WebGL. The front end's tests run on happy-dom on all five systems, and in Chrome in CI.
 - **What other runtimes allow:** a lengua component runs in any WASI 0.2 runtime, but outside
   lengua the grants are that runtime's to enforce, not lengua's.
 
 - **The watch list: what would lift each native limit.** Each waits on a standard, not on
   lengua; when one matures, the native kind it covers moves to WebAssembly.
-  - Desktop windows and the GPU outside the browser: **wasi-gfx** (WebGPU for WASI). Then
-    `lengua-run` could open a real window for the same one file.
-  - Running AI models locally: **wasi-nn**.
+  - Back-end GPU work (large AI models, training, heavy compute): **wasi-gfx** (WebGPU for
+    WASI) and **wasi-nn**. Then that work could return to the one WebAssembly file. Front-end
+    GPU work needs neither: the browser and Electron already give WebGPU.
+  - Models larger than 4 GB in WebAssembly, in the browser or on the back end: **Memory64**
+    (64-bit memories), with wasi-gfx for the GPU.
   - Threads that share memory: WebAssembly's **shared-everything-threads** proposal.
   - WebSockets: not in WASI 0.2's HTTP world; watch WASI 0.3 and later.
   - Timed jobs ("every night at 2 a.m."): no WASI standard yet.
-- **Decided 2026-11-13, the front end is GPUI and GPUI Kit,** after comparing Leptos and Native
-  Shell: the owner chose to keep GPUI. Known risks: GPUI's web target is a basic pre-1.0 port,
-  and GPUI Kit's own site says it is made for the desktop; L8 tests it first and pins one
-  commit.
+- **Decided 2026-11-13: the front end is Next.js**, exported statically and served by the back
+  end; desktop apps are Electron. GPUI, GPUI Kit, Leptos and Tauri are dropped (GPUI's attempt is
+  at the tag `archive/l8-gpui`).
 - **Crates that aren't pure Rust** (they wrap a C library) need a C compiler, build differently
   on each system and usually can't go into WebAssembly, so the `build` skill takes them last,
   and `check` flags them.
@@ -2011,33 +2504,26 @@ Decided for lengua 3 at L8 (2026-11-13), the parts that do not depend on the fro
   default, and lengua's `wit/world.wit` is a statement for the host, not WIT for a binding
   generator (it imports WASI with no `wit/deps/`). A program writes `path: []` with `inline`; the
   `build` skill (L9) says so.
-- **Found at L8: why the same program was not the same file on every system.** `hello` and
-  `tally` (no external crate) had one SHA-256 on all five runners; `greet` (with `wasip2`) and the
-  shop (with `wasip2`, `wit-bindgen` and two lengua libraries) did not, each in two or three
-  versions of the same size whose grouping did not follow the system (run 43548327435: `greet`
-  71,005 bytes, the shop 81,082). `wasm-tools print` showed one function standing at another
-  index, so the numbers after it, the table of `call_indirect` and two data addresses moved (run
-  43543315033); four builds from clean on one runner gave one SHA-256 (run 43541237409). The
-  names, from builds without `strip` (run 43548327435), gave the cause: the crate hash of `wasip2`
-  and of the program differed on every system (`hAcE0StRMEg`, `fry7ILbvW2c`, `zTDUfLUYoL` for
-  `wasip2` on Linux ARM64, Linux x86-64 and Windows ARM64), while `core` and `alloc` kept theirs,
-  and two functions named `__link_custom_section_describing_imports` (of two units of `wasip2`)
-  sorted in another order. Cargo's `-C metadata` for a crate mixes in its dependencies' metadata
-  (its `compilation_files.rs`), and a build script or a proc macro is built for the host, whose
-  metadata holds the host's `rustc -vV` line `host: ...`, so the hash of every crate above one
-  differs between systems; the hashes then decide the order of functions. Before `strip = true`
-  they were also in the `name` section. Fixed in lengua's build: `lengua-mcp` is the rustc wrapper
-  of the build job and gives each crate built for `wasm32` a `-C metadata` of its own identity
-  (section 9). Path remapping did not help (run 43524778056), and Cargo's `trim-paths` (stable
-  from Rust 1.101) leaves out paths, not the host. L7's 3-byte difference on Windows ARM64 had
-  this cause too (L7 compared sizes only).
+- **Found at L8: why a program with crates was not the same file on every system.** Programs
+  with no external crate matched on all five runners; `greet` and the shop did not, in versions
+  of the same size where functions stood in another order (`wasm-tools print`, runs 43543315033
+  and 43560066261). Cargo's `-C metadata` and `-C extra-filename` of a crate mix in those of its
+  build scripts and proc macros, built for the host and so holding its triple; rustc orders the
+  functions by the names they make. Fixed by `lengua-mcp` as the rustc wrapper (section 9).
 
 ## Sources
 
-- GPUI: [gpui.rs](https://gpui.rs/), [docs.rs/gpui](https://docs.rs/gpui/latest/gpui/),
-  [examples](https://gpui.rs/examples/); its web target: Zed's
-  [`crates/gpui_web`](https://github.com/zed-industries/zed/tree/main/crates/gpui_web) and
-  pull request [#50228, "GPUI on the web"](https://github.com/zed-industries/zed/pull/50228),
-  merged on 2026-02-26.
-- GPUI Kit: [gpui-kit.com](https://gpui-kit.com/).
+- Next.js: [nextjs.org](https://nextjs.org/), [static exports](https://nextjs.org/docs/app/guides/static-exports)
+  (and what they do not support), [TypeScript and `useTypeScriptCli`](https://nextjs.org/docs/app/api-reference/config/next-config-js/useTypeScriptCli).
+- shadcn/ui: [ui.shadcn.com](https://ui.shadcn.com/).
+- json-render, Vercel Labs' generative UI: [github.com/vercel-labs/json-render](https://github.com/vercel-labs/json-render),
+  [The New Stack, 2026-01-23](https://thenewstack.io/vercels-json-render-a-step-toward-generative-ui/),
+  [InfoQ, 2026-03](https://www.infoq.com/news/2026/03/vercel-json-render).
+- AI Elements: [elements.ai-sdk.dev](https://elements.ai-sdk.dev/); the AI SDK: [ai-sdk.dev](https://ai-sdk.dev/).
+- pnpm: [pnpm.io](https://pnpm.io/), its [build settings](https://pnpm.io/settings/build).
+- Electron: [electronjs.org](https://www.electronjs.org/).
+- oxc, the TypeScript parser in Rust: [oxc.rs](https://oxc.rs/), [docs.rs/oxc_parser](https://docs.rs/oxc_parser).
+- Vitest: [vitest.dev](https://vitest.dev/); Testing Library: [testing-library.com](https://testing-library.com/);
+  happy-dom: [github.com/capricorn86/happy-dom](https://github.com/capricorn86/happy-dom).
+- Chrome's DevTools protocol: [chromedevtools.github.io/devtools-protocol](https://chromedevtools.github.io/devtools-protocol/).
 - The standards and the Power of 10: the links in sections 4 and 5.

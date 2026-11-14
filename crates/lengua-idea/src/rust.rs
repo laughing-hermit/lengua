@@ -48,7 +48,11 @@ pub(crate) fn lint(
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut sources = Vec::new();
-    for (page, structure) in pages.iter().zip(structures) {
+    for (page, structure) in pages
+        .iter()
+        .zip(structures)
+        .filter(|(p, _)| p.kind != IdeaKind::Screen)
+    {
         match fs::read(folder.join(&page.source)).map(String::from_utf8) {
             Ok(Ok(text)) => sources.push(lengua_lint::Source {
                 file: page.source.clone(),

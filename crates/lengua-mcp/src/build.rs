@@ -12,7 +12,7 @@ use lengua_idea::{Build, Label, Trust};
 
 use crate::doctor;
 use crate::host::{Host, Seal, grant_for, outside};
-use crate::{harness, mutation, testing};
+use crate::{front, harness, mutation, testing};
 
 pub(crate) const THRESHOLD: usize = 80;
 
@@ -96,6 +96,7 @@ pub(crate) struct Status {
     pub tests: Tests,
     pub mutants: Mutants,
     pub toolchain: String,
+    pub export: Option<(usize, u64)>,
 }
 
 impl Status {
@@ -109,6 +110,7 @@ impl Status {
             tests: Tests::default(),
             mutants: Mutants::default(),
             toolchain: String::new(),
+            export: None,
         }
     }
 
@@ -194,31 +196,21 @@ impl Worker {
     }
 
     fn work(&self) {
+        if let Some(found) = &self.build.front
+            && let Err((stage, problems)) = front::build(self, found)
+        {
+            return self.finish(stage, problems);
+        }
         let component = match compile(&self.folder, &self.build, &self.child, &self.host) {
             Ok(component) => component,
             Err(problems) => return self.finish(Stage::BuildFailed, problems),
         };
-        let screens: Vec<Remark> = self
-            .build
-            .tests
-            .iter()
-            .filter(|t| t.screen)
-            .map(|t| Remark {
-                file: t.file.clone(),
-                line: Some(t.line),
-                message: format!(
-                    "the screen example `{}` runs at L8, with GPUI's test context; it was not run",
-                    t.name
-                ),
-            })
-            .collect();
         let cases = testing::cases(&self.build);
         let seal = component.seal.clone();
         self.update(|s| {
             s.component = Some(component);
             s.stage = Stage::Testing;
-            s.remarks = screens;
-            s.tests.total = cases.len();
+            s.tests.total += cases.len();
         });
         let Some(seal) = seal else {
             return self.finish(Stage::Done, Vec::new());
@@ -334,6 +326,17 @@ impl Builds {
             )];
             return status;
         }
+        let browser = build.front.as_ref().is_some_and(|f| !f.browser.is_empty());
+        if build.front.is_some() && (!doctor.front_ok() || (browser && !doctor.browser_ok())) {
+            let mut status = Status::new(Stage::BuildFailed);
+            status.problems = vec![problem(
+                "web/package.json",
+                1,
+                "toolchain-missing",
+                doctor.front_problems(),
+            )];
+            return status;
+        }
         let job = Job::start(folder, build, &self.host);
         lock(&job.state).toolchain = doctor.rustc();
         let status = job.status();
@@ -347,19 +350,30 @@ pub(crate) fn cargo(
     args: &[&str],
     slot: &Mutex<Option<Child>>,
 ) -> Result<(bool, String), String> {
-    let mut child = Command::new("cargo")
+    let mut command = Command::new("cargo");
+    command
+        .env("CARGO_TERM_COLOR", "never")
         .env("CARGO_NET_RETRY", "10")
         .env("RUSTC_WRAPPER", std::env::current_exe().unwrap_or_default())
         .env(crate::wrapper::MARK, "1")
-        .env("CARGO_BUILD_PIPELINING", "false")
+        .env("CARGO_BUILD_PIPELINING", "false");
+    tool(command, args, folder, slot).map_err(|e| format!("lengua could not run cargo: {e}"))
+}
+
+pub(crate) fn tool(
+    mut command: Command,
+    args: &[&str],
+    folder: &Path,
+    slot: &Mutex<Option<Child>>,
+) -> Result<(bool, String), String> {
+    let mut child = command
         .args(args)
         .current_dir(folder)
-        .env("CARGO_TERM_COLOR", "never")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("lengua could not start cargo: {e}"))?;
+        .map_err(|e| format!("it did not start: {e}"))?;
     let out_pipe = child.stdout.take();
     let err_pipe = child.stderr.take();
     *lock(slot) = Some(child);
@@ -380,7 +394,7 @@ pub(crate) fn cargo(
     let status = taken
         .ok_or_else(|| "the build was stopped".to_string())?
         .wait()
-        .map_err(|e| format!("lengua could not wait for cargo: {e}"))?;
+        .map_err(|e| format!("lengua could not wait for it: {e}"))?;
     Ok((status.success(), String::from_utf8_lossy(&all).to_string()))
 }
 

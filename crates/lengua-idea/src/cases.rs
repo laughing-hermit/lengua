@@ -92,6 +92,19 @@ pub struct Test {
     pub status: Option<u16>,
     pub expect_headers: Vec<(String, String)>,
     pub expect_body: Option<String>,
+    pub state: Vec<StateValue>,
+    pub typed: Vec<(String, String)>,
+    pub click: Option<String>,
+    pub expect_state: Vec<StateValue>,
+    pub expect_text: Option<String>,
+    pub expect_label: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StateValue {
+    pub field: String,
+    pub value: String,
+    pub text: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -218,8 +231,27 @@ fn filled(test: &Test, values: &[(String, String)]) -> Test {
         request_body: test.request_body.as_ref().map(one),
         expect_headers: pairs(&test.expect_headers),
         expect_body: test.expect_body.as_ref().map(one),
+        state: states(&test.state, values),
+        typed: pairs(&test.typed),
+        click: test.click.as_ref().map(one),
+        expect_state: states(&test.expect_state, values),
+        expect_text: test.expect_text.as_ref().map(one),
+        expect_label: test.expect_label.as_ref().map(one),
         ..test.clone()
     }
+}
+
+fn states(list: &[StateValue], values: &[(String, String)]) -> Vec<StateValue> {
+    list.iter()
+        .map(|s| StateValue {
+            value: if s.text {
+                fill(&s.value, values)
+            } else {
+                s.value.clone()
+            },
+            ..s.clone()
+        })
+        .collect()
 }
 
 #[must_use]

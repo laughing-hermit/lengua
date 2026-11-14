@@ -125,3 +125,15 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
   library: its `idea.md`, its folder's name as the package, its lock verified with
   `lock::verify` (kind `library`), its label and the SHA-256 of its lock; `description` reads the
   library's description from its frontmatter.
+- `web.rs` (since L8): `plan` makes the generated files of `web/` for an application with screens
+  (`package.json` from the base, shadcn's packages and `- Uses package:`; the configurations in
+  `front/`; a route `page.tsx` per screen; shadcn's components from `shadcn/`; the client from
+  `routes`; the screen tests from `screen_runs`; `web/lengua.sum`), holds each to its previous
+  text, and finds TypeScript files of no screen (`ts-source-unlisted`); `routes` reads `- Route:`
+  and the server's examples into types.
+- `json.rs` and `types.rs` (since L8): a JSON reader that keeps only the shapes, and the
+  TypeScript types made from them (`of`, `merge`, `render`) with their checks at run time
+  (`check`).
+- `wiki.rs`, since L8: `index_text` writes the sections of the back end, the front end, the
+  interface and the dependencies; `api_text` writes `api.md`; `links_text` the `# Links` of an
+  idea. `frontmatter::without_links` leaves `# Links` out of an idea when it is read.

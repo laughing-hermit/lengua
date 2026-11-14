@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -6,6 +7,8 @@ use crate::frontmatter::{self, Front};
 use crate::idea::IdeaKind;
 use crate::okf::{self, GENERATED_BY, LENGUA_CHECK};
 use crate::text::is_fence;
+use crate::types::render;
+use crate::web::Route;
 use crate::{Finding, Label, Library, Note, Shape, Sink, Trust};
 
 pub(crate) struct Parts<'a> {
@@ -15,6 +18,15 @@ pub(crate) struct Parts<'a> {
     pub components: &'a [(String, String, usize)],
     pub crates: Count,
     pub vision: bool,
+    pub interface: &'a Interface<'a>,
+}
+
+pub(crate) struct Interface<'a> {
+    pub routes: &'a [Route],
+    pub calls: &'a [(String, Vec<String>)],
+    pub client_hash: Option<String>,
+    pub packages: &'a [(String, String)],
+    pub large: &'a [(String, u64)],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -258,6 +270,100 @@ fn idea_link(from: &str, id: &str, pages: &[Page], parts: &Parts) -> String {
     )
 }
 
+fn calls_route(interface: &Interface, page: &Page, route: &Route) -> bool {
+    interface
+        .calls
+        .iter()
+        .any(|(source, called)| *source == page.source && called.contains(&route.function))
+}
+
+fn interface_groups(
+    page: &Page,
+    pages: &[Page],
+    parts: &Parts,
+) -> Vec<(&'static str, Vec<String>)> {
+    let interface = parts.interface;
+    let api = okf::relative(&page.file, "api.md");
+    let route_link = |r: &Route| format!("[`{} {}`]({api})", r.method, r.path);
+    let calls: Vec<String> = interface
+        .routes
+        .iter()
+        .filter(|r| calls_route(interface, page, r))
+        .map(route_link)
+        .collect();
+    let served: Vec<&Route> = interface
+        .routes
+        .iter()
+        .filter(|r| r.served_by.contains(&page.file))
+        .collect();
+    let mut callers: Vec<String> = Vec::new();
+    for other in pages {
+        let link = idea_link(&page.file, other.id(), pages, parts);
+        if served.iter().any(|r| calls_route(interface, other, r)) && !callers.contains(&link) {
+            callers.push(link);
+        }
+    }
+    vec![
+        ("Calls", calls),
+        ("Serves", served.iter().map(|r| route_link(r)).collect()),
+        ("Called by", callers),
+    ]
+}
+
+pub(crate) const API_DESCRIPTION: &str = "The routes of the back end that the front end calls, with the shapes of their requests and answers.";
+
+fn file_link(pages: &[Page], file: &str) -> String {
+    let title = pages
+        .iter()
+        .find(|p| p.file == file)
+        .map_or(file, |p| p.title.as_str());
+    format!("[{title}]({file})")
+}
+
+pub(crate) fn api_text(pages: &[Page], label: &str, interface: &Interface) -> String {
+    let mut out = format!(
+        "---\ntype: lengua Interface\ndescription: {}\nlabel: {label}\nclient_sha256: {}\n---\n\n# Routes\n",
+        quoted(API_DESCRIPTION),
+        interface.client_hash.as_deref().unwrap_or("none")
+    );
+    for route in interface.routes {
+        let (answer, failure) = if route.json {
+            (render(&route.answer), render(&route.failure))
+        } else {
+            ("string".to_string(), "string".to_string())
+        };
+        let body = route
+            .body
+            .as_ref()
+            .map_or("none".to_string(), |b| format!("`{}`", render(b)));
+        let served: Vec<String> = route
+            .served_by
+            .iter()
+            .map(|f| file_link(pages, f))
+            .collect();
+        let called: Vec<String> = pages
+            .iter()
+            .filter(|p| calls_route(interface, p, route))
+            .map(|p| format!("[{}]({})", p.title, p.file))
+            .collect();
+        let called = if called.is_empty() {
+            "no screen".to_string()
+        } else {
+            called.join(", ")
+        };
+        let _ = write!(
+            out,
+            "\n## `{} {}`\n\n* Function: `{}` in `web/lib/lengua.ts`.\n* Request body: {body}.\n* Answer: `{answer}`.\n* Failure: `{failure}`.\n* Served by: {}.\n* Called by: {called}.\n",
+            route.method,
+            route.path,
+            route.function,
+            served.join(", ")
+        );
+    }
+    out.push_str("\n# Links\n\n* Index: [index](index.md).\n");
+    out
+}
+
 fn page_text(
     page: &Page,
     used_by: &[String],
@@ -310,6 +416,7 @@ fn page_text(
             .collect();
         groups.push(("Components", components));
     }
+    groups.extend(interface_groups(page, pages, parts));
     format!(
         "{}\n{}",
         page.front.render(&keys, &absent),
@@ -370,19 +477,15 @@ fn index_line(title: &str, link: &str, description: &str, label: &str) -> String
 
 pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
     let mut out = String::from("---\nokf_version: \"0.2\"\n---\n");
-    let groups = [
-        ("Program", IdeaKind::Program),
-        ("Modules", IdeaKind::Module),
-        ("Screens", IdeaKind::Screen),
-    ];
-    for (heading, kind) in groups {
-        let lines: Vec<String> = pages
+    let of = |kind: IdeaKind| -> Vec<String> {
+        pages
             .iter()
             .filter(|p| p.kind == kind)
             .map(|p| index_line(&p.title, &p.file, &p.description, label))
-            .collect();
-        section(&mut out, heading, &lines);
-    }
+            .collect()
+    };
+    section(&mut out, "# Back end: program", &of(IdeaKind::Program));
+    section(&mut out, "# Back end: modules", &of(IdeaKind::Module));
     let libraries: Vec<String> = parts
         .libraries
         .iter()
@@ -395,7 +498,22 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
             )
         })
         .collect();
-    section(&mut out, "Libraries", &libraries);
+    let front = pages.iter().any(|p| p.kind == IdeaKind::Screen);
+    let libraries: Vec<String> = libraries
+        .into_iter()
+        .zip(parts.libraries)
+        .map(|(line, l)| {
+            if front {
+                format!(
+                    "{line}* In the browser, `{}` is `@/lib/wasm/{}`.\n",
+                    l.name, l.name
+                )
+            } else {
+                line
+            }
+        })
+        .collect();
+    section(&mut out, "# Back end: libraries", &libraries);
     let components: Vec<String> = parts
         .components
         .iter()
@@ -408,14 +526,55 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
             )
         })
         .collect();
-    section(&mut out, "Components", &components);
-    section(&mut out, "Crates", &parts.crates.lines());
+    section(&mut out, "# Back end: components", &components);
+    section(&mut out, "# Back end: crates", &parts.crates.lines());
+    let screens = of(IdeaKind::Screen);
+    if !screens.is_empty() {
+        section(&mut out, "# Front end: screens", &screens);
+        section(
+            &mut out,
+            "# Front end: npm packages",
+            &package_lines(parts.interface),
+        );
+    }
+    if !parts.interface.routes.is_empty() {
+        section(
+            &mut out,
+            "# Interface",
+            &[index_line("api", "api.md", API_DESCRIPTION, label)],
+        );
+    }
     out
+}
+
+fn package_lines(interface: &Interface) -> Vec<String> {
+    let mut lines = Vec::new();
+    let packages = interface.packages;
+    if !packages.is_empty() {
+        let names: Vec<String> = packages.iter().map(|(n, v)| format!("`{n}` {v}")).collect();
+        lines.push(format!(
+            "* {} in `web/package.json` ({}), with the packages every front end has for its build and tests, all pinned in `web/pnpm-lock.yaml`.\n",
+            packages.len(),
+            names.join(", ")
+        ));
+    }
+    if !interface.large.is_empty() {
+        let names: Vec<String> = interface
+            .large
+            .iter()
+            .map(|(n, size)| format!("`{n}` ({} KiB)", size / 1024))
+            .collect();
+        lines.push(format!(
+            "* Large, over 1 MiB in pnpm's copy: {}.\n",
+            names.join(", ")
+        ));
+    }
+    lines
 }
 
 fn section(out: &mut String, heading: &str, lines: &[String]) {
     if !lines.is_empty() {
-        out.push_str("\n# ");
+        out.push('\n');
         out.push_str(heading);
         out.push_str("\n\n");
         out.push_str(&lines.concat());
@@ -572,6 +731,12 @@ fn texts(
         }));
     }
     out.push(("index.md".to_string(), index_text(pages, label, parts)));
+    if !parts.interface.routes.is_empty() {
+        out.push((
+            "api.md".to_string(),
+            api_text(pages, label, parts.interface),
+        ));
+    }
     out.extend(generated.iter().cloned());
     out
 }

@@ -44,7 +44,7 @@ Then it writes 0 and a line end to the standard output.
 - Reads: standard input
 - Memory: 16 MiB
 - Time: 2 s
-- Modules: `words`, `ui/summary`
+- Modules: `words`
 
 # Structure
 

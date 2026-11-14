@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::Sink;
-use crate::cases::{End, Range, Test};
+use crate::cases::{End, Range, StateValue, Test};
 use crate::idea::IdeaKind;
 use crate::ste::Dictionary;
 use crate::text::{
@@ -13,8 +13,7 @@ const PROGRAM_KEYS: &str = "`Standard input`, `Arguments`, `File `path``, `Serve
 type Make = fn(String) -> Key;
 
 const METHODS: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
-const SCREEN_KEYS: &str =
-    "`State `field``, `Click`, `Type into `element``, `Expect state `field``, `Expect text`";
+const SCREEN_KEYS: &str = "`State `field``, `Click`, `Type into `element``, `Expect state `field``, `Expect text`, `Expect label`";
 pub(crate) const MAX_TEXT_LENGTH: u64 = 65_536;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,6 +31,7 @@ enum Key {
     TypeInto(String),
     ExpectState(String),
     ExpectText,
+    ExpectLabel,
     Range(String),
     Server(String),
     Client(String),
@@ -57,6 +57,7 @@ impl Key {
             "Expect end" => Self::End,
             "Click" => Self::Click,
             "Expect text" => Self::ExpectText,
+            "Expect label" => Self::ExpectLabel,
             "Expect answer" => Self::Answer,
             "Call" => Self::Call,
             "Expect value" => Self::Value,
@@ -119,7 +120,8 @@ impl Key {
             | Self::Click
             | Self::TypeInto(_)
             | Self::ExpectState(_)
-            | Self::ExpectText => Some(true),
+            | Self::ExpectText
+            | Self::ExpectLabel => Some(true),
             Self::Range(_) => None,
         }
     }
@@ -134,6 +136,7 @@ impl Key {
                 | Self::OutputFile(_)
                 | Self::ExpectState(_)
                 | Self::ExpectText
+                | Self::ExpectLabel
                 | Self::Answer
                 | Self::Value
                 | Self::Status
@@ -465,23 +468,53 @@ fn values(key: &Key, item: &Item, value: &str, sink: &mut Sink) -> Vec<String> {
             }
             Vec::new()
         }
-        Key::Click => {
-            if backticked(value).is_none() {
+        Key::Click | Key::ExpectLabel => {
+            let found = backticked(value).map(str::to_string);
+            if found.is_none() {
                 sink.add(
                     item.line,
                     "example-value",
                     "write the element in backticks, for example `- Click: `add``".to_string(),
                 );
             }
-            Vec::new()
+            found.into_iter().collect()
         }
         Key::Range(_) => Vec::new(),
+    }
+}
+
+fn state(value: &str, found: &[String]) -> StateValue {
+    match found.first() {
+        Some(text) => StateValue {
+            field: String::new(),
+            value: text.clone(),
+            text: true,
+        },
+        None => StateValue {
+            field: String::new(),
+            value: value.to_string(),
+            text: false,
+        },
     }
 }
 
 fn record(key: &Key, value: &str, found: &[String], test: &mut Test) {
     let first = found.first().cloned();
     match key {
+        Key::State(field) => test.state.push(StateValue {
+            field: field.clone(),
+            ..state(value, found)
+        }),
+        Key::ExpectState(field) => test.expect_state.push(StateValue {
+            field: field.clone(),
+            ..state(value, found)
+        }),
+        Key::TypeInto(element) => test
+            .typed
+            .push((element.clone(), first.unwrap_or_default())),
+        Key::Click => test.click = first,
+        Key::ExpectText => test.expect_text = first,
+        Key::ExpectLabel => test.expect_label = first,
         Key::Input => test.stdin = first,
         Key::Arguments => test.arguments = Some(found.to_vec()),
         Key::File(path) => test.files.push((path.clone(), first.unwrap_or_default())),
@@ -511,12 +544,7 @@ fn record(key: &Key, value: &str, found: &[String], test: &mut Test) {
             .expect_headers
             .push((name.to_lowercase(), first.unwrap_or_default())),
         Key::ExpectBody => test.expect_body = first,
-        Key::State(_)
-        | Key::Click
-        | Key::TypeInto(_)
-        | Key::ExpectState(_)
-        | Key::ExpectText
-        | Key::Range(_) => {}
+        Key::Range(_) => {}
     }
 }
 

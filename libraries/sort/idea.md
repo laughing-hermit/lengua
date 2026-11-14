@@ -8,11 +8,11 @@ used_by: []
 label: checked
 idea_sha256: 17a8a55af09597c2cf54343836d105967ac17d979bb8b4a28e269625042524d4
 source_sha256: 94a201e3431aa54bdfef66570ac9972e1fa9c95b9a594c6d41657c3146303bea
-cargo_sha256: 70c252a02fdeed93a965109d63e004f5094e844d2c03fcd6b656087d6d7d7d15
+cargo_sha256: e83072e9d240df5b619d3feedab9c8cfa79d88bfbf123ec4f537e627486787ac
 world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T00:31:36Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T04:31:56Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T00:31:36Z }
+  - { by: process:lengua-check, at: 2026-11-14T04:31:56Z }
 title: sort
 status: draft
 ---

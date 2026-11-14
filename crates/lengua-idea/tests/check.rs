@@ -44,7 +44,6 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
         [
             "idea.md",
             "ideas/words.md",
-            "ideas/ui/summary.md",
             "index.md",
             "log.md",
             "Cargo.toml",
@@ -52,7 +51,7 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
         ]
     );
     let top = read(&folder, "idea.md");
-    assert!(top.starts_with("---\ntype: lengua Program\ndescription: \"The program counts the words in a text.\"\nmodule: main\nsource: src/main.rs\nuses: [ideas/words, ideas/ui/summary]\nused_by: []\nlabel: unchecked\nidea_sha256: "));
+    assert!(top.starts_with("---\ntype: lengua Program\ndescription: \"The program counts the words in a text.\"\nmodule: main\nsource: src/main.rs\nuses: [ideas/words]\nused_by: []\nlabel: unchecked\nidea_sha256: "));
     assert!(top.contains("\nsource_sha256: none\ncargo_sha256: "));
     assert!(top.contains("\nworld_sha256: "));
     assert!(top.contains("\n---\n\n# Purpose\n"));
@@ -63,33 +62,74 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
     assert_eq!(report.build.as_ref().map(|b| b.code), Some(false));
     let words = read(&folder, "ideas/words.md");
     assert!(words.contains("type: lengua Module\n"));
-    assert!(words.contains("used_by: [idea, ideas/ui/summary]\n"));
+    assert!(words.contains(
+        "used_by: [idea]
+"
+    ));
     assert!(words.contains(&format!(
-        "source_sha256: none\ngenerated: {{ by: lengua-mcp/{VERSION}, at: 2026-11-13T00:00:00Z }}\ntitle: Words\ntags: [text]\nstatus: draft\n---\n"
+        "source_sha256: none
+generated: {{ by: lengua-mcp/{VERSION}, at: 2026-11-13T00:00:00Z }}
+title: Words
+tags: [text]
+status: draft
+---
+"
     )));
     assert!(!words.contains("verified:"));
-    assert!(words.contains("\n# Links\n\n* Used by: ["), "{words}");
     assert!(
-        words.contains("](../idea.md), [ui/summary](ui/summary.md).\n* Index: ["),
+        words.contains(
+            "
+# Links
+
+* Used by: ["
+        ),
         "{words}"
     );
-    assert!(words.ends_with("](../index.md).\n"), "{words}");
+    assert!(
+        words.contains(
+            "](../idea.md).
+* Index: ["
+        ),
+        "{words}"
+    );
+    assert!(
+        words.ends_with(
+            "](../index.md).
+"
+        ),
+        "{words}"
+    );
     assert!(
         top.contains(
-            "\n# Links\n\n* Uses: [Words](ideas/words.md), [ui/summary](ideas/ui/summary.md).\n"
+            "
+# Links
+
+* Uses: [Words](ideas/words.md).
+"
         ),
         "{top}"
     );
-    assert!(top.contains("\ntitle: lengua-idea-"), "{top}");
+    assert!(
+        top.contains(
+            "
+title: lengua-idea-"
+        ),
+        "{top}"
+    );
     assert!(!words.contains("label: checked"));
     let index = read(&folder, "index.md");
-    assert!(index.starts_with("---\nokf_version: \"0.2\"\n---\n\n# Program\n\n* ["));
+    assert!(index.starts_with("---\nokf_version: \"0.2\"\n---\n\n# Back end: program\n\n* ["));
     assert!(
         index
             .contains("](idea.md) - The program counts the words in a text. Label: `unchecked`.\n")
     );
-    assert!(index.contains("\n# Modules\n\n* [Words](ideas/words.md) - The module finds the words in a text. Label: `unchecked`.\n"));
-    assert!(index.contains("\n# Screens\n\n* [ui/summary](ideas/ui/summary.md) - "));
+    assert!(index.contains(
+        "
+# Back end: modules
+
+* [Words](ideas/words.md) - The module finds the words in a text. Label: `unchecked`.
+"
+    ));
     let log = read(&folder, "log.md");
     assert!(log.starts_with(
         "# Log\n\n## 2026-11-13\n\n* **Check** at 00:00:00Z: no problems; label `unchecked`.\n"
@@ -106,7 +146,10 @@ fn a_second_check_that_changes_nothing_writes_nothing() {
     assert_eq!(first.findings, []);
     let log = read(&folder, "log.md");
     let top = read(&folder, "idea.md");
-    assert!(read(&folder, "index.md").contains("\n# Crates\n\n* Declared in the ideas: none;"));
+    assert!(
+        read(&folder, "index.md")
+            .contains("\n# Back end: crates\n\n* Declared in the ideas: none;")
+    );
     let second = lengua_idea::check(&folder, NOV_13_2026 + 60);
     assert_eq!(second.findings, []);
     assert_eq!(second.written, Vec::<String>::new());
@@ -216,40 +259,31 @@ fn every_page_in_the_folder_is_an_okf_concept() {
 #[test]
 fn a_purpose_that_names_a_module_its_constraints_do_not_list_is_a_finding() {
     let folder = fixture("good", "named");
-    let words = read(&folder, "ideas/words.md");
-    fs::write(
-        folder.join("ideas/words.md"),
-        words.replace(
-            "A word is a group of characters with no space in it.",
-            "The screen `ui/summary` shows the words.",
-        ),
-    )
-    .expect("a file");
-    let found: Vec<(String, &str)> = lengua_idea::program(&folder)
-        .findings
-        .into_iter()
-        .map(|f| (f.file, f.code))
-        .collect();
+    let top = read(&folder, "idea.md").replace(
+        "It reads the text from the standard input.",
+        "It reads the text from the standard input, and the module `words` finds the words.",
+    );
+    fs::write(folder.join("idea.md"), &top).expect("a file");
+    let codes_of = |folder: &Path| -> Vec<(String, &'static str)> {
+        lengua_idea::program(folder)
+            .findings
+            .into_iter()
+            .map(|f| (f.file, f.code))
+            .collect()
+    };
+    let found = codes_of(&folder);
     assert!(
-        found.contains(&("ideas/words.md".to_string(), "purpose-unlisted")),
+        !found.contains(&("idea.md".to_string(), "purpose-unlisted")),
         "{found:?}"
     );
-    let summary = read(&folder, "ideas/ui/summary.md");
     fs::write(
-        folder.join("ideas/ui/summary.md"),
-        summary.replace(
-            "The screen shows the number of words in the text.",
-            "The screen shows the number of words that the module `words` finds.",
-        ),
+        folder.join("idea.md"),
+        top.replace("- Modules: `words`\n", ""),
     )
     .expect("a file");
-    let found: Vec<(String, &str)> = lengua_idea::program(&folder)
-        .findings
-        .into_iter()
-        .map(|f| (f.file, f.code))
-        .collect();
+    let found = codes_of(&folder);
     assert!(
-        !found.contains(&("ideas/ui/summary.md".to_string(), "purpose-unlisted")),
+        found.contains(&("idea.md".to_string(), "purpose-unlisted")),
         "{found:?}"
     );
 }
@@ -503,13 +537,7 @@ fn the_label_and_the_score_go_into_the_wiki() {
     });
     assert_eq!(
         tested.written,
-        [
-            "idea.md",
-            "ideas/words.md",
-            "ideas/ui/summary.md",
-            "index.md",
-            "log.md"
-        ]
+        ["idea.md", "ideas/words.md", "index.md", "log.md"]
     );
     assert!(read(&folder, "log.md").starts_with("# Log\n\n## 2026-11-13\n\n* **Check** at 00:00:01Z: no problems; label `tested`, mutation score 1 of 4 (25%).\n"));
 }
@@ -530,14 +558,10 @@ fn the_build_carries_every_test_of_every_idea() {
             ("idea.md", "two words", false),
             ("idea.md", "one word", false),
             ("idea.md", "empty input", false),
-            ("ideas/words.md", "two words", false),
-            ("ideas/ui/summary.md", "two words", true)
+            ("ideas/words.md", "two words", false)
         ]
     );
-    assert_eq!(
-        build.sources,
-        ["src/main.rs", "src/words.rs", "src/ui/summary.rs"]
-    );
+    assert_eq!(build.sources, ["src/main.rs", "src/words.rs"]);
     assert_eq!(build.tests[1].ranges.len(), 1);
     assert_eq!(build.tests[2].stdout.as_deref(), Some("0\n"));
     assert_eq!(build.tests_hash.len(), 64);
