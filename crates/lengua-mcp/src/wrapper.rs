@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
-use std::process::{Command, ExitCode};
+use std::io::{BufRead, BufReader};
+use std::process::{Command, ExitCode, Stdio};
 
 pub(crate) const MARK: &str = "LENGUA_RUSTC_WRAPPER";
 
@@ -129,6 +130,22 @@ pub(crate) fn rename_outputs(folder: &Path, from: &str, to: &str) -> std::io::Re
     Ok(())
 }
 
+pub(crate) fn artifact_line(line: &str, from: &str, to: &str) -> (String, Option<(String, String)>) {
+    if from.is_empty() || from == to || !line.contains("\"artifact\"") || !line.contains(from) {
+        return (line.to_string(), None);
+    }
+    let path = line
+        .split("\"artifact\":\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .map(str::to_string);
+    let renamed = path.map(|p| {
+        let target = p.replace(from, to);
+        (p, target)
+    });
+    (line.replace(from, to), renamed)
+}
+
 pub(crate) fn run(args: &[String]) -> ExitCode {
     let Some((program, rest)) = args.split_first() else {
         eprintln!("{MARK}: no compiler to run");
@@ -136,29 +153,34 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
     };
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
     let arguments = rewritten(rest, &version);
-    let status = Command::new(program)
+    let cargo_suffix = codegen(rest, "extra-filename").unwrap_or_default();
+    let our_suffix = codegen(&arguments, "extra-filename").unwrap_or_default();
+    let child = Command::new(program)
         .args(&arguments)
         .env_remove(MARK)
-        .status();
-    let code = match status {
-        Ok(status) => status.code().and_then(|c| u8::try_from(c).ok()),
+        .stderr(Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
         Err(error) => {
             eprintln!("{MARK}: could not start {program}: {error}");
             return ExitCode::FAILURE;
         }
     };
-    let cargo_suffix = codegen(rest, "extra-filename").unwrap_or_default();
-    let our_suffix = codegen(&arguments, "extra-filename").unwrap_or_default();
-    if std::env::var_os("LENGUA_RUSTC_WRAPPER_SHOW").is_some() {
-        eprintln!(
-            "{MARK}: {:?} {:?} -> {:?} in {:?} ({code:?}); emit {:?}",
-            value(rest, "--crate-name"),
-            our_suffix,
-            cargo_suffix,
-            value(rest, "--out-dir"),
-            value(rest, "--emit")
-        );
+    if let Some(pipe) = child.stderr.take() {
+        for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+            let (shown, renamed) = artifact_line(&line, &our_suffix, &cargo_suffix);
+            if let Some((from, to)) = renamed {
+                let _ = fs::rename(from.replace("\\\\", "\\"), to.replace("\\\\", "\\"));
+            }
+            eprintln!("{shown}");
+        }
     }
+    let code = child
+        .wait()
+        .ok()
+        .and_then(|s| s.code())
+        .and_then(|c| u8::try_from(c).ok());
     if code == Some(0)
         && let Some(folder) = value(rest, "--out-dir").first()
         && let Err(error) = rename_outputs(Path::new(folder), &our_suffix, &cargo_suffix)
@@ -233,5 +255,20 @@ mod tests {
             "libwasip2-cargo.rlib: src/lib.rs\n"
         );
         assert!(!folder.join("libwasip2-ours.rlib").exists());
+    }
+
+    #[test]
+    fn an_artifact_notice_gets_cargo_s_name() {
+        let line = r#"{"$message_type":"artifact","artifact":"/t/out/libbitflags-ours.rmeta","emit":"metadata"}"#;
+        let (shown, renamed) = super::artifact_line(line, "-ours", "-cargo");
+        assert!(shown.contains("libbitflags-cargo.rmeta"), "{shown}");
+        assert_eq!(
+            renamed,
+            Some((
+                "/t/out/libbitflags-ours.rmeta".to_string(),
+                "/t/out/libbitflags-cargo.rmeta".to_string()
+            ))
+        );
+        assert_eq!(super::artifact_line("plain", "-ours", "-cargo").1, None);
     }
 }

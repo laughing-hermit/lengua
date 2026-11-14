@@ -355,8 +355,7 @@ pub(crate) fn cargo(
         .env("CARGO_TERM_COLOR", "never")
         .env("CARGO_NET_RETRY", "10")
         .env("RUSTC_WRAPPER", std::env::current_exe().unwrap_or_default())
-        .env(crate::wrapper::MARK, "1")
-        .env("CARGO_BUILD_PIPELINING", "false");
+        .env(crate::wrapper::MARK, "1");
     tool(command, args, folder, slot).map_err(|e| format!("lengua could not run cargo: {e}"))
 }
 
