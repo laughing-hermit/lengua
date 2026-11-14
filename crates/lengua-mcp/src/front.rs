@@ -3,11 +3,15 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
 
 use lengua_idea::{ASSETS, Browser, Front, Mutant};
 use rmcp::serde_json::{self, Value};
 
-use crate::build::{Problem, Stage, Worker, problem, tool};
+use crate::build::{Problem, Stage, Worker, lock, problem, tool};
 use crate::doctor;
 
 pub(crate) const STAGE: &str = "target/lengua/web";
@@ -39,6 +43,33 @@ fn pnpm(
         command.env(name, value);
     }
     tool(command, args, dir, &worker.child).map_err(|e| format!("lengua could not run pnpm: {e}"))
+}
+
+fn pnpm_limited(
+    worker: &Worker,
+    args: &[&str],
+    dir: &Path,
+    seconds: u64,
+) -> Result<(bool, String), String> {
+    let finished = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&finished);
+    let slot = Arc::clone(&worker.child);
+    thread::spawn(move || {
+        for _ in 0..seconds * 10 {
+            if flag.load(Ordering::Relaxed) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        if !flag.load(Ordering::Relaxed)
+            && let Some(child) = lock(&slot).as_mut()
+        {
+            let _ = child.kill();
+        }
+    });
+    let out = pnpm(worker, args, dir, &[]);
+    finished.store(true, Ordering::Relaxed);
+    out
 }
 
 fn copy_tree(from: &Path, to: &Path, top: bool) -> io::Result<()> {
@@ -237,11 +268,11 @@ fn tests(worker: &Worker, front: &Front, stage: &Path) -> Result<usize, Failure>
     worker.update(|s| s.tests.total += total);
     let report = stage.join(REPORT);
     let output = format!("--outputFile={REPORT}");
-    let ran = pnpm(
+    let ran = pnpm_limited(
         worker,
         &["exec", "vitest", "run", "--reporter=json", &output],
         stage,
-        &[],
+        600,
     );
     let text = match ran {
         Ok((_, text)) => text,
@@ -279,7 +310,7 @@ fn tests(worker: &Worker, front: &Front, stage: &Path) -> Result<usize, Failure>
 }
 
 fn next_build(worker: &Worker, stage: &Path) -> Result<(), Failure> {
-    match pnpm(worker, &["exec", "next", "build"], stage, &[]) {
+    match pnpm_limited(worker, &["exec", "next", "build"], stage, 600) {
         Ok((true, _)) if stage.join("out").is_dir() => Ok(()),
         Ok((_, text)) => Err(failed(
             Stage::BuildFailed,
@@ -521,12 +552,7 @@ pub(crate) fn judge(worker: &Worker, mutant: &Mutant) -> Option<bool> {
     let text = fs::read_to_string(&original).ok()?;
     let changed = lengua_idea::apply(&text, &mutant.edits);
     fs::write(&original, changed).ok()?;
-    let ran = pnpm(
-        worker,
-        &["exec", "vitest", "run", "--reporter=dot"],
-        &stage,
-        &[],
-    );
+    let ran = pnpm_limited(worker, &["exec", "vitest", "run", "--reporter=dot"], &stage, 120);
     let restored = fs::write(&original, &text).is_ok();
     if worker.stopped() || !restored {
         return None;

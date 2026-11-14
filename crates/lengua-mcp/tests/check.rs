@@ -1215,6 +1215,7 @@ fn http_get(port: u16, path: &str) -> String {
     let started = Instant::now();
     loop {
         if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
             let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n");
             stream.write_all(request.as_bytes()).expect("a request");
             let mut answer = String::new();
@@ -1776,6 +1777,7 @@ impl Socket {
 
 fn http_put(port: u16, path: &str) -> String {
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("the browser's port");
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
     let request = format!(
         "PUT {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     );
