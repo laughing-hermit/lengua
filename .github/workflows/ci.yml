@@ -218,6 +218,8 @@ jobs:
         run: |
           mkdir -p "same/${{ matrix.target }}"
           for pair in "hello target/tmp/lengua-mcp-hello/hello/target/wasm32-wasip2/release/hello.wasm" \
+                      "tally target/tmp/lengua-mcp-tally/tally/target/wasm32-wasip2/release/tally.wasm" \
+                      "greet target/tmp/lengua-mcp-greet/greet/target/wasm32-wasip2/release/greet.wasm" \
                       "shop target/tmp/lengua-mcp-shop/examples/shop/target/wasm32-wasip2/release/shop.wasm"; do
             set -- $pair
             if [ -f "$2" ]; then
@@ -333,11 +335,13 @@ jobs:
           echo "21c036c1740a0552124c79c6e2170cb61c5b016005671a6d5bc06cf642165431  wt.tar.gz" | sha256sum -c
           tar xzf wt.tar.gz
           echo "$PWD/wasm-tools-1.263.0-x86_64-linux" >> "$GITHUB_PATH"
-      - name: hello and the shop have the same SHA-256 on every system that built them
+      - name: hello and tally have the same SHA-256 on every system; greet and the shop are compared and reported
         run: |
           ls built
           status=0
-          for name in hello shop; do
+          for name in hello tally greet shop; do
+            required=1
+            if [ "$name" = shop ] || [ "$name" = greet ]; then required=0; fi
             echo "== $name"
             first=""
             for dir in built/*/; do
@@ -345,6 +349,7 @@ jobs:
               file="$dir/$name.wasm"
               if [ ! -f "$file" ]; then
                 echo "$(basename "$dir"): not built"
+                if [ "$required" = 0 ]; then continue; fi
                 status=1
                 continue
               fi
@@ -352,7 +357,7 @@ jobs:
               if [ -z "$first" ]; then
                 first="$file"
               elif ! cmp -s "$first" "$file"; then
-                status=1
+                if [ "$required" = 1 ]; then status=1; fi
                 echo "  differs from $(basename "$(dirname "$first")"): $(cmp -l "$first" "$file" | wc -l) bytes differ; the first differences:"
                 cmp -l "$first" "$file" | head -20 || true
                 diff <(wasm-tools print "$first") <(wasm-tools print "$file") | head -60 || true

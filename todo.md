@@ -427,13 +427,19 @@ next starts (Lengua3.md, section 8).
   and Electron are dropped, and the front end comes at the next milestone from a new brief. What
   was found: Lengua3.md, section 10, "History: GPUI's web target".
 - **2026-11-13, L8: no path remapping.** `--remap-path-prefix` (Cargo home, folder, path
-  dependencies, in `CARGO_ENCODED_RUSTFLAGS`) was tried and taken back: the flags carry each
-  computer's paths into Cargo's crate metadata, so the crate hashes in the mangled names of the
-  shop's `name` section differed between Linux x86-64 and ARM64, which matched without it (run
-  43524778056). The build job keeps `CARGO_NET_RETRY=10`.
-- **2026-11-13, L8: CI holds `hello` and the shop to one SHA-256 on every runner** (job
-  `same-bytes`); L7's landing run had the shop at 98,722 bytes on four systems and 98,725 on
-  Windows ARM64, and `greet` 87,311 and 87,281.
+  dependencies) was tried and taken back: the shop still differed between systems with it (run
+  43524778056), its differences coming from Cargo's crate hashes. The build job keeps
+  `CARGO_NET_RETRY=10`.
+- **2026-11-13, L8: `strip = true` in the generated release profile**, so a component has no
+  `name` section, whose mangled names carry Cargo's crate hashes (runs 43524778056, 43528549629);
+  `hello` is then one SHA-256 on all five runners (run 43536298022). To reverse: remove the line,
+  and a component keeps its names for a debugger.
+- **2026-11-13, L8: CI holds `hello`, `tally` and `greet` to one SHA-256 on every runner** (job
+  `same-bytes`), and compares and reports the shop: a program with a lengua library, a path
+  dependency outside its folder, gets crate hashes from the library's absolute path, so its
+  functions are ordered differently on systems whose paths differ, and Rust 1.100.0's Cargo has
+  no stable way to leave the path out (`trim-paths` is stable from Rust 1.101). Lengua3.md, section
+  10.
 - **2026-11-13, L8: CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2`**, and a failure
   fails the run (Lengua3.md, section 1).
 - **2026-11-13, the LLM wiki and OKF fixed ahead of L9 and L13** (`wip/wiki`; Lengua3.md,

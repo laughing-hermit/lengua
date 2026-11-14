@@ -1849,14 +1849,21 @@ Decided for lengua 3 at L7 (2026-11-13):
 
 Decided for lengua 3 at L8 (2026-11-13), the parts that do not depend on the front end:
 
-- **No path remapping.** It was tried (`--remap-path-prefix` for the Cargo home, the folder and
-  the path dependencies, in `CARGO_ENCODED_RUSTFLAGS`) and taken back: the flags hold each
-  computer's own paths, Cargo hashes the flags into each crate's metadata, and so the crate hashes
-  in the mangled names of the component's `name` section differed between Linux x86-64 and Linux
-  ARM64, which matched without it (run 43524778056). `hello` and the shop hold no paths, so they
-  need none. Cargo's network retries are 10 (`CARGO_NET_RETRY`) in every cargo call of the job.
-- **CI holds `hello` and the shop to one SHA-256 on every runner** (the job `same-bytes`, from
-  the components each check job uploads), and prints the bytes that differ when they do not.
+- **No path remapping.** `--remap-path-prefix` for the Cargo home, the folder and the path
+  dependencies was tried and taken back: the shop still differed between systems with it (run
+  43524778056), since its differences come from Cargo's crate hashes (section 10), and `hello`
+  holds no paths. Cargo's network retries are 10 (`CARGO_NET_RETRY`) in every cargo call of the
+  job.
+- **`strip = true` in the generated release profile**: the component has no `name` section.
+  Its mangled names carry Cargo's crate hashes, which differ between computers, so the same
+  program built on Linux x86-64 and on Linux ARM64 differed there and nowhere else (runs
+  43524778056 and 43528549629). With it, `hello` has 54,690 bytes and one SHA-256 on all five
+  runners (run 43536298022).
+- **CI holds `hello`, `tally` and `greet` to one SHA-256 on every runner** (the job `same-bytes`,
+  from the components each check job uploads, with the difference printed by `wasm-tools`
+  1.263.0 when there is one); **the shop is compared and reported, not held**, since a program
+  that uses a lengua library cannot have one SHA-256 on every system with Rust 1.100.0 (section
+  10, "Found at L8: why the shop is not the same on every system").
 - **CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2`** on every runner, and a
   failure fails the run (section 1).
 
@@ -1996,6 +2003,26 @@ Decided for lengua 3 at L8 (2026-11-13), the parts that do not depend on the fro
   default, and lengua's `wit/world.wit` is a statement for the host, not WIT for a binding
   generator (it imports WASI with no `wit/deps/`). A program writes `path: []` with `inline`; the
   `build` skill (L9) says so.
+- **Found at L8: why the shop is not the same on every system.** Run 43543315033 (`strip = true`,
+  Rust 1.100.0): `hello` 54,690 bytes on all five runners with one SHA-256; the shop 81,082 bytes
+  everywhere, in two versions, one on Linux x86-64, Linux ARM64 and Windows ARM64 and one on macOS
+  ARM64 and Windows x86-64, 183 bytes apart. `wasm-tools print` shows the cause: one function
+  (`(type 13)`, no parameters) stands at index 172 in one and 167 in the other, so the function
+  numbers between, the table of `call_indirect` (`elem`) and two data addresses move. Four builds
+  from clean on one runner gave one SHA-256 (run 43541237409), so it is not chance. The shop uses
+  two lengua libraries, `json` and `decimal`, which are path dependencies outside its folder, and
+  Cargo puts the absolute path of such a dependency into its crate hash (`-C metadata`, through
+  the package id's source; its source, `compilation_files.rs`, leaves the path out only with the
+  profile setting `trim-paths`). The crate hashes order the functions that rustc writes, and the
+  repository's path differs between the systems (`/home/runner/work/...` on Linux,
+  `/Users/runner/work/...` on macOS, a drive letter on Windows). Before `strip = true` the hashes
+  were also in the names, so even Linux x86-64 and
+  ARM64 differed (run 43528549629). What would fix it: Cargo's `trim-paths`, stable from Rust
+  1.101 (Cargo's documentation), not 1.100.0; or the libraries inside the program's folder, which
+  lengua's design does not do. Until then `hello`, `tally` and `greet` (no path dependency) are
+  held to one SHA-256 and the shop is reported. L7's 3-byte difference on Windows ARM64 most likely
+  had the same cause, with the names still in (L7 compared sizes only).
+
 - **History: GPUI's web target, tried at L8 and dropped on 2026-11-13.** The owner then chose
   Leptos for the front end and Tauri for the desktop; GPUI, GPUI Kit, Next.js and Electron are
   dropped. The work is kept at the tag `archive/l8-gpui`. What was found, in CI on Linux x86-64:
