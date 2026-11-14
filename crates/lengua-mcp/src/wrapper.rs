@@ -127,7 +127,8 @@ mod tests {
         assert_ne!(pick(&a), "metadata=a1b2");
         assert!(a.contains(&"extra-filename=-a1b2".to_string()));
         assert_ne!(metadata(&linux, "2.0.1"), metadata(&linux, "2.0.2"));
-        let other = args("--crate-name wasip2 --crate-type lib -C metadata=a1b2 --target wasm32-wasip2");
+        let other =
+            args("--crate-name wasip2 --crate-type lib -C metadata=a1b2 --target wasm32-wasip2");
         assert_ne!(metadata(&linux, "2.0.1"), metadata(&other, "2.0.1"));
     }
 
