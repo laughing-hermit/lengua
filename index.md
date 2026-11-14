@@ -10,5 +10,5 @@ okf_version: "0.2"
 
 # Folders
 
-* [examples](examples/index.md) - 17 lengua folders: 15 programs and 2 servers.
+* [examples](examples/index.md) - 19 lengua folders: 15 programs, 3 servers and 1 library.
 * [libraries](libraries/index.md) - 7 lengua folders: 7 libraries.

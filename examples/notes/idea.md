@@ -1,3 +1,23 @@
+---
+type: lengua Server
+description: "The program is a small web application for notes."
+module: main
+source: src/main.rs
+uses: [ideas/notes, ideas/ui/home, ideas/ui/note, ideas/ui/write, ../titles/idea]
+used_by: []
+label: checked
+idea_sha256: 34b4f6ae53a5e64798472c6a8c07d0bbfedf836c7f227d45946464e2f3dcf03b
+source_sha256: b662971b0dcdcd926bc8f537e992660dab25ae2ed7cc56e1fb3165b9a291d895
+cargo_sha256: 9ec37064ffe0e12b03922cb38eb02bb079f7f96d1ad20e15310df38d333d3c14
+world_sha256: 6aa2f03d29a6dae284b24b3801913f715788aad0e8f74739ae1fde5efab7af5d
+web_sha256: 36eaf61e787ad441ca920b94259bb697cda5d491a0f15188dbe60c54970b8f71
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T04:38:07Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-14T04:38:07Z }
+title: notes
+status: draft
+---
+
 # Purpose
 
 The program is a small web application for notes. Its back end is an HTTP server in Rust that
@@ -143,3 +163,10 @@ Then the answer is 200 with the page of the screen `home`.
 - `method_name`: gives the name of the method of a request.
 - `body_of`: reads the body of a request as text.
 - `respond`: writes the answer to the client.
+
+# Links
+
+* Uses: [notes](ideas/notes.md), [ui/home](ideas/ui/home.md), [ui/note](ideas/ui/note.md), [ui/write](ideas/ui/write.md), [titles](../titles/idea.md).
+* Serves: [`GET /api/notes`](api.md), [`GET /api/notes/{id}`](api.md), [`POST /api/notes`](api.md), [`POST /api/ui`](api.md).
+* Called by: [ui/home](ideas/ui/home.md), [ui/note](ideas/ui/note.md), [ui/write](ideas/ui/write.md).
+* Index: [notes](index.md).

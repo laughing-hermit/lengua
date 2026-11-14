@@ -10,9 +10,9 @@ idea_sha256: 533383b537de9fd9aa7e74be93491ce9429865cff250d980e7561549ad3d885c
 source_sha256: 6e982c49a2d135f377bf9cecf664977415042b03ad8092e7112b6be0743733a1
 cargo_sha256: bd9f215f334dceae8b36bf451135766efb2f2fd09a1b4147d15c73d4f69cc455
 world_sha256: 0a7313a3dd0aa5c41e90b244f039886104d47ce35544350dbfa738da23ba0d2c
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:02:15Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T04:38:18Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-13T23:02:15Z }
+  - { by: process:lengua-check, at: 2026-11-14T04:38:18Z }
 title: prices
 status: draft
 ---
