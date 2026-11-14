@@ -289,6 +289,7 @@ jobs:
               if [ "$(uname)" = Darwin ]; then sum=$(shasum -a 256 "$f" | cut -d' ' -f1); else sum=$(sha256sum "$f" | cut -d' ' -f1); fi
               echo "$(wc -c < "$f" | tr -d ' ') $sum $f"
             done) > "$here/notes-export.txt"
+            cp -r "$export_dir" "$here/notes-out"
           fi
           ls -l "same/${{ matrix.target }}"
           cd "same/${{ matrix.target }}" && (sha256sum *.wasm 2> /dev/null || shasum -a 256 *.wasm) | tee sums.txt
