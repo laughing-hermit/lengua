@@ -224,7 +224,6 @@ pub fn lint(input: &WebLintInput) -> WebLintOutput {
             screen,
             lines: &lines,
             packages: &input.packages,
-            client: &input.client,
             asyncs: &asyncs,
         };
         let items = check::run(&context, &program, &mut output.findings);

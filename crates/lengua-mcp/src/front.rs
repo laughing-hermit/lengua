@@ -343,11 +343,11 @@ fn exported(dir: &Path, prefix: &str, out: &mut Vec<(String, u64)>) {
 pub(crate) fn assets_text(files: &[(String, u64)]) -> String {
     let mut out = format!("const FILES: [(&str, &str, &[u8]); {}] = [\n", files.len());
     for (name, _) in files {
+        let path = format!("../../web/out/{name}");
         let _ = writeln!(
             out,
-            "    ({name:?}, {:?}, include_bytes!({:?})),",
+            "    ({name:?}, {:?}, include_bytes!({path:?})),",
             media_type(name),
-            format!("../../web/out/{name}")
         );
     }
     out.push_str("];\n\n#[must_use]\npub fn asset(path: &str) -> Option<(&'static str, &'static [u8])> {\n    let path = path.split(['?', '#']).next().unwrap_or(\"\").trim_start_matches('/');\n    let wanted = if path.is_empty() || path.ends_with('/') {\n        format!(\"{path}index.html\")\n    } else {\n        path.to_string()\n    };\n    let inside = format!(\"{wanted}/index.html\");\n    FILES\n        .iter()\n        .find(|(name, _, _)| *name == wanted)\n        .or_else(|| FILES.iter().find(|(name, _, _)| *name == inside))\n        .map(|(_, kind, bytes)| (*kind, *bytes))\n}\n");

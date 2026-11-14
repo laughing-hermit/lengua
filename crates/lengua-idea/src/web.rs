@@ -225,7 +225,7 @@ pub(crate) fn routes(top: &Constraints, tests: &[Test], findings: &mut Vec<Findi
         if route.served_by.is_empty() {
             findings.push(Finding {
                 file: "idea.md".to_string(),
-                line: *line,
+                line: route.line,
                 code: "route-untested",
                 message: format!(
                     "no example requests the route `{method} {path}`, so its answers have no shape; add an example with `- Request: `{method} ...``"

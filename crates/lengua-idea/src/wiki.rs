@@ -146,11 +146,7 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
         )
     };
     let of = |kind: IdeaKind| -> Vec<String> {
-        pages
-            .iter()
-            .filter(|p| p.kind == kind)
-            .map(&line)
-            .collect()
+        pages.iter().filter(|p| p.kind == kind).map(&line).collect()
     };
     out.push_str("\n# Back end\n");
     section(&mut out, "## Program", &of(IdeaKind::Program));

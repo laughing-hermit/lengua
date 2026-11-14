@@ -23,7 +23,6 @@ pub(crate) struct Context<'x> {
     pub screen: &'x WebSource,
     pub lines: &'x Lines,
     pub packages: &'x [String],
-    pub client: &'x [String],
     pub asyncs: &'x [String],
 }
 
@@ -193,11 +192,10 @@ impl Checker<'_, '_> {
     fn floating(&self, expression: &Expression) -> bool {
         match inner(expression) {
             Expression::CallExpression(call) => match callee_name(call) {
-                Some("catch") => false,
+                Some("catch") | None => false,
                 Some("then") => call.arguments.len() < 2,
                 Some("finally") => true,
                 Some(name) => self.context.asyncs.iter().any(|a| a == name),
-                None => false,
             },
             Expression::UnaryExpression(u) => {
                 u.operator == UnaryOperator::Void
@@ -562,7 +560,7 @@ pub(crate) fn assertions(screens: &[WebSource], reads: &[Read], findings: &mut V
 fn reaches(edges: &[Vec<usize>], from: usize, to: usize) -> bool {
     let mut seen = vec![false; edges.len()];
     let mut stack: Vec<usize> = edges.get(from).cloned().unwrap_or_default();
-    for _ in 0..edges.len() * edges.len() + 1 {
+    for _ in 0..=(edges.len() * edges.len()) {
         let Some(at) = stack.pop() else {
             return false;
         };
