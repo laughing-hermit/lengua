@@ -198,8 +198,9 @@ and 7.
   10 s for the port) and starts each `Client`, which connects to the program's port; `finish`
   stops them and gives what each client got.
 - `wrapper.rs` (since L8): with `LENGUA_RUSTC_WRAPPER` set (`MARK`), `lengua-mcp <rustc>
-  <arguments>` is the rustc wrapper that the build job gives Cargo (`RUSTC_WRAPPER`): `run`
-  starts the compiler with the arguments `rewritten`, where a crate built for a `wasm32` target
-  gets a `-C metadata` from `metadata` (its name, crate types, edition, target, `--cfg` values,
-  the names of its `--extern` crates and its version, read by `value`), so that a component has
-  the same bytes on every system; a crate built for the host keeps Cargo's.
+  <arguments>` is the rustc wrapper that the build job gives Cargo (`RUSTC_WRAPPER`). For a crate
+  built for `wasm32`, `rewritten` (`replaced`, `codegen`) gives `-C metadata` and `-C
+  extra-filename` from `metadata` (its name, crate types, edition, target, `--cfg` values, extern
+  names and version, read by `value`); `run` copies the `.rmeta` that rustc announces to Cargo's
+  name (`artifact_line`) and, at the end, gives every output Cargo's name (`rename_outputs`).
+  So a component has the same bytes on every system; a crate built for the host keeps Cargo's.
