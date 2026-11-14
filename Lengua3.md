@@ -768,6 +768,10 @@ server component and served by it: at each build, lengua writes a small Rust cra
 `lengua_web::asset(path)` with the file's media type and bytes, and the server serves
 `/_next/...`, `/` and each screen's `/<name>/` from it. One file to ship, one lock; the server
 answers its own routes (by convention under `/api/`) and every other `GET` from the export.
+Measured at L8 (run 43552069900, Linux x86-64): `examples/notes` is one file of 1,095,636
+bytes, of which the export is 39 files and 1,017,050 bytes (Next.js 16.4.6, React 19.3.1, the json-render
+catalog and the `titles` library's browser module); `lengua-run` served its first page 414 ms after
+it started.
 
 **What is not used, and why.** The export is plain files, so any Next.js feature that needs a
 Node server at request time is not used; the WebAssembly back end does that work instead:
