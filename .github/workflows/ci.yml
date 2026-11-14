@@ -213,6 +213,13 @@ jobs:
             echo "$f: $(wc -c < "$f") bytes"
             cargo run --locked -q -p lengua-mcp -- imports "$f"
           done
+      - name: greet built with and without lengua's rustc wrapper (a check of the wrapper)
+        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' && matrix.target == 'linux-x86_64' }}
+        run: |
+          d=target/tmp/lengua-mcp-greet/greet
+          (cd "$d" && RUSTC_WRAPPER="$GITHUB_WORKSPACE/target/debug/lengua-mcp" LENGUA_RUSTC_WRAPPER=1 cargo build -v --release --target wasm32-wasip2 --offline --target-dir "$RUNNER_TEMP/with" 2>&1 | grep -E 'Running .*crate-name (wasip2|greet) ' | cut -c1-600)
+          (cd "$d" && cargo build -q --release --target wasm32-wasip2 --offline --target-dir "$RUNNER_TEMP/without")
+          sha256sum "$RUNNER_TEMP/with/wasm32-wasip2/release/greet.wasm" "$RUNNER_TEMP/without/wasm32-wasip2/release/greet.wasm" "$d/target/wasm32-wasip2/release/greet.wasm"
       - name: the bytes of the built components, for the check that every system builds the same
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |
