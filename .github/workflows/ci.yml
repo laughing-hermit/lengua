@@ -213,29 +213,6 @@ jobs:
             echo "$f: $(wc -c < "$f") bytes"
             cargo run --locked -q -p lengua-mcp -- imports "$f"
           done
-      - name: the shop built again from clean on one system, to see whether its bytes change from build to build
-        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' && matrix.target == 'linux-x86_64' }}
-        run: |
-          curl -sSfL -o wt.tar.gz https://github.com/bytecodealliance/wasm-tools/releases/download/v1.263.0/wasm-tools-1.263.0-x86_64-linux.tar.gz
-          echo "21c036c1740a0552124c79c6e2170cb61c5b016005671a6d5bc06cf642165431  wt.tar.gz" | sha256sum -c
-          tar xzf wt.tar.gz
-          tools="$PWD/wasm-tools-1.263.0-x86_64-linux/wasm-tools"
-          d=target/tmp/lengua-mcp-shop/examples/shop
-          out="$PWD/again"
-          mkdir -p "$out"
-          for i in 1 2 3 4; do
-            (cd "$d" && cargo clean -q)
-            (cd "$d" && cargo build -q --release --target wasm32-wasip2 --offline)
-            cp "$d/target/wasm32-wasip2/release/shop.wasm" "$out/shop-$i.wasm"
-            sha256sum "$out/shop-$i.wasm"
-          done
-          for i in 2 3 4; do
-            if ! cmp -s "$out/shop-1.wasm" "$out/shop-$i.wasm"; then
-              echo "== build 1 and build $i differ"
-              diff <("$tools" print "$out/shop-1.wasm") <("$tools" print "$out/shop-$i.wasm") | head -60 || true
-              break
-            fi
-          done
       - name: the bytes of the built components, for the check that every system builds the same
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |
@@ -350,6 +327,12 @@ jobs:
           pattern: built-*
           merge-multiple: true
           path: built
+      - name: wasm-tools 1.263.0, pinned by SHA-256, to show what differs
+        run: |
+          curl -sSfL -o wt.tar.gz https://github.com/bytecodealliance/wasm-tools/releases/download/v1.263.0/wasm-tools-1.263.0-x86_64-linux.tar.gz
+          echo "21c036c1740a0552124c79c6e2170cb61c5b016005671a6d5bc06cf642165431  wt.tar.gz" | sha256sum -c
+          tar xzf wt.tar.gz
+          echo "$PWD/wasm-tools-1.263.0-x86_64-linux" >> "$GITHUB_PATH"
       - name: hello and the shop have the same SHA-256 on every system that built them
         run: |
           ls built
@@ -372,7 +355,7 @@ jobs:
                 status=1
                 echo "  differs from $(basename "$(dirname "$first")"): $(cmp -l "$first" "$file" | wc -l) bytes differ; the first differences:"
                 cmp -l "$first" "$file" | head -20 || true
-                diff <(strings -n 8 "$first") <(strings -n 8 "$file") | head -40 || true
+                diff <(wasm-tools print "$first") <(wasm-tools print "$file") | head -60 || true
               fi
             done
           done
