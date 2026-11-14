@@ -494,6 +494,7 @@ shop/
   web/vitest.config.mts     generated: how the screen tests run
   web/postcss.config.mjs    generated: Tailwind CSS for shadcn/ui
   web/app/layout.tsx        generated: the page around every screen
+  web/app/not-found.tsx     generated: the page of a path that is not there (since L10)
   web/app/globals.css       generated: Tailwind and shadcn/ui's theme
   web/app/page.tsx          generated: the route of the screen `home`, `/`
   web/app/basket/page.tsx   generated: the route of each other screen, `/<name>/`

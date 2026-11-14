@@ -741,6 +741,10 @@ fn texts(
         ));
     }
     out.push(("web/app/layout.tsx".to_string(), layout(title)));
+    out.push((
+        "web/app/not-found.tsx".to_string(),
+        include_str!("front/not-found.tsx").to_string(),
+    ));
     for screen in screens {
         let file = if screen == "home" {
             "web/app/page.tsx".to_string()

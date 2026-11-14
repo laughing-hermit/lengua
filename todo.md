@@ -670,6 +670,13 @@ next starts (Lengua3.md, section 8).
 - **2026-11-14, L10: CI**: the check job has 120 minutes; Linux runs the tests under `xvfb-run`
   (installed on the ARM64 image when missing) with `ELECTRON_DISABLE_SANDBOX`, since the runner's
   user namespaces are restricted; the pnpm lockfile job holds `examples/desk` too.
+- **2026-11-14, L10: `web/app/not-found.tsx` is generated**: with Next.js's own not-found page,
+  its `404.html` had two `<title>`s in an order that changed from build to build, so the
+  export of `notes` and `desk` differed between runners under load (run 43601765013). The
+  generated page has no title of its own.
+- **2026-11-14, L10: the two tests that run `ask` take turns**: both start its test server on
+  port 7813, and when they ran at once one got the other's connection (run 43601765013).
+
 
 ## Never exercised
 

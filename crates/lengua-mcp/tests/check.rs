@@ -1150,6 +1150,14 @@ fn the_shared_library_vectors_uses_json_and_is_checked() {
     shared_library_using("vectors", &["json"]);
 }
 
+static PORT_7813: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn alone() -> std::sync::MutexGuard<'static, ()> {
+    PORT_7813
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn ask_checked(test: &str, server: &mut Server) -> PathBuf {
     let root = bundle(
         test,
@@ -1173,6 +1181,7 @@ fn ask_checked(test: &str, server: &mut Server) -> PathBuf {
 
 #[test]
 fn a_program_asks_a_model_calls_a_service_and_gets_a_secret_under_its_grants() {
+    let _alone = alone();
     let mut server = Server::start();
     let folder = ask_checked("ask", &mut server);
     let reply = done(&mut server, &folder, 5000);
@@ -1212,6 +1221,7 @@ fn files_holding(folder: &Path, marked: &str, found: &mut Vec<String>) {
 
 #[test]
 fn a_secret_reaches_the_program_and_no_file_or_reply_of_lengua() {
+    let _alone = alone();
     let marked = "lengua-marked-secret-7f3a";
     let mut command = Command::new(env!("CARGO_BIN_EXE_lengua-mcp"));
     command
