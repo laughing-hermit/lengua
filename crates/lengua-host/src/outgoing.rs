@@ -133,7 +133,7 @@ impl WasiHttpHooks for Hooks {
             };
         }
         let address = authority_of(request.uri()).unwrap_or_default();
-        if self.calls.iter().any(|c| *c == address) {
+        if self.calls.contains(&address) {
             return Box::new(send(request, options));
         }
         Box::new(std::future::ready(Err(HttpError::HttpRequestDenied)))

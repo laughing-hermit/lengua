@@ -126,6 +126,9 @@ pub(crate) async fn ask(
             "the model answers `POST /ask`, `POST /stream` and `POST /embed`",
         );
     };
+    if request.method() != hyper::Method::POST {
+        return text_reply(405, "the model answers only `POST`");
+    }
     let structured = request
         .headers()
         .get("x-lengua-reply")

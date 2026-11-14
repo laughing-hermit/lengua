@@ -1,7 +1,7 @@
 # Purpose
 
-The library helps a program that asks an AI model. It fills the parts of a prompt, it chains
-two steps, it reads the fields of an answer in JSON, and it tells which answers of the host to
+The library helps a program that asks an AI model. It fills the parts of a prompt and chains
+two steps. It reads the fields of an answer in JSON, and it tells which answers of the host to
 try again. It uses the library `json`, so it is a `lengua` library that uses another `lengua`
 library.
 

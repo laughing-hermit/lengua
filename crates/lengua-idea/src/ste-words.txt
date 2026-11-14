@@ -33,6 +33,7 @@ am m
 among p
 an d
 and c
+angle n
 another d
 answer nv
 any d
@@ -169,6 +170,7 @@ convert v
 copy nv
 correct av
 correctly r
+cosine n
 count nv
 crate n
 create v
@@ -453,6 +455,7 @@ must m
 my o
 name n
 near p
+nearest a
 necessary a
 need v
 negative a
@@ -556,6 +559,7 @@ push v
 put vx
 quantity n
 query n
+question n
 queue n
 quick a
 quickly r

@@ -1,7 +1,7 @@
 # Purpose
 
-The library keeps the logins of a program: it makes the hash of a password, it compares a
-password with a hash, and it signs and checks the tokens of a session. It uses the library
+The library keeps the logins of a program. It makes the hash of a password and compares a
+password with a hash. It signs and checks the tokens of a session. It uses the library
 `hashes` for SHA-256, so it is a `lengua` library that uses another `lengua` library. The hash
 of a password is PBKDF2 with HMAC-SHA256 of RFC 8018, and the HMAC is the HMAC of RFC 2104.
 

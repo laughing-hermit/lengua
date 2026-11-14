@@ -36,7 +36,12 @@ fn placeholder(text: &str, values: &[(&str, &str)]) -> (String, usize) {
         .strip_prefix('{')
         .and_then(|t| t.split_once('}'))
         .map(|(name, _)| name);
-    let found = name.and_then(|n| values.iter().find(|(key, _)| *key == n).map(|(_, v)| (n, *v)));
+    let found = name.and_then(|n| {
+        values
+            .iter()
+            .find(|(key, _)| *key == n)
+            .map(|(_, v)| (n, *v))
+    });
     debug_assert!(!text.is_empty());
     match found {
         Some((name, value)) => (value.to_string(), name.len() + 2),
