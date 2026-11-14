@@ -8,11 +8,12 @@ used_by: [idea]
 label: checked
 idea_sha256: b0c04c3aa0476d6bfd9d7010c7fab9d9b6cd2a26f00d73eadb90c3866b72c409
 source_sha256: 03ba8a5f304d1e933b2e97d3f275206bd05235eefb61d340902beed321e85673
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T10:07:17Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T12:47:48Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T10:07:17Z }
+  - { by: human:owner, at: 2026-11-14T12:00:00Z }
+  - { by: process:lengua-check, at: 2026-11-14T12:47:48Z }
 title: lines
-status: draft
+status: stable
 ---
 
 # Purpose

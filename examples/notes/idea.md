@@ -11,11 +11,12 @@ source_sha256: 6749f59b9dcf23e799e9387e2ac6d03160ff9489971cf347d1872a40f04f858d
 cargo_sha256: a71e617ef16a3533e8b7ccc811be90a821436cd6b0c75e52e9bc9f8971760d96
 world_sha256: 432ab60b895088c9bc0206a29ba4e132e6b86715dbabb9ceab8b2b6adf271f30
 web_sha256: 3c10a01c59ede2c82f1f315ee5d9a354e90bfc8d7bae13c065edeeefdcfb5a44
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T10:11:53Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T12:52:52Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T10:11:53Z }
+  - { by: human:owner, at: 2026-11-14T12:00:00Z }
+  - { by: process:lengua-check, at: 2026-11-14T12:52:52Z }
 title: notes
-status: draft
+status: stable
 approved: { sha256: 7048ff4a72c232f317ac7cd746074574215570a3768d84901ed643f3e88fd768, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 

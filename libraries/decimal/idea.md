@@ -10,11 +10,12 @@ idea_sha256: 6f8b62af5416cdfc6cdcd57e2e1ea9c60faf0e7ae3f54731b9ad647d8b06abd3
 source_sha256: 0aa2edc6181445c8fbdac7134d55ba2356ab1459260b66676e3dbdb1055d9e1b
 cargo_sha256: 01621d58ac0019863e3a52a353be2934020f2f6642e2980cc15e79005ed1b972
 world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T09:58:28Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T12:38:01Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T09:58:28Z }
+  - { by: human:owner, at: 2026-11-14T12:00:00Z }
+  - { by: process:lengua-check, at: 2026-11-14T12:38:01Z }
 title: decimal
-status: draft
+status: stable
 approved: { sha256: 4b280788615850a274f3cebc26ae2782b366fe6514727fe798a382ee94b2a7f2, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 

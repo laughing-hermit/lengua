@@ -10,11 +10,12 @@ idea_sha256: b8f02ba5d9b46ff8de968eeb9e7dfc6ffb6a2b7c3b854acebc02f0d8e211c81b
 source_sha256: 877c938a3b33ab2d737b222a10d53f3e8748a1662aac0ae1a72e041c94207430
 cargo_sha256: 9269c30f91e4cf90b9a78a6c77110c4f5f99f7c2a3e016430c30debe13b5aa5f
 world_sha256: 1dcb1f39bae916e91c7370da7a68bfdf772df1c0ecd52d570128a0a7cead5ab1
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T10:06:10Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T12:46:36Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T10:06:10Z }
+  - { by: human:owner, at: 2026-11-14T12:00:00Z }
+  - { by: process:lengua-check, at: 2026-11-14T12:46:36Z }
 title: clock
-status: draft
+status: stable
 approved: { sha256: 52c51adfcedd810f24ebde609c3f55a07acdddeab3c543ba66147712b2df359a, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
