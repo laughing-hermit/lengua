@@ -84,9 +84,11 @@ pub(crate) fn rules(
             (Part::Folder(_), _) => {}
         }
     }
-    let Some(own) = top.natives.iter().find(|l| {
-        matches!(l.part, Part::Own(_)) && l.reason.is_some_and(|r| r != Reason::Desktop)
-    }) else {
+    let Some(own) = top
+        .natives
+        .iter()
+        .find(|l| matches!(l.part, Part::Own(_)) && l.reason.is_some_and(|r| r != Reason::Desktop))
+    else {
         return place;
     };
     if shape != Shape::Command || place.desktop {
@@ -149,7 +151,9 @@ fn one(
         finding(
             line,
             "native-lock",
-            format!("the native part `{path}` is not checked as it is: {message}. Call check on its folder first"),
+            format!(
+                "the native part `{path}` is not checked as it is: {message}. Call check on its folder first"
+            ),
         )
     };
     let key = key.ok_or_else(|| unverified("lengua could not read the user's key".to_string()))?;
@@ -173,7 +177,11 @@ fn one(
     })
 }
 
-pub(crate) fn resolve(folder: &Path, top: &Constraints, findings: &mut Vec<Finding>) -> Vec<Native> {
+pub(crate) fn resolve(
+    folder: &Path,
+    top: &Constraints,
+    findings: &mut Vec<Finding>,
+) -> Vec<Native> {
     let wanted: Vec<(&str, &str, usize)> = top
         .natives
         .iter()
@@ -283,7 +291,11 @@ mod tests {
             desktop: true,
         };
         assert!(where_it_runs(Shape::Server, &desktop, &[], true).starts_with("An Electron app"));
-        assert!(declares_native("# Constraints\n\n- Native: a model, for large AI models\n"));
-        assert!(!declares_native("- Native: `../model`, for large AI models\n"));
+        assert!(declares_native(
+            "# Constraints\n\n- Native: a model, for large AI models\n"
+        ));
+        assert!(!declares_native(
+            "- Native: `../model`, for large AI models\n"
+        ));
     }
 }

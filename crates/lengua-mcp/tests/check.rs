@@ -2261,7 +2261,10 @@ fn a_native_part_and_a_desktop_app_run_on_this_computer() {
     let _ = child.wait();
     let logs = logs.join().unwrap_or_default();
     assert!(page.starts_with("HTTP/1.1 200"), "{page}");
-    assert!(answer.ends_with("{\"text\":\"helloeedbfbed\"}"), "{answer}\n{logs}");
+    assert!(
+        answer.ends_with("{\"text\":\"helloeedbfbed\"}"),
+        "{answer}\n{logs}"
+    );
     assert!(
         logs.contains("the native part `model` says: The model runs on "),
         "{logs}"
@@ -2272,7 +2275,8 @@ fn a_native_part_and_a_desktop_app_run_on_this_computer() {
         assert_eq!(found["status"], 200, "{found:#}");
         assert_eq!(found["body"], "{\"text\":\"abfbedbfbe\"}", "{found:#}");
     }
-    let code = read(&model, "src/main.rs").replace("const STEPS: usize = 8;", "const STEPS: usize = 9;");
+    let code =
+        read(&model, "src/main.rs").replace("const STEPS: usize = 8;", "const STEPS: usize = 9;");
     fs::write(model.join("src/main.rs"), code).expect("a change of the native part");
     let (output, _) = run_lengua_run(&desk, &[], &home());
     let message = String::from_utf8_lossy(&output.stderr);

@@ -330,7 +330,7 @@ fn seal_program(
     let facts = Facts {
         kind: if library {
             Kind::Library
-        } else if plan.native {
+        } else if plan.native() {
             Kind::Native
         } else {
             Kind::Program
@@ -590,7 +590,7 @@ impl Lengua {
         }
         if lengua_idea::program(&folder)
             .build
-            .is_some_and(|b| b.native)
+            .is_some_and(|b| b.native())
         {
             return Ok(Json(plain("refused", Some(NATIVE_RUN.to_string()), 0)));
         }

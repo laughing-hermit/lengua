@@ -786,9 +786,15 @@ fn native_folder(test: &str, constraints: &str, code: &str) -> PathBuf {
 #[test]
 fn a_native_need_is_declared_with_a_named_reason_or_refused() {
     let plain = "fn main() {\n    println!(\"word\");\n}\n";
-    let threads = "fn main() {\n    let _ = std::thread::spawn(|| 1).join();\n    println!(\"word\");\n}\n";
+    let threads =
+        "fn main() {\n    let _ = std::thread::spawn(|| 1).join();\n    println!(\"word\");\n}\n";
     let cases = [
-        ("threads", "", threads, vec![("src/main.rs".to_string(), "native-undeclared")]),
+        (
+            "threads",
+            "",
+            threads,
+            vec![("src/main.rs".to_string(), "native-undeclared")],
+        ),
         (
             "reason",
             "- Native: a faster screen, for speed alone\n",
@@ -826,9 +832,17 @@ fn a_native_need_is_declared_with_a_named_reason_or_refused() {
     let report = lengua_idea::program(&native);
     assert_eq!(report.findings, []);
     let build = report.build.expect("a build");
-    assert!(build.native);
-    assert!(build.artifact.starts_with("target/release/"), "{}", build.artifact);
-    assert!(build.place.starts_with("A native program"), "{}", build.place);
+    assert!(build.native());
+    assert!(
+        build.artifact.starts_with("target/release/"),
+        "{}",
+        build.artifact
+    );
+    assert!(
+        build.place.starts_with("A native program"),
+        "{}",
+        build.place
+    );
     let cargo = lengua_idea::check(&native, NOV_13_2026);
     assert_eq!(cargo.findings, []);
     let manifest = read(&native, "Cargo.toml");

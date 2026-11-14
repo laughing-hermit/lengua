@@ -65,7 +65,9 @@ fn one(
         return Err(finding(
             line,
             "native-undeclared",
-            format!("`{path}` is a native part, not a library: it runs outside the sandbox, so the program names it with `- Native: `{path}`, for <reason>`"),
+            format!(
+                "`{path}` is a native part, not a library: it runs outside the sandbox, so the program names it with `- Native: `{path}`, for <reason>`"
+            ),
         ));
     }
     let name = fs::canonicalize(&place)

@@ -28,7 +28,11 @@ fn read_all(pipe: Option<impl Read + Send + 'static>) -> Option<thread::JoinHand
     })
 }
 
-pub(crate) fn run_part(part: &Native, input: &[u8], limit: Duration) -> Result<(bool, Vec<u8>), String> {
+pub(crate) fn run_part(
+    part: &Native,
+    input: &[u8],
+    limit: Duration,
+) -> Result<(bool, Vec<u8>), String> {
     let bytes = std::fs::read(&part.binary)
         .map_err(|e| format!("lengua could not read the native part `{}`: {e}", part.name))?;
     if lengua_idea::sha256_hex(&bytes) != part.binary_sha256 {
@@ -44,7 +48,12 @@ pub(crate) fn run_part(part: &Native, input: &[u8], limit: Duration) -> Result<(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("lengua could not start the native part `{}`: {e}", part.name))?;
+        .map_err(|e| {
+            format!(
+                "lengua could not start the native part `{}`: {e}",
+                part.name
+            )
+        })?;
     let given = input.to_vec();
     let writer = child.stdin.take().map(|mut pipe| {
         thread::spawn(move || {
@@ -81,9 +90,16 @@ pub(crate) fn run_part(part: &Native, input: &[u8], limit: Duration) -> Result<(
     })
 }
 
-pub(crate) async fn call(request: hyper::Request<WasiBody>, part: Native, limit: Duration) -> Reply {
+pub(crate) async fn call(
+    request: hyper::Request<WasiBody>,
+    part: Native,
+    limit: Duration,
+) -> Reply {
     if request.method() != hyper::Method::POST {
-        return text(405, "a native part answers only `POST`: the body is its standard input");
+        return text(
+            405,
+            "a native part answers only `POST`: the body is its standard input",
+        );
     }
     let bytes = request.into_body().collect().await?.to_bytes().to_vec();
     let found = tokio::task::spawn_blocking(move || run_part(&part, &bytes, limit))

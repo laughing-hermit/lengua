@@ -136,7 +136,7 @@ pub(crate) fn package_name(name: &str) -> bool {
         && !NOT_NAMES.contains(&name)
 }
 
-pub(crate) struct Feature {
+pub(crate) struct Flag {
     pub name: String,
     pub feature: String,
     pub system: Option<&'static str>,
@@ -150,7 +150,7 @@ pub(crate) struct Package<'a> {
     pub libraries: &'a [(String, String)],
     pub web: bool,
     pub native: bool,
-    pub features: &'a [Feature],
+    pub features: &'a [Flag],
 }
 
 fn quoted_list(items: &[String]) -> String {
@@ -158,7 +158,7 @@ fn quoted_list(items: &[String]) -> String {
     format!("[{}]", quoted.join(", "))
 }
 
-fn crate_entry(name: &str, version: &str, features: &[&Feature], system: Option<&str>) -> String {
+fn crate_entry(name: &str, version: &str, features: &[&Flag], system: Option<&str>) -> String {
     let named: Vec<String> = features
         .iter()
         .filter(|f| f.name == name && f.system == system)
@@ -175,7 +175,7 @@ fn crate_entry(name: &str, version: &str, features: &[&Feature], system: Option<
 }
 
 fn dependencies(package: &Package) -> Vec<String> {
-    let all: Vec<&Feature> = package.features.iter().collect();
+    let all: Vec<&Flag> = package.features.iter().collect();
     let mut lines: Vec<(String, String)> = package
         .crates
         .iter()
@@ -198,7 +198,7 @@ fn dependencies(package: &Package) -> Vec<String> {
 }
 
 fn target_sections(package: &Package, lines: &mut Vec<String>) {
-    let all: Vec<&Feature> = package.features.iter().collect();
+    let all: Vec<&Flag> = package.features.iter().collect();
     let mut systems: Vec<&str> = package.features.iter().filter_map(|f| f.system).collect();
     systems.sort_unstable();
     systems.dedup();
@@ -207,7 +207,10 @@ fn target_sections(package: &Package, lines: &mut Vec<String>) {
             "[target.'cfg(target_os = \"{system}\")'.dependencies]"
         ));
         for (name, version) in package.crates {
-            if all.iter().any(|f| f.name == *name && f.system == Some(system)) {
+            if all
+                .iter()
+                .any(|f| f.name == *name && f.system == Some(system))
+            {
                 lines.push(crate_entry(name, version, &all, Some(system)));
             }
         }
@@ -265,7 +268,12 @@ pub(crate) fn cargo_toml(package: &Package) -> String {
         lines.push("missing_errors_doc = \"allow\"".to_string());
         lines.push("missing_panics_doc = \"allow\"".to_string());
     }
-    for line in ["", "[profile.release]", "opt-level = 3", "panic = \"abort\""] {
+    for line in [
+        "",
+        "[profile.release]",
+        "opt-level = 3",
+        "panic = \"abort\"",
+    ] {
         lines.push(line.to_string());
     }
     if !package.native {
@@ -420,12 +428,12 @@ pub(crate) fn plan(
         });
     }
     let used = crates(pages, constraints, findings);
-    let features: Vec<Feature> = constraints
+    let features: Vec<Flag> = constraints
         .iter()
         .flat_map(|c| c.crates.iter())
         .filter_map(|c| {
             let (feature, system) = c.feature.clone()?;
-            Some(Feature {
+            Some(Flag {
                 name: c.name.clone(),
                 feature,
                 system,
@@ -755,11 +763,11 @@ world program {
         assert!(world.contains("  export wasi:http/incoming-handler@0.2.12;\n"));
         assert!(!world.contains("wasi:cli/run"));
         assert_eq!(
-            super::artifact("my-shop", Shape::Server),
+            super::artifact("my-shop", Shape::Server, false),
             "target/wasm32-wasip2/release/my_shop.wasm"
         );
         assert_eq!(
-            super::artifact("my-shop", Shape::Command),
+            super::artifact("my-shop", Shape::Command, false),
             "target/wasm32-wasip2/release/my-shop.wasm"
         );
     }

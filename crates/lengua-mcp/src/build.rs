@@ -220,7 +220,7 @@ impl Worker {
             s.stage = Stage::Testing;
             s.tests.total += cases.len();
         });
-        let runner = match (&seal, self.build.native) {
+        let runner = match (&seal, self.build.native()) {
             (_, true) => Runner::Native(&binary),
             (Some(seal), false) => Runner::Sealed(&seal.lock),
             (None, false) => return self.finish(Stage::Done, Vec::new()),
@@ -284,7 +284,7 @@ impl Job {
             inputs: build.inputs.clone(),
             started: Instant::now(),
             state: Arc::new(Mutex::new(Status {
-                native: build.native,
+                native: build.native(),
                 ..Status::new(Stage::Building)
             })),
             child: Arc::new(Mutex::new(None)),
@@ -460,7 +460,7 @@ fn step(folder: &Path, args: &[&str], slot: &Mutex<Option<Child>>) -> Result<(),
 }
 
 pub(crate) fn target_args(build: &Build) -> Vec<&'static str> {
-    if build.native {
+    if build.native() {
         Vec::new()
     } else {
         vec!["--target", build.target]
@@ -483,14 +483,20 @@ fn compile(
     let target = target_args(build);
     let mut clippy = vec!["clippy", "--release"];
     clippy.extend(&target);
-    clippy.extend(["--offline", "--message-format=short", "--", "-D", "warnings"]);
+    clippy.extend([
+        "--offline",
+        "--message-format=short",
+        "--",
+        "-D",
+        "warnings",
+    ]);
     let mut building = vec!["build", "--release"];
     building.extend(&target);
     building.extend(["--offline", "--message-format=short"]);
     for args in [&clippy, &building] {
         step(folder, args, slot)?;
     }
-    if build.native {
+    if build.native() {
         return native_built(folder, build);
     }
     if build.library {

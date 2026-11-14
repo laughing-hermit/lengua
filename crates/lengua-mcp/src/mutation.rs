@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use lengua_idea::{Build, Case, Mutant, Mutation, Shape, Test};
 
 use crate::build::{Remark, Worker, cargo, lock, target_args};
-use crate::testing::Runner;
 use crate::host::unseal;
+use crate::testing::Runner;
 use crate::{front, harness, testing};
 
 pub(crate) const MUTANTS: usize = 40;
@@ -130,7 +130,7 @@ pub(crate) fn mutant_manifest(text: &str, package: &str, folder: &Path) -> Strin
 
 fn tested_artifact(build: &Build) -> String {
     let name = mutant_name(&build.package);
-    if build.native {
+    if build.native() {
         return format!("target/release/{name}{}", std::env::consts::EXE_SUFFIX);
     }
     match build.shape {
@@ -249,7 +249,7 @@ fn verdict(
     if sha256 == original {
         return Some(Verdict::Same);
     }
-    if worker.build.native {
+    if worker.build.native() {
         let binary = worker.folder.join(&space.build.artifact);
         return judge(worker, space, cases, Runner::Native(&binary));
     }

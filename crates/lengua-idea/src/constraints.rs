@@ -80,13 +80,19 @@ pub(crate) struct NativeLine {
     pub line: usize,
 }
 
-const SYSTEMS: [(&str, &str); 3] = [("Linux", "linux"), ("macOS", "macos"), ("Windows", "windows")];
+const SYSTEMS: [(&str, &str); 3] = [
+    ("Linux", "linux"),
+    ("macOS", "macos"),
+    ("Windows", "windows"),
+];
 
 fn native_line(value: &str, line: usize) -> Option<NativeLine> {
     let (part, because) = value.split_once(", for ")?;
     let part = match backticked(part) {
         Some(folder) => library_path(folder).then(|| Part::Folder(folder.to_string()))?,
-        None if !part.trim().is_empty() && !part.contains('`') => Part::Own(part.trim().to_string()),
+        None if !part.trim().is_empty() && !part.contains('`') => {
+            Part::Own(part.trim().to_string())
+        }
         None => return None,
     };
     let because = because.trim().to_string();

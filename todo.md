@@ -23,7 +23,7 @@ next starts (Lengua3.md, section 8).
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Done on `wip/l7`; the five-runner landing run is named in the landing report |
 | L8 | The Next.js front end, exported statically and embedded in the one file; TypeScript held like Rust; the wiki across both sides | Built on `wip/l8-next`; the five-runner landing run is named in the landing report |
 | L9 | Full stack: AI models as a grant, storage, outgoing calls, secrets, logins, shared types, logs, embeddings, deployment, libraries using libraries, concurrent serving | Built on `wip/l9`; the five-runner landing run is named in the landing report |
-| L10 | Native parts and the Electron desktop app | Not started |
+| L10 | Native parts and the Electron desktop app; HTTPS in the host; the client's session token | Built on `wip/l10`; the five-runner landing run is named in the landing report |
 | L11 | The three skills (`vision`, `write-idea`, `build`), approval, "Where it runs", a product test in an interactive session | Not started |
 | L12 | The scale test: a Next.js and Rust full-stack application with an AI call | Not started |
 | L13 | The finish line: release, the never-exercised sweep, WASI 0.3 again, documents, the owner's guide, the final run | Not started |
@@ -610,13 +610,74 @@ next starts (Lengua3.md, section 8).
   `http1` features; all were in the graph through Wasmtime, so `Cargo.lock` gains no package
   (run 43563716392's lockfile job). No new crate or npm package for a program.
 
+- **2026-11-14, L10: HTTPS in the host** for ``- Calls: HTTPS at `host:port` `` and an
+  `https://` `LENGUA_MODEL_URL`. The crates, each with its reason (L9 refused them; TLS runs in
+  the native host, never in the program, and a cloud model is reached only over HTTPS):
+  - `rustls` 0.23, default features off, `ring`, `std`, `tls12`: the TLS of the host; writing TLS
+    is a large project of its own. The provider is `ring` 0.17 (C and assembly, built by `cc` on
+    every runner): the smallest provider `rustls` takes; `aws-lc-rs` brings more C and NASM or
+    CMake on Windows, and the pure-Rust providers (`rustls-rustcrypto`) are not audited. To
+    reverse: a pure-Rust provider once one is audited.
+  - `tokio-rustls` 0.26 (`ring`, `tls12`): `rustls` on the Tokio streams the host already uses.
+  - `webpki-roots` 1: Mozilla's roots, the same bytes on every system; the platform verifier
+    (`rustls-platform-verifier`) would differ per OS and bring each OS's crates. Extra roots, for
+    a gateway or a test, come from the PEM file of `LENGUA_TLS_ROOTS`.
+  - `rcgen` 0.14 (`crypto`, `ring`), a dev-dependency of `lengua-host` only: the test makes its
+    own root and server certificate, so no key is in the repository.
+  - What they bring, from the lockfile job (run 43579205024): 42 packages for every target, the
+    dev ones among them: `rustls`, `rustls-webpki`, `rustls-pki-types`, `ring`, `untrusted`,
+    `subtle`, `zeroize`, `tokio-rustls`, `webpki-roots`, a second `windows-sys` for `ring`, and,
+    for `rcgen` only, `time`, `yasna`, `x509-parser`, `asn1-rs`, `der-parser`, `nom` and others.
+- **2026-11-14, L10: the generated client sends the session's token**: each route function takes
+  `token = ""` last and sends `authorization: Bearer <token>`; a screen test answers a request
+  only from an example with the same `authorization`. The screen `login` of `notes` now calls
+  `GET /api/me` with its token and shows the name the server gives.
+- **2026-11-14, L10: `- Native: <part>, for <reason>`**, the reason one of six phrases (Lengua3.md,
+  section 1). A native part is a program folder of its own (`native-shape`, `native-grant`),
+  built for the computer with no `lto` (each mutant then links in seconds), tested and mutated as
+  processes, its lock of kind `native`; a WebAssembly program names it by folder and calls
+  `POST http://<name>.native/` through the host. To reverse: a part that stays up on a port of its
+  own, for a large model that loads once.
+- **2026-11-14, L10: the label `native`** goes to a native part whose checks would make it
+  `checked`; under 80% it is `tested`, and the "Where it runs" line still says native.
+- **2026-11-14, L10: what counts as an undeclared native need**: `std::thread::spawn`,
+  `thread::scope` and `process::Command` in a WebAssembly program's source, and a native part
+  named in `- Uses:` (`native-undeclared`). A plain text search of each Rust file, so a name in a
+  string also counts.
+- **2026-11-14, L10: Candle 0.11.1 for the local model** (`candle-core`, pure Rust; the crates it
+  brings are in the example's crate count): Burn would prove the same with far more crates (its
+  `wgpu` back end is the whole of `wgpu`). The model's weights come from a rule, so CI downloads
+  nothing and caches nothing. Metal on macOS through ``with `metal` on macOS``; CUDA is not
+  declared (NVIDIA's toolkit is not pure Rust and not on the runners).
+- **2026-11-14, L10: desktop apps**: `electron` 45.3.2 (the current release on 2026-11-14, read
+  from the npm registry), the one install script allowed (`allowBuilds`), since Electron's
+  package is a download of its binary checked against the sums it carries; `web/desktop/main.mjs`
+  is generated and held like the other files of `web/`; `lengua-run --desktop <folder>` serves
+  the one file and starts Electron, and the smoke test (`LENGUA_SMOKE`, `LENGUA_SMOKE_BODY`,
+  `LENGUA_SMOKE_OUT`) loads the first page, asks one request and quits. Nothing signed or
+  published.
+- **2026-11-14, L10: STE dictionary** gains `app`, `beside`, `computer`, `desktop`, `download`,
+  `inference`, `native`, `shell` and `weight`.
+- **2026-11-14, L10: CI**: the check job has 120 minutes; Linux runs the tests under `xvfb-run`
+  (installed on the ARM64 image when missing) with `ELECTRON_DISABLE_SANDBOX`, since the runner's
+  user namespaces are restricted; the pnpm lockfile job holds `examples/desk` too.
+
 ## Never exercised
 
 What the milestones built and no run has used, with the reason.
 
 - A live model: no run asks Ollama, llama.cpp or a cloud model (the `$0` rule and no model on
   the runners); `model::live` and `Events` are tested only by their unit tests.
-- HTTPS anywhere (no TLS, above).
+- HTTPS to a real service or a cloud model: the host's TLS is tested only against a local server
+  with a certificate made in the test (the $0 rule).
+- A real GPU: the runners have none, so `examples/model` runs on the CPU in CI (or on Metal, if a
+  macOS runner gives one), and CUDA is never built.
+- A large model through a native part, and a native part for training, shared-memory threads or
+  a device.
+- A desktop app signed, notarized or published, and one opened by a person: CI only starts it,
+  loads its first page, asks one request and quits.
+- `lengua-run` killed during a call of a native part: the part runs on to the end of its call
+  alone, and no test kills one there.
 - A deployment to Vercel (the owner's account), its `vercel.json` services and rewrites, and
   a lasting store behind `- Calls:`.
 - The container image on `linux/arm64`, and of an app with screens (CI builds `examples/greet`).
@@ -720,3 +781,6 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 - **2026-11-13, the wiki fix:** a shell command that ran `python3 --version` (a slip, while
   checking a file) was refused. Nothing needed it; the work went on with the editor's tools and
   `sed`.
+- **2026-11-14, L10:** a shell command of the builder that began with `perl -v` (a slip, before a
+  file edit) was refused, and another that ended in `python3` (a slip, after a `sed` edit of the
+  workflow) was refused. Mistakes, not needs: the work went on with the editor's tools and `sed`.

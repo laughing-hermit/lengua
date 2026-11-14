@@ -1,8 +1,8 @@
 mod http;
 mod json;
 mod model;
-mod network;
 mod native;
+mod network;
 mod outgoing;
 mod tls;
 

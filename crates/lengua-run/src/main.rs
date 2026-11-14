@@ -73,10 +73,10 @@ fn open_window(shell: PathBuf, main: PathBuf, address: String) {
 }
 
 fn not_this_kind(build: Option<&lengua_idea::Build>, desktop: bool) -> Option<&'static str> {
-    if build.is_some_and(|b| b.native) {
+    if build.is_some_and(|b| b.native()) {
         return Some(NATIVE);
     }
-    (desktop && !build.is_some_and(|b| b.desktop)).then_some(
+    (desktop && !build.is_some_and(|b| b.desktop())).then_some(
         "the idea is not a desktop app: it has no `- Native: a desktop window, for the Electron shell of a desktop app`",
     )
 }

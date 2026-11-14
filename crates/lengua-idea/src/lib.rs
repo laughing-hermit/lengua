@@ -7,8 +7,8 @@ mod generate;
 mod idea;
 mod json;
 mod library;
-mod native;
 pub mod lock;
+mod native;
 mod okf;
 mod rust;
 mod sha256;
@@ -33,8 +33,8 @@ pub use crate::library::Library;
 pub use crate::native::{HOST as NATIVE_HOST, Native, Place, where_it_runs};
 pub use crate::tree::{findings as wiki_findings, write_indexes as write_wiki_indexes};
 pub use crate::web::{
-    Browser, BrowserFn, CLIENT, DESKTOP, Front, PNPM, SUM, ScreenRun, browser_functions, component_name,
-    screen_route, screen_runs,
+    Browser, BrowserFn, CLIENT, DESKTOP, Front, PNPM, SUM, ScreenRun, browser_functions,
+    component_name, screen_route, screen_runs,
 };
 pub use lengua_lint::{Edit, Mutant, Mutation, apply, choose};
 
@@ -179,8 +179,7 @@ pub struct Build {
     pub tests: Vec<Test>,
     pub tests_hash: String,
     pub front: Option<Front>,
-    pub native: bool,
-    pub desktop: bool,
+    pub runs: Place,
     pub natives: Vec<Native>,
     pub place: String,
 }
@@ -210,6 +209,16 @@ pub struct WebLintOutput {
 pub type WebLint = fn(&WebLintInput) -> WebLintOutput;
 
 impl Build {
+    #[must_use]
+    pub fn native(&self) -> bool {
+        self.runs.native.is_some()
+    }
+
+    #[must_use]
+    pub fn desktop(&self) -> bool {
+        self.runs.desktop
+    }
+
     #[must_use]
     pub fn harness(&self) -> Self {
         Self {
@@ -686,7 +695,11 @@ fn build(folder: &Path, prepared: &Prepared) -> Build {
         generate::collect_skipping(folder, "web", &WEB_SKIPPED, &mut extra);
     }
     Build {
-        artifact: generate::artifact(&plan.package, prepared.shape, prepared.place.native.is_some()),
+        artifact: generate::artifact(
+            &plan.package,
+            prepared.shape,
+            prepared.place.native.is_some(),
+        ),
         package: plan.package.clone(),
         target: generate::TARGET,
         crates: plan.crates,
@@ -719,8 +732,7 @@ fn build(folder: &Path, prepared: &Prepared) -> Build {
         tests: prepared.tests.clone(),
         tests_hash,
         front: prepared.web.as_ref().map(|w| w.front.clone()),
-        native: prepared.place.native.is_some(),
-        desktop: prepared.place.desktop,
+        runs: prepared.place.clone(),
         natives: prepared.natives.clone(),
         place: where_it_runs(
             prepared.shape,
