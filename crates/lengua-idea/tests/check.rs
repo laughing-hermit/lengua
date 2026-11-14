@@ -118,14 +118,14 @@ title: lengua-idea-"
     );
     assert!(!words.contains("label: checked"));
     let index = read(&folder, "index.md");
-    assert!(index.starts_with("---\nokf_version: \"0.2\"\n---\n\n# Back end\n\n## Program\n\n* ["));
+    assert!(index.starts_with("---\nokf_version: \"0.2\"\n---\n\n# Back end: program\n\n* ["));
     assert!(
         index
             .contains("](idea.md) - The program counts the words in a text. Label: `unchecked`.\n")
     );
     assert!(index.contains(
         "
-## Modules
+# Back end: modules
 
 * [Words](ideas/words.md) - The module finds the words in a text. Label: `unchecked`.
 "
@@ -146,7 +146,7 @@ fn a_second_check_that_changes_nothing_writes_nothing() {
     assert_eq!(first.findings, []);
     let log = read(&folder, "log.md");
     let top = read(&folder, "idea.md");
-    assert!(read(&folder, "index.md").contains("\n## Crates\n\n* Declared in the ideas: none;"));
+    assert!(read(&folder, "index.md").contains("\n# Back end: crates\n\n* Declared in the ideas: none;"));
     let second = lengua_idea::check(&folder, NOV_13_2026 + 60);
     assert_eq!(second.findings, []);
     assert_eq!(second.written, Vec::<String>::new());
@@ -256,40 +256,27 @@ fn every_page_in_the_folder_is_an_okf_concept() {
 #[test]
 fn a_purpose_that_names_a_module_its_constraints_do_not_list_is_a_finding() {
     let folder = fixture("good", "named");
-    let words = read(&folder, "ideas/words.md");
-    fs::write(
-        folder.join("ideas/words.md"),
-        words.replace(
-            "A word is a group of characters with no space in it.",
-            "The library `json` can write the words.",
-        ),
-    )
-    .expect("a file");
-    let found: Vec<(String, &str)> = lengua_idea::program(&folder)
-        .findings
-        .into_iter()
-        .map(|f| (f.file, f.code))
-        .collect();
-    assert!(
-        found.contains(&("ideas/words.md".to_string(), "purpose-unlisted")),
-        "{found:?}"
+    let top = read(&folder, "idea.md").replace(
+        "It reads the text from the standard input.",
+        "It reads the text from the standard input, and the module `words` finds the words.",
     );
-    let top = read(&folder, "idea.md");
-    fs::write(
-        folder.join("idea.md"),
-        top.replace(
-            "It reads the text from the standard input.",
-            "It reads the text from the standard input, and the module `words` finds the words.",
-        ),
-    )
-    .expect("a file");
-    let found: Vec<(String, &str)> = lengua_idea::program(&folder)
-        .findings
-        .into_iter()
-        .map(|f| (f.file, f.code))
-        .collect();
+    fs::write(folder.join("idea.md"), &top).expect("a file");
+    let codes_of = |folder: &Path| -> Vec<(String, &'static str)> {
+        lengua_idea::program(folder)
+            .findings
+            .into_iter()
+            .map(|f| (f.file, f.code))
+            .collect()
+    };
+    let found = codes_of(&folder);
     assert!(
         !found.contains(&("idea.md".to_string(), "purpose-unlisted")),
+        "{found:?}"
+    );
+    fs::write(folder.join("idea.md"), top.replace("- Modules: `words`\n", "")).expect("a file");
+    let found = codes_of(&folder);
+    assert!(
+        found.contains(&("idea.md".to_string(), "purpose-unlisted")),
         "{found:?}"
     );
 }

@@ -1168,7 +1168,7 @@ fn a_program_uses_a_checked_library_and_refuses_one_that_changed() {
     );
     let index = fs::read_to_string(program.join("index.md")).expect("the index");
     assert!(
-        index.contains("\n## Libraries\n\n* [decimal](../../libraries/decimal/idea.md) - ")
+        index.contains("\n# Back end: libraries\n\n* [decimal](../../libraries/decimal/idea.md) - ")
             && index.contains("Label: `checked`."),
         "{index}"
     );
@@ -1322,10 +1322,10 @@ fn the_shop_is_one_file_of_three_modules_two_libraries_and_a_c_component() {
     assert_eq!(lock.matches("\ncomponent ").count(), 1, "{lock}");
     let index = fs::read_to_string(shop.join("index.md")).expect("the index");
     for part in [
-        "# Program",
-        "# Modules",
-        "# Libraries",
-        "# Components",
+        "# Back end: program",
+        "# Back end: modules",
+        "# Back end: libraries",
+        "# Back end: components",
         "Label: `trusted`.",
         "Label: `checked`.",
     ] {
@@ -1422,12 +1422,12 @@ fn the_wiki_joins_the_screens_and_the_server_through_api_md() {
     );
     let index = read(&folder, "index.md");
     for part in [
-        "# Back end",
-        "## Screens",
+        "# Back end: program",
+        "# Front end: screens",
         "# Front end",
         "# Interface",
-        "## npm packages",
-        "  * In the browser: `@/lib/wasm/titles`.\n",
+        "# Front end: npm packages",
+        "* In the browser, `titles` is `@/lib/wasm/titles`.\n",
         "`@json-render/react` 0.22.0",
     ] {
         assert!(index.contains(part), "{part} in {index}");

@@ -484,9 +484,8 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
             .map(|p| index_line(&p.title, &p.file, &p.description, label))
             .collect()
     };
-    out.push_str("\n# Back end\n");
-    section(&mut out, "## Program", &of(IdeaKind::Program));
-    section(&mut out, "## Modules", &of(IdeaKind::Module));
+    section(&mut out, "# Back end: program", &of(IdeaKind::Program));
+    section(&mut out, "# Back end: modules", &of(IdeaKind::Module));
     let libraries: Vec<String> = parts
         .libraries
         .iter()
@@ -505,13 +504,13 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
         .zip(parts.libraries)
         .map(|(line, l)| {
             if front {
-                format!("{line}  * In the browser: `@/lib/wasm/{}`.\n", l.name)
+                format!("{line}* In the browser, `{}` is `@/lib/wasm/{}`.\n", l.name, l.name)
             } else {
                 line
             }
         })
         .collect();
-    section(&mut out, "## Libraries", &libraries);
+    section(&mut out, "# Back end: libraries", &libraries);
     let components: Vec<String> = parts
         .components
         .iter()
@@ -524,13 +523,12 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
             )
         })
         .collect();
-    section(&mut out, "## Components", &components);
-    section(&mut out, "## Crates", &parts.crates.lines());
+    section(&mut out, "# Back end: components", &components);
+    section(&mut out, "# Back end: crates", &parts.crates.lines());
     let screens = of(IdeaKind::Screen);
     if !screens.is_empty() {
-        out.push_str("\n# Front end\n");
-        section(&mut out, "## Screens", &screens);
-        section(&mut out, "## npm packages", &package_lines(parts.interface));
+        section(&mut out, "# Front end: screens", &screens);
+        section(&mut out, "# Front end: npm packages", &package_lines(parts.interface));
     }
     if !parts.interface.routes.is_empty() {
         section(
