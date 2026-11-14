@@ -552,7 +552,12 @@ pub(crate) fn judge(worker: &Worker, mutant: &Mutant) -> Option<bool> {
     let text = fs::read_to_string(&original).ok()?;
     let changed = lengua_idea::apply(&text, &mutant.edits);
     fs::write(&original, changed).ok()?;
-    let ran = pnpm_limited(worker, &["exec", "vitest", "run", "--reporter=dot"], &stage, 120);
+    let ran = pnpm_limited(
+        worker,
+        &["exec", "vitest", "run", "--reporter=dot"],
+        &stage,
+        120,
+    );
     let restored = fs::write(&original, &text).is_ok();
     if worker.stopped() || !restored {
         return None;
