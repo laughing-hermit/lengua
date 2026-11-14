@@ -1390,13 +1390,20 @@ fn the_wiki_joins_the_screens_and_the_server_through_api_md() {
     let api = read(&folder, "api.md");
     assert!(api.starts_with("---\ntype: lengua Interface\n"), "{api}");
     assert!(api.contains("\n## `GET /api/notes`\n"), "{api}");
-    assert!(api.contains("* Function: `getNotesById` in `web/lib/lengua.ts`."), "{api}");
-    assert!(api.contains("* Called by: [ui/home](ideas/ui/home.md)."), "{api}");
+    assert!(
+        api.contains("* Function: `getNotesById` in `web/lib/lengua.ts`."),
+        "{api}"
+    );
+    assert!(
+        api.contains("* Called by: [ui/home](ideas/ui/home.md)."),
+        "{api}"
+    );
     let home = read(&folder, "ideas/ui/home.md");
     assert!(home.contains("type: lengua Screen\n"), "{home}");
     assert!(home.contains("source: web/screens/home.tsx\n"), "{home}");
     assert!(
-        home.contains("\n# Links\n") && home.contains("* Calls [`GET /api/notes`](api.md), served by "),
+        home.contains("\n# Links\n")
+            && home.contains("* Calls [`GET /api/notes`](api.md), served by "),
         "{home}"
     );
     let top = read(&folder, "idea.md");
@@ -1405,28 +1412,72 @@ fn the_wiki_joins_the_screens_and_the_server_through_api_md() {
         "{top}"
     );
     let index = read(&folder, "index.md");
-    for part in ["# Back end", "## Screens", "# Front end", "# Interface", "# Dependencies", "`@json-render/react` 0.22.0"] {
+    for part in [
+        "# Back end",
+        "## Screens",
+        "# Front end",
+        "# Interface",
+        "# Dependencies",
+        "`@json-render/react` 0.22.0",
+    ] {
         assert!(index.contains(part), "{part} in {index}");
     }
-    for file in ["web/package.json", "web/tsconfig.json", "web/lib/lengua.ts", "web/app/page.tsx", "web/app/note/page.tsx", "web/components/ui/button.tsx", "web/tests/write.test.tsx", "web/lengua.sum"] {
+    for file in [
+        "web/package.json",
+        "web/tsconfig.json",
+        "web/lib/lengua.ts",
+        "web/app/page.tsx",
+        "web/app/note/page.tsx",
+        "web/components/ui/button.tsx",
+        "web/tests/write.test.tsx",
+        "web/lengua.sum",
+    ] {
         assert!(folder.join(file).is_file(), "{file}");
     }
-    for file in ["web/lib/lengua.ts", "web/tests/write.test.tsx", "web/tests/server.ts", "web/app/layout.tsx", "web/app/page.tsx"] {
-        assert_eq!(lengua_ts::comment_lines(&read(&folder, file)), Vec::<usize>::new(), "{file}");
+    for file in [
+        "web/lib/lengua.ts",
+        "web/tests/write.test.tsx",
+        "web/tests/server.ts",
+        "web/app/layout.tsx",
+        "web/app/page.tsx",
+    ] {
+        assert_eq!(
+            lengua_ts::comment_lines(&read(&folder, file)),
+            Vec::<usize>::new(),
+            "{file}"
+        );
     }
     let tsconfig = read(&folder, "web/tsconfig.json");
-    for part in ["\"strict\": true", "\"noUncheckedIndexedAccess\": true", "\"exactOptionalPropertyTypes\": true", "\"allowJs\": false"] {
+    for part in [
+        "\"strict\": true",
+        "\"noUncheckedIndexedAccess\": true",
+        "\"exactOptionalPropertyTypes\": true",
+        "\"allowJs\": false",
+    ] {
         assert!(tsconfig.contains(part), "{part} in {tsconfig}");
     }
     assert!(read(&folder, "web/next.config.mjs").contains("output: \"export\""));
     let package = read(&folder, "web/package.json");
-    assert!(package.contains("\"next\": \"16.4.6\"") && package.contains("\"zod\": \"4.6.7\""), "{package}");
-    assert!(!package.contains('^') && !package.contains('~'), "{package}");
-    let screen = read(&folder, "web/screens/home.tsx").replace("<CardTitle>Notes</CardTitle>", "<CardTitle>All notes</CardTitle>");
+    assert!(
+        package.contains("\"next\": \"16.4.6\"") && package.contains("\"zod\": \"4.6.7\""),
+        "{package}"
+    );
+    assert!(
+        !package.contains('^') && !package.contains('~'),
+        "{package}"
+    );
+    let screen = read(&folder, "web/screens/home.tsx").replace(
+        "<CardTitle>Notes</CardTitle>",
+        "<CardTitle>All notes</CardTitle>",
+    );
     fs::write(folder.join("web/screens/home.tsx"), screen).expect("a change");
     let again = server.check(11, &folder);
     assert!(
-        !notes_with(&again, "the code `web/screens/home.tsx` changed and its idea `ideas/ui/home.md` did not").is_empty(),
+        !notes_with(
+            &again,
+            "the code `web/screens/home.tsx` changed and its idea `ideas/ui/home.md` did not"
+        )
+        .is_empty(),
         "{again:#}"
     );
     assert!(read(&folder, "log.md").contains("  * Code `web/screens/home.tsx`, changed: `"));
@@ -1447,10 +1498,30 @@ fn the_wiki_joins_the_screens_and_the_server_through_api_md() {
 #[test]
 fn typescript_that_breaks_a_rule_and_hand_edits_of_the_front_end_are_refused() {
     let cases: [(&str, &str, &str, &str); 4] = [
-        ("web/screens/home.tsx", "export function HomeScreen() {", "// the list\nexport function HomeScreen() {", "ts-comment"),
-        ("web/screens/home.tsx", "export function HomeScreen() {", "export function extra(): number {\n  return 1;\n}\n\nexport function HomeScreen() {", "ts-unnamed"),
-        ("web/screens/home.tsx", "export function countText(count: number): string {", "export function countText(count: any): string {", "ts-any"),
-        ("idea.md", "`zod` 4.6.7, for", "`zod` 4.6, for", "package-version"),
+        (
+            "web/screens/home.tsx",
+            "export function HomeScreen() {",
+            "// the list\nexport function HomeScreen() {",
+            "ts-comment",
+        ),
+        (
+            "web/screens/home.tsx",
+            "export function HomeScreen() {",
+            "export function extra(): number {\n  return 1;\n}\n\nexport function HomeScreen() {",
+            "ts-unnamed",
+        ),
+        (
+            "web/screens/home.tsx",
+            "export function countText(count: number): string {",
+            "export function countText(count: any): string {",
+            "ts-any",
+        ),
+        (
+            "idea.md",
+            "`zod` 4.6.7, for",
+            "`zod` 4.6, for",
+            "package-version",
+        ),
     ];
     let mut server = Server::start();
     for (k, (file, from, to, code)) in cases.iter().enumerate() {
@@ -1459,24 +1530,49 @@ fn typescript_that_breaks_a_rule_and_hand_edits_of_the_front_end_are_refused() {
         assert!(text.contains(from), "{from} in {file}");
         fs::write(folder.join(file), text.replacen(from, to, 1)).expect("a change");
         let reply = server.check(20 + k as u64, &folder);
-        assert!(codes(&reply).contains(&(*code).to_string()), "{code}: {reply:#}");
-        assert!(!folder.join("web/package.json").exists(), "nothing written for {code}");
+        assert!(
+            codes(&reply).contains(&(*code).to_string()),
+            "{code}: {reply:#}"
+        );
+        assert!(
+            !folder.join("web/package.json").exists(),
+            "nothing written for {code}"
+        );
     }
     let folder = notes_ideas_only("notes-held");
     assert_eq!(server.check(40, &folder)["ok"], true);
-    let tsconfig = read(&folder, "web/tsconfig.json").replace("\"strict\": true", "\"strict\": false");
+    let tsconfig =
+        read(&folder, "web/tsconfig.json").replace("\"strict\": true", "\"strict\": false");
     fs::write(folder.join("web/tsconfig.json"), tsconfig).expect("a hand edit");
     let reply = server.check(41, &folder);
     let found: Vec<(String, String)> = reply["findings"]
         .as_array()
         .expect("findings")
         .iter()
-        .map(|f| (f["file"].as_str().unwrap_or("").to_string(), f["code"].as_str().unwrap_or("").to_string()))
+        .map(|f| {
+            (
+                f["file"].as_str().unwrap_or("").to_string(),
+                f["code"].as_str().unwrap_or("").to_string(),
+            )
+        })
         .collect();
-    assert!(found.contains(&("web/tsconfig.json".to_string(), "generated-edited".to_string())), "{reply:#}");
-    fs::write(folder.join("web/screens/extra.tsx"), "export const x = 1;\n").expect("a file");
+    assert!(
+        found.contains(&(
+            "web/tsconfig.json".to_string(),
+            "generated-edited".to_string()
+        )),
+        "{reply:#}"
+    );
+    fs::write(
+        folder.join("web/screens/extra.tsx"),
+        "export const x = 1;\n",
+    )
+    .expect("a file");
     let unlisted = server.check(42, &folder);
-    assert!(codes(&unlisted).contains(&"ts-source-unlisted".to_string()), "{unlisted:#}");
+    assert!(
+        codes(&unlisted).contains(&"ts-source-unlisted".to_string()),
+        "{unlisted:#}"
+    );
 }
 
 #[test]
@@ -1492,7 +1588,14 @@ fn notes_is_checked_as_one_file_that_serves_its_front_end() {
     assert!(export["files"].as_u64().unwrap_or(0) > 3, "{reply:#}");
     assert!(folder.join("web/pnpm-lock.yaml").is_file());
     let lock = read(&folder, "lengua.lock");
-    for line in [" web/screens/home.tsx\n", " web/pnpm-lock.yaml\n", " web/lib/lengua.ts\n", " api.md\n", "\nexport ", " target/lengua/web/out\n"] {
+    for line in [
+        " web/screens/home.tsx\n",
+        " web/pnpm-lock.yaml\n",
+        " web/lib/lengua.ts\n",
+        " api.md\n",
+        "\nexport ",
+        " target/lengua/web/out\n",
+    ] {
         assert!(lock.contains(line), "{line} in {lock}");
     }
     let mut child = Command::new(lengua_run())
@@ -1512,12 +1615,29 @@ fn notes_is_checked_as_one_file_that_serves_its_front_end() {
         .map(|chrome| chrome_labels(&PathBuf::from(chrome), 7812));
     let _ = child.kill();
     let _ = child.wait();
-    assert!(page.starts_with("HTTP/1.1 200") && page.contains("<html"), "{page}");
-    assert!(notes.ends_with("\"text\":\"Call the shop at noon.\"}]"), "{notes}");
+    assert!(
+        page.starts_with("HTTP/1.1 200") && page.contains("<html"),
+        "{page}"
+    );
+    assert!(
+        notes.ends_with("\"text\":\"Call the shop at noon.\"}]"),
+        "{notes}"
+    );
     assert!(note_page.starts_with("HTTP/1.1 200"), "{note_page}");
     if let Some(found) = browser {
-        for label in ["Write a note", "The notes", "Milk", "Explain", "Title", "Text", "Save"] {
-            assert!(found.iter().any(|f| f == label), "{label} in the accessibility tree: {found:?}");
+        for label in [
+            "Write a note",
+            "The notes",
+            "Milk",
+            "Explain",
+            "Title",
+            "Text",
+            "Save",
+        ] {
+            assert!(
+                found.iter().any(|f| f == label),
+                "{label} in the accessibility tree: {found:?}"
+            );
         }
     }
     let log = Path::new(env!("CARGO_TARGET_TMPDIR")).join("lengua-timings.txt");
@@ -1536,7 +1656,8 @@ struct Socket {
 
 impl Socket {
     fn open(port: u16, path: &str) -> Self {
-        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("the browser's port");
+        let mut stream =
+            std::net::TcpStream::connect(("127.0.0.1", port)).expect("the browser's port");
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
             .expect("a timeout");
@@ -1550,7 +1671,11 @@ impl Socket {
             std::io::Read::read_exact(&mut stream, &mut byte).expect("the upgrade's answer");
             head.push(byte[0]);
         }
-        assert!(head.starts_with(b"HTTP/1.1 101"), "{}", String::from_utf8_lossy(&head));
+        assert!(
+            head.starts_with(b"HTTP/1.1 101"),
+            "{}",
+            String::from_utf8_lossy(&head)
+        );
         Self { stream }
     }
 
@@ -1561,10 +1686,18 @@ impl Socket {
             frame.push(0x80 | u8::try_from(payload.len()).expect("a short length"));
         } else if payload.len() < 65_536 {
             frame.push(0x80 | 126);
-            frame.extend_from_slice(&u16::try_from(payload.len()).expect("a length").to_be_bytes());
+            frame.extend_from_slice(
+                &u16::try_from(payload.len())
+                    .expect("a length")
+                    .to_be_bytes(),
+            );
         } else {
             frame.push(0x80 | 127);
-            frame.extend_from_slice(&u64::try_from(payload.len()).expect("a length").to_be_bytes());
+            frame.extend_from_slice(
+                &u64::try_from(payload.len())
+                    .expect("a length")
+                    .to_be_bytes(),
+            );
         }
         let mask = [7u8, 11, 13, 17];
         frame.extend_from_slice(&mask);
@@ -1589,7 +1722,8 @@ impl Socket {
                 }
                 127 => {
                     let bytes = self.exact(8);
-                    usize::try_from(u64::from_be_bytes(bytes.try_into().expect("8 bytes"))).expect("a length")
+                    usize::try_from(u64::from_be_bytes(bytes.try_into().expect("8 bytes")))
+                        .expect("a length")
                 }
                 short => usize::from(short),
             };
@@ -1617,7 +1751,9 @@ impl Socket {
 
 fn http_put(port: u16, path: &str) -> String {
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("the browser's port");
-    let request = format!("PUT {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    let request = format!(
+        "PUT {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
     stream.write_all(request.as_bytes()).expect("a request");
     let mut answer = String::new();
     let _ = std::io::Read::read_to_string(&mut stream, &mut answer);
@@ -1643,7 +1779,13 @@ fn chrome_labels(chrome: &Path, port: u16) -> Vec<String> {
     let _ = fs::remove_dir_all(&profile);
     fs::create_dir_all(&profile).expect("a profile");
     let mut browser = Command::new(chrome)
-        .args(["--headless=new", "--no-sandbox", "--no-first-run", "--disable-gpu", "--remote-debugging-port=0"])
+        .args([
+            "--headless=new",
+            "--no-sandbox",
+            "--no-first-run",
+            "--disable-gpu",
+            "--remote-debugging-port=0",
+        ])
         .arg(format!("--user-data-dir={}", profile.display()))
         .arg("about:blank")
         .stdout(Stdio::null())
@@ -1657,20 +1799,44 @@ fn chrome_labels(chrome: &Path, port: u16) -> Vec<String> {
         {
             break text;
         }
-        assert!(started.elapsed() < Duration::from_secs(30), "Chrome gave no port");
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "Chrome gave no port"
+        );
         thread::sleep(Duration::from_millis(100));
     };
-    let devtools: u16 = active.lines().next().unwrap_or("").trim().parse().expect("a port");
+    let devtools: u16 = active
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .parse()
+        .expect("a port");
     let created = http_put(devtools, &format!("/json/new?http://127.0.0.1:{port}/"));
     let body = created.split("\r\n\r\n").nth(1).unwrap_or("");
     let target: Value = serde_json::from_str(body).expect("a target");
-    let socket_url = target["webSocketDebuggerUrl"].as_str().expect("a socket").to_string();
-    let path = socket_url.splitn(4, '/').nth(3).map(|p| format!("/{p}")).expect("a path");
+    let socket_url = target["webSocketDebuggerUrl"]
+        .as_str()
+        .expect("a socket")
+        .to_string();
+    let path = socket_url
+        .splitn(4, '/')
+        .nth(3)
+        .map(|p| format!("/{p}"))
+        .expect("a path");
     let mut socket = Socket::open(devtools, &path);
     let mut found = Vec::new();
     let mut id = 1;
-    for (route, wanted) in [("/", "Milk"), ("/note/?id=1", "Explain"), ("/write/", "Save")] {
-        socket.call(id, "Page.navigate", &json!({"url": format!("http://127.0.0.1:{port}{route}")}));
+    for (route, wanted) in [
+        ("/", "Milk"),
+        ("/note/?id=1", "Explain"),
+        ("/write/", "Save"),
+    ] {
+        socket.call(
+            id,
+            "Page.navigate",
+            &json!({"url": format!("http://127.0.0.1:{port}{route}")}),
+        );
         let started = Instant::now();
         loop {
             id += 1;

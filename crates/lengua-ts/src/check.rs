@@ -387,7 +387,7 @@ impl<'a> Visit<'a> for Checker<'_, '_> {
     }
 
     fn visit_import_declaration(&mut self, it: &ImportDeclaration<'a>) {
-        let source = it.source.value.as_str();
+        let source = it.source.value.as_str().unwrap_or("");
         if !allowed(source, self.context.packages) {
             let message = format!(
                 "`{source}` is not a package the idea declares; screens import `react`, `next/link`, `@/lib/lengua`, `@/components/ui/...`, other screens, and the packages of `- Uses package:`"

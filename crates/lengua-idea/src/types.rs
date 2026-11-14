@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use crate::json::Json;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,7 +101,9 @@ pub(crate) fn quoted(text: &str) -> String {
             '\t' => out.push_str("\\t"),
             '\u{2028}' => out.push_str("\\u2028"),
             '\u{2029}' => out.push_str("\\u2029"),
-            c if u32::from(c) < 0x20 => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c if u32::from(c) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", u32::from(c));
+            }
             c => out.push(c),
         }
     }

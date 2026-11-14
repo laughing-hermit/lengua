@@ -87,9 +87,9 @@ pub(crate) fn top_items(statement: &Statement) -> Vec<Item> {
     match statement {
         Statement::FunctionDeclaration(f) => out.extend(function_item(f)),
         Statement::VariableDeclaration(d) => variable_items(d, &mut out),
-        Statement::ExportNamedDeclaration(e) => match &e.declaration {
-            Some(Declaration::FunctionDeclaration(f)) => out.extend(function_item(f)),
-            Some(Declaration::VariableDeclaration(d)) => variable_items(d, &mut out),
+        Statement::ExportDeclaration(e) => match &e.declaration {
+            Declaration::FunctionDeclaration(f) => out.extend(function_item(f)),
+            Declaration::VariableDeclaration(d) => variable_items(d, &mut out),
             _ => {}
         },
         Statement::ExportDefaultDeclaration(e) => {
@@ -106,8 +106,8 @@ fn global_rules(file: &str, lines: &Lines, program: &Program, findings: &mut Vec
     for statement in &program.body {
         let declaration = match statement {
             Statement::VariableDeclaration(d) => Some(&**d),
-            Statement::ExportNamedDeclaration(e) => match &e.declaration {
-                Some(Declaration::VariableDeclaration(d)) => Some(&**d),
+            Statement::ExportDeclaration(e) => match &e.declaration {
+                Declaration::VariableDeclaration(d) => Some(&**d),
                 _ => None,
             },
             _ => None,

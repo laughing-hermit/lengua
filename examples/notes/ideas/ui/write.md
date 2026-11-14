@@ -40,4 +40,4 @@ Then the screen shows an error and sends nothing.
 
 - `WriteScreen`: shows the form, the error and the result.
 - `titleError`: gives the error of a title, or an empty text when the title is good.
-- `save`: checks the title, sends the note to the server and puts the result in the state.
+- `save`: sends a note with a good title to the server, with the result in the state.

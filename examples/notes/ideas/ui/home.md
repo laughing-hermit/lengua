@@ -32,6 +32,6 @@ Then it shows the text `2 notes`.
 
 # Structure
 
-- `HomeScreen`: shows the notes, the number of notes and the link to write a note.
+- `HomeScreen`: shows the notes, their number and a link to the screen `write`.
 - `NoteLink`: shows the title of one note as a link to its screen.
 - `countText`: gives the text for a number of notes.

@@ -326,7 +326,8 @@ impl Reader<'_> {
         }
         let found = self
             .value(key, value, line, sink)
-            .or_else(|| self.reach(key, value, line));
+            .or_else(|| self.reach(key, value, line))
+            .or_else(|| self.front(key, value, line, sink));
         let Some((good, form)) = found else {
             sink.add(
                 line,
@@ -452,6 +453,29 @@ impl Reader<'_> {
                 }
                 (good, "`` `name` 1.2.3, for <reason> ``")
             }
+            "Uses component" => {
+                let found = component_line(value, line, self.dictionary, sink);
+                let good = found.is_some();
+                if let Some((file, built)) = found {
+                    self.out.components.push((file, built, line));
+                }
+                (
+                    good,
+                    "`` `<file>.wasm`, built from <what built it> ``, with the file inside the folder",
+                )
+            }
+            _ => return None,
+        })
+    }
+
+    fn front(
+        &mut self,
+        key: &str,
+        value: &str,
+        line: usize,
+        sink: &mut Sink,
+    ) -> Option<(bool, &'static str)> {
+        Some(match key {
             "Uses package" => {
                 let found = package_line(value, line, self.dictionary, sink);
                 let good = found.is_some();
@@ -484,17 +508,6 @@ impl Reader<'_> {
                 (
                     good,
                     "`` `<METHOD> <path>` ``: `GET`, `POST`, `PUT`, `DELETE` or `PATCH`, and a path from `/` whose parts may be `{name}`",
-                )
-            }
-            "Uses component" => {
-                let found = component_line(value, line, self.dictionary, sink);
-                let good = found.is_some();
-                if let Some((file, built)) = found {
-                    self.out.components.push((file, built, line));
-                }
-                (
-                    good,
-                    "`` `<file>.wasm`, built from <what built it> ``, with the file inside the folder",
                 )
             }
             _ => return None,

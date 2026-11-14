@@ -48,7 +48,7 @@ Then the screen draws the card of the summary that the server describes.
 
 # Structure
 
-- `NoteScreen`: shows a note, its error, and the summary that the AI part draws.
-- `loadNote`: asks the server for a note and puts it, or the error, in the state.
-- `explain`: asks the server for the summary of a note and puts it in the state.
+- `NoteScreen`: shows a note, its error and the card of its summary.
+- `loadNote`: puts the note from the server, or its error, in the state.
+- `explain`: puts the summary of the note from the server in the state.
 - `toSpec`: changes the answer of the server into the description that the renderer draws.

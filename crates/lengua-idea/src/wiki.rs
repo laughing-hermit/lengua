@@ -149,7 +149,7 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
         pages
             .iter()
             .filter(|p| p.kind == kind)
-            .map(|p| line(p))
+            .map(&line)
             .collect()
     };
     out.push_str("\n# Back end\n");
@@ -302,7 +302,7 @@ pub(crate) fn links_text(
         let calls = interface
             .calls
             .iter()
-            .any(|(s, c)| *s == page.source && c.iter().any(|f| *f == route.function));
+            .any(|(s, c)| *s == page.source && c.contains(&route.function));
         if calls {
             let served: Vec<String> = route
                 .served_by

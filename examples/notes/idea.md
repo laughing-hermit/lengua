@@ -1,14 +1,14 @@
 # Purpose
 
 The program is a small web application for notes. Its back end is an HTTP server in Rust that
-gives the notes as JSON, adds a note when its title is good, and makes a summary of a note for
-the AI part of the screen. Its front end has three screens, `home`, `note` and `write`, in
-TypeScript with `Next.js`. The server carries the front end and serves it, so the application is
-one WebAssembly file.
+gives the notes as JSON. The server adds a note when its title is good. It also makes a summary
+of a note for the AI part of the screen. The front end has three screens in TypeScript with
+`Next.js`: `home`, `note` and `write`. The server carries the front end and serves it, so the
+application is one WebAssembly file.
 
-The summary is a fixed answer of the server until the grant for an AI model is in `lengua`. The
-notes are fixed too until the grant for storage is in `lengua`, so a new note is checked and
-given back, but it is not kept.
+The summary is a fixed answer of the server until `lengua` has the grant for an AI model. The
+notes are fixed until `lengua` has the grant for storage. So the server checks a new note and
+gives it back, but it does not keep it.
 
 # Behaviours
 
@@ -118,8 +118,8 @@ Then the answer is 200 with the page of the screen `home`.
 
 # Structure
 
-- `Notes::handle`: answers a request with the status, the type and the body that `answer` gives.
-- `answer`: gives the answer of the notes for a path under `/api/`, and a file of the front end for any other path.
+- `Notes::handle`: answers a request with what `answer` gives.
+- `answer`: answers a path under `/api/` with the notes, and any other path with a file of the front end.
 - `method_name`: gives the name of the method of a request.
 - `body_of`: reads the body of a request as text.
-- `respond`: writes the status, the type and the body of the answer.
+- `respond`: writes the answer to the client.

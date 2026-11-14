@@ -33,10 +33,10 @@ Then the answer is 404 with an error.
 
 # Structure
 
-- `route`: gives the status and the JSON of the answer for a method and a path under `/api/`.
+- `route`: gives the status and the JSON for a method and a path under `/api/`.
 - `all`: gives every note as a JSON list.
 - `one`: gives the note with a number, or an error.
-- `add`: checks a new note and gives it with its new number, or an error.
+- `add`: gives a new note with its new number, or an error for a bad title.
 - `summary`: gives the description of a card with the summary of a note.
 - `note_json`: writes one note as JSON.
 - `quoted`: writes a text as a JSON string.
