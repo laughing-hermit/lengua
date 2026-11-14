@@ -115,11 +115,29 @@ row each part of it falls into.
 | Work | Where | Built with | Native? |
 |---|---|---|---|
 | Screens, forms, navigation, layout, visualisations, AI chat UI | Front end | Next.js (TSX), shadcn/ui, Vercel's AI-UI tools | No |
-| 3D, charts, effects, image and video processing, small and medium in-browser models | Front end | WebGPU in the browser or Electron's Chromium | No |
-| Data, business rules, storage, logins, secrets, APIs, calls to other services and AI models | Back end | Rust compiled to WebAssembly (one file) | No |
-| Large local models, training, fine-tuning, heavy compute | Back end | A native Rust part, pure Rust first (Candle or Burn; CUDA or Metal where needed) | Yes, declared and labelled |
+| 3D, charts, effects, image and video processing | Front end | WebGPU in the browser or Electron's Chromium | No |
+| Small to medium AI models on the user's machine | Front end | WebGPU (for example WebLLM) | No |
+| Data, business rules, storage, logins, secrets, APIs, calls to other services | Back end | Rust compiled to WebAssembly (one file) | No |
+| Calling a cloud model or a local model server (for example Ollama on the same machine) | Back end | WebAssembly, through the `- Asks:` grant (L9) | No |
+| Shared pure logic (validation, calculations, formatting) | Front end and back end | A lengua library, imported by Next.js as WebAssembly and linked into the back end | No |
+| Large AI models, the fastest local inference, training or fine-tuning | Back end | A native Rust part (Candle or Burn, on CUDA or Metal) | Yes, declared and labelled |
+| Heavy compute that needs threads sharing memory | Back end | A native Rust part | Yes, declared and labelled |
+| A hardware device with no host grant | Back end | A native Rust part | Yes, declared and labelled |
 | Desktop window and shell | Desktop | Electron, running the same front end and back end | Yes (the shell), declared |
 | Shared types between the front end and the back end | Interface | Generated from the back end's routes (`api.md`, `web/lib/lengua.ts`) | No |
+
+**Native stays narrow** (decided by the owner on 2026-11-13). A native Rust part is allowed only
+for large local AI models or the fastest local inference, training or fine-tuning; heavy compute
+that needs threads sharing memory; and a hardware device that has no host grant (and the
+Electron shell of a desktop app). Everything else is the WebAssembly back end or the Next.js
+front end. L10 builds the native path once and proves it with one example: a back-end part that
+runs a local model on the GPU with Candle or Burn.
+
+**Why WebGPU stops short**, said plainly: a browser limits the memory of a page and of the GPU,
+and 32-bit WebAssembly reaches 4 GB at most today; it is slower than native CUDA or Metal; a
+large model's weights are downloads of several gigabytes; training is not practical; and a page
+gets one GPU. And the WebAssembly back end has no GPU at all: WebGPU is an interface of the
+browser, and wasi-gfx is not mature. The watch list (section 10) has Memory64 and wasi-gfx.
 
 An example only, not something to build: an IDE for changing the weights of open-source language
 models. Its editors and its views of the weights are the Next.js front end (the views drawn with
@@ -140,15 +158,18 @@ All Rust that lengua builds compiles to WebAssembly unless WebAssembly truly can
 | 3D, charts, maps, effects | front end (WebGPU) | WebAssembly and the browser, no native | The browser, or Electron's Chromium, gives the front end WebGPU |
 | Small or medium AI models on the user's machine | front end (WebGPU) | No native | WebLLM or Transformers.js run them in the browser on WebGPU |
 | Image and video processing | front end (WebGPU) | No native | WebGPU and the browser's media interfaces |
-| Calling AI models over the network, embeddings, search | back end | WebAssembly | Outgoing HTTP is enough |
-| Large local models, training, heavy compute | back end | A native Rust part | Needs the GPU directly, outside a browser |
-| Threads that share memory | back end | Native | Not in WebAssembly yet |
-| Hardware devices (serial, USB, Bluetooth) | back end | Native, or a host grant | Not in WebAssembly; a specific device can instead be a grant the host provides |
+| Calling a cloud model or a local model server (Ollama), embeddings, search | back end | WebAssembly, through `- Asks:` | Outgoing HTTP is enough |
+| Large AI models, the fastest local inference, training or fine-tuning | back end | A native Rust part (Candle or Burn on CUDA or Metal) | Needs the GPU directly, outside a browser, past WebGPU's limits ("Why WebGPU stops short") |
+| Heavy compute that needs threads sharing memory | back end | Native | Not in WebAssembly yet |
+| Hardware devices (serial, USB, Bluetooth) with no host grant | back end | Native, or a host grant | Not in WebAssembly; a specific device can instead be a grant the host provides |
+| Shared pure logic (validation, calculations, formatting, parsing) | both | A lengua library: WebAssembly in the browser (imported by Next.js) and linked into the WebAssembly back end | The same code on both sides, so they can't disagree |
 
 The rule for a native part:
 1. The idea declares it with `- Native: <part>, for <reason>`, and the reason must be one of the
-   kinds marked Native above (large local models, training or heavy compute on the GPU; threads
-   that share memory; a hardware device; and the desktop shell, Electron, for a desktop app).
+   kinds marked Native above (large AI models, the fastest local inference, training or
+   fine-tuning on the GPU; heavy compute with threads
+   that share memory; a hardware device with no host grant; and the desktop shell, Electron, for a
+   desktop app).
    Any other reason is refused. Front-end GPU work is never a reason: the front end has WebGPU.
 2. Only the part that needs it is native; the rest of the application stays WebAssembly.
 3. The same checks apply: the Power of 10, the idea's tests, the mutation score, the lock.
@@ -167,11 +188,12 @@ libraries are also built for WebAssembly, so the checker could one day run as We
    effects (for example three.js), small and medium AI models run in the user's browser (for
    example WebLLM or Transformers.js), and image and video processing. On the desktop,
    Electron's Chromium makes WebGPU the same on every system.
-2. **GPU work in the back end needs a declared native part:** large local models, training,
+2. **GPU work in the back end needs a declared native part:** large AI models, the fastest local
+   inference, training or fine-tuning,
    heavy compute. It is Rust, pure Rust first (Candle or Burn on wgpu; CUDA or Metal only where
    needed), declared with `- Native:` and its reason, labelled `native`, and only that part; in
    a desktop app Electron starts it beside the WebAssembly back end.
-3. **The watch list:** wasi-gfx and wasi-nn would let back-end GPU work return to the one
+3. **The watch list:** wasi-gfx, wasi-nn and Memory64 would let back-end GPU work return to the one
    WebAssembly file (section 10).
 
 The `vision` skill tells the person up front which of these an idea falls into, and which row
@@ -222,7 +244,7 @@ section to the same list, so they can't drift apart.
 |---|---|---|---|
 | 1 | An AI language | Write the idea as the source and the only documentation; let the AI compile it to Rust for the back end and TypeScript for the front end; let the machine verify both | Trust code because an AI wrote it; document anything outside the idea |
 | 2 | Maximum interoperability | Build one file that runs on any OS and CPU, whose front end opens in any current browser and in Electron | Build per system when WebAssembly can do the job |
-| 3 | WebAssembly first | Make every back-end part WebAssembly; do GPU work for the screen (3D, charts, effects, small and medium AI models) in the front end with WebGPU; declare a native part only for a named limit (back-end GPU work: large local models, training, heavy compute; the Electron shell of a desktop app; shared-memory threads; a device), with its reason; say for each part which row of "Which part does what" it is | Go native for speed, convenience, front-end GPU work, or a crate that only builds natively when a WebAssembly path exists |
+| 3 | WebAssembly first | Make every back-end part WebAssembly; put shared pure logic in a lengua library that runs in the browser and on the server; do GPU work for the screen (3D, charts, effects, small to medium AI models with WebGPU, for example WebLLM) in the front end; call a cloud model or a local model server through `- Asks:` from the WebAssembly back end; declare a native Rust part only for large AI models, the fastest local inference, training or fine-tuning (Candle or Burn on CUDA or Metal), heavy compute with threads sharing memory, a device with no host grant, or the Electron shell; say for each part which row of "Which part does what" it is, and why WebGPU stops short when it does | Go native for speed, convenience, front-end GPU work, a model a server or WebGPU can run, or a crate that only builds natively when a WebAssembly path exists |
 | 4 | Nothing unless absolutely necessary | Use the standard library, then lengua's shared libraries, then the agent's own code; take a pure-Rust crate or an npm package only when it merits it, declared with its reason and pinned; download front-end tools only when the app needs them | Add a crate or a package to save a few hundred lines; take a crate that wraps C when a pure-Rust one exists; bundle tools an app does not use; grant access the program doesn't need |
 | 5 | Full stack, web first | Put the Next.js front end, the server, storage, logins and AI calls in the one file; keep AI keys on the back end | Split one application into separate deployables; use a Next.js feature that needs a Node server; call a model from the browser with a key |
 | 6 | The Power of 10 | Plan small functions, bounded loops, plain data, every error and promise handled, in Rust and in TypeScript | Plan recursion, unbounded loops, global state, `unwrap`, `unsafe`, `any`, casts, a floating promise |
@@ -780,6 +802,41 @@ generates `web/lib/lengua.ts`: a TypeScript type for each route's request body a
 check of each answer's shape when it arrives, since TypeScript's types are gone at run time. A
 screen calls the back end only through these functions (`ts-fetch` otherwise), so a change of
 the server that the front end does not follow fails `tsc`.
+
+**The two connections of Next.js to the Rust side** (decided by the owner on 2026-11-13, "yes
+both, add it"):
+
+1. **HTTP to the back end**, for everything with data, storage, logins, secrets or AI calls:
+   typed by `api.md` and the generated client above.
+2. **Lengua libraries in the browser**, for pure logic (validation, calculations, formatting,
+   parsing): a lengua library (`- Exports:`) that the application uses (`- Uses:`) is also built
+   for the browser, and a screen imports it as `@/lib/wasm/<library>` and calls its functions
+   directly, with generated TypeScript types. The same Rust code runs in the browser and, linked
+   as a crate, on the server, so the two can't disagree: the example's form checks a title in
+   the browser and the server checks it again with the same function.
+
+How a library reaches the browser, as built: at each build of the front end, lengua writes a
+small crate of its own, `target/lengua/browser/<library>/` (`crate-type = ["cdylib"]`), that
+depends on the library as a path crate and has one `#[wasm_bindgen]` function per exported
+function of the library whose types the browser takes (`&str`, `String`, `bool`, the integers up
+to 32 bits, `f64`), each calling the library's function; builds it for `wasm32-unknown-unknown`;
+runs `wasm-bindgen --target web` on it; and writes `lib/wasm/<library>.ts`, which starts the
+module with the bytes inline (`initSync`) and re-exports its functions, in the copy of `web/`
+that the build uses. `wasm-bindgen` was chosen over jco (which turns a WASI component into
+JavaScript): the library's code and its checks stay as they are (the wrapper is lengua's,
+generated, and calls only the library's exports), the library is already built for
+`wasm32-unknown-unknown` and its standard library imports nothing there, while a WASI component
+in the browser needs shims for the WASI interfaces `std` always imports (`@bytecodealliance/
+preview2-shim`) and jco's own packages. The wrapper names `wasm-bindgen` 0.2.130 exactly, and the
+user needs `wasm-bindgen-cli` of the same version (`cargo install wasm-bindgen-cli --version
+0.2.130`), which `doctor` checks when an application with screens uses a library.
+
+A library in the browser reaches nothing: a lengua library has no grants of its own
+(`library-grant`, since L7), so no files, network, secrets, storage or AI calls can reach the
+browser through it. The lock signs the browser build and its types with the export (the `browser`
+line, the hash of `target/lengua/web/lib/wasm`). In the wiki, the program's `index.md` names each
+library with its browser module (`In the browser: @/lib/wasm/<library>`), next to `api.md` for
+HTTP.
 
 **Desktop apps, at L10.** [Electron](https://www.electronjs.org/), chosen by the owner for its
 identical Chromium on every system and its stability, shows the same front end in a window, and
@@ -2031,9 +2088,9 @@ Each one is green on all five runners before the next starts.
 | L5 | Tests from the idea, generated cases, mutation score, trust labels | A program goes from idea to `checked` |
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | A changed idea or file is refused at run |
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries (JSON, HTTP, decimal, text, sorting, hashes, dates); a component from another language | An application of several module ideas builds to one file; it uses a library and a C component, each labelled |
-| L8 | The Next.js front end: screens in TSX with shadcn/ui, built with pnpm and Turbopack, exported statically and embedded in the one file; the generated `web/` files held; TypeScript checked to the same rules as Rust (`oxc_parser`), `tsc` at its strictest; a typed client generated from the server's routes; several screens with navigation and forms, their behaviours as component tests, a real browser and its accessibility tree in CI; the mutation score over both languages; one AI-UI component from Vercel's tools (json-render) wired to the back end; `doctor` checks Node.js and pnpm | A web application with Next.js screens ships as one file, is `checked`, and opens in a browser |
+| L8 | The Next.js front end: screens in TSX with shadcn/ui, built with pnpm and Turbopack, exported statically and embedded in the one file; the generated `web/` files held; TypeScript checked to the same rules as Rust (`oxc_parser`), `tsc` at its strictest; the two connections of Next.js to the Rust side: HTTP to the back end through a typed client generated from the server's routes, and the lengua libraries the app uses built for the browser (wasm-bindgen) and imported by the screens with generated types, the same code as on the server; several screens with navigation and forms, their behaviours as component tests, a real browser and its accessibility tree in CI; the mutation score over both languages; one AI-UI component from Vercel's tools (json-render) wired to the back end; `doctor` checks Node.js and pnpm | A web application with Next.js screens ships as one file, is `checked`, and opens in a browser |
 | L9 | Full stack: programs that ask AI models (`- Asks: an AI model`, with call and token limits; the host's interface to a cloud or local model, structured and streamed replies; model answers given in the tests; the `ai` shared library; json-render's answers made by a real model); storage granted by the idea; outgoing HTTP calls (other services and AI models, with streaming replies); secrets given by the host and never written to the lock or logs; logins (sessions, password hashing, tokens) as a shared library; the front end and the back end sharing more types (the generated client grown to every route and error shape); logs and errors of a running app; an embeddings and vector-search shared library; a tested way to deploy; lengua libraries that use other lengua libraries; a server that answers requests at the same time (concurrent serving) | A full-stack application (front end, server, storage, logins, an AI call) is `checked` and runs as one file |
-| L10 | Native parts and desktop apps: `- Native:` with a named reason (large local models, training, heavy compute on the GPU; the Electron shell of a desktop app; shared-memory threads; a device), built for the user's system and on five runners, the same checks, the `native` label, the "Where it runs" line; desktop apps in Electron (downloaded only for them), showing the same front end with the same WebAssembly back end run by `lengua-run` beside it, and a native part started beside it when the idea has one; what a native part can reach, written down | A native part is built, checked and labelled; an undeclared native need is refused; an example desktop app runs on five |
+| L10 | Native parts and desktop apps: `- Native:` with a named reason, kept narrow (large AI models, the fastest local inference, training or fine-tuning; heavy compute with shared-memory threads; a device with no host grant; the Electron shell of a desktop app), the native path built once and proven by one example, a back-end part that runs a local model on the GPU with Candle or Burn, built for the user's system and on five runners, the same checks, the `native` label, the "Where it runs" line; desktop apps in Electron (downloaded only for them), showing the same front end with the same WebAssembly back end run by `lengua-run` beside it, and a native part started beside it when the idea has one; what a native part can reach, written down | A native part is built, checked and labelled; an undeclared native need is refused; an example desktop app runs on five |
 | L11 | The skills: a new `vision` skill (the best lengua solution for an idea, `vision.md`, the principles with their do's and don'ts in `references/principles.md`, the GPU case said up front, approved by the person) and `write-idea` and `build` rewritten for Rust, Next.js, full stack, desktop and native parts; the person reads the idea and approves it in their own words before any code, and again for changes (the approved hash in the lock, `build` refused without it); "Where it runs" before any code, pure Rust first, the merit test for crates and npm packages, crates that aren't pure Rust flagged; the Agent Plugins version settled; a product test in an interactive session | An agent goes from a request to a `checked` full-stack application with the plugin alone |
 | L12 | The scale test: a full-stack application (Next.js front end, server, storage, logins, an AI call) in one file, built and then changed three times | A report of cycles and breakages, next to lengua 2's 3,638-line record |
 | L13 | The finish line: trace and profile; a bench of lengua's overhead; release archives for the five systems with install steps; every path a milestone listed as never exercised, now exercised or its reason written; WASI 0.3 checked again; every document current; a short guide to the owner's own steps (publishing, loading the plugin, branch protection) | The finish-line run green on five; only main and tags remain |
@@ -2369,9 +2426,11 @@ Decided for lengua 3 at L8 (2026-11-13):
 
 - **The watch list: what would lift each native limit.** Each waits on a standard, not on
   lengua; when one matures, the native kind it covers moves to WebAssembly.
-  - Back-end GPU work (large local models, training, heavy compute): **wasi-gfx** (WebGPU for
+  - Back-end GPU work (large AI models, training, heavy compute): **wasi-gfx** (WebGPU for
     WASI) and **wasi-nn**. Then that work could return to the one WebAssembly file. Front-end
     GPU work needs neither: the browser and Electron already give WebGPU.
+  - Models larger than 4 GB in WebAssembly, in the browser or on the back end: **Memory64**
+    (64-bit memories), with wasi-gfx for the GPU.
   - Threads that share memory: WebAssembly's **shared-everything-threads** proposal.
   - WebSockets: not in WASI 0.2's HTTP world; watch WASI 0.3 and later.
   - Timed jobs ("every night at 2 a.m."): no WASI standard yet.
