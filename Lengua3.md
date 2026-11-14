@@ -1859,11 +1859,19 @@ Decided for lengua 3 at L8 (2026-11-13), the parts that do not depend on the fro
   program built on Linux x86-64 and on Linux ARM64 differed there and nowhere else (runs
   43524778056 and 43528549629). With it, `hello` has 54,690 bytes and one SHA-256 on all five
   runners (run 43536298022).
-- **CI holds `hello`, `tally` and `greet` to one SHA-256 on every runner** (the job `same-bytes`,
-  from the components each check job uploads, with the difference printed by `wasm-tools`
-  1.263.0 when there is one); **the shop is compared and reported, not held**, since a program
-  that uses a lengua library cannot have one SHA-256 on every system with Rust 1.100.0 (section
-  10, "Found at L8: why the shop is not the same on every system").
+- **Every cargo call of the build job runs rustc through `lengua-mcp` itself** (`RUSTC_WRAPPER`,
+  with `LENGUA_RUSTC_WRAPPER` set so that `lengua-mcp` acts as the wrapper), which, for a crate
+  built for a `wasm32` target only, gives rustc a `-C metadata` made from the crate's identity
+  alone: its name, crate types, edition, target, `--cfg` values, the names of its `--extern`
+  crates and its version. Cargo's own `-C metadata` mixes in the metadata of every dependency,
+  build scripts and proc macros among them, and those are built for the host, whose metadata
+  holds the host's triple; the crate hashes it makes order the functions that rustc writes, so
+  the same program differed between systems (section 10, "Found at L8: why the same program was
+  not the same file on every system"). Crates built for the host keep Cargo's metadata.
+- **CI holds every built example to one SHA-256 on every runner** (the job `same-bytes`: `hello`,
+  `tally`, `greet`, `echo`, `count`, `files`, `clock`, `forever`, `greedy`, `words`, `fetch`, `upper`,
+  `sleepy` and the shop, from the components each check job uploads, with the difference
+  printed by `wasm-tools` 1.263.0 when there is one).
 - **CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2`** on every runner, and a
   failure fails the run (section 1).
 
@@ -2003,25 +2011,26 @@ Decided for lengua 3 at L8 (2026-11-13), the parts that do not depend on the fro
   default, and lengua's `wit/world.wit` is a statement for the host, not WIT for a binding
   generator (it imports WASI with no `wit/deps/`). A program writes `path: []` with `inline`; the
   `build` skill (L9) says so.
-- **Found at L8: why the shop is not the same on every system.** Run 43543315033 (`strip = true`,
-  Rust 1.100.0): `hello` 54,690 bytes on all five runners with one SHA-256; the shop 81,082 bytes
-  everywhere, in two versions, one on Linux x86-64, Linux ARM64 and Windows ARM64 and one on macOS
-  ARM64 and Windows x86-64, 183 bytes apart. `wasm-tools print` shows the cause: one function
-  (`(type 13)`, no parameters) stands at index 172 in one and 167 in the other, so the function
-  numbers between, the table of `call_indirect` (`elem`) and two data addresses move. Four builds
-  from clean on one runner gave one SHA-256 (run 43541237409), so it is not chance. The shop uses
-  two lengua libraries, `json` and `decimal`, which are path dependencies outside its folder, and
-  Cargo puts the absolute path of such a dependency into its crate hash (`-C metadata`, through
-  the package id's source; its source, `compilation_files.rs`, leaves the path out only with the
-  profile setting `trim-paths`). The crate hashes order the functions that rustc writes, and the
-  repository's path differs between the systems (`/home/runner/work/...` on Linux,
-  `/Users/runner/work/...` on macOS, a drive letter on Windows). Before `strip = true` the hashes
-  were also in the names, so even Linux x86-64 and
-  ARM64 differed (run 43528549629). What would fix it: Cargo's `trim-paths`, stable from Rust
-  1.101 (Cargo's documentation), not 1.100.0; or the libraries inside the program's folder, which
-  lengua's design does not do. Until then `hello`, `tally` and `greet` (no path dependency) are
-  held to one SHA-256 and the shop is reported. L7's 3-byte difference on Windows ARM64 most likely
-  had the same cause, with the names still in (L7 compared sizes only).
+- **Found at L8: why the same program was not the same file on every system.** `hello` and
+  `tally` (no external crate) had one SHA-256 on all five runners; `greet` (with `wasip2`) and the
+  shop (with `wasip2`, `wit-bindgen` and two lengua libraries) did not, each in two or three
+  versions of the same size whose grouping did not follow the system (run 43548327435: `greet`
+  71,005 bytes, the shop 81,082). `wasm-tools print` showed one function standing at another
+  index, so the numbers after it, the table of `call_indirect` and two data addresses moved (run
+  43543315033); four builds from clean on one runner gave one SHA-256 (run 43541237409). The
+  names, from builds without `strip` (run 43548327435), gave the cause: the crate hash of `wasip2`
+  and of the program differed on every system (`hAcE0StRMEg`, `fry7ILbvW2c`, `zTDUfLUYoL` for
+  `wasip2` on Linux ARM64, Linux x86-64 and Windows ARM64), while `core` and `alloc` kept theirs,
+  and two functions named `__link_custom_section_describing_imports` (of two units of `wasip2`)
+  sorted in another order. Cargo's `-C metadata` for a crate mixes in its dependencies' metadata
+  (its `compilation_files.rs`), and a build script or a proc macro is built for the host, whose
+  metadata holds the host's `rustc -vV` line `host: ...`, so the hash of every crate above one
+  differs between systems; the hashes then decide the order of functions. Before `strip = true`
+  they were also in the `name` section. Fixed in lengua's build: `lengua-mcp` is the rustc wrapper
+  of the build job and gives each crate built for `wasm32` a `-C metadata` of its own identity
+  (section 9). Path remapping did not help (run 43524778056), and Cargo's `trim-paths` (stable
+  from Rust 1.101) leaves out paths, not the host. L7's 3-byte difference on Windows ARM64 had
+  this cause too (L7 compared sizes only).
 
 ## Sources
 

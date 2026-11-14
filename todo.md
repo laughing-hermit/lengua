@@ -428,12 +428,15 @@ next starts (Lengua3.md, section 8).
   `name` section, whose mangled names carry Cargo's crate hashes (runs 43524778056, 43528549629);
   `hello` is then one SHA-256 on all five runners (run 43536298022). To reverse: remove the line,
   and a component keeps its names for a debugger.
-- **2026-11-13, L8: CI holds `hello`, `tally` and `greet` to one SHA-256 on every runner** (job
-  `same-bytes`), and compares and reports the shop: a program with a lengua library, a path
-  dependency outside its folder, gets crate hashes from the library's absolute path, so its
-  functions are ordered differently on systems whose paths differ, and Rust 1.100.0's Cargo has
-  no stable way to leave the path out (`trim-paths` is stable from Rust 1.101). Lengua3.md, section
-  10.
+- **2026-11-13, L8: `lengua-mcp` is the rustc wrapper of the build job** (`RUSTC_WRAPPER`, marked by
+  `LENGUA_RUSTC_WRAPPER`) and gives each crate built for `wasm32` a `-C metadata` of its own
+  identity (name, crate types, edition, target, `--cfg`, extern names, version). Reason: Cargo's
+  metadata mixes in that of build scripts and proc macros, built for the host and holding its
+  triple, and the crate hashes order the functions, so `greet` and the shop were different files
+  on different systems (runs 43543315033, 43548327435). To reverse: drop the two variables in
+  `build.rs`, and the components differ between systems again.
+- **2026-11-13, L8: CI holds every built example to one SHA-256 on every runner** (job
+  `same-bytes`, 14 components).
 - **2026-11-13, L8: CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2`**, and a failure
   fails the run (Lengua3.md, section 1).
 - **2026-11-13, the LLM wiki and OKF fixed ahead of L9 and L13** (`wip/wiki`; Lengua3.md,

@@ -349,6 +349,8 @@ pub(crate) fn cargo(
 ) -> Result<(bool, String), String> {
     let mut child = Command::new("cargo")
         .env("CARGO_NET_RETRY", "10")
+        .env("RUSTC_WRAPPER", std::env::current_exe().unwrap_or_default())
+        .env(crate::wrapper::MARK, "1")
         .args(args)
         .current_dir(folder)
         .env("CARGO_TERM_COLOR", "never")

@@ -213,42 +213,19 @@ jobs:
             echo "$f: $(wc -c < "$f") bytes"
             cargo run --locked -q -p lengua-mcp -- imports "$f"
           done
-      - name: the function names of greet and the shop, built again without strip, to compare between systems
-        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
-        run: |
-          case "${{ matrix.target }}" in
-            linux-x86_64) a=x86_64-linux; s=21c036c1740a0552124c79c6e2170cb61c5b016005671a6d5bc06cf642165431; x=tar.gz ;;
-            linux-aarch64) a=aarch64-linux; s=773b5e6bf957f0d93a9a337c9c5fc4c35509706301a80799f57a76fa367fd1ca; x=tar.gz ;;
-            macos-aarch64) a=aarch64-macos; s=b568f04746a699c4068b8d751779b60b501cf2cab6d259a3bc973eb5eeb1f62b; x=tar.gz ;;
-            windows-x86_64) a=x86_64-windows; s=0803df158b4dbea6b029d11f4206c414f432f0447af91542817061e4f0bd912e; x=zip ;;
-            windows-aarch64) a=aarch64-windows; s=e556da1f47810331f6455cb1b23248a9fa43f2fca28adb6eeb0973d4f25b7e25; x=zip ;;
-          esac
-          curl -sSfL -o "wt.$x" "https://github.com/bytecodealliance/wasm-tools/releases/download/v1.263.0/wasm-tools-1.263.0-$a.$x"
-          if command -v sha256sum > /dev/null; then echo "$s  wt.$x" | sha256sum -c; else echo "$s  wt.$x" | shasum -a 256 -c; fi
-          mkdir -p "$RUNNER_TEMP/wt"
-          if [ "$x" = zip ]; then unzip -q "wt.$x" -d "$RUNNER_TEMP/wt"; else tar xzf "wt.$x" -C "$RUNNER_TEMP/wt"; fi
-          tools=$(find "$RUNNER_TEMP/wt" -type f \( -name wasm-tools -o -name wasm-tools.exe \) | head -1)
-          mkdir -p "same/${{ matrix.target }}"
-          for pair in "greet target/tmp/lengua-mcp-greet/greet greet" \
-                      "shop target/tmp/lengua-mcp-shop/examples/shop shop"; do
-            set -- $pair
-            if [ ! -f "$2/Cargo.toml" ]; then continue; fi
-            cp "$2/Cargo.toml" "$RUNNER_TEMP/Cargo.toml.kept"
-            sed -i.bak '/^strip = true$/d' "$2/Cargo.toml"
-            (cd "$2" && cargo build -q --release --target wasm32-wasip2 --offline --target-dir "$RUNNER_TEMP/names-$1")
-            cp "$RUNNER_TEMP/Cargo.toml.kept" "$2/Cargo.toml"
-            rm -f "$2/Cargo.toml.bak"
-            "$tools" print "$RUNNER_TEMP/names-$1/wasm32-wasip2/release/$3.wasm" | grep -E '^ *\(func ' | sed 's/ (type [0-9]*).*//' > "same/${{ matrix.target }}/$1-names.txt"
-            wc -l "same/${{ matrix.target }}/$1-names.txt"
-          done
       - name: the bytes of the built components, for the check that every system builds the same
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |
           mkdir -p "same/${{ matrix.target }}"
-          for pair in "hello target/tmp/lengua-mcp-hello/hello/target/wasm32-wasip2/release/hello.wasm" \
-                      "tally target/tmp/lengua-mcp-tally/tally/target/wasm32-wasip2/release/tally.wasm" \
-                      "greet target/tmp/lengua-mcp-greet/greet/target/wasm32-wasip2/release/greet.wasm" \
-                      "shop target/tmp/lengua-mcp-shop/examples/shop/target/wasm32-wasip2/release/shop.wasm"; do
+          for pair in hello:hello tally:tally greet:greet run-echo:echo run-count:count run-files:files run-clock:clock run-forever:forever run-greedy:greedy run-words:words fetch:fetch upper:upper sleepy:sleepy; do
+            test_name=${pair%%:*}
+            name=${pair#*:}
+            set -- "$name" "target/tmp/lengua-mcp-$test_name/$name/target/wasm32-wasip2/release/$name.wasm"
+            if [ -f "$2" ]; then
+              cp "$2" "same/${{ matrix.target }}/$1.wasm"
+            fi
+          done
+          for pair in "shop target/tmp/lengua-mcp-shop/examples/shop/target/wasm32-wasip2/release/shop.wasm"; do
             set -- $pair
             if [ -f "$2" ]; then
               cp "$2" "same/${{ matrix.target }}/$1.wasm"
@@ -363,13 +340,11 @@ jobs:
           echo "21c036c1740a0552124c79c6e2170cb61c5b016005671a6d5bc06cf642165431  wt.tar.gz" | sha256sum -c
           tar xzf wt.tar.gz
           echo "$PWD/wasm-tools-1.263.0-x86_64-linux" >> "$GITHUB_PATH"
-      - name: hello and tally have the same SHA-256 on every system; greet and the shop are compared and reported
+      - name: every built example has the same SHA-256 on every system
         run: |
           ls built
           status=0
-          for name in hello tally greet shop; do
-            required=1
-            if [ "$name" = shop ] || [ "$name" = greet ]; then required=0; fi
+          for name in hello tally greet echo count files clock forever greedy words fetch upper sleepy shop; do
             echo "== $name"
             first=""
             for dir in built/*/; do
@@ -377,7 +352,6 @@ jobs:
               file="$dir/$name.wasm"
               if [ ! -f "$file" ]; then
                 echo "$(basename "$dir"): not built"
-                if [ "$required" = 0 ]; then continue; fi
                 status=1
                 continue
               fi
@@ -385,7 +359,7 @@ jobs:
               if [ -z "$first" ]; then
                 first="$file"
               elif ! cmp -s "$first" "$file"; then
-                if [ "$required" = 1 ]; then status=1; fi
+                status=1
                 echo "  differs from $(basename "$(dirname "$first")"): $(cmp -l "$first" "$file" | wc -l) bytes differ; the first differences:"
                 cmp -l "$first" "$file" | head -20 || true
                 diff <(wasm-tools print "$first") <(wasm-tools print "$file") | head -60 || true
@@ -393,18 +367,3 @@ jobs:
             done
           done
           exit $status
-      - name: the function names of greet and the shop, compared between systems
-        if: ${{ !cancelled() }}
-        run: |
-          for name in greet shop; do
-            first=""
-            for dir in built/*/; do
-              file="${dir%/}/$name-names.txt"
-              [ -f "$file" ] || continue
-              if [ -z "$first" ]; then first="$file"; continue; fi
-              if ! cmp -s "$first" "$file"; then
-                echo "== $name: $first and $file"
-                diff "$first" "$file" | head -60 || true
-              fi
-            done
-          done
