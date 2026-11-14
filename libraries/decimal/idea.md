@@ -8,11 +8,11 @@ used_by: []
 label: checked
 idea_sha256: 6f8b62af5416cdfc6cdcd57e2e1ea9c60faf0e7ae3f54731b9ad647d8b06abd3
 source_sha256: 0aa2edc6181445c8fbdac7134d55ba2356ab1459260b66676e3dbdb1055d9e1b
-cargo_sha256: ccf407feb8f49854dfd01f4a44c8e8268dab795251bb09f5213b8b08bbd11b9e
+cargo_sha256: 01621d58ac0019863e3a52a353be2934020f2f6642e2980cc15e79005ed1b972
 world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T22:55:09Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T00:23:26Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-13T22:55:09Z }
+  - { by: process:lengua-check, at: 2026-11-14T00:23:26Z }
 title: decimal
 status: draft
 ---
