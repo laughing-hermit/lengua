@@ -21,7 +21,7 @@ next starts (Lengua3.md, section 8).
 | L5 | Tests from the idea, generated cases, mutation score, trust labels | Landed on main at 7ce9264 (run 43439284107, green on five) |
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | Landed on main at cb314b2 (run 43450491850, green on five) |
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Landed on main at af89139 (run 43483075983, green on five) |
-| L8 | Reproducible builds and the same-SHA check on five runners; lengua's own std-only crates built for WebAssembly in CI (the GPUI front end was tried and dropped on 2026-11-13, tag `archive/l8-gpui`) | Done on `wip/l8b`; the five-runner landing run is named in the landing report |
+| L8 | Reproducible builds and the same-SHA check on five runners; lengua's own std-only crates built for WebAssembly in CI | Done on `wip/l8b`; the five-runner landing run is named in the landing report |
 | L9 | The skills rewritten for Rust and GPUI; a product test in an interactive session | Not started |
 | L10 | The scale test | Not started |
 | L11 | Trace and profile; a bench of lengua's overhead; documents; the finish line | Not started |
@@ -419,13 +419,7 @@ next starts (Lengua3.md, section 8).
   need (`client`, `listen`, `get`, `hash`, `chunk`, `bracket`, `escape`, `overflow`, `tax`, ...),
   each with its part of speech.
 
-- **2026-11-13, L8: the GPUI front end was tried and dropped.** Built on `wip/l8` (kept at the tag
-  `archive/l8-gpui`): GPUI through the crates.io snapshot `gpui-pre` 0.3.12 (Zed commit
-  `d2a4fb6`, the only way to pin one Zed commit next to GPUI Kit `gpui-component` 0.9.1), built for
-  `wasm32-unknown-unknown` on stable 1.100.0, drawn in headless Chrome through WebGL2. On the same
-  day the owner chose Leptos for the front end and Tauri for the desktop; GPUI, GPUI Kit, Next.js
-  and Electron are dropped, and the front end comes at the next milestone from a new brief. What
-  was found: Lengua3.md, section 10, "History: GPUI's web target".
+- **2026-11-13, L8:** GPUI and GPUI Kit were tried at L8 for the browser and dropped on 2026-11-13 (a 21 MB front end, no accessibility on the web); the attempt is kept at the tag archive/l8-gpui.
 - **2026-11-13, L8: no path remapping.** `--remap-path-prefix` (Cargo home, folder, path
   dependencies) was tried and taken back: the shop still differed between systems with it (run
   43524778056), its differences coming from Cargo's crate hashes. The build job keeps
@@ -530,9 +524,7 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-13 | [43476045199](https://github.com/laughing-hermit/lengua/actions/runs/43476045199) | wip/l7 e3109dd | test, linux-x86_64 | Failed only on the shop: it built and passed clippy (so the bindings' macros pass `unsafe_code = "forbid"`), and the import check wanted a WASI version on `lengua:tax/rates`; now an exact name is taken |
 | 2026-11-13 | [43478821353](https://github.com/laughing-hermit/lengua/actions/runs/43478821353) | wip/l7 5d04e13 | test, linux-x86_64 | Green. Seconds from the first check to `done`, and the mutation score: `tally` 23.1, 6 of 6; `fetch` 23.4, 3 of 3; `upper` 28.8, 4 of 4; `greet` 13.0, 2 of 2; `prices` 11.4, 4 of 4; the libraries `decimal` 106 to 125, 27 of 30; `sort` 66 to 89, 22 of 27; `text` 50 to 70, 22 of 23; `hashes` 82 to 92, 33 of 36 (4 unbuilt); `dates` 137 to 160, 34 of 36 (4 unbuilt); `json` 113 to 161, 37 of 39 (1 unbuilt); `http` 181 to 188, 37 of 40; each `checked`, and each built for `wasm32-unknown-unknown` too; `shop` 58.5, 14 of 14, `checked`: one file of 98,722 bytes, `lengua-run`'s first answer 106 ms after its start. The C component `tax.wasm`: 50,628 bytes |
 | 2026-11-13 | [43483075983](https://github.com/laughing-hermit/lengua/actions/runs/43483075983) | wip/l7 af89139 | test, all five | Green on five: the L7 landing run. The shop's one file 98,722 bytes on four systems and 98,725 on Windows ARM64 (`greet` 87,311 and 87,281): the difference L8 checks |
-| 2026-11-13 | [43490423487](https://github.com/laughing-hermit/lengua/actions/runs/43490423487) | wip/l8 38320ec | compile, linux-x86_64 | GPUI risk test: GPUI and GPUI Kit built for the browser on stable in 3 min 18 s (20,977,185 bytes after `wasm-bindgen`); in Chrome, a panic for want of fonts (now at `archive/l8-gpui`) |
-| 2026-11-13 | [43491793393](https://github.com/laughing-hermit/lengua/actions/runs/43491793393) | wip/l8 615ad46 | compile, linux-x86_64 | GPUI risk test with IBM Plex Sans: the screen drew through WebGL2 (SwiftShader); GPUI's test context ran it natively |
-| 2026-11-13 | 43495368168 to [43511534741](https://github.com/laughing-hermit/lengua/actions/runs/43511534741) | wip/l8 9051fc7 to 2abbe82 | test, linux-x86_64 | Nine runs of the GPUI front end (lock, format, clippy, an STE brace, a fetch for both targets, the 16 MiB answer limit): the front end and the one file built; the last run cancelled when GPUI was dropped |
+| 2026-11-13 | 43490423487 to 43511534741 | wip/l8 (tag archive/l8-gpui) | compile and test, linux-x86_64 | The GPUI attempt, dropped |
 | 2026-11-13 | [43513488146](https://github.com/laughing-hermit/lengua/actions/runs/43513488146) | wip/wiki ec3e0ce | test, linux-x86_64 | Failed: 11 clippy findings in `lengua-idea` (`similar_names`, `manual_is_multiple_of`, `map_unwrap_or`) and a format patch |
 | 2026-11-13 | [43514346508](https://github.com/laughing-hermit/lengua/actions/runs/43514346508) | wip/wiki 9f468f5 | test, linux-x86_64 | Failed: the tree test (no committed wiki yet, as planned); the usage test; and every job ran twice, all mutants cached: `verified` added two frontmatter lines, which moved the examples' lines in the build's inputs (now counted from the idea's text) |
 | 2026-11-13 | [43516467060](https://github.com/laughing-hermit/lengua/actions/runs/43516467060) | wip/wiki 2f3b5c4 | test, linux-x86_64 | Every test green but the tree test (no committed wiki yet, as planned) |
