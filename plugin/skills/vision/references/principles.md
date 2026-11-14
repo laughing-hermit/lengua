@@ -93,7 +93,7 @@ A crate or an npm package merits it only when all of these hold:
 ## AI calls
 
 - Do: ask a model from the back end with ``- Asks: an AI model, for <what>, up to <N> calls and
-  <M> tokens``; the person who runs the program chooses the model (`LENGUA_MODEL_URL`).
+  <M> tokens``; the person who runs the program chooses the model (`LENGUA_MODEL_URL`, over HTTP or HTTPS).
 - Do: treat every answer as untrusted input, and give the tests a ``- Model answers:``.
 - Don't: hold an API key in the program or in the browser.
 

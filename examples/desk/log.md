@@ -1,0 +1,21 @@
+# Log
+
+## 2026-11-14
+
+* **Approval** at 12:00:00Z by human:owner: the ideas `7f62915ffbcb2ddb38a1f0b527fee78627be601b8380dfecc57e31e8b63e4dc6`. The person's words: "Approved with milestone L11: lengua's own examples and libraries, as the owner's milestones asked for them.".
+* **Check** at 15:26:19Z: no problems; label `checked`, mutation score 17 of 21 (80%).
+* **Check** at 15:24:57Z: no problems; label `unchecked`.
+* **Check** at 15:24:45Z: no problems; label `unchecked`.
+* **Check** at 15:24:42Z: no problems; label `unchecked`.
+  * Generated `web/lengua.sum`, changed: `c3a1a43bde7ed2e7f894e1806dab079c896ca9284da297e5ecaa46dfa856a77d`.
+* **Check** at 13:34:47Z: no problems; label `checked`, mutation score 17 of 21 (80%).
+* **Check** at 13:33:22Z: no problems; label `unchecked`.
+* **Check** at 13:33:12Z: no problems; label `unchecked`.
+* **Check** at 13:33:08Z: no problems; label `unchecked`.
+  * Idea [desk](idea.md), new: `ce8028a930da2bf0df4453774ed2040cebc231baacdb87ed549d49018bb41ffe`.
+  * Code `src/main.rs`, new: `8fe52be33c3a9f52bd888c7c600e4f85a0a6d1974546c7e85536041b6f86ce83`.
+  * Generated `Cargo.toml`, new: `dbb9541af7745d495a909e05bec141a6f7705ead1d094829219d6d1709cbc5ff`.
+  * Generated `wit/world.wit`, new: `e1fa39b4514b921fb087df71d46f9bda8c247415e4e9fee0409382456311ad86`.
+  * Generated `web/lengua.sum`, new: `8923afea4e11e30318ff68513e9b7cd9ea930bba05c0cad4b1a321cb3d93c9c3`.
+  * Idea [ui/home](ideas/ui/home.md), new: `37b29caebc456745c67049c3dba7664f6e3f7131e451938d2d3a8d2b8eb237d8`.
+  * Code `web/screens/home.tsx`, new: `d1fdf091f4b50310ae7f5ba5ae7919082fb639645e87e4f4739360f84a71c334`.

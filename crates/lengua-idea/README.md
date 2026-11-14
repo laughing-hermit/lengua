@@ -59,7 +59,7 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
   `verified`, and the lock an `approved` line; after a change of a behaviour or a constraint,
   `status: draft` again.
 - Given a `vision.md`, when `check` runs, then it holds `type: lengua Vision` and `# Where it
-  runs` (`vision-type`, `vision-section`), lists it first in `index.md` and signs it in the
+  runs` (`vision-type`, `vision-section`), lists it in `index.md` after "Where it runs" and signs it in the
   lock.
 
 ## Structure
@@ -139,6 +139,10 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
   library: its `idea.md`, its folder's name as the package, its lock verified with
   `lock::verify` (kind `library`), its label and the SHA-256 of its lock; `description` reads the
   library's description from its frontmatter.
+- `native.rs` (since L10): `rules` reads the `- Native:` lines (`native-reason`, `native-shape`,
+  `native-grant`, `native-desktop`) into a `Place`; `resolve` reads each native part a program
+  names and verifies its lock (`Native`); `undeclared` finds a thread or a process of the system
+  in a WebAssembly program (`native-undeclared`); `where_it_runs` writes the "Where it runs" line.
 - `web.rs` (since L8): `plan` makes the generated files of `web/` for an application with screens
   (`package.json` from the base, shadcn's packages and `- Uses package:`; the configurations in
   `front/`; a route `page.tsx` per screen; shadcn's components from `shadcn/`; the client from

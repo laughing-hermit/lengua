@@ -10,13 +10,12 @@ idea_sha256: 21d14e833a6203724731c682f621b90519a9f4eb96f4f6cf5526118c9a262df8
 source_sha256: 6749f59b9dcf23e799e9387e2ac6d03160ff9489971cf347d1872a40f04f858d
 cargo_sha256: a71e617ef16a3533e8b7ccc811be90a821436cd6b0c75e52e9bc9f8971760d96
 world_sha256: 432ab60b895088c9bc0206a29ba4e132e6b86715dbabb9ceab8b2b6adf271f30
-web_sha256: 3c10a01c59ede2c82f1f315ee5d9a354e90bfc8d7bae13c065edeeefdcfb5a44
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T12:52:52Z }
+web_sha256: f3cdf0bdbaa429c2a871f17b369f20aa23ef3761161471139caa07b465a34af7
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T15:31:10Z }
 verified:
-  - { by: human:owner, at: 2026-11-14T12:00:00Z }
-  - { by: process:lengua-check, at: 2026-11-14T12:52:52Z }
+  - { by: process:lengua-check, at: 2026-11-14T15:31:10Z }
 title: notes
-status: stable
+status: draft
 approved: { sha256: 7048ff4a72c232f317ac7cd746074574215570a3768d84901ed643f3e88fd768, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 

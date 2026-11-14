@@ -25,8 +25,13 @@ function answer(input: RequestInfo | URL, init?: RequestInit): Promise<Response>
   const path = typeof input === "string" ? input : input.toString();
   const method = init?.method ?? "GET";
   const body = typeof init?.body === "string" ? init.body : null;
+  const authorization = new Headers(init?.headers).get("authorization") ?? "";
   const found = examples.find(
-    (e) => e.method === method && e.path === path && canonical(e.body) === canonical(body),
+    (e) =>
+      e.method === method &&
+      e.path === path &&
+      canonical(e.body) === canonical(body) &&
+      e.authorization === authorization,
   );
   if (found === undefined) {
     return Promise.reject(new Error(`no example of the server answers \`${method} ${path}\``));

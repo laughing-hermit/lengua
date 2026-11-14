@@ -33,8 +33,8 @@ The code does what the ideas say, and nothing more. `check` holds the two to eac
 5. When a mutant survives, the tests can't tell it from the code. Write an example that does,
    at the boundary the note names. A new example changes a behaviour, so show it to the person
    and ask them to approve again.
-6. Stop when the state is `done` and the label is `checked`. Tell the person the label, the
-   "Where it runs" line, any `trusted` or `native` part, and any crate that is not pure Rust.
+6. Stop when the state is `done` and the label is `checked` (`native` for a native part). Tell the person the label, the reply's
+   `where_it_runs` (also the first section of `index.md`), any `trusted` or `native` part, and any crate that is not pure Rust.
 7. Run it with the MCP tool `run`, or `lengua-run <folder>` in a shell.
 
 ## Never

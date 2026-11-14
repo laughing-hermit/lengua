@@ -38,10 +38,10 @@ written before the person approves it.
 - An AI call is ``- Asks: an AI model, for <what>, up to <N> calls and <M> tokens``; the
   examples give ``- Model answers:``.
 - A desktop app is the same front end and back end in Electron:
-  `- Native: a desktop window, for the Electron shell of a desktop app` (L10).
+  `- Native: a desktop window, for the Electron shell of a desktop app`.
 - Only a part that WebAssembly can't do is native: a program folder of its own whose idea says
   `- Native: <what>, for <reason>`, started by the WebAssembly program, which names it with
-  ``- Native: `<folder>`, for <reason>`` (L10). The reasons are in the grammar.
+  ``- Native: `<folder>`, for <reason>``. The reasons are in the grammar.
 
 ## Crates and npm packages: pure Rust first, and only when they merit it
 

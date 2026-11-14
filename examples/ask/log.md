@@ -2,10 +2,13 @@
 
 ## 2026-11-14
 
-* **Check** at 12:49:15Z: no problems; label `checked`, mutation score 18 of 20 (90%).
-* **Check** at 12:48:06Z: no problems; label `unchecked`.
-* **Check** at 12:48:06Z: no problems; label `unchecked`.
 * **Approval** at 12:00:00Z by human:owner: the ideas `a9e622f74aff4c31fe3837bae568ca6fb9d77a9051f61a7d546969019fad729c`. The person's words: "Approved with milestone L11: lengua's own examples and libraries, as the owner's milestones asked for them.".
+* **Check** at 15:24:42Z: no problems; label `checked`, mutation score 18 of 20 (90%).
+* **Check** at 15:22:58Z: no problems; label `unchecked`.
+* **Check** at 15:22:58Z: no problems; label `unchecked`.
+* **Check** at 13:33:08Z: no problems; label `checked`, mutation score 18 of 20 (90%).
+* **Check** at 13:31:20Z: no problems; label `unchecked`.
+* **Check** at 13:31:19Z: no problems; label `unchecked`.
 * **Check** at 10:08:34Z: no problems; label `checked`, mutation score 18 of 20 (90%).
 * **Check** at 10:07:33Z: no problems; label `unchecked`.
 * **Check** at 10:07:32Z: no problems; label `unchecked`.

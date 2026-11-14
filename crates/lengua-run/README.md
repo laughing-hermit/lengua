@@ -9,7 +9,8 @@ description: "The lean runner, which runs a checked lengua program from a shell.
 ## Purpose
 
 `lengua-run` is the lean runner: it runs a checked lengua program from a shell,
-`lengua-run [--listen <address:port>] <folder> [arguments...]`. It has Wasmtime without its compiler (no Cranelift; the
+`lengua-run [--listen <address:port>] <folder> [arguments...]`, or `lengua-run --desktop <folder>`
+for a desktop app. It has Wasmtime without its compiler (no Cranelift; the
 `runtime` feature only), so it loads only the sealed precompiled code that `check` made, and only
 after it verified the program's `lengua.lock` exactly as the `run` tool does. It grants only
 what the idea grants, and passes standard input (when granted), standard output and standard
@@ -33,12 +34,19 @@ error through. See [Lengua3.md](../../Lengua3.md), section 4, "The lock" and "`l
 - Given a program that grows its memory past its idea, then exit code 126; a trap, 134.
 - Given a server and `--listen <address:port>`, then it serves that address in place of
   `127.0.0.1:N`, as a container needs (since L9).
+- Given `--desktop` and a desktop app, then it serves the one file on its port and starts
+  Electron from the app's `target/lengua/web/node_modules` on `web/desktop/main.mjs`, with
+  `LENGUA_URL`; it ends with the window, with Electron's exit code (since L10). Given a folder
+  that is not a desktop app, or a native part's folder, it refuses (125).
 - Given `--version`, then it writes `lengua-run <version>`; given no arguments, the usage line
   and exit code 2.
 
 ## Structure
 
 - `main`: reads the arguments; `--version`, the usage line, or `run`.
+- `not_this_kind`: refuses a native part, and `--desktop` for an app that is not a desktop one.
+- `electron`, `open_window`: find Electron of the app, and start it on the served address once it
+  answers, on a thread that ends the process with its exit code.
 - `run`: reads the user's key, verifies the lock, reads the ideas with `lengua_idea::program`,
   refuses ungranted arguments, loads the sealed code with `lengua_seal::load`, starts `watch`,
   and runs the program with `lengua_host` and `Streams::Inherit`.

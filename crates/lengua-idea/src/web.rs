@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::cases::{StateValue, Test, cases};
-use crate::constraints::Constraints;
+use crate::constraints::{Constraints, Part, Reason};
 use crate::generate::{collect_skipping, held};
 use crate::idea::IdeaKind;
 use crate::types::{self, Ty, merge, quoted, render};
@@ -13,6 +13,8 @@ use crate::{Finding, Library, json, sha256};
 pub const SUM: &str = "web/lengua.sum";
 pub const CLIENT: &str = "web/lib/lengua.ts";
 pub const PNPM: &str = "12.18.0";
+pub const DESKTOP: &str = "web/desktop/main.mjs";
+const ELECTRON: (&str, &str) = ("electron", "45.3.2");
 
 const BASE: [(&str, &str); 3] = [
     ("next", "16.4.6"),
@@ -95,6 +97,7 @@ pub struct Front {
     pub packages: Vec<(String, String)>,
     pub runs: Vec<ScreenRun>,
     pub browser: Vec<Browser>,
+    pub desktop: bool,
 }
 
 const BROWSER_TYPES: [&str; 11] = [
@@ -155,6 +158,7 @@ fn browsers(folder: &Path, libraries: &[Library]) -> Vec<Browser> {
             functions: fs::read_to_string(folder.join(&l.path).join("src/main.rs"))
                 .map_or_else(|_| Vec::new(), |t| browser_functions(&t)),
         })
+        .filter(|b| !b.functions.is_empty())
         .collect()
 }
 
@@ -428,6 +432,7 @@ fn route_code(route: &Route, out: &mut String) {
     };
     validator(out, &answer, &checks.0);
     validator(out, &failure, &checks.1);
+    params.push("token = \"\"".to_string());
     let label = format!("`{} {}`", route.method, route.path);
     let (good, good_check) = statuses_of(route, true);
     let (bad, bad_check) = statuses_of(route, false);
@@ -435,7 +440,7 @@ fn route_code(route: &Route, out: &mut String) {
     let bad_check = status_check(&bad_check, &label).replace("\n    ", "\n  ");
     let _ = writeln!(
         out,
-        "\nexport async function {}({}): Promise<Answer<{answer}, {failure}, {good}, {bad}>> {{\n  const got = await call({}, {}, {sent}, {});\n  const status = got.status;\n  if (got.ok) {{\n    assert(is{answer}(got.value), {});{good_check}\n    return {{ ok: true, status, value: got.value }};\n  }}\n  assert(is{failure}(got.value), {});{bad_check}\n  return {{ ok: false, status, error: got.value }};\n}}",
+        "\nexport async function {}({}): Promise<Answer<{answer}, {failure}, {good}, {bad}>> {{\n  const got = await call({}, {}, {sent}, {}, token);\n  const status = got.status;\n  if (got.ok) {{\n    assert(is{answer}(got.value), {});{good_check}\n    return {{ ok: true, status, value: got.value }};\n  }}\n  assert(is{failure}(got.value), {});{bad_check}\n  return {{ ok: false, status, error: got.value }};\n}}",
         route.function,
         params.join(", "),
         quoted(&route.method),
@@ -562,7 +567,7 @@ fn screen_test(screen: &str, runs: &[&ScreenRun]) -> String {
 
 fn server_examples(tests: &[Test]) -> String {
     let mut out = String::from(
-        "export interface Example {\n  readonly method: string;\n  readonly path: string;\n  readonly body: string | null;\n  readonly status: number;\n  readonly answer: string;\n}\n\nexport const examples: readonly Example[] = [\n",
+        "export interface Example {\n  readonly method: string;\n  readonly path: string;\n  readonly body: string | null;\n  readonly authorization: string;\n  readonly status: number;\n  readonly answer: string;\n}\n\nexport const examples: readonly Example[] = [\n",
     );
     for test in tests.iter().filter(|t| !t.screen && t.request.is_some()) {
         for case in cases(test) {
@@ -573,9 +578,15 @@ fn server_examples(tests: &[Test]) -> String {
             let body = t.request_body.as_deref().map_or("null".to_string(), quoted);
             let _ = writeln!(
                 out,
-                "  {{ method: {}, path: {}, body: {body}, status: {}, answer: {} }},",
+                "  {{ method: {}, path: {}, body: {body}, authorization: {}, status: {}, answer: {} }},",
                 quoted(method),
                 quoted(path),
+                quoted(
+                    t.request_headers
+                        .iter()
+                        .find(|(n, _)| n.eq_ignore_ascii_case("authorization"))
+                        .map_or("", |(_, v)| v.as_str())
+                ),
                 t.status.unwrap_or(200),
                 quoted(t.expect_body.as_deref().unwrap_or(""))
             );
@@ -593,11 +604,14 @@ fn json_object(pairs: &[(String, String)]) -> String {
     format!("{{\n{}\n  }}", lines.join(",\n"))
 }
 
-fn package_json(title: &str, dependencies: &[(String, String)]) -> String {
+fn package_json(title: &str, dependencies: &[(String, String)], desktop: bool) -> String {
     let mut dev: Vec<(String, String)> = DEV
         .iter()
         .map(|(n, v)| ((*n).to_string(), (*v).to_string()))
         .collect();
+    if desktop {
+        dev.push((ELECTRON.0.to_string(), ELECTRON.1.to_string()));
+    }
     dev.sort();
     format!(
         "{{\n  \"name\": {},\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"packageManager\": \"pnpm@{PNPM}\",\n  \"browserslist\": [\"chrome 111\", \"edge 111\", \"firefox 128\", \"safari 16.4\"],\n  \"dependencies\": {},\n  \"devDependencies\": {}\n}}\n",
@@ -709,17 +723,28 @@ fn texts(
     routes: &[Route],
     tests: &[Test],
     dependencies: &[(String, String)],
+    desktop: bool,
 ) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = vec![(
         "web/package.json".to_string(),
-        package_json(title, dependencies),
+        package_json(title, dependencies, desktop),
     )];
     out.extend(
         STATIC
             .iter()
             .map(|(f, t)| ((*f).to_string(), (*t).to_string())),
     );
+    if desktop {
+        out.push((
+            DESKTOP.to_string(),
+            include_str!("front/desktop.mjs").to_string(),
+        ));
+    }
     out.push(("web/app/layout.tsx".to_string(), layout(title)));
+    out.push((
+        "web/app/not-found.tsx".to_string(),
+        include_str!("front/not-found.tsx").to_string(),
+    ));
     for screen in screens {
         let file = if screen == "home" {
             "web/app/page.tsx".to_string()
@@ -773,7 +798,11 @@ pub(crate) fn plan(
     }
     let top = constraints.first().cloned().unwrap_or_default();
     let dependencies = packages(pages, constraints, !top.shadcn.is_empty(), findings);
-    let made = texts(title, &screens, &top, routes, tests, &dependencies);
+    let desktop = top
+        .natives
+        .iter()
+        .any(|n| matches!(n.part, Part::Own(_)) && n.reason == Some(Reason::Desktop));
+    let made = texts(title, &screens, &top, routes, tests, &dependencies, desktop);
     let stamp = pages.first().and_then(|p| p.front.value("web_sha256"));
     let previous = previous_sums(folder, stamp);
     let mut sum = String::new();
@@ -811,6 +840,7 @@ pub(crate) fn plan(
             packages: dependencies,
             runs: screen_runs(tests),
             browser: browsers(folder, libraries),
+            desktop,
         },
     })
 }

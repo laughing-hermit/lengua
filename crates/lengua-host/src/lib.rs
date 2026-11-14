@@ -1,8 +1,10 @@
 mod http;
 mod json;
 mod model;
+mod native;
 mod network;
 mod outgoing;
+mod tls;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,6 +32,7 @@ use wasmtime_wasi::{
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
 
 pub use crate::http::{read_request, response_bytes};
+pub use crate::tls::ROOTS;
 
 pub const TICK_MS: u64 = 10;
 pub const OUTPUT: usize = 16 << 20;
@@ -394,6 +397,8 @@ fn hooks(run: &Program, input: &Input) -> outgoing::Hooks {
             }))
         }),
         model: Arc::new(model),
+        natives: run.build.natives.clone(),
+        limit: Duration::from_millis(grants.time_ms),
     }
 }
 

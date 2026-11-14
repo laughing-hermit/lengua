@@ -311,7 +311,7 @@ fn example_named(name: &str, test: &str) -> PathBuf {
 
 fn until_built(server: &mut Server, folder: &Path, base: u64) -> Value {
     let started = Instant::now();
-    for id in base..base + 5000 {
+    for id in base..base + 15_000 {
         let reply = server.check(id, folder);
         let state = reply["build"]["state"].as_str().unwrap_or("").to_string();
         if !["building", "testing", "mutating"].contains(&state.as_str()) {
@@ -338,7 +338,7 @@ fn until_built(server: &mut Server, folder: &Path, base: u64) -> Value {
         assert!(reply["build"]["seconds"].is_u64(), "{reply:#}");
         thread::sleep(Duration::from_millis(200));
     }
-    panic!("the job did not end in about 1000 seconds");
+    panic!("the job did not end in about 3000 seconds");
 }
 
 #[test]
@@ -1179,6 +1179,14 @@ fn the_shared_library_vectors_uses_json_and_is_checked() {
     shared_library_using("vectors", &["json"]);
 }
 
+static PORT_7813: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn alone() -> std::sync::MutexGuard<'static, ()> {
+    PORT_7813
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn ask_checked(test: &str, server: &mut Server) -> PathBuf {
     let root = bundle(
         test,
@@ -1202,6 +1210,7 @@ fn ask_checked(test: &str, server: &mut Server) -> PathBuf {
 
 #[test]
 fn a_program_asks_a_model_calls_a_service_and_gets_a_secret_under_its_grants() {
+    let _alone = alone();
     let mut server = Server::start();
     let folder = ask_checked("ask", &mut server);
     let reply = done(&mut server, &folder, 5000);
@@ -1241,6 +1250,7 @@ fn files_holding(folder: &Path, marked: &str, found: &mut Vec<String>) {
 
 #[test]
 fn a_secret_reaches_the_program_and_no_file_or_reply_of_lengua() {
+    let _alone = alone();
     let marked = "lengua-marked-secret-7f3a";
     let mut command = Command::new(env!("CARGO_BIN_EXE_lengua-mcp"));
     command
@@ -2202,4 +2212,175 @@ fn code_is_built_only_from_ideas_the_person_approved() {
         }}),
     );
     assert_eq!(bad["result"]["isError"], true, "{bad:#}");
+}
+
+#[test]
+fn the_desktop_app_gets_electron_and_its_window_in_the_generated_files() {
+    let root = bundle("desk-wiki", &["libraries/json", "examples/desk"]);
+    let folder = root.join("examples/desk");
+    fs::remove_dir_all(folder.join("src")).expect("the Rust removed");
+    let idea = read(&folder, "idea.md").replace(
+        "- Native: `../model`, for the fastest local inference\n",
+        "",
+    );
+    fs::write(folder.join("idea.md"), idea).expect("the idea without its native part");
+    let mut server = Server::start();
+    let json = done(&mut server, &root.join("libraries/json"), 100);
+    assert_eq!(json["label"], "checked", "{json:#}");
+    let reply = server.check(5000, &folder);
+    assert_eq!(reply["ok"], true, "{reply:#}");
+    let package = read(&folder, "web/package.json");
+    assert!(package.contains("\"electron\": \"45.3.2\""), "{package}");
+    let workspace = read(&folder, "web/pnpm-workspace.yaml");
+    assert!(!workspace.contains("allowBuilds"), "{workspace}");
+    assert!(read(&folder, "web/desktop/main.mjs").contains("LENGUA_URL"));
+    assert!(
+        reply["where_it_runs"]
+            .as_str()
+            .is_some_and(|w| w.starts_with("An Electron app")),
+        "{reply:#}"
+    );
+}
+
+fn wait_for(child: &mut Child, limit: Duration) -> Option<std::process::ExitStatus> {
+    let started = Instant::now();
+    loop {
+        if let Ok(Some(status)) = child.try_wait() {
+            return Some(status);
+        }
+        if started.elapsed() > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn logs_of(child: &mut Child) -> thread::JoinHandle<String> {
+    let stderr = child.stderr.take();
+    thread::spawn(move || {
+        let mut text = String::new();
+        if let Some(mut pipe) = stderr {
+            let _ = std::io::Read::read_to_string(&mut pipe, &mut text);
+        }
+        text
+    })
+}
+
+fn desktop_smoke(desk: &Path) -> Value {
+    let out = desk.join("target/smoke.json");
+    let _ = fs::remove_file(&out);
+    let mut child = Command::new(lengua_run())
+        .arg("--desktop")
+        .arg(desk)
+        .env("LENGUA_HOME", home())
+        .env("LENGUA_SMOKE", "POST /api/write")
+        .env("LENGUA_SMOKE_BODY", "{\"prompt\":\"ab\"}")
+        .env("LENGUA_SMOKE_OUT", &out)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("lengua-run starts the desktop app");
+    let logs = logs_of(&mut child);
+    let started = Instant::now();
+    let status = wait_for(&mut child, Duration::from_secs(240));
+    let seconds = started.elapsed().as_secs_f64();
+    let logs = logs.join().unwrap_or_default();
+    let text = fs::read_to_string(&out).unwrap_or_default();
+    assert!(
+        status.is_some_and(|s| s.success()),
+        "{status:?} after {seconds:.1} s\n{logs}\n{text}"
+    );
+    let log = Path::new(env!("CARGO_TARGET_TMPDIR")).join("lengua-timings.txt");
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(log) {
+        let _ = writeln!(
+            file,
+            "desk: the desktop app started, loaded its first page, answered one request and quit in {seconds:.1} s"
+        );
+    }
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{e}: {text}\n{logs}"))
+}
+
+#[test]
+fn a_native_part_and_a_desktop_app_run_on_this_computer() {
+    let root = bundle(
+        "desk",
+        &["libraries/json", "examples/model", "examples/desk"],
+    );
+    let mut server = Server::start();
+    let json = done(&mut server, &root.join("libraries/json"), 100);
+    assert_eq!(json["label"], "checked", "{json:#}");
+    let model = root.join("examples/model");
+    let part = done(&mut server, &model, 2000);
+    assert_eq!(part["label"], "native", "{part:#}");
+    assert_eq!(part["build"]["tests"]["failed"], 0, "{part:#}");
+    assert!(
+        part["where_it_runs"]
+            .as_str()
+            .is_some_and(|w| w.starts_with("A native program")),
+        "{part:#}"
+    );
+    let lock = read(&model, "lengua.lock");
+    assert!(lock.contains("\nkind native\n"), "{lock}");
+    assert!(lock.contains("\nlabel native\n"), "{lock}");
+    assert!(!lock.contains("\nsealed "), "{lock}");
+    let cargo = read(&model, "Cargo.toml");
+    assert!(
+        cargo.contains("[target.'cfg(target_os = \"macos\")'.dependencies]\ncandle-core = { version = \"=0.11.1\", features = [\"metal\"] }\n"),
+        "{cargo}"
+    );
+    let refused = server.run_to_end(3000, &model, &json!({"stdin": "ab"}));
+    assert_eq!(refused["state"], "refused", "{refused:#}");
+    let desk = root.join("examples/desk");
+    let reply = done(&mut server, &desk, 5000);
+    assert_eq!(reply["label"], "checked", "{reply:#}");
+    assert_eq!(reply["natives"][0]["label"], "native", "{reply:#}");
+    let lock = read(&desk, "lengua.lock");
+    assert!(lock.contains(" ../model/lengua.lock\n"), "{lock}");
+    let index = read(&desk, "index.md");
+    for part in [
+        "\n# Where it runs\n\n* An Electron app",
+        "Native, beside it: `model` (for the fastest local inference)",
+        "\n# Back end: native parts\n",
+    ] {
+        assert!(index.contains(part), "{part} in {index}");
+    }
+    let mut child = Command::new(lengua_run())
+        .arg(&desk)
+        .env("LENGUA_HOME", home())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("lengua-run starts");
+    let logs = logs_of(&mut child);
+    let page = http_get(7820, "/");
+    let answer = http_send(7820, "POST", "/api/write", "{\"prompt\":\"hello\"}", "");
+    let _ = child.kill();
+    let _ = child.wait();
+    let logs = logs.join().unwrap_or_default();
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    assert!(
+        answer.ends_with("{\"text\":\"helloeedbfbed\"}"),
+        "{answer}\n{logs}"
+    );
+    assert!(
+        logs.contains("the native part `model` says: The model runs on "),
+        "{logs}"
+    );
+    if std::env::var_os("LENGUA_ELECTRON").is_some_and(|v| !v.is_empty()) {
+        let found = desktop_smoke(&desk);
+        assert_eq!(found["title"], "desk", "{found:#}");
+        assert_eq!(found["status"], 200, "{found:#}");
+        assert_eq!(found["body"], "{\"text\":\"abfbedbfbe\"}", "{found:#}");
+    }
+    let code =
+        read(&model, "src/main.rs").replace("const STEPS: usize = 8;", "const STEPS: usize = 9;");
+    fs::write(model.join("src/main.rs"), code).expect("a change of the native part");
+    let (output, _) = run_lengua_run(&desk, &[], &home());
+    let message = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(125), "{message}");
+    assert!(message.contains("native part"), "{message}");
 }

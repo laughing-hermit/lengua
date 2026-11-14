@@ -2,6 +2,10 @@
 okf_version: "0.2"
 ---
 
+# Where it runs
+
+* One WebAssembly file. Runs on any OS and CPU. Sandboxed: it reaches only what the idea grants.
+
 # Back end: program
 
 * [prices](idea.md) - The program adds prices. Label: `checked`.

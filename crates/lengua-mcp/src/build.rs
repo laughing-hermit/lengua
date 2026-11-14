@@ -12,6 +12,7 @@ use lengua_idea::{Build, Label, Trust};
 
 use crate::doctor;
 use crate::host::{Host, Seal, grant_for, outside};
+use crate::testing::Runner;
 use crate::{front, harness, mutation, testing};
 
 pub(crate) const THRESHOLD: usize = 80;
@@ -97,6 +98,7 @@ pub(crate) struct Status {
     pub mutants: Mutants,
     pub toolchain: String,
     pub export: Option<(usize, u64)>,
+    pub native: bool,
 }
 
 impl Status {
@@ -111,6 +113,7 @@ impl Status {
             mutants: Mutants::default(),
             toolchain: String::new(),
             export: None,
+            native: false,
         }
     }
 
@@ -125,7 +128,11 @@ impl Status {
         }
         let (caught, counted) = self.score();
         let label = if counted == 0 || caught * 100 >= THRESHOLD * counted {
-            Label::Checked
+            if self.native {
+                Label::Native
+            } else {
+                Label::Checked
+            }
         } else {
             Label::Tested
         };
@@ -207,20 +214,23 @@ impl Worker {
         };
         let cases = testing::cases(&self.build);
         let seal = component.seal.clone();
+        let binary = component.path.clone();
         self.update(|s| {
             s.component = Some(component);
             s.stage = Stage::Testing;
             s.tests.total += cases.len();
         });
-        let Some(seal) = seal else {
-            return self.finish(Stage::Done, Vec::new());
+        let runner = match (&seal, self.build.native()) {
+            (_, true) => Runner::Native(&binary),
+            (Some(seal), false) => Runner::Sealed(&seal.lock),
+            (None, false) => return self.finish(Stage::Done, Vec::new()),
         };
         let mut problems = Vec::new();
         for (index, case) in cases.iter().enumerate() {
             if self.stopped() {
                 return;
             }
-            let failed = testing::run_case(&self.folder, &self.build, &seal.lock, (index, case));
+            let failed = testing::run_case(&self.folder, &self.build, runner, (index, case));
             if let Some(detail) = &failed {
                 problems.push(testing::problem(case, detail));
             }
@@ -273,7 +283,10 @@ impl Job {
             folder: folder.to_path_buf(),
             inputs: build.inputs.clone(),
             started: Instant::now(),
-            state: Arc::new(Mutex::new(Status::new(Stage::Building))),
+            state: Arc::new(Mutex::new(Status {
+                native: build.native(),
+                ..Status::new(Stage::Building)
+            })),
             child: Arc::new(Mutex::new(None)),
             stopped: Arc::new(AtomicBool::new(false)),
         };
@@ -408,7 +421,9 @@ fn fetch(folder: &Path, build: &Build, slot: &Mutex<Option<Child>>) -> Result<()
     if build.crates == 0 || fs::read_to_string(&stamp).is_ok_and(|s| s == hash) {
         return Ok(());
     }
-    match cargo(folder, &["fetch", "--target", build.target], slot) {
+    let mut args = vec!["fetch"];
+    args.extend(target_args(build));
+    match cargo(folder, &args, slot) {
         Ok((true, _)) => {
             let _ = stamp.parent().map(fs::create_dir_all);
             let _ = fs::write(&stamp, hash);
@@ -448,6 +463,14 @@ fn step(folder: &Path, args: &[&str], slot: &Mutex<Option<Child>>) -> Result<(),
     }
 }
 
+pub(crate) fn target_args(build: &Build) -> Vec<&'static str> {
+    if build.native() {
+        Vec::new()
+    } else {
+        vec!["--target", build.target]
+    }
+}
+
 fn compile(
     folder: &Path,
     build: &Build,
@@ -461,33 +484,53 @@ fn compile(
             return Err(found);
         }
     }
-    let target = build.target;
-    let clippy = [
-        "clippy",
-        "--release",
-        "--target",
-        target,
+    let target = target_args(build);
+    let mut clippy = vec!["clippy", "--release"];
+    clippy.extend(&target);
+    clippy.extend([
         "--offline",
         "--message-format=short",
         "--",
         "-D",
         "warnings",
-    ];
-    let building = [
-        "build",
-        "--release",
-        "--target",
-        target,
-        "--offline",
-        "--message-format=short",
-    ];
-    for args in [&clippy[..], &building[..]] {
+    ]);
+    let mut building = vec!["build", "--release"];
+    building.extend(&target);
+    building.extend(["--offline", "--message-format=short"]);
+    for args in [&clippy, &building] {
         step(folder, args, slot)?;
+    }
+    if build.native() {
+        return native_built(folder, build);
     }
     if build.library {
         return library(folder, build, slot, host);
     }
     built(folder, build, host)
+}
+
+fn native_built(folder: &Path, build: &Build) -> Result<Component, Vec<Problem>> {
+    let path = folder.join(&build.artifact);
+    let bytes = fs::read(&path).map_err(|error| {
+        vec![problem(
+            "Cargo.toml",
+            1,
+            "build-error",
+            format!(
+                "the build ended, but lengua could not read `{}`: {error}",
+                build.artifact
+            ),
+        )]
+    })?;
+    let sha256 = lengua_idea::sha256_hex(&bytes);
+    Ok(Component {
+        size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        tested: sha256.clone(),
+        sha256,
+        seal: None,
+        trusted: Vec::new(),
+        path,
+    })
 }
 
 pub(crate) const SIZE_LIMIT: usize = 64 << 20;

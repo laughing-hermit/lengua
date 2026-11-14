@@ -139,8 +139,9 @@ row each part of it falls into.
 for large local AI models or the fastest local inference, training or fine-tuning; heavy compute
 that needs threads sharing memory; and a hardware device that has no host grant (and the
 Electron shell of a desktop app). Everything else is the WebAssembly back end or the Next.js
-front end. L10 builds the native path once and proves it with one example: a back-end part that
-runs a local model on the GPU with Candle or Burn.
+front end. L10 built the native path once and proved it with one example, `examples/model`: a
+back-end part that runs a small language model with Candle, on a GPU when the build can use one
+and on the CPU otherwise ("As built at L10", below).
 
 **Why WebGPU stops short**, said plainly: a browser limits the memory of a page and of the GPU,
 and 32-bit WebAssembly reaches 4 GB at most today; it is slower than native CUDA or Metal; a
@@ -163,7 +164,7 @@ All Rust that lengua builds compiles to WebAssembly unless WebAssembly truly can
 | Web apps: the server | back end | WebAssembly | WASI servers are where WebAssembly is strongest |
 | Web apps: the front end | front end | A Next.js static export (TSX), carried and served by the WebAssembly back end | The browser runs it; it is files inside the one `.wasm` file |
 | Command-line tools, servers, background services | back end | WebAssembly | No window is needed, so one file runs on any computer |
-| Desktop apps with their own window | both | Electron showing the same front end; the same WebAssembly back end run by `lengua-run` beside it (L10) | Electron's Chromium is the same on every system; the shell is native, so the idea declares it (`- Native: a desktop window, for ...`, L10) and it is labelled; the app's own code stays WebAssembly and TSX |
+| Desktop apps with their own window | both | Electron showing the same front end; the same WebAssembly back end run by `lengua-run` beside it | Electron's Chromium is the same on every system; the shell is native, so the idea declares it (`- Native: a desktop window, for the Electron shell of a desktop app`) and it is labelled; the app's own code stays WebAssembly and TSX |
 | 3D, charts, maps, effects | front end (WebGPU) | WebAssembly and the browser, no native | The browser, or Electron's Chromium, gives the front end WebGPU |
 | Small or medium AI models on the user's machine | front end (WebGPU) | No native | WebLLM or Transformers.js run them in the browser on WebGPU |
 | Image and video processing | front end (WebGPU) | No native | WebGPU and the browser's media interfaces |
@@ -174,18 +175,56 @@ All Rust that lengua builds compiles to WebAssembly unless WebAssembly truly can
 | Shared pure logic (validation, calculations, formatting, parsing) | both | A lengua library: WebAssembly in the browser (imported by Next.js) and linked into the WebAssembly back end | The same code on both sides, so they can't disagree |
 
 The rule for a native part:
-1. The idea declares it with `- Native: <part>, for <reason>`, and the reason must be one of the
-   kinds marked Native above (large AI models, the fastest local inference, training or
-   fine-tuning on the GPU; heavy compute with threads
-   that share memory; a hardware device with no host grant; and the desktop shell, Electron, for a
-   desktop app).
-   Any other reason is refused. Front-end GPU work is never a reason: the front end has WebGPU.
+1. The idea declares it with `- Native: <part>, for <reason>`, and the reason starts with one of
+   the kinds marked Native above: `large AI models`, `the fastest local inference`, `training or
+   fine-tuning`, `heavy compute with shared-memory threads`, `a device with no host grant`, or
+   `the Electron shell of a desktop app`.
+   Any other reason is refused (`native-reason`). Front-end GPU work is never a reason: the front
+   end has WebGPU.
 2. Only the part that needs it is native; the rest of the application stays WebAssembly.
 3. The same checks apply: the Power of 10, the idea's tests, the mutation score, the lock.
 4. Its label is `native`, shown in every reply and in the wiki, because it is not sandboxed: it
    can do what the user's account can.
 5. When a standard lifts the limit (see the watch list in section 10), the part moves back to
    WebAssembly.
+
+#### As built at L10
+
+- **A native part is a lengua program of its own**, in its own folder, whose top idea says
+  `- Native: <what it is>, for <reason>`. It reads its standard input and writes its standard
+  output (`native-shape` for a server or a library), and it grants only `- Reads: standard input`
+  and `- Reads: arguments` (`native-grant`): no grant can hold code outside the sandbox. `check`
+  builds it for the computer it runs on (`cargo build --release`, no `--target`, a release
+  profile without `lto` so that each mutant links in seconds), with the same lint, `rustfmt`,
+  clippy, examples (each a process, killed at the idea's time and two seconds) and mutants; its
+  lock is of kind `native` and names the program, with no sealed code. Its label is `native` when
+  it would be `checked`.
+- **A WebAssembly program names it** with ``- Native: `<folder>`, for <reason>`` (its lock
+  verified, `native-lock`, `native-missing`; a native part named in `- Uses:` is
+  `native-undeclared`). The grant adds `wasi:http/outgoing-handler`, and the program sends
+  `POST http://<name>.native/` with the input as the body; the host checks the program's SHA-256
+  against the part's lock, starts it beside the WebAssembly file with the body as its standard
+  input, and answers 200 with its standard output, 502 with its standard error when it fails,
+  within the program's time. Its tests run the real part. One process a call: a long-lived part,
+  for a large model that loads once, is for later.
+- **An undeclared native need is refused**: `std::thread::spawn`, `thread::scope` and
+  `process::Command` in a WebAssembly program are `native-undeclared`, and a crate that builds
+  only natively fails the build, as before.
+- **A crate's feature on one system**: ``- Uses crate: `candle-core` 0.11.1 with `metal` on
+  macOS, for ...`` writes a `[target.'cfg(target_os = "macos")'.dependencies]` entry (Linux,
+  macOS, Windows).
+- **The example** `examples/model` is a small language model on Candle (`candle-core` 0.11.1,
+  pure Rust; Burn was the other choice and brings far more crates for the same proof): its weights
+  come from a rule in the program, so nothing is downloaded, and its sums are of small integers,
+  so its output is the same bytes on every CPU and GPU. It is built with Metal on macOS and runs
+  on the CPU elsewhere, and says which on its standard error; CUDA would be ``with `cuda` on
+  Linux`` and NVIDIA's toolkit, which is not pure Rust and not on the runners, so the example
+  does not declare it. `examples/desk` starts it.
+- **What a native part can reach:** everything the user's account can: files, network, devices,
+  other processes, the GPU. lengua holds only what it can check: the code (the lint, the tests,
+  the mutants, the lock), the SHA-256 of the program before each start, its time, and its standard
+  input and output. Its memory, clock and random numbers are the system's. So it is labelled
+  `native` in every reply, in `index.md` and in the "Where it runs" line, and it stays narrow.
 
 The two native programs that lengua itself is made of, `lengua-mcp` and `lengua-run`, are the
 standing exception: something native must run the WebAssembly. lengua's own std-only
@@ -220,8 +259,12 @@ of "Which part does what" each part of it is.
   file. Runs on any OS and CPU. Sandboxed: it reaches only what the idea grants." For a web
   app: "One WebAssembly file that serves its own front end. Opens in any current browser. The
   server reaches only what the idea grants; the browser's sandbox holds the front end." For a
-  desktop app (L10): "An Electron app: the same front end in a window, and the same WebAssembly
-  file run by `lengua-run` beside it. Runs on Linux, macOS and Windows."
+  desktop app: "An Electron app: the same front end in a window, and the same WebAssembly
+  file run by `lengua-run` beside it. Runs on Linux, macOS and Windows." For a native part: "A
+  native program, built for this computer's system and CPU, for <reason>. It runs outside the
+  sandbox: it can do what the user's account can." A program that names native parts adds
+  "Native, beside it: `<name>` (for <reason>), built for this computer and outside the sandbox."
+  Since L10 the line is the reply's `where_it_runs` and the first section of `index.md`, `# Where it runs`.
 
 ### The vision: the best lengua solution, before the idea
 
@@ -322,8 +365,8 @@ In lengua it is a grant like any other. Built at L9 (2026-11-14), in `crates/len
   environment: `LENGUA_MODEL_URL` (default `http://127.0.0.1:11434`, Ollama), `LENGUA_MODEL`,
   `LENGUA_EMBED_MODEL` and `LENGUA_MODEL_KEY` (sent as a bearer token). The host speaks the
   OpenAI-compatible `/v1/chat/completions` and `/v1/embeddings`, which Ollama, llama.cpp's server
-  and cloud gateways speak, over plain HTTP: a cloud model over HTTPS is reached through a local
-  gateway until the host has TLS (section 10). MCP sampling waits for Claude Code
+  and cloud gateways speak, over HTTP or, since L10, HTTPS (`LENGUA_MODEL_URL` of `https://...`,
+  section 4, "The host"). MCP sampling waits for Claude Code
   ([issue #1785](https://github.com/anthropics/claude-code/issues/1785),
   [MCP sampling](https://modelcontextprotocol.io/specification/2025-11-25/client/sampling)).
 - **Tests stay exact and free.** ``- Model answers: "<text>"`` gives the answer of every call of
@@ -471,6 +514,7 @@ shop/
   web/vitest.config.mts     generated: how the screen tests run
   web/postcss.config.mjs    generated: Tailwind CSS for shadcn/ui
   web/app/layout.tsx        generated: the page around every screen
+  web/app/not-found.tsx     generated: the page of a path that is not there (since L10)
   web/app/globals.css       generated: Tailwind and shadcn/ui's theme
   web/app/page.tsx          generated: the route of the screen `home`, `/`
   web/app/basket/page.tsx   generated: the route of each other screen, `/<name>/`
@@ -703,13 +747,14 @@ run").
 | `Modules` | module names in backticks, commas between them | top idea |
 | `Exports` | function and type names in backticks, commas between them: the idea is a library | top idea |
 | `Uses` | module names, or folders of lengua libraries (a name with a `/`, relative to the folder: `` `../../libraries/json` ``), in backticks, commas between them | any idea; a library only in the top idea |
-| `Uses crate` | `` `<name>` <major.minor.patch>, for <reason> `` | any idea |
+| `Uses crate` | `` `<name>` <major.minor.patch>, for <reason> ``, or with `` with `<feature>` `` and an optional `on Linux`, `on macOS` or `on Windows` before the reason (L10) | any idea |
 | `Uses component` | `` `<file>.wasm`, built from <words> ``: a component from another language, a file inside the folder (since L7) | top idea |
 | `Uses package` | `` `<name>` <major.minor.patch>, for <reason> ``: an npm package of the front end, pinned (since L8) | any idea |
 | `Uses shadcn` | shadcn/ui component names in backticks, commas between them: `button`, `card`, `input`, `label`, `textarea` (since L8) | top idea |
 | `Route` | `` `<METHOD> <path>` ``, a path from `/` whose parts may be `{<name>}`: a route of the server that the front end calls (since L8) | top idea of a server |
 | `Asks` | `an AI model, for <what>, up to <N> calls and <M> tokens`, per run (L9) | top idea |
-| `Calls` | ``HTTP at `<host>:<port>` ``: outgoing HTTP to a service, a name or an IP address (L9) | top idea |
+| `Calls` | ``HTTP at `<host>:<port>` `` or, since L10, ``HTTPS at `<host>:<port>` ``: outgoing HTTP to a service, a name or an IP address (L9) | top idea |
+| `Native` | ``<what it is>, for <reason>`` (the idea is a native part, or a desktop app with the reason `the Electron shell of a desktop app`) or `` `<folder>`, for <reason> `` (a native part the program starts), the reason one of section 1 (L10) | top idea |
 
 Standard output and standard error are always granted. Every file in `ideas/` must be in
 `- Modules:`, and every name there must have its file. A `Uses` name with no `/` must be a module
@@ -844,7 +889,7 @@ generates `web/lib/lengua.ts`: a TypeScript type for each route's request body a
 check of each answer's shape and status when it arrives, since TypeScript's types are gone at run time
 (since L9 the statuses of the examples are literal types, `Answer<T, F, 200 | 201, 400 | 409>`,
 and a 2xx example under `/api/` that no `- Route:` names is `route-unlisted`, so the client has
-every route the front end can call). A
+every route the front end can call; since L10 each function takes the session's token last, `token = ""`, sent as `authorization: Bearer <token>`, and a screen test matches the header too). A
 screen calls the back end only through these functions (`ts-fetch` otherwise), so a change of
 the server that the front end does not follow fails `tsc`.
 
@@ -883,14 +928,21 @@ line, the hash of `target/lengua/web/lib/wasm`). In the wiki, the program's `ind
 library with its browser module (`In the browser: @/lib/wasm/<library>`), next to `api.md` for
 HTTP.
 
-**Desktop apps, at L10.** [Electron](https://www.electronjs.org/), chosen by the owner for its
-identical Chromium on every system and its stability, shows the same front end in a window, and
-starts the same WebAssembly back end with `lengua-run` beside it, on a local port. Nothing in
-L8 depends on a browser that Electron lacks: the front end is a static export, it calls only
-relative paths, and the back end serves it, so the same files serve a browser and an Electron
-window. Electron is downloaded only for an app built as a desktop app. The shell is native, so
-the idea declares it with `- Native:` and the reply and the wiki label it; the app's own code
-stays WebAssembly and TSX.
+**Desktop apps, as built at L10.** [Electron](https://www.electronjs.org/), chosen by the owner
+for its identical Chromium on every system and its stability, shows the same front end in a
+window. The idea says `- Native: a desktop window, for the Electron shell of a desktop app`
+(`native-desktop` without screens). `check` then adds `electron` 45.3.2 to the generated
+`web/package.json` (no install script runs: after `pnpm install` the build runs Electron's own
+installer, `pnpm exec install-electron`, which downloads its binary and
+checks it against the SHA-256 sums the package carries), and writes
+`web/desktop/main.mjs`, the shell: one window on the app's address, no navigation away from it,
+no new windows, the page sandboxed with no Node.js. `lengua-run --desktop <folder>` verifies the
+lock, serves the one file on its port, starts Electron from `target/lengua/web/node_modules`
+with `LENGUA_URL`, and ends when the window closes; a native part of the app starts beside it,
+on each call. Nothing is signed, notarized or published (the owner's alone). Electron is
+downloaded only for a desktop app, and a web app never fetches it. `examples/desk` is the one
+example; in CI, on all five runners (Linux under `xvfb-run`), it starts, loads its first page,
+answers one request (`LENGUA_SMOKE`) and quits.
 
 ### Deployment
 
@@ -920,10 +972,10 @@ where absolutely necessary, so deploying never turns the back end native.
   disk that lasts ([limits](https://vercel.com/docs/functions/limitations),
   [registry](https://vercel.com/docs/container-registry/limits-and-pricing)). So on Vercel the
   folder `data` of a `- Writes:` grant lasts only as long as an instance: lasting storage there is
-  a service reached with `- Calls:` and a key in a secret (plain HTTP until the host has TLS,
-  section 10). The registry stores images at $0.10 a GB, so a deployment may cost money. Never
-  deployed: an account and a deployment are the owner's alone.
-- **The desktop**, through Electron (L10).
+  a service reached with ``- Calls: HTTPS at `host:443` `` and a key in a secret. The registry
+  stores images at $0.10 a GB, so a deployment may cost money. Never deployed: an account and a
+  deployment are the owner's alone.
+- **The desktop**, through Electron: `lengua-run --desktop <folder>` (section 4, "Desktop apps").
 
 ### The build
 
@@ -1090,7 +1142,7 @@ of each grant, with the interfaces their types come from:
 | `- Reads:` or `- Writes: files in ...` | `wasi:filesystem/types`, `preopens`; `wasi:clocks/wall-clock` (for the type `datetime`) |
 | `- Connects to: ...` or `- Listens on: ...` | `wasi:sockets/network`, `instance-network`, `tcp`, `tcp-create-socket`, `ip-name-lookup`, and since L7 `udp` and `udp-create-socket`; `wasi:clocks/monotonic-clock` (for the type `duration`), and since L7 `wasi:clocks/wall-clock`, which `std`'s sockets import (run 43464215484) |
 | `- Serves: HTTP on TCP port N` (L7) | `wasi:http/types` |
-| `- Asks: an AI model, ...` or ``- Calls: HTTP at `host:port` `` (L9) | `wasi:http/outgoing-handler`, `wasi:http/types` |
+| `- Asks: an AI model, ...` or ``- Calls: HTTP at `host:port` `` (L9), ``- Native: `<folder>`, ...`` (L10) | `wasi:http/outgoing-handler`, `wasi:http/types` |
 | ``- Reads: the secret `NAME` `` (L9) | none more: the host gives the one environment variable |
 
 UDP is in no grant: since L7 the world of a network grant names `wasi:sockets/udp` and
@@ -1222,7 +1274,8 @@ How each grant maps to the host:
 | `- Serves: HTTP on TCP port N` (L7) | the server is a component that exports `wasi:http/incoming-handler`; `wasmtime-wasi-http`'s synchronous bindings give it each request, with hooks of lengua's own that refuse every outgoing request the idea does not grant (L9: `- Asks:`, `- Calls:`); `run` and the tests give one request on the standard input and get the answer as HTTP/1.1 bytes; `lengua-run` serves `127.0.0.1:N` (or `--listen <address:port>`), eight requests at a time, each an instance of its own under the idea's time and memory; when the idea writes files, a request other than `GET`, `HEAD` or `OPTIONS` runs alone; one line on standard error for each request (method, path, status, milliseconds, the program's own standard error after it) |
 | `- Uses component:` (L7) | the host instantiates the component first, in the same store and under the same grants, and links each function of each interface it exports into the program's imports |
 | `- Asks: an AI model, ...` (L9) | the hooks of `wasmtime-wasi-http` answer the address `ai.lengua` ("Programs that ask AI models"), counting the calls and tokens of the run; in a fixed run the answer is the example's `- Model answers:`, in a live run the model server of `LENGUA_MODEL_URL` |
-| ``- Calls: HTTP at `<host>:<port>` `` (L9) | outgoing HTTP/1.1 only to the granted `host:port` (a name is looked up when the call starts), over plain TCP; any other address is `HTTP-request-denied`; the answer's body reaches the program as it comes, so a streamed answer streams |
+| ``- Calls: HTTP at `<host>:<port>` `` (L9), ``HTTPS at ...`` (L10) | outgoing HTTP/1.1 only to the granted `host:port` (a name is looked up when the call starts), over plain TCP or, for `HTTPS`, TLS from `rustls` with the `ring` provider and Mozilla's roots (`webpki-roots`), plus the PEM roots of `LENGUA_TLS_ROOTS` when it is set; any other address, or the right address with the other scheme, is `HTTP-request-denied`; the answer's body reaches the program as it comes, so a streamed answer streams |
+| ``- Native: `<folder>`, for ...`` (L10) | `POST http://<name>.native/`: the host checks the part's program against its lock, runs it with the body as its standard input, within the program's time, and answers 200 with its standard output or 502 with its standard error; any other `.native` name is refused (403) |
 | ``- Reads: the secret `<NAME>` `` (L9) | the environment variable `NAME` of the host, and no other, as the program's own; a live run refuses to start without it; a fixed run gives `test-<NAME>` |
 
 Wasmtime keeps a preopened folder's paths inside it: `..` out of it, an absolute path, and a
@@ -1341,6 +1394,8 @@ The exception that merits it, still declared in the idea with its reason:
 - **The WASI bindings** for what the standard library does not cover, such as WASI's HTTP world
   for a server: the generated interface code (`wit-bindgen` or the `wasip2` crate). It is the
   component's own interface, not a library of features.
+
+lengua's own host takes the same test. **TLS** (since L10) is `rustls` 0.23 with `tokio-rustls` 0.26 and `webpki-roots` 1 in `lengua-host`: writing TLS is a large project of its own, a cloud model or service is reached only over HTTPS, and it runs in the native host, never in the program. The provider is `ring`, the smallest one `rustls` takes (`aws-lc-rs` brings more C and CMake on Windows; pure-Rust providers are not yet audited), so the host has C and assembly in it, counted and recorded in `todo.md`; Mozilla's roots are the same on every system, where the platform verifier would differ per OS.
 
 Not exceptions: **Axum** and **Tokio**. A server's routing and its requests are written on the
 standard library and lengua's shared HTTP library, over the WASI bindings. A WASI component has
@@ -1795,8 +1850,9 @@ it reads any code.
 - **`index.md` has a section for each side:** `# Back end` (`## Program`, `## Modules`,
   `## Libraries`, `## Components`, and L9's crate count as `## Crates`), `# Front end`
   (`## Screens`, and `## npm packages`: the packages of `web/package.json`, and those over 1 MiB in
-  pnpm's copy once the build installed them), `# Interface` (`api.md`), and `# Vision` first
-  (since L11) and `# Desktop` (L10); each line with its label.
+  pnpm's copy once the build installed them), `# Interface` (`api.md`), and `# Vision`
+  (since L11, after "Where it runs"); since L10 the "Where it runs" line comes first and `# Back end: native parts` lists the
+  native parts the program starts; each line with its label.
 - **The query path.** An agent reads `index.md`, then `api.md`, then the pages of the side it
   changes, and only then the code. The skills say so (since L11); the builder of lengua works that
   way now.
@@ -1973,7 +2029,7 @@ NaNs are canonical.
 | `checked` | Built by lengua, every rule holds, every test passes, and the mutation score is at or above the threshold, 80% |
 | `tested` | Built by lengua, every rule holds and every test passes, but the tests are weak: the mutation score is under 80% |
 | `trusted` | A component lengua did not build; it runs under the grants, and its tests run, but nothing about its code is checked (L7) |
-| `native` | A part that runs outside the sandbox (back-end GPU work, the Electron shell, a device, shared-memory threads), declared with `- Native:`; the same checks hold, and it can do what the user's account can (L10) |
+| `native` | A part that runs outside the sandbox (back-end GPU work, a device, shared-memory threads), declared with `- Native:`; the same checks hold, and it can do what the user's account can. Since L10: a native part whose checks would make it `checked`; under the threshold it is `tested`, and the "Where it runs" line still says native. A desktop app's Electron shell is named in that line, and the app keeps its own label |
 
 `check`'s reply and the wiki show the label of every program, its Rust and its TypeScript
 together. A program that uses a `trusted`
@@ -2226,10 +2282,10 @@ milestone named:
     (`purpose-unlisted`, names in backticks only).
   - Done at L9: secrets never written to the frontmatter, the index, the log, the lock or a
     reply, tested with a marked value ("The wiki's formats", "Secrets").
-- **L10:** the "Where it runs" line first in `index.md`.
+- **L10:** done: the "Where it runs" line first in `index.md`, and `# Back end: native parts`.
 - **L11, the query path and the person's part:**
   - Done: `vision.md` as an OKF page (`type: lengua Vision`, `vision-type`), with its
-    `# Request` quoted and `# Where it runs` (`vision-section`), first in `index.md`, linked
+    `# Request` quoted and `# Where it runs` (`vision-section`), in `index.md` right after "Where it runs", linked
     from every idea's `# Links`, and in the lock's file list. Not done: a link in each idea's
     `sources` (the `# Links` line does the work).
   - Done: every skill's first step reads `index.md`, then the pages it names, before any code.
@@ -2427,7 +2483,7 @@ Decided for lengua 3 at L9 (2026-11-14):
   interface of lengua's own: the program needs only `wasip2`, streaming is the body of the answer,
   and the host holds the key, the model and the limits (section 1, "Programs that ask AI models").
 - **Outgoing HTTP is `- Calls:`, exact `host:port` pairs**, sent by the host's own sender on
-  Tokio and `hyper` (already in the graph); no TLS yet (section 10).
+  Tokio and `hyper` (already in the graph); TLS since L10.
 - **A secret is one environment variable of the host**, by name, through `wasi:cli/environment`.
 - **Storage is the `- Writes:` folder**; a store of its own waits until a deployment needs one.
 - **Logins, prompts and vectors are lengua libraries** (`logins`, `ai`, `vectors`), and a
@@ -2436,6 +2492,22 @@ Decided for lengua 3 at L9 (2026-11-14):
   the address, for a container; `lengua-mcp check <folder>` checks a folder from a shell.
 - **No new package**: `lengua-host` names `tokio`, `http` and `http-body-util`, which Wasmtime
   already brings.
+
+Decided for lengua 3 at L10 (2026-11-14):
+
+- **HTTPS in the host**: `rustls` with `ring` and `webpki-roots` (section 4, "Crates"); the
+  generated client sends the session's token.
+- **A native part is a program of its own, called through the host** (`<name>.native`), one
+  process a call, its program checked against its lock before each start; its label is `native`
+  (section 1, "As built at L10").
+- **The undeclared native needs refused**: a thread, a scope or a process of the system in a
+  WebAssembly program, and a native part used as a library (`native-undeclared`).
+- **Candle, not Burn**, for the example: pure Rust, fewer crates; a model built from a rule, so
+  CI downloads nothing.
+- **A desktop app is `lengua-run --desktop`**: the one file served in the same process, Electron
+  from the app's own `node_modules`, installed by its own `install-electron` (no install script).
+- **CI's check job has 120 minutes** (60 before): the native part builds Candle and its mutants
+  on each runner.
 
 ## 10. Risks and open questions
 
@@ -2592,7 +2664,14 @@ Decided for lengua 3 at L9 (2026-11-14):
 - **Open at L9: no TLS in the host.** Outgoing calls and the model server are plain HTTP/1.1 over
   TCP; `https` is refused (`HTTP-protocol-error`). TLS needs `rustls` and a crypto provider
   (`ring` or `aws-lc-rs`, both with C and assembly, not pure Rust), so a cloud model or service is
-  reached through a gateway on the same machine or network until a provider merits it.
+  reached through a gateway on the same machine or network until a provider merits it. **Closed
+  at L10:** `rustls` with `ring` in the host (section 4, "Crates"), tested against a local TLS
+  server with a certificate made in the test; a real cloud service over HTTPS is never exercised
+  (the $0 rule).
+- **Open at L10: a native part is one process a call.** A large model loads its weights at each
+  call; a part that stays up and serves many calls (a port of its own, and its end when the
+  program ends on every system) is for later. A native part's memory, clock and random numbers
+  are not held: they are the system's.
 - **Found at L9: a server keeps nothing in memory between requests.** Each request is an instance
   of its own, so state is in a `- Writes:` folder, and the limits of `- Asks:` are per request.
   Concurrent requests share the folder; the host runs a request that may write (not `GET`,

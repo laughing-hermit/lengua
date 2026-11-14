@@ -2,6 +2,10 @@
 okf_version: "0.2"
 ---
 
+# Where it runs
+
+* One WebAssembly file. Runs on any OS and CPU. Sandboxed: it reaches only what the idea grants.
+
 # Back end: program
 
 * [ask](idea.md) - The program asks an AI model and another service, through its host, and writes what it gets. Label: `checked`.

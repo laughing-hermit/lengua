@@ -118,7 +118,7 @@ fn the_wiki_of_every_folder_is_written_in_place() {
         let text = fs::read_to_string(f.join("idea.md")).unwrap_or_default();
         (
             !text.contains("\n- Exports:"),
-            text.contains("\n- Uses: `../"),
+            text.contains("\n- Uses: `../") || text.contains("\n- Native: `"),
         )
     });
     for folder in all {

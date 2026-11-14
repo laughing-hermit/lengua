@@ -2,11 +2,19 @@
 
 ## 2026-11-14
 
-* **Check** at 12:52:52Z: no problems; label `checked`, mutation score 37 of 38 (97%).
-* **Check** at 12:49:35Z: no problems; label `unchecked`.
-* **Check** at 12:49:18Z: no problems; label `unchecked`.
-* **Check** at 12:49:16Z: no problems; label `unchecked`.
 * **Approval** at 12:00:00Z by human:owner: the ideas `7048ff4a72c232f317ac7cd746074574215570a3768d84901ed643f3e88fd768`. The person's words: "Approved with milestone L11: lengua's own examples and libraries, as the owner's milestones asked for them.".
+* **Check** at 15:31:10Z: no problems; label `checked`, mutation score 37 of 38 (97%).
+* **Check** at 15:26:45Z: no problems; label `unchecked`.
+* **Check** at 15:26:20Z: no problems; label `unchecked`.
+* **Check** at 15:26:19Z: no problems; label `unchecked`.
+  * Generated `web/lengua.sum`, changed: `f3cdf0bdbaa429c2a871f17b369f20aa23ef3761161471139caa07b465a34af7`.
+* **Check** at 13:39:46Z: no problems; label `checked`, mutation score 37 of 38 (97%).
+* **Check** at 13:35:13Z: no problems; label `unchecked`.
+* **Check** at 13:34:48Z: no problems; label `unchecked`.
+* **Check** at 13:34:47Z: no problems; label `unchecked`.
+  * Generated `web/lengua.sum`, changed: `b1b4e9d43f7bd29c074e0acbaea480b13567e0fb00ff3de8d3b10aad0c5bdde2`.
+  * Idea [ui/login](ideas/ui/login.md), changed: `a1359cf33dfc23f0eccdae0b4d1f10ac3fb886dc1a2454a40ab1bcd22ccf7bc9`.
+  * Code `web/screens/login.tsx`, changed: `bce9f430b5153b773267b5834fa40af17842be909ae8cdcb6945769c76e0d557`.
 * **Check** at 10:11:53Z: no problems; label `checked`, mutation score 37 of 38 (97%).
 * **Check** at 10:08:52Z: no problems; label `unchecked`.
 * **Check** at 10:08:36Z: no problems; label `unchecked`.

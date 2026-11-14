@@ -10,12 +10,11 @@ idea_sha256: 81e4c2ab80c7e97f9d62310e96bef6fb92824b3b6bee39a8050bfaf1186cdb60
 source_sha256: bf46bd6d8d0716650ab08285b0b411b7ad2f3eb35619167abbc2910274b13ffd
 cargo_sha256: 9f74807b7d97be289e95401c753861c804a20e8f83bd1c5db4b55b0be1fdc790
 world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T12:44:26Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T15:15:39Z }
 verified:
-  - { by: human:owner, at: 2026-11-14T12:00:00Z }
-  - { by: process:lengua-check, at: 2026-11-14T12:44:26Z }
+  - { by: process:lengua-check, at: 2026-11-14T15:15:39Z }
 title: titles
-status: stable
+status: draft
 approved: { sha256: 396e65bd5a69fcd421c3df3561d6e25674958a463bd3a2eb173ae75f94126b10, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 

@@ -2,8 +2,9 @@
 
 ## 2026-11-14
 
-* **Check** at 12:47:48Z: no problems; label `unchecked`.
 * **Approval** at 12:00:00Z by human:owner: the ideas `0cba96626f217bae5044bb4c140bf023667ab7b3d8fbeca96b7f72e4aa03243a`. The person's words: "Approved with milestone L11: lengua's own examples and libraries, as the owner's milestones asked for them.".
+* **Check** at 15:22:32Z: no problems; label `unchecked`.
+* **Check** at 13:30:53Z: no problems; label `unchecked`.
 * **Check** at 10:07:17Z: no problems; label `unchecked`.
 * **Check** at 07:51:47Z: no problems; label `unchecked`.
 * **Check** at 04:39:51Z: no problems; label `unchecked`.

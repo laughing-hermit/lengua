@@ -61,8 +61,8 @@ Level-1 headings, in this order, each one time: `# Purpose`, `# Behaviours`, `# 
 | `Uses component` | `` `<file>.wasm`, built from <words> ``: a component from another language | top idea |
 | `Route` | `` `<METHOD> <path>` ``, parts may be `{<name>}`: a route the front end calls | top idea of a server |
 | `Asks` | `an AI model, for <what>, up to <N> calls and <M> tokens` | top idea |
-| `Calls` | ``HTTP at `<host>:<port>` ``, or ``HTTPS at `<host>:<port>` `` (L10) | top idea |
-| `Native` | `<what it is>, for <reason>` (this idea is a native part, or a desktop app), or `` `<folder>`, for <reason> `` (a native part it starts), L10 | top idea |
+| `Calls` | ``HTTP at `<host>:<port>` ``, or ``HTTPS at `<host>:<port>` `` | top idea |
+| `Native` | `<what it is>, for <reason>` (this idea is a native part, or a desktop app), or `` `<folder>`, for <reason> `` (a native part it starts) | top idea |
 
 Standard output and standard error are always granted. Grant only what the program needs.
 The reasons of `- Native:` are `large AI models`, `the fastest local inference`, `training or
@@ -76,7 +76,7 @@ fine-tuning`, `heavy compute with shared-memory threads`, `a device with no host
   arguments. An idea with screens is a server: its back end serves the front end. A screen's
   route is `/` for `home` and `/<name>/` for any other.
 - A **library** has `- Exports:` and no grants; its examples are calls.
-- A **native part** (L10) has `- Native: <what>, for <reason>`, reads only standard input and
+- A **native part** has `- Native: <what>, for <reason>`, reads only standard input and
   arguments, and is built for the computer, not for WebAssembly; label `native`.
 
 A module needs its `mod <name>;` line in `src/main.rs`, and each `- Exports:` name a `pub` item.

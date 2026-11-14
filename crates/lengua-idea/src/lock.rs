@@ -16,6 +16,7 @@ pub enum Kind {
     #[default]
     Program,
     Library,
+    Native,
     Test,
 }
 
@@ -25,13 +26,14 @@ impl Kind {
         match self {
             Self::Program => "program",
             Self::Library => "library",
+            Self::Native => "native",
             Self::Test => "test",
         }
     }
 
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
-        [Self::Program, Self::Library, Self::Test]
+        [Self::Program, Self::Library, Self::Native, Self::Test]
             .into_iter()
             .find(|k| k.name() == text)
     }
@@ -82,6 +84,7 @@ pub struct Facts {
     pub trust: Trust,
     pub files: Vec<String>,
     pub libraries: Vec<String>,
+    pub natives: Vec<String>,
     pub trusted: Vec<String>,
     pub component: Option<String>,
     pub sealed: Option<String>,
@@ -381,6 +384,7 @@ pub fn text(folder: &Path, facts: &Facts, key: &Key) -> Result<String, String> {
     }
     let mut entries: Vec<(&str, &str)> = facts.files.iter().map(|f| ("file", f.as_str())).collect();
     entries.extend(facts.libraries.iter().map(|l| ("library", l.as_str())));
+    entries.extend(facts.natives.iter().map(|n| ("native", n.as_str())));
     entries.extend(facts.trusted.iter().map(|t| ("trusted", t.as_str())));
     entries.extend(facts.export.as_deref().map(|e| ("export", e)));
     entries.extend(facts.browser.as_deref().map(|e| ("browser", e)));
@@ -467,12 +471,17 @@ fn check_entry(
             None
         }
     };
-    if tag == "library" && changed.is_empty() {
+    let nested = match tag {
+        "library" => Some((Kind::Library, "library")),
+        "native" => Some((Kind::Native, "native part")),
+        _ => None,
+    };
+    if let Some((kind, what)) = nested.filter(|_| changed.is_empty()) {
         let lock = folder.join(path);
         let place = lock.parent().unwrap_or(folder);
-        if let Err(message) = verify(place, &lock, Kind::Library, key) {
+        if let Err(message) = verify(place, &lock, kind, key) {
             changed.push(format!(
-                "the library of `{path}` is not as its lock signed it ({message})"
+                "the {what} of `{path}` is not as its lock signed it ({message})"
             ));
         }
     }
@@ -502,19 +511,20 @@ fn read_lines(folder: &Path, body: &str, key: &Key) -> Reading {
         match tag {
             "kind" => out.found = Kind::parse(rest),
             "label" => out.label = rest.to_string(),
-            "file" | "component" | "sealed" | "library" | "trusted" | "sealed-trusted"
-            | "export" | "browser" => match check_entry(folder, (tag, rest), key, &mut out.changed)
-            {
-                Some((path, code)) => {
-                    out.files.push(path);
-                    if tag == "sealed-trusted" {
-                        out.trusted.extend(code);
-                    } else {
-                        out.sealed = code.or(out.sealed.take());
+            "file" | "component" | "sealed" | "library" | "native" | "trusted"
+            | "sealed-trusted" | "export" | "browser" => {
+                match check_entry(folder, (tag, rest), key, &mut out.changed) {
+                    Some((path, code)) => {
+                        out.files.push(path);
+                        if tag == "sealed-trusted" {
+                            out.trusted.extend(code);
+                        } else {
+                            out.sealed = code.or(out.sealed.take());
+                        }
                     }
+                    None => out.changed.push(format!("the line `{line}` of the lock")),
                 }
-                None => out.changed.push(format!("the line `{line}` of the lock")),
-            },
+            }
             _ => {}
         }
     }

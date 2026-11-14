@@ -9,6 +9,7 @@ mod idea;
 mod json;
 mod library;
 pub mod lock;
+mod native;
 mod okf;
 mod rust;
 mod sha256;
@@ -31,10 +32,11 @@ pub use crate::approval::{Approval, Approved, Record, VISION, approval, approve}
 pub use crate::cases::{CASES_DRAWN, Case, End, Range, StateValue, Test, cases};
 pub use crate::generate::ASSETS;
 pub use crate::library::Library;
+pub use crate::native::{HOST as NATIVE_HOST, Native, Place, where_it_runs};
 pub use crate::tree::{findings as wiki_findings, write_indexes as write_wiki_indexes};
 pub use crate::web::{
-    Browser, BrowserFn, CLIENT, Front, PNPM, SUM, ScreenRun, browser_functions, component_name,
-    screen_route, screen_runs,
+    Browser, BrowserFn, CLIENT, DESKTOP, Front, PNPM, SUM, ScreenRun, browser_functions,
+    component_name, screen_route, screen_runs,
 };
 pub use lengua_lint::{Edit, Mutant, Mutation, apply, choose};
 
@@ -58,6 +60,7 @@ pub enum Label {
     Unchecked,
     Tested,
     Checked,
+    Native,
 }
 
 impl Label {
@@ -67,6 +70,7 @@ impl Label {
             Self::Unchecked => "unchecked",
             Self::Tested => "tested",
             Self::Checked => "checked",
+            Self::Native => "native",
         }
     }
 }
@@ -177,6 +181,9 @@ pub struct Build {
     pub tests: Vec<Test>,
     pub tests_hash: String,
     pub front: Option<Front>,
+    pub runs: Place,
+    pub natives: Vec<Native>,
+    pub place: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -204,6 +211,16 @@ pub struct WebLintOutput {
 pub type WebLint = fn(&WebLintInput) -> WebLintOutput;
 
 impl Build {
+    #[must_use]
+    pub fn native(&self) -> bool {
+        self.runs.native.is_some()
+    }
+
+    #[must_use]
+    pub fn desktop(&self) -> bool {
+        self.runs.desktop
+    }
+
     #[must_use]
     pub fn harness(&self) -> Self {
         Self {
@@ -627,6 +644,8 @@ struct Prepared {
     web: Option<web::WebPlan>,
     routes: Vec<web::Route>,
     calls: Vec<(String, Vec<String>)>,
+    natives: Vec<Native>,
+    place: Place,
 }
 
 #[must_use]
@@ -640,6 +659,12 @@ fn outside_inputs(folder: &Path, prepared: &Prepared) -> Vec<(String, Vec<u8>)> 
         .iter()
         .map(|l| (l.lock.clone(), l.lock_sha256.clone().into_bytes()))
         .collect();
+    out.extend(
+        prepared
+            .natives
+            .iter()
+            .map(|n| (n.lock.clone(), n.lock_sha256.clone().into_bytes())),
+    );
     for (file, _, _) in &prepared.top.components {
         out.push((
             file.clone(),
@@ -673,7 +698,11 @@ fn build(folder: &Path, prepared: &Prepared) -> Build {
         generate::collect_skipping(folder, "web", &WEB_SKIPPED, &mut extra);
     }
     Build {
-        artifact: generate::artifact(&plan.package, prepared.shape),
+        artifact: generate::artifact(
+            &plan.package,
+            prepared.shape,
+            prepared.place.native.is_some(),
+        ),
         package: plan.package.clone(),
         target: generate::TARGET,
         crates: plan.crates,
@@ -706,6 +735,14 @@ fn build(folder: &Path, prepared: &Prepared) -> Build {
         tests: prepared.tests.clone(),
         tests_hash,
         front: prepared.web.as_ref().map(|w| w.front.clone()),
+        runs: prepared.place.clone(),
+        natives: prepared.natives.clone(),
+        place: where_it_runs(
+            prepared.shape,
+            &prepared.place,
+            &prepared.natives,
+            prepared.web.is_some(),
+        ),
     }
 }
 
@@ -1017,6 +1054,28 @@ fn vision_rules(folder: &Path, findings: &mut Vec<Finding>) {
     findings.append(&mut sink.findings);
 }
 
+fn native_parts(
+    folder: &Path,
+    read: &Read,
+    (top, shape, program): (&constraints::Constraints, Shape, bool),
+    findings: &mut Vec<Finding>,
+) -> (Place, Vec<Native>) {
+    if !program {
+        return (Place::default(), Vec::new());
+    }
+    let screens = read.pages.iter().any(|p| p.kind == IdeaKind::Screen);
+    let place = native::rules(top, shape, screens, findings);
+    let natives = native::resolve(folder, top, findings);
+    if place.native.is_none() {
+        for page in read.pages.iter().filter(|p| p.kind != IdeaKind::Screen) {
+            if let Ok(text) = fs::read_to_string(folder.join(&page.source)) {
+                findings.extend(native::undeclared(&page.source, &text));
+            }
+        }
+    }
+    (place, natives)
+}
+
 fn prepare(folder: &Path, lint: Option<WebLint>) -> Result<Prepared, Vec<Finding>> {
     if !folder.join("idea.md").is_file() {
         return Err(vec![top_finding(
@@ -1048,6 +1107,7 @@ fn prepare(folder: &Path, lint: Option<WebLint>) -> Result<Prepared, Vec<Finding
         findings.retain(|f| f.code != "structure-main-missing");
     }
     let libraries = library::resolve(folder, &top.libraries, &mut findings);
+    let (place, natives) = native_parts(folder, &read, (&top, shape, program), &mut findings);
     if program {
         purpose_rules(folder, &read, &top, shape, &mut findings);
         conformance(folder, &read.pages, &top.components, &mut findings);
@@ -1076,7 +1136,7 @@ fn prepare(folder: &Path, lint: Option<WebLint>) -> Result<Prepared, Vec<Finding
         &title,
         &read.pages,
         &read.constraints,
-        (shape, &libraries),
+        (shape, &libraries, place.native.is_some()),
         &mut findings,
     );
     let web = web::plan(
@@ -1110,6 +1170,8 @@ fn prepare(folder: &Path, lint: Option<WebLint>) -> Result<Prepared, Vec<Finding
         web,
         routes,
         calls,
+        natives,
+        place,
     })
 }
 
@@ -1176,6 +1238,9 @@ pub fn check_web(
             ),
         })
         .collect();
+    let browser: Vec<String> = prepared.web.as_ref().map_or_else(Vec::new, |w| {
+        w.front.browser.iter().map(|b| b.name.clone()).collect()
+    });
     let parts = wiki::Parts {
         title: &title,
         shape: prepared.shape,
@@ -1183,6 +1248,9 @@ pub fn check_web(
         components: &prepared.top.components,
         crates,
         vision: folder.join(VISION).is_file(),
+        place: &planned.place,
+        natives: &prepared.natives,
+        browser: &browser,
         interface: &interface,
         approval: &report.approval,
     };

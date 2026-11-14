@@ -56,7 +56,7 @@ export function HomeScreen() {
 
 `web/lib/lengua.ts` has one function for each `- Route:`, named from the method and the path:
 `GET /api/notes` is `getNotes()`, `GET /api/notes/{id}` is `getNotesById(id)`, `POST /api/ui`
-is `postUi(body)`. Each takes the session's token last (L10) and gives an
+is `postUi(body)`. Each takes the session's token last (`token = ""`, sent as `authorization: Bearer <token>`) and gives an
 `Answer`: `{ ok: true, status, value }` or `{ ok: false, status, error }`, with the types of
 the examples. A screen calls the back end only through these (`ts-fetch` otherwise).
 
@@ -78,7 +78,7 @@ browser on WebGPU needs no key and no grant.
 No Route Handlers, Server Actions, middleware, `cookies()`, ISR, `next/image` optimization or
 dynamic routes: the Rust back end does that work.
 
-## A desktop app (L10)
+## A desktop app
 
 The same screens and back end in Electron: the idea says `- Native: a desktop window, for the
 Electron shell of a desktop app`, `check` writes `web/desktop/main.mjs`, and

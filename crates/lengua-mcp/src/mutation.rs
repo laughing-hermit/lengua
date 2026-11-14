@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 
 use lengua_idea::{Build, Case, Mutant, Mutation, Shape, Test};
 
-use crate::build::{Remark, Worker, cargo, lock};
-use crate::host::{Seal, unseal};
+use crate::build::{Remark, Worker, cargo, lock, target_args};
+use crate::host::unseal;
+use crate::testing::Runner;
 use crate::{front, harness, testing};
 
 pub(crate) const MUTANTS: usize = 40;
@@ -129,6 +130,9 @@ pub(crate) fn mutant_manifest(text: &str, package: &str, folder: &Path) -> Strin
 
 fn tested_artifact(build: &Build) -> String {
     let name = mutant_name(&build.package);
+    if build.native() {
+        return format!("target/release/{name}{}", std::env::consts::EXE_SUFFIX);
+    }
     match build.shape {
         Shape::Library => format!(
             "target/{}/release/{}.wasm",
@@ -218,16 +222,14 @@ fn verdict(
         }
     }
     let target_dir = worker.folder.join("target").to_string_lossy().to_string();
-    let args = [
-        "build",
-        "--release",
-        "--target",
-        worker.build.target,
+    let mut args = vec!["build", "--release"];
+    args.extend(target_args(&worker.build));
+    args.extend([
         "--offline",
         "--message-format=short",
         "--target-dir",
         target_dir.as_str(),
-    ];
+    ]);
     let dir = if worker.build.library {
         worker.folder.join(harness::MUTANT_FOLDER)
     } else {
@@ -247,23 +249,27 @@ fn verdict(
     if sha256 == original {
         return Some(Verdict::Same);
     }
+    if worker.build.native() {
+        let binary = worker.folder.join(&space.build.artifact);
+        return judge(worker, space, cases, Runner::Native(&binary));
+    }
     let Ok(seal) = worker
         .host
         .seal(&worker.folder, &bytes, &sha256, &space.trusted)
     else {
         return Some(Verdict::Unbuilt);
     };
-    let found = judge(worker, space, cases, &seal);
+    let found = judge(worker, space, cases, Runner::Sealed(&seal.lock));
     unseal(&worker.folder, &seal);
     found
 }
 
-fn judge(worker: &Worker, space: &Workspace, cases: &[Case], seal: &Seal) -> Option<Verdict> {
+fn judge(worker: &Worker, space: &Workspace, cases: &[Case], runner: Runner) -> Option<Verdict> {
     for (index, case) in cases.iter().enumerate() {
         if worker.stopped() {
             return None;
         }
-        if testing::run_case(&worker.folder, &space.build, &seal.lock, (index, case)).is_some() {
+        if testing::run_case(&worker.folder, &space.build, runner, (index, case)).is_some() {
             return Some(Verdict::Caught);
         }
     }

@@ -6,20 +6,20 @@ source: web/screens/login.tsx
 uses: [ideas/notes]
 used_by: [idea]
 label: checked
-idea_sha256: 8c025d3ae4581d45dadcae910f16d7dbe0551b35a6d58fd66be47f11ce0047af
-source_sha256: ddb30d34a0dbfd0c54ec4b40b75fe84aa171c0a081bffd0688f4c54f53a16e7d
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T12:52:52Z }
+idea_sha256: a1359cf33dfc23f0eccdae0b4d1f10ac3fb886dc1a2454a40ab1bcd22ccf7bc9
+source_sha256: bce9f430b5153b773267b5834fa40af17842be909ae8cdcb6945769c76e0d557
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T15:31:10Z }
 verified:
-  - { by: human:owner, at: 2026-11-14T12:00:00Z }
-  - { by: process:lengua-check, at: 2026-11-14T12:52:52Z }
+  - { by: process:lengua-check, at: 2026-11-14T15:31:10Z }
 title: ui/login
-status: stable
+status: draft
 ---
 
 # Purpose
 
 The screen is a form to sign in with a name and a password. It sends them to the server, and it
-keeps the token of the session that the server gives.
+keeps the token of the session that the server gives. Then it sends the token with `GET /api/me`,
+and it shows the name that the server gives for the token.
 
 # Behaviours
 
@@ -58,11 +58,12 @@ Then the screen shows the error of the server.
 # Structure
 
 - `LoginScreen`: shows the form, the error and the result.
-- `signIn`: sends the name and the password to the server, and keeps the token or the error.
+- `signIn`: sends the name and the password, then sends the token to get the name, and keeps the
+  token or the error.
 
 # Links
 
 * Uses: [notes](../notes.md).
 * Used by: [notes](../../idea.md).
-* Calls: [`POST /api/login`](../../api.md).
+* Calls: [`POST /api/login`](../../api.md), [`GET /api/me`](../../api.md).
 * Index: [notes](../../index.md).

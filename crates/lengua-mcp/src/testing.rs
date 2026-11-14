@@ -17,6 +17,12 @@ const BEFORE: usize = 20;
 
 static RUNS: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Clone, Copy)]
+pub(crate) enum Runner<'a> {
+    Sealed(&'a Path),
+    Native(&'a Path),
+}
+
 pub(crate) fn cases(build: &Build) -> Vec<Case> {
     build
         .tests
@@ -256,7 +262,7 @@ fn answers(test: &Test, got: &[Option<Vec<u8>>], out: &mut Vec<String>) {
 pub(crate) fn run_case(
     folder: &Path,
     build: &Build,
-    lock: &Path,
+    runner: Runner,
     (index, case): (usize, &Case),
 ) -> Option<String> {
     let test = &case.test;
@@ -272,13 +278,18 @@ pub(crate) fn run_case(
     let result = place(&root, build, test).and_then(|()| {
         let input = input_of(test, index, &root);
         let fixtures = Fixtures::start(test, limit)?;
-        let outcome = worker::run(&Request {
-            kind: Kind::Test,
-            lock,
-            folder,
-            input: &input,
-            limit,
-        });
+        let outcome = match runner {
+            Runner::Sealed(lock) => worker::run(&Request {
+                kind: Kind::Test,
+                lock,
+                folder,
+                input: &input,
+                limit,
+            }),
+            Runner::Native(binary) => {
+                crate::native::run(binary, &input.arguments, &input.stdin, &root, limit)
+            }
+        };
         let got = fixtures.finish();
         let mut found = compare(test, &outcome, &root);
         answers(test, &got, &mut found);

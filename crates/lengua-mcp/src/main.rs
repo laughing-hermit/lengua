@@ -5,6 +5,7 @@ mod front;
 mod harness;
 mod host;
 mod mutation;
+mod native;
 mod runs;
 mod testing;
 mod worker;
@@ -186,6 +187,14 @@ struct CheckReply {
         description = "True when the person approved the ideas (and vision.md, when there is one) as they are now; lengua builds no code until then"
     )]
     approved: bool,
+    #[schemars(
+        description = "The native parts the program starts beside it, each with its folder and its label, native when it is checked"
+    )]
+    natives: Vec<PartReply>,
+    #[schemars(
+        description = "Where it runs, in plain words: one WebAssembly file, a web app, a desktop app, or a native part, and what each part can reach"
+    )]
+    where_it_runs: String,
     #[schemars(description = "The build, when the ideas have no problems")]
     build: Option<BuildReply>,
 }
@@ -280,6 +289,8 @@ struct Lengua {
     runs: Runs,
 }
 
+const NATIVE_RUN: &str = "the folder is a native part: it runs outside the sandbox, beside the WebAssembly program that names it with `- Native:`, and check runs its examples; run that program instead";
+
 fn millis(taken: std::time::Duration) -> u64 {
     u64::try_from(taken.as_millis()).unwrap_or(u64::MAX)
 }
@@ -360,6 +371,8 @@ fn seal_program(
     let facts = Facts {
         kind: if library {
             Kind::Library
+        } else if plan.native() {
+            Kind::Native
         } else {
             Kind::Program
         },
@@ -367,6 +380,7 @@ fn seal_program(
         trust: report.trust,
         files: lock::program_files(folder),
         libraries: plan.libraries.iter().map(|l| l.lock.clone()).collect(),
+        natives: plan.natives.iter().map(|n| n.lock.clone()).collect(),
         trusted: plan.components.iter().map(|c| c.file.clone()).collect(),
         component: Some(plan.artifact.clone()),
         sealed: component
@@ -450,6 +464,23 @@ fn build_reply(
     }
 }
 
+fn natives_of(build: Option<&lengua_idea::Build>) -> (Vec<PartReply>, String) {
+    build.map_or_else(
+        || (Vec::new(), String::new()),
+        |plan| {
+            let natives = plan
+                .natives
+                .iter()
+                .map(|n| PartReply {
+                    path: n.path.clone(),
+                    label: n.label.clone(),
+                })
+                .collect();
+            (natives, plan.place.clone())
+        },
+    )
+}
+
 impl Lengua {
     fn reply(
         &self,
@@ -477,6 +508,7 @@ impl Lengua {
                 message: n.message,
             })
             .collect();
+        let (natives, where_it_runs) = natives_of(report.build.as_ref());
         let (libraries, components) = report.build.as_ref().map_or_else(
             || (Vec::new(), Vec::new()),
             |plan| {
@@ -510,16 +542,17 @@ impl Lengua {
             });
         }
         let build = report.build.map(|plan| {
+            let target = if plan.native() { "native" } else { plan.target };
             if plan.code {
                 let status = snapshot
                     .filter(|(inputs, _)| *inputs == plan.inputs)
                     .map_or_else(|| self.builds.status(folder, &plan), |(_, status)| status);
-                build_reply(plan.target, status, &mut findings, &mut notes)
+                build_reply(target, status, &mut findings, &mut notes)
             } else {
                 BuildReply {
                     state: "no_code".to_string(),
                     seconds: 0,
-                    target: plan.target.to_string(),
+                    target: target.to_string(),
                     component: None,
                     size: None,
                     sha256: None,
@@ -541,6 +574,8 @@ impl Lengua {
             written: report.written,
             libraries,
             components,
+            natives,
+            where_it_runs,
             label: report.trust.label.name().to_string(),
             score,
             approved,
@@ -660,6 +695,13 @@ impl Lengua {
         let folder = PathBuf::from(&params.folder);
         if !folder.is_dir() {
             return Err(format!("{} is not a folder", folder.display()));
+        }
+        if lengua_idea::program(&folder)
+            .build
+            .as_ref()
+            .is_some_and(lengua_idea::Build::native)
+        {
+            return Ok(Json(plain("refused", Some(NATIVE_RUN.to_string()), 0)));
         }
         let lock_path = folder.join(lock::LOCK);
         let verified =

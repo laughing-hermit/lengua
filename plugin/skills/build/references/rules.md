@@ -28,6 +28,6 @@ test passes and the tests catch 80% of the mutants or more, `tested` under 80%.
 ## Code that runs everywhere
 
 - No threads, no `std::process`: a WebAssembly component has one thread, and a thread or a
-  process is a native need (L10, `native-undeclared`).
+  process is a native need (`native-undeclared`).
 - A `HashMap` works with no grant and gives the same order on every run.
 - The wall clock and random numbers need their grants; the tests fix both.

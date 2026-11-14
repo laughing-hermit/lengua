@@ -23,7 +23,7 @@ next starts (Lengua3.md, section 8).
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Landed on main at af89139 (run 43483075983, green on five) |
 | L8 | The Next.js front end, exported statically and embedded in the one file; TypeScript held like Rust; the wiki across both sides | Built on `wip/l8-next`; the five-runner landing run is named in the landing report |
 | L9 | Full stack: AI models as a grant, storage, outgoing calls, secrets, logins, shared types, logs, embeddings, deployment, libraries using libraries, concurrent serving | Built on `wip/l9`; the five-runner landing run is named in the landing report |
-| L10 | Native parts and the Electron desktop app | Not started |
+| L10 | Native parts and the Electron desktop app; HTTPS in the host; the client's session token | Built on `wip/l10`; the five-runner landing run is named in the landing report |
 | L11 | The three skills (`vision`, `write-idea`, `build`), approval, "Where it runs", a product test in an interactive session | Built on `wip/l11`; the five-runner landing run is named in the landing report; the product test is the coordinator's |
 | L12 | The scale test: a Next.js and Rust full-stack application with an AI call | Not started |
 | L13 | The finish line: release, the never-exercised sweep, WASI 0.3 again, documents, the owner's guide, the final run | Not started |
@@ -617,6 +617,64 @@ next starts (Lengua3.md, section 8).
   `time`), `http` 1 and `http-body-util` 0.1 for its outgoing sender, and `hyper`'s `client` and
   `http1` features; all were in the graph through Wasmtime, so `Cargo.lock` gains no package
   (run 43563716392's lockfile job). No new crate or npm package for a program.
+- **2026-11-14, L10: HTTPS in the host** for ``- Calls: HTTPS at `host:port` `` and an
+  `https://` `LENGUA_MODEL_URL`. The crates, each with its reason (L9 refused them; TLS runs in
+  the native host, never in the program, and a cloud model is reached only over HTTPS):
+  - `rustls` 0.23, default features off, `ring`, `std`, `tls12`: the TLS of the host; writing TLS
+    is a large project of its own. The provider is `ring` 0.17 (C and assembly, built by `cc` on
+    every runner): the smallest provider `rustls` takes; `aws-lc-rs` brings more C and NASM or
+    CMake on Windows, and the pure-Rust providers (`rustls-rustcrypto`) are not audited. To
+    reverse: a pure-Rust provider once one is audited.
+  - `tokio-rustls` 0.26 (`ring`, `tls12`): `rustls` on the Tokio streams the host already uses.
+  - `webpki-roots` 1: Mozilla's roots, the same bytes on every system; the platform verifier
+    (`rustls-platform-verifier`) would differ per OS and bring each OS's crates. Extra roots, for
+    a gateway or a test, come from the PEM file of `LENGUA_TLS_ROOTS`.
+  - `rcgen` 0.14 (`crypto`, `ring`), a dev-dependency of `lengua-host` only: the test makes its
+    own root and server certificate, so no key is in the repository.
+  - What they bring, from the lockfile job (run 43579205024): 42 packages for every target, the
+    dev ones among them: `rustls`, `rustls-webpki`, `rustls-pki-types`, `ring`, `untrusted`,
+    `subtle`, `zeroize`, `tokio-rustls`, `webpki-roots`, a second `windows-sys` for `ring`, and,
+    for `rcgen` only, `time`, `yasna`, `x509-parser`, `asn1-rs`, `der-parser`, `nom` and others.
+- **2026-11-14, L10: the generated client sends the session's token**: each route function takes
+  `token = ""` last and sends `authorization: Bearer <token>`; a screen test answers a request
+  only from an example with the same `authorization`. The screen `login` of `notes` now calls
+  `GET /api/me` with its token and shows the name the server gives.
+- **2026-11-14, L10: `- Native: <part>, for <reason>`**, the reason one of six phrases (Lengua3.md,
+  section 1). A native part is a program folder of its own (`native-shape`, `native-grant`),
+  built for the computer with no `lto` (each mutant then links in seconds), tested and mutated as
+  processes, its lock of kind `native`; a WebAssembly program names it by folder and calls
+  `POST http://<name>.native/` through the host. To reverse: a part that stays up on a port of its
+  own, for a large model that loads once.
+- **2026-11-14, L10: the label `native`** goes to a native part whose checks would make it
+  `checked`; under 80% it is `tested`, and the "Where it runs" line still says native.
+- **2026-11-14, L10: what counts as an undeclared native need**: `std::thread::spawn`,
+  `thread::scope` and `process::Command` in a WebAssembly program's source, and a native part
+  named in `- Uses:` (`native-undeclared`). A plain text search of each Rust file, so a name in a
+  string also counts.
+- **2026-11-14, L10: Candle 0.11.1 for the local model** (`candle-core`, pure Rust; the crates it
+  brings are in the example's crate count): Burn would prove the same with far more crates (its
+  `wgpu` back end is the whole of `wgpu`). The model's weights come from a rule, so CI downloads
+  nothing and caches nothing. Metal on macOS through ``with `metal` on macOS``; CUDA is not
+  declared (NVIDIA's toolkit is not pure Rust and not on the runners).
+- **2026-11-14, L10: desktop apps**: `electron` 45.3.2 (the current release on 2026-11-14, read
+  from the npm registry); its package has no install script, so the build runs its
+  installer, `pnpm exec install-electron`, which downloads the binary and checks it against the
+  sums the package carries; `web/desktop/main.mjs`
+  is generated and held like the other files of `web/`; `lengua-run --desktop <folder>` serves
+  the one file and starts Electron, and the smoke test (`LENGUA_SMOKE`, `LENGUA_SMOKE_BODY`,
+  `LENGUA_SMOKE_OUT`) loads the first page, asks one request and quits. Nothing signed or
+  published.
+- **2026-11-14, L10: STE dictionary** gains `app`, `beside`, `computer`, `desktop`, `download`,
+  `inference`, `native`, `shell` and `weight`.
+- **2026-11-14, L10: CI**: the check job has 120 minutes; Linux runs the tests under `xvfb-run`
+  (installed on the ARM64 image when missing) with `ELECTRON_DISABLE_SANDBOX`, since the runner's
+  user namespaces are restricted; the pnpm lockfile job holds `examples/desk` too.
+- **2026-11-14, L10: `web/app/not-found.tsx` is generated**: with Next.js's own not-found page,
+  its `404.html` had two `<title>`s in an order that changed from build to build, so the
+  export of `notes` and `desk` differed between runners under load (run 43601765013). The
+  generated page has no title of its own.
+- **2026-11-14, L10: the two tests that run `ask` take turns**: both start its test server on
+  port 7813, and when they ran at once one got the other's connection (run 43601765013).
 - **2026-11-14, L11: approval is a tool, `approve`**, not a field of `check`: the person's words
   are an input of their own, and a call of `check` never approves by accident. Its record is
   `approved` in the frontmatter of `idea.md` and `vision.md`, since the lock is per user and
@@ -645,7 +703,7 @@ next starts (Lengua3.md, section 8).
 - **2026-11-14, L11: the skills** are `vision`, `write-idea` and `build`, each a short
   `SKILL.md` with pages in `references/`: the principles (the design's table, held to it by a
   test), the grammar, the test format, STE, the rules, the back end and the front end. L10's
-  native parts and desktop apps are described as L10 built them on `wip/l10`, marked (L10).
+  native parts, desktop apps and HTTPS are described as L10 built them.
 
 ## L11: the product test in an interactive session
 
@@ -665,13 +723,24 @@ The coordinator runs it in the live session, with the plugin alone, after L11 la
    speed, GPU training): the vision says so and offers the WebAssembly way.
 7. The agent never calls `approve` without the person's words.
 
+
+
 ## Never exercised
 
 What the milestones built and no run has used, with the reason.
 
 - A live model: no run asks Ollama, llama.cpp or a cloud model (the `$0` rule and no model on
   the runners); `model::live` and `Events` are tested only by their unit tests.
-- HTTPS anywhere (no TLS, above).
+- HTTPS to a real service or a cloud model: the host's TLS is tested only against a local server
+  with a certificate made in the test (the $0 rule).
+- A real GPU: the runners have none, so `examples/model` runs on the CPU in CI (or on Metal, if a
+  macOS runner gives one), and CUDA is never built.
+- A large model through a native part, and a native part for training, shared-memory threads or
+  a device.
+- A desktop app signed, notarized or published, and one opened by a person: CI only starts it,
+  loads its first page, asks one request and quits.
+- `lengua-run` killed during a call of a native part: the part runs on to the end of its call
+  alone, and no test kills one there.
 - A deployment to Vercel (the owner's account), its `vercel.json` services and rewrites, and
   a lasting store behind `- Calls:`.
 - The container image on `linux/arm64`, and of an app with screens (CI builds `examples/greet`).
@@ -758,6 +827,10 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-14 | [43565796219](https://github.com/laughing-hermit/lengua/actions/runs/43565796219) to [43569345579](https://github.com/laughing-hermit/lengua/actions/runs/43569345579) | wip/l9 4c8530b to 71a98e3 | test, linux-x86_64 | Failed on STE (sentences over 25 words, `named`), clippy in the new examples (`map(_).unwrap_or_default()`, `format!` collected, a constant assertion) and `rustfmt`, each fixed; `logins` 23 of 25, `ai` 18 of 19, `vectors` 11 of 11, `ask` 18 of 20, all `checked` |
 | 2026-11-14 | [43571805500](https://github.com/laughing-hermit/lengua/actions/runs/43571805500) | wip/l9 a39789b | test, linux-x86_64 | Every test green but the tree test (the new folders' wiki not committed yet). `notes` `checked`, 37 of 38, 39 tests, done in 433 s; one file of 1,189,438 bytes, the export 45 files and 1,041,922 bytes; `lengua-run`'s first page 408 ms after its start; eight requests at once, an account made and signed in with a real clock, salt and key |
 | 2026-11-14 | [43571807934](https://github.com/laughing-hermit/lengua/actions/runs/43571807934) | wip/l9 a39789b | wiki, linux-x86_64 | Green: the committed wiki (artifact `wiki-724-linux-x86_64`); every example's log has two lines more, since the build's inputs hold the grants, which have three fields more |
+| 2026-11-14 | [43579378386](https://github.com/laughing-hermit/lengua/actions/runs/43579378386) | wip/l10 8462751 | test, linux-x86_64 | HTTPS green: a request over TLS to a local server whose certificate the test's root signed, and one refused without that root; `notes`' login screen asks `GET /api/me` with its token; failed only on the tree test (the wiki not committed yet). The lockfile job of 43579205024 gave the 42 packages of `rustls`, `ring`, `webpki-roots` and the dev crate `rcgen` |
+| 2026-11-14 | [43580958600](https://github.com/laughing-hermit/lengua/actions/runs/43580958600) to [43592381104](https://github.com/laughing-hermit/lengua/actions/runs/43592381104) | wip/l10 996f03b to 6b26013 | compile and test, linux-x86_64 | Failed on clippy (a struct's bools, a field's name, closures), STE (`sandbox`, `capital`, a sentence of 31 words), OKF's index (the "Where it runs" line is now a section), and `model` `tested` at 28 of 40 (equivalent mutants of capacities and fallbacks, now constants; then 38 of 38, `native`); Candle 0.11.1 built in 37 s on Linux x86-64; merged main's reproducible builds |
+| 2026-11-14 | [43594804013](https://github.com/laughing-hermit/lengua/actions/runs/43594804013), [43597877891](https://github.com/laughing-hermit/lengua/actions/runs/43597877891) | wip/l10 8f7f18d, 5877a24 | test, linux-x86_64 | `desk` `checked`, 17 of 21, 8 tests, the native part called through the host; `json` was built for the browser with no function it takes (now skipped); Electron 45 has no install script, so the build runs `install-electron`; then the desktop app under `xvfb-run` started, loaded its first page, answered one request and quit in 2.2 s; same-bytes green with `desk` |
+| 2026-11-14 | [43597880318](https://github.com/laughing-hermit/lengua/actions/runs/43597880318) | wip/l10 5877a24 | wiki, linux-x86_64 | Green: the committed wiki, with `model` (`native`) and `desk` (`checked`), and "Where it runs" in every index |
 | 2026-11-14 | [43593749166](https://github.com/laughing-hermit/lengua/actions/runs/43593749166) to [43594421776](https://github.com/laughing-hermit/lengua/actions/runs/43594421776) | wip/l11 e4de879 to 57d8ec2 | test, linux-x86_64 | Failed on `rustfmt` (its patch applied), clippy (`match_same_arms`, `map_unwrap_or`), and `approve` refusing a library (no `main`); the container refused `greet` as unapproved, as it should before the approvals |
 | 2026-11-14 | [43595249052](https://github.com/laughing-hermit/lengua/actions/runs/43595249052) | wip/l11 57b66a3 | test, linux-x86_64 | Green: the 30 approvals, computed with `sha256sum` from the rule of `approval.rs`, matched the tree test |
 | 2026-11-14 | [43595251431](https://github.com/laughing-hermit/lengua/actions/runs/43595251431) | wip/l11 57b66a3 | wiki, linux-x86_64 | Green: the committed wiki (artifact `wiki-753-linux-x86_64`): the approved ideas `stable`, the owner first in `verified` |
@@ -782,6 +855,9 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 - **2026-11-13, the wiki fix:** a shell command that ran `python3 --version` (a slip, while
   checking a file) was refused. Nothing needed it; the work went on with the editor's tools and
   `sed`.
+- **2026-11-14, L10:** a shell command of the builder that began with `perl -v` (a slip, before a
+  file edit) was refused, and another that ended in `python3` (a slip, after a `sed` edit of the
+  workflow) was refused. Mistakes, not needs: the work went on with the editor's tools and `sed`.
 - **2026-11-14, L11:** a shell command of the builder that ended in `perl -v` (a slip, while
   making a scratch file) was refused. A mistake, not a need: the edits went on with the editor's
   tools and `sed`.

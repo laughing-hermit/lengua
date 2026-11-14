@@ -9,6 +9,7 @@
 * [forever](forever/index.md) - The program counts to the largest 64 - bit number, so it does not stop in the time of its idea. Label: `tested`.
 * [greedy](greedy/index.md) - The program keeps many blocks of memory, more than the memory of its idea. Label: `tested`.
 * [hello](hello/index.md) - The program writes a short message to the standard output. Label: `checked`.
+* [model](model/index.md) - The program is a small language model, and it is a native part. Label: `native`.
 * [prices](prices/index.md) - The program adds prices. Label: `checked`.
 * [sleepy](sleepy/index.md) - The program waits for 30 seconds in a call to the host, and then it writes `awake`. Label: `tested`.
 * [small](small/index.md) - The program tells if a number is small. Label: `checked`.
@@ -19,6 +20,7 @@
 
 # Servers
 
+* [desk](desk/index.md) - The program is a desktop app. Label: `checked`.
 * [greet](greet/index.md) - The program is an HTTP server. Label: `checked`.
 * [notes](notes/index.md) - The program is a small web application for notes. Label: `checked`.
 * [shop](shop/index.md) - The program is the HTTP server of a small shop. Label: `checked`.

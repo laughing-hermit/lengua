@@ -19,6 +19,9 @@ pub(crate) struct Parts<'a> {
     pub components: &'a [(String, String, usize)],
     pub crates: Count,
     pub vision: bool,
+    pub place: &'a str,
+    pub natives: &'a [crate::Native],
+    pub browser: &'a [String],
     pub interface: &'a Interface<'a>,
     pub approval: &'a Approval,
 }
@@ -532,7 +535,7 @@ fn index_line(title: &str, link: &str, description: &str, label: &str) -> String
     format!("* [{title}]({link}) - {description} Label: `{label}`.\n")
 }
 
-const INDEX_HEAD: &str = "---\nokf_version: \"0.2\"\n---\n";
+const BACK_END: &str = "\n# Back end: program\n";
 
 fn vision_text(folder: &Path, approval: &Approval) -> Option<(String, String)> {
     let old = fs::read_to_string(folder.join(VISION))
@@ -571,7 +574,10 @@ fn vision_text(folder: &Path, approval: &Approval) -> Option<(String, String)> {
 }
 
 pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
-    let mut out = String::from(INDEX_HEAD);
+    let mut out = format!(
+        "---\nokf_version: \"0.2\"\n---\n\n# Where it runs\n\n* {}\n",
+        parts.place
+    );
     let of = |kind: IdeaKind| -> Vec<String> {
         pages
             .iter()
@@ -593,12 +599,11 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
             )
         })
         .collect();
-    let front = pages.iter().any(|p| p.kind == IdeaKind::Screen);
     let libraries: Vec<String> = libraries
         .into_iter()
         .zip(parts.libraries)
         .map(|(line, l)| {
-            if front {
+            if parts.browser.contains(&l.name) {
                 format!(
                     "{line}* In the browser, `{}` is `@/lib/wasm/{}`.\n",
                     l.name, l.name
@@ -609,6 +614,19 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
         })
         .collect();
     section(&mut out, "# Back end: libraries", &libraries);
+    let natives: Vec<String> = parts
+        .natives
+        .iter()
+        .map(|n| {
+            index_line(
+                &n.name,
+                &format!("{}/idea.md", n.path),
+                &n.description,
+                &n.label,
+            )
+        })
+        .collect();
+    section(&mut out, "# Back end: native parts", &natives);
     let components: Vec<String> = parts
         .components
         .iter()
@@ -828,8 +846,8 @@ fn texts(
     let vision = vision_text(folder, parts.approval);
     let mut index = index_text(pages, label, parts);
     if let Some((_, description)) = &vision {
-        let section = format!("{INDEX_HEAD}\n# Vision\n\n* [vision]({VISION}) - {description}\n");
-        index = index.replacen(INDEX_HEAD, &section, 1);
+        let section = format!("\n# Vision\n\n* [vision]({VISION}) - {description}\n{BACK_END}");
+        index = index.replacen(BACK_END, &section, 1);
     }
     if let Some((text, _)) = vision {
         out.push((VISION.to_string(), text));
@@ -860,7 +878,12 @@ pub(crate) fn write(
     };
     let stamp = iso(now);
     let unchecked = Label::Unchecked.name();
-    let known = [unchecked, Label::Tested.name(), Label::Checked.name()];
+    let known = [
+        unchecked,
+        Label::Tested.name(),
+        Label::Checked.name(),
+        Label::Native.name(),
+    ];
     let previous = pages
         .first()
         .and_then(|p| p.front.value("label"))

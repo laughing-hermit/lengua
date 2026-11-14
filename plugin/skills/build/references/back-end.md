@@ -49,10 +49,13 @@ Check every answer: the library `ai` has `fill`, `then`, `fields`, `retryable` a
 
 ## Other services, secrets, native parts
 
-- ``- Calls: HTTP at `<host>:<port>` `` (or `HTTPS`, L10): outgoing requests only there.
+- ``- Calls: HTTP at `<host>:<port>` `` (or `HTTPS`, with Mozilla's roots): outgoing requests only there.
 - ``- Reads: the secret `NAME` ``: `std::env::var("NAME")`; never write it to a file or an
   answer.
-- A native part (L10): `POST http://<name>.native/` with the input as the body; the answer is
+- A native part is a program folder of its own: its idea says `- Native: <what>, for <reason>`,
+  it reads standard input and writes standard output, and `check` builds it for this computer
+  (label `native`). The WebAssembly program names it with ``- Native: `<folder>`, for <reason>``
+  and sends `POST http://<name>.native/` with the input as the body; the answer is
   200 with its standard output, or 502.
 
 ## lengua's shared libraries
@@ -82,4 +85,4 @@ A library of your own is a folder whose top idea has `- Exports:`; its examples 
   serves it with `lengua-run` in the second.
 - Vercel: the front end's static export natively, the back end as that container, `/api/` sent
   to it.
-- A desktop app (L10): `lengua-run --desktop <folder>`.
+- A desktop app: `lengua-run --desktop <folder>`.

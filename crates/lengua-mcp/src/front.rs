@@ -169,6 +169,28 @@ fn install(worker: &Worker, stage: &Path) -> Result<(), Failure> {
     Ok(())
 }
 
+fn electron(worker: &Worker, stage: &Path) -> Result<(), Failure> {
+    let installed = stage.join("node_modules/electron/path.txt").is_file();
+    if installed {
+        return Ok(());
+    }
+    match pnpm_limited(worker, &["exec", "install-electron"], stage, 600) {
+        Ok((true, _)) => Ok(()),
+        Ok((false, text)) => Err(failed(
+            Stage::BuildFailed,
+            "web/package.json",
+            "web-install",
+            format!("Electron's installer failed:\n{}", tail(&text, 20)),
+        )),
+        Err(message) => Err(failed(
+            Stage::BuildFailed,
+            "web/package.json",
+            "web-install",
+            message,
+        )),
+    }
+}
+
 pub(crate) fn type_problems(text: &str) -> Vec<Problem> {
     text.lines()
         .filter_map(|line| {
@@ -579,6 +601,9 @@ pub(crate) fn build(worker: &Worker, front: &Front) -> Result<usize, Failure> {
         )
     })?;
     install(worker, &stage)?;
+    if front.desktop {
+        electron(worker, &stage)?;
+    }
     browsers(worker, front, &stage)?;
     typecheck(worker, &stage)?;
     let runs = tests(worker, front, &stage)?;
