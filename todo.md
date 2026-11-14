@@ -20,7 +20,7 @@ next starts (Lengua3.md, section 8).
 | L4 | The Power of 10 lint and the component checks | Landed on main at f197505 (run 43399815151, green on five) |
 | L5 | Tests from the idea, generated cases, mutation score, trust labels | Landed on main at 7ce9264 (run 43439284107, green on five) |
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | Landed on main at cb314b2 (run 43450491850, green on five) |
-| L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Done on `wip/l7`; the five-runner landing run is named in the landing report |
+| L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Landed on main at af89139 (run 43483075983, green on five) |
 | L8 | The Next.js front end, exported statically and embedded in the one file; TypeScript held like Rust; the wiki across both sides | Built on `wip/l8-next`; the five-runner landing run is named in the landing report |
 | L9 | Full stack: AI models as a grant, storage, outgoing calls, secrets, logins, shared types, logs, embeddings, deployment, libraries using libraries, concurrent serving | Built on `wip/l9`; the five-runner landing run is named in the landing report |
 | L10 | Native parts and the Electron desktop app; HTTPS in the host; the client's session token | Built on `wip/l10`; the five-runner landing run is named in the landing report |
@@ -541,6 +541,14 @@ next starts (Lengua3.md, section 8).
   training or fine-tuning, the heaviest GPU work (large local models at full speed),
   shared-memory threads, a device with no host grant, and Electron's shell. L10 proves the native
   path with one example, a local model on the GPU with Candle or Burn.
+- **2026-11-13, L8: one SHA-256 per component on every system.** The generated release profile
+  strips symbols, and `lengua-mcp` is the rustc wrapper of the build job: crates built for
+  `wasm32` get a `-C metadata` and `-C extra-filename` of their own identity, since Cargo's mix in
+  the host's triple through build scripts and proc macros and so reorder functions (runs
+  43543315033, 43560066261). A front end's export is made the same too (pnpm's store names of one
+  length, Tailwind's sources, a `browserslist`, Next's segment file names; Lengua3.md section 9).
+  CI's `same-bytes` holds every example; CI also builds `lengua-idea` and `lengua-lint` for
+  `wasm32-wasip2`.
 - **2026-11-13, the LLM wiki and OKF fixed ahead of L9 and L13** (`wip/wiki`; Lengua3.md,
   section 8, "The LLM wiki and OKF, by milestone", and section 4, "The wiki's formats" and "One
   wiki across the repository"). The decisions taken:
@@ -741,6 +749,8 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-13 | [43473833819](https://github.com/laughing-hermit/lengua/actions/runs/43473833819) | wip/l7 58cad84 | test, linux-x86_64 | Failed only on the shop: its `generate!` read the folder `wit/` (lengua's statement of the world) by default; now `path: []` |
 | 2026-11-13 | [43476045199](https://github.com/laughing-hermit/lengua/actions/runs/43476045199) | wip/l7 e3109dd | test, linux-x86_64 | Failed only on the shop: it built and passed clippy (so the bindings' macros pass `unsafe_code = "forbid"`), and the import check wanted a WASI version on `lengua:tax/rates`; now an exact name is taken |
 | 2026-11-13 | [43478821353](https://github.com/laughing-hermit/lengua/actions/runs/43478821353) | wip/l7 5d04e13 | test, linux-x86_64 | Green. Seconds from the first check to `done`, and the mutation score: `tally` 23.1, 6 of 6; `fetch` 23.4, 3 of 3; `upper` 28.8, 4 of 4; `greet` 13.0, 2 of 2; `prices` 11.4, 4 of 4; the libraries `decimal` 106 to 125, 27 of 30; `sort` 66 to 89, 22 of 27; `text` 50 to 70, 22 of 23; `hashes` 82 to 92, 33 of 36 (4 unbuilt); `dates` 137 to 160, 34 of 36 (4 unbuilt); `json` 113 to 161, 37 of 39 (1 unbuilt); `http` 181 to 188, 37 of 40; each `checked`, and each built for `wasm32-unknown-unknown` too; `shop` 58.5, 14 of 14, `checked`: one file of 98,722 bytes, `lengua-run`'s first answer 106 ms after its start. The C component `tax.wasm`: 50,628 bytes |
+| 2026-11-13 | [43483075983](https://github.com/laughing-hermit/lengua/actions/runs/43483075983) | wip/l7 af89139 | test, all five | Green on five: the L7 landing run. The shop's one file 98,722 bytes on four systems and 98,725 on Windows ARM64 (`greet` 87,311 and 87,281): the difference L8 checks |
+| 2026-11-13 | 43490423487 to 43511534741 | wip/l8 (tag archive/l8-gpui) | compile and test, linux-x86_64 | The GPUI attempt, dropped |
 | 2026-11-13 | [43513488146](https://github.com/laughing-hermit/lengua/actions/runs/43513488146) | wip/wiki ec3e0ce | test, linux-x86_64 | Failed: 11 clippy findings in `lengua-idea` (`similar_names`, `manual_is_multiple_of`, `map_unwrap_or`) and a format patch |
 | 2026-11-13 | [43514346508](https://github.com/laughing-hermit/lengua/actions/runs/43514346508) | wip/wiki 9f468f5 | test, linux-x86_64 | Failed: the tree test (no committed wiki yet, as planned); the usage test; and every job ran twice, all mutants cached: `verified` added two frontmatter lines, which moved the examples' lines in the build's inputs (now counted from the idea's text) |
 | 2026-11-13 | [43516467060](https://github.com/laughing-hermit/lengua/actions/runs/43516467060) | wip/wiki 2f3b5c4 | test, linux-x86_64 | Every test green but the tree test (no committed wiki yet, as planned) |

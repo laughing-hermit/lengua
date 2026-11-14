@@ -255,6 +255,8 @@ jobs:
           wasm-bindgen --version
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked --keep-going
+      - name: lengua's own std-only crates, built for WebAssembly (wasm32-wasip2)
+        run: cargo build --locked --target wasm32-wasip2 -p lengua-idea -p lengua-lint
       - name: tests built
         if: ${{ needs.plan.outputs.mode == 'compile' }}
         run: cargo test --workspace --locked --no-run
@@ -306,6 +308,43 @@ jobs:
             echo "$f: $(wc -c < "$f") bytes"
             cargo run --locked -q -p lengua-mcp -- imports "$f"
           done
+      - name: the bytes of the built components, for the check that every system builds the same
+        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+        run: |
+          mkdir -p "same/${{ matrix.target }}"
+          for pair in hello:hello tally:tally greet:greet run-echo:echo run-count:count run-files:files run-clock:clock run-forever:forever run-greedy:greedy run-words:words fetch:fetch upper:upper sleepy:sleepy; do
+            test_name=${pair%%:*}
+            name=${pair#*:}
+            set -- "$name" "target/tmp/lengua-mcp-$test_name/$name/target/wasm32-wasip2/release/$name.wasm"
+            if [ -f "$2" ]; then
+              cp "$2" "same/${{ matrix.target }}/$1.wasm"
+            fi
+          done
+          for pair in "shop target/tmp/lengua-mcp-shop/examples/shop/target/wasm32-wasip2/release/shop.wasm" \
+                      "ask target/tmp/lengua-mcp-ask/examples/ask/target/wasm32-wasip2/release/ask.wasm" \
+                      "notes target/tmp/lengua-mcp-notes/examples/notes/target/wasm32-wasip2/release/notes.wasm" \
+                      "desk target/tmp/lengua-mcp-desk/examples/desk/target/wasm32-wasip2/release/desk.wasm"; do
+            set -- $pair
+            if [ -f "$2" ]; then
+              cp "$2" "same/${{ matrix.target }}/$1.wasm"
+            fi
+          done
+          export_dir=target/tmp/lengua-mcp-notes/examples/notes/target/lengua/web/out
+          if [ -d "$export_dir" ]; then
+            here="$PWD/same/${{ matrix.target }}"
+            (cd "$export_dir" && find . -type f | LC_ALL=C sort | while read -r f; do
+              if [ "$(uname)" = Darwin ]; then sum=$(shasum -a 256 "$f" | cut -d' ' -f1); else sum=$(sha256sum "$f" | cut -d' ' -f1); fi
+              echo "$(wc -c < "$f" | tr -d ' ') $sum $f"
+            done) > "$here/notes-export.txt"
+          fi
+          ls -l "same/${{ matrix.target }}"
+          cd "same/${{ matrix.target }}" && (sha256sum *.wasm 2> /dev/null || shasum -a 256 *.wasm) | tee sums.txt
+      - uses: actions/upload-artifact@v5
+        if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+        with:
+          name: built-${{ matrix.target }}
+          path: same
+          if-no-files-found: ignore
       - name: the shared libraries, checked by the tests, built for wasm32-unknown-unknown too
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
         run: |
@@ -390,3 +429,63 @@ jobs:
           time (for i in $(seq 20); do ./target/release/lengua-run --version > /dev/null; done)
           TIMEFORMAT='lengua-mcp --version, 20 runs: %R s'
           time (for i in $(seq 20); do ./target/release/lengua-mcp --version > /dev/null; done)
+
+  same-bytes:
+    needs: [plan, check]
+    if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: built-*
+          merge-multiple: true
+          path: built
+      - name: wasm-tools 1.263.0, pinned by SHA-256, to show what differs
+        run: |
+          curl -sSfL -o wt.tar.gz https://github.com/bytecodealliance/wasm-tools/releases/download/v1.263.0/wasm-tools-1.263.0-x86_64-linux.tar.gz
+          echo "21c036c1740a0552124c79c6e2170cb61c5b016005671a6d5bc06cf642165431  wt.tar.gz" | sha256sum -c
+          tar xzf wt.tar.gz
+          echo "$PWD/wasm-tools-1.263.0-x86_64-linux" >> "$GITHUB_PATH"
+      - name: every built example has the same SHA-256 on every system
+        run: |
+          ls built
+          status=0
+          echo "examples/model is not compared: it is a native part, built for each system on purpose"
+          for name in hello tally greet echo count files clock forever greedy words fetch upper sleepy shop ask notes desk; do
+            echo "== $name"
+            first=""
+            for dir in built/*/; do
+              dir=${dir%/}
+              file="$dir/$name.wasm"
+              if [ ! -f "$file" ]; then
+                echo "$(basename "$dir"): not built"
+                status=1
+                continue
+              fi
+              echo "$(basename "$dir"): $(wc -c < "$file") bytes, $(sha256sum "$file" | cut -d' ' -f1)"
+              if [ -z "$first" ]; then
+                first="$file"
+              elif ! cmp -s "$first" "$file"; then
+                status=1
+                echo "  differs from $(basename "$(dirname "$first")"): $(cmp -l "$first" "$file" | wc -l) bytes differ; the first differences:"
+                cmp -l "$first" "$file" | head -20 || true
+                diff <(wasm-tools print "$first") <(wasm-tools print "$file") | head -60 || true
+              fi
+            done
+          done
+          exit $status
+      - name: the files of the notes' export, compared between systems
+        if: ${{ !cancelled() }}
+        run: |
+          for name in notes-export; do
+            first=""
+            for dir in built/*/; do
+              file="${dir%/}/$name.txt"
+              [ -f "$file" ] || continue
+              if [ -z "$first" ]; then first="$file"; continue; fi
+              if ! cmp -s "$first" "$file"; then
+                echo "== $name: $first and $file"
+                diff "$first" "$file" | head -60 || true
+              fi
+            done
+          done

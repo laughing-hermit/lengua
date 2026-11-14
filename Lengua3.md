@@ -228,7 +228,9 @@ The rule for a native part:
 
 The two native programs that lengua itself is made of, `lengua-mcp` and `lengua-run`, are the
 standing exception: something native must run the WebAssembly. lengua's own std-only
-libraries are also built for WebAssembly, so the checker could one day run as WebAssembly too.
+libraries are also built for WebAssembly, so the checker could one day run as WebAssembly too:
+since L8, CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2` on every runner, and a
+failure fails the run.
 
 **GPU access with this stack** (decided by the owner on 2026-11-13):
 1. **GPU work in the front end needs no native code.** The browser, or Electron's Chromium,
@@ -1042,6 +1044,7 @@ opt-level = 3
 panic = "abort"
 lto = true
 codegen-units = 1
+strip = true
 
 [workspace]
 ```
@@ -2431,6 +2434,22 @@ Decided for lengua 3 at L8 (2026-11-13):
 - **The wiki joins both sides**: `api.md`, `# Links`, the two-sided `index.md`.
 - **The npm packages** are the base, shadcn's two, and those the idea declares, each pinned; the
   list and the reasons are in `todo.md`.
+- **Every component has one SHA-256 on every system.** The generated release profile has
+  `strip = true`, and `lengua-mcp` is the rustc wrapper of the build job (`RUSTC_WRAPPER`, marked
+  by `LENGUA_RUSTC_WRAPPER`): a crate built for `wasm32` gets a `-C metadata` and an
+  `-C extra-filename` from its own identity (name, crate types, edition, target, `--cfg`, extern
+  names, version), and its outputs get Cargo's names back. Cargo's own values mix in the host's
+  triple through build scripts and proc macros, and they order the functions rustc writes
+  (section 10). A front end's export is the same on every system too: `pnpm-workspace.yaml` sets
+  `virtualStoreDirMaxLength: 60` (pnpm's default on Windows; 120 elsewhere), as Turbopack's module
+  ids hash the store's folder names; `globals.css` imports Tailwind with `source(none)` and scans
+  only the front's own folders; `package.json` has a `browserslist` (Chrome and Edge 111, Firefox
+  128, Safari 16.4) that keeps `oklch()` as written, not converted to `lab()` with digits that
+  differ by system; and `lengua-mcp` renames the segment files Next writes on Windows as
+  `__next.<page>/__PAGE__.txt` to Linux's `__next.<page>.__PAGE__.txt` (runs 43575965175,
+  43578946762). CI's job `same-bytes` holds every example's component to one SHA-256 on the
+  five runners.
+- **CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2`**, and a failure fails the run.
 
 Decided for lengua 3 at L9 (2026-11-14):
 
@@ -2610,6 +2629,12 @@ Decided for lengua 3 at L10 (2026-11-14):
   default, and lengua's `wit/world.wit` is a statement for the host, not WIT for a binding
   generator (it imports WASI with no `wit/deps/`). A program writes `path: []` with `inline`; the
   `build` skill (L11) says so.
+- **Found at L8: why a program with crates was not the same file on every system.** Programs
+  with no external crate matched on all five runners; `greet` and the shop did not, in versions
+  of the same size where functions stood in another order (`wasm-tools print`, runs 43543315033
+  and 43560066261). Cargo's `-C metadata` and `-C extra-filename` of a crate mix in those of its
+  build scripts and proc macros, built for the host and so holding its triple; rustc orders the
+  functions by the names they make. Fixed by `lengua-mcp` as the rustc wrapper (section 9).
 - **Open at L9: no TLS in the host.** Outgoing calls and the model server are plain HTTP/1.1 over
   TCP; `https` is refused (`HTTP-protocol-error`). TLS needs `rustls` and a crypto provider
   (`ring` or `aws-lc-rs`, both with C and assembly, not pure Rust), so a cloud model or service is

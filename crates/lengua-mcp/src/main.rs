@@ -9,6 +9,7 @@ mod native;
 mod runs;
 mod testing;
 mod worker;
+mod wrapper;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -758,6 +759,9 @@ fn write_wiki(root: &Path) -> ExitCode {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if std::env::var_os(wrapper::MARK).is_some() {
+        return wrapper::run(&args);
+    }
     if args == ["--version"] {
         println!("{VERSION}");
         return ExitCode::SUCCESS;

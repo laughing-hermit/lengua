@@ -8,9 +8,9 @@ used_by: [idea, ideas/notes]
 label: checked
 idea_sha256: d88c9e082f9fe5de466ed16e5809ced8dd971b93578c00333418ea180021b4f5
 source_sha256: 8d4941f268d0e0a9a2022546ea8ce5ca875f6ce2680b9a84c4c307ea7294ed6d
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T07:56:57Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T10:11:53Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T07:56:57Z }
+  - { by: process:lengua-check, at: 2026-11-14T10:11:53Z }
 title: summary
 status: draft
 ---

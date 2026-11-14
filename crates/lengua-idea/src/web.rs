@@ -614,7 +614,7 @@ fn package_json(title: &str, dependencies: &[(String, String)], desktop: bool) -
     }
     dev.sort();
     format!(
-        "{{\n  \"name\": {},\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"packageManager\": \"pnpm@{PNPM}\",\n  \"dependencies\": {},\n  \"devDependencies\": {}\n}}\n",
+        "{{\n  \"name\": {},\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"packageManager\": \"pnpm@{PNPM}\",\n  \"browserslist\": [\"chrome 111\", \"edge 111\", \"firefox 128\", \"safari 16.4\"],\n  \"dependencies\": {},\n  \"devDependencies\": {}\n}}\n",
         quoted(&format!("{title}-web")),
         json_object(dependencies),
         json_object(&dev)
