@@ -1,3 +1,9 @@
+---
+type: lengua Overview
+title: lengua
+description: "What lengua 3 is, and where its design, its plan, its plugin and its runner are."
+---
+
 # lengua
 
 lengua 3 is an AI language. A person writes what they want. The agent writes an idea file, the

@@ -1,3 +1,9 @@
+---
+type: lengua Design
+title: lengua 3
+description: "The design of lengua 3, the source that every milestone is built from."
+---
+
 # lengua 3
 
 The design of lengua 3: a fresh start, in which the agent writes Rust, Rust is compiled to
@@ -352,18 +358,45 @@ there, it opens with `---` on line 1 and closes with `---`; each line between is
 space or `-`), a blank line or a `#` comment. A key may be there one time only.
 
 - **lengua writes these keys**, and overwrites any value the agent gave them: `type`
-  (`lengua Program`, `lengua Module` or `lengua Screen`), `description` (the first sentence of
+  (`lengua Program`, `lengua Server` or `lengua Library` for the top idea, by its shape, since
+  L7; `lengua Module` or `lengua Screen`; a component page, not an idea, is `lengua Component`,
+  since L9), `description` (the first sentence of
   `# Purpose`), `module` (`main` for the top idea), `source` (`src/main.rs`, `src/<name>.rs`,
   `src/ui/<name>.rs`), `uses` and `used_by` (OKF concept ids, the file without `.md`: `idea`,
-  `ideas/cart`, `ideas/ui/basket`), `label` (`unchecked`, `tested` or `checked`, section 6;
+  `ideas/cart`, `ideas/ui/basket`; since L9 a library's id too, its folder and `/idea`:
+  `../../libraries/json/idea`), `label` (`unchecked`, `tested` or `checked`, section 6;
   since L5 the program's label, on every idea of it),
   `idea_sha256` (the SHA-256 of the idea's text after the frontmatter, blank lines at its
-  start left out) and `source_sha256` (of the Rust file, or `none`); on the top idea only,
+  start and the `# Links` section left out, the text ending with one line end) and
+  `source_sha256` (of the Rust file, or `none`); on the top idea only,
   `cargo_sha256` and `world_sha256`, the SHA-256 of the `Cargo.toml` and `wit/world.wit` that
-  check wrote (since L2, see "The generated files" below).
+  check wrote (since L2, see "The generated files" below); since L9, OKF's trust fields
+  `generated` (`{ by: lengua-mcp/<version>, at: <time> }`) and `verified` (below).
 - **The agent may write any other key**, and lengua keeps it byte for byte: OKF's `title`,
-  `tags`, `status`, `sources`, `generated`, `verified`, `stale_after`, `resource`, or a key of
-  its own. lengua does not check their values.
+  `tags`, `status`, `sources`, `stale_after`, `resource`, or a key of its own. Since L9 lengua
+  writes `title` (the folder's name for the top idea, the module's name for the others) and
+  `status: draft` when they are absent, after the agent's keys, and from then on keeps them as
+  the agent's. It checks the values OKF defines (OKF sections 5 and 7): `status` is `draft` or
+  `deprecated` (`stable` only after the person's approval, L11; `okf-status` otherwise);
+  `stale_after`, and each `at` and `last_modified`, an ISO 8601 time with its offset
+  (`okf-time`); each `by` and each source's `author` an OKF actor, `human:<id>`,
+  `process:<id>` or `<producer>/<version>` (`okf-actor`); each source has a `resource`
+  (`okf-sources`); `verified` is a `{ by, at }` mapping or a list of them (`okf-trust`).
+- **`verified`** (since L9) keeps the entries of other actors (a person's, at L11) and holds
+  one entry of lengua's own, `{ by: process:lengua-check, at: <time> }`, while the label is
+  `checked` or `tested`: the time of the first check that confirmed the files as they are.
+  When the label goes back to `unchecked`, lengua's entry is removed.
+- **The times.** `generated.at` and lengua's `verified` `at` change only when the page's text
+  changes; a check that changes nothing keeps them, so a page is not rewritten for nothing.
+  Every time is UTC, `YYYY-MM-DDTHH:MM:SSZ`.
+
+**`# Links`** (since L9) is the last section of every idea, and `check` writes it: real
+markdown links, relative to the page, to the ideas and libraries the idea uses (`* Uses:`),
+the ideas that use it (`* Used by:`), on the top idea the component pages
+(`* Components:`), `vision.md` when the folder has one (`* Vision:`), and the folder's
+`index.md` (`* Index:`). It is not part of the idea: the grammar below never sees it, and the
+idea's hash leaves it out, as it leaves out the frontmatter. A `# Links` that is not the last
+section is `section-unknown`.
 
 **The sections** are level-1 headings, in this order, each one time: `# Purpose`,
 `# Behaviours`, `# Constraints`, `# Structure`. Every idea has Purpose, Behaviours and
@@ -372,7 +405,13 @@ blank lines come before `# Purpose`. A heading inside a fenced block is not a se
 
 **`# Purpose`**: one paragraph or more of description in STE, with no headings and no fenced
 blocks. A list item (`- ` or `* `) counts as its own paragraph. Its first sentence is the
-idea's `description` in the frontmatter and in `index.md`.
+idea's `description` in the frontmatter and in `index.md`. Since L9, a name in backticks that
+is a module of the program or a lengua library must be one the idea lists
+(`purpose-unlisted`): the top idea lists its modules in `- Modules:`, a module the modules it
+uses in `- Uses:`, and a library is listed in the top idea's `- Uses:`. The libraries known are
+those the top idea uses and the folders of every `libraries/` folder above the program's folder;
+a library's own idea may name other libraries, since it can't use them. The check is
+conservative: a name in plain words is not held.
 
 **`# Behaviours`**: one behaviour or more. Each is:
 
@@ -1007,7 +1046,7 @@ with ``- Uses: `<path>/libraries/<name>` ``; the `build` skill (L9) will point t
 The lock is what keeps every document current. `lengua.lock` holds, signed together with an
 HMAC under the user's key, the hashes of:
 - every idea, the top one and each module's and screen's;
-- `index.md` and `log.md`;
+- `index.md` and `log.md`, and the component pages (since L9);
 - every file in `src/` and the generated files;
 - `Cargo.lock`, which pins every dependency by checksum, and the toolchain's version;
 - both compiled parts and the one file.
@@ -1076,6 +1115,7 @@ hmac-sha256 2c5d…
 - Each `file`, `component` and `sealed` line is a tag, the SHA-256 of the file in lowercase
   hexadecimal, and its path relative to the folder with `/` between names. The files are every
   idea (`idea.md`, then `ideas/*.md` and `ideas/ui/*.md`, each sorted), `index.md`, `log.md`,
+  the component pages (`components/*.md`, sorted, since L9),
   every file under `src/` (sorted), the generated `Cargo.toml` and `wit/world.wit`, and
   `Cargo.lock` when the folder has one (Cargo writes it at the first build). Then the
   component that `cargo build` made, and the sealed precompiled code (a library, L7, has no
@@ -1100,9 +1140,12 @@ key), so a library whose files changed after its check refuses the program at `c
 **When `check` writes it.** In the same `check` call as the wiki, right after it, and only
 when the build job is `done` for the same key (the label in the wiki and in the lock is the one
 of that job). A check whose job is `building`, `testing`, `mutating`, `build_failed` or
-`tests_failed` writes no lock, and the lock that was there (if any) no longer matches the
-log, which every check writes, so `run` refuses until a check is `done` again. Since every
-check adds a log entry, every `done` check writes the lock again.
+`tests_failed` writes no lock. Until L9 every check added a log entry, so the lock that was
+there no longer matched; since L9 a check that changes nothing writes nothing ("The wiki's
+formats"), and the lock that was there still matches only when every idea, code file,
+generated file and wiki file is exactly as it signed them: a changed file, or a job that ends
+`build_failed` or `tests_failed` (the label goes to `unchecked` in the wiki), makes `run`
+refuse until a check is `done` again. Every `done` check writes the lock again.
 
 **Sealed precompiled code.** When the build ends and the component checks pass, the job
 precompiles the component for this computer (`Component::serialize` of the component lengua's
@@ -1175,12 +1218,14 @@ An application's ideas form a wiki, as in Karpathy's LLM wiki, and `check` keeps
 
 - **Every idea is a wiki page** with Open Knowledge Format frontmatter: the top `idea.md` and
   each `ideas/<module>.md`. The frontmatter gives its kind, its module, links to the ideas it
-  uses and the ideas that use it, its trust label, and the hash of its Rust file. `check`
-  writes the frontmatter; the agent doesn't.
-- **`index.md`** has one line per idea and module, with its purpose and its label. It is the
-  map an agent, or a person, reads to find the right page before reading any code.
-- **`log.md`** is append-only. Each check adds one entry: the date, which ideas and which Rust
-  files changed, their new hashes, the result and the label. When an entry shows a Rust file
+  uses and the ideas that use it, its trust label, OKF's trust fields and the hash of its Rust
+  file; its `# Links` section links the same pages as markdown links (since L9). `check`
+  writes the frontmatter and the links; the agent doesn't.
+- **`index.md`** has one line per idea and module, with its purpose and its label, and the
+  libraries, the component pages and the crate count. It is the map an agent, or a person,
+  reads to find the right page before reading any code.
+- **`log.md`** is append-only. Each check that changes a file adds one entry: the date, which
+  ideas and which Rust files changed, their new hashes, the result and the label. When an entry shows a Rust file
   changed with no change to its idea, or an idea changed with no change to its code, `check`'s
   reply says so.
 
@@ -1193,15 +1238,26 @@ Three things stop the documentation drifting from the code:
 
 #### The wiki's formats
 
-Decided at L1 (2026-11-13). The folder is an OKF v0.2 bundle: every idea is a concept, and
-`index.md` and `log.md` at the folder's root are OKF's reserved files (OKF sections 8 and 9).
+Decided at L1 (2026-11-13), and completed at L9 for OKF's trust fields and the LLM wiki's
+links. The folder is an OKF v0.2 bundle: every idea is a concept, and `index.md` and `log.md` at
+the folder's root are OKF's reserved files (OKF sections 8 and 9).
 
 - **When `check` writes it:** only when the check finds no problems, in the same step for all
-  three (the frontmatter of every idea, `index.md`, `log.md`), so the wiki never shows a state
-  the checks refused. A file whose text did not change is not written again. At L6 the lock is
-  written in the same step.
+  of it (the frontmatter and links of every idea, the component pages, `index.md`, `log.md`),
+  so the wiki never shows a state the checks refused. A file whose text did not change is not
+  written again, and a check that would change no file writes nothing, not even a log entry
+  (since L9). At L6 the lock is written in the same step.
+- **The label while the job runs** (since L9). A check whose job has no result yet (`building`,
+  `testing`, `mutating`, or no code) writes the label the wiki already has when that leaves
+  every file as it is: the same ideas, code and generated files keep the label they were
+  checked to, so a new session or a new clone does not write `unchecked` and then `checked`
+  again. When anything changed, the label is `unchecked` until the job ends. A job that ends
+  `build_failed` or `tests_failed` writes `unchecked`, and `done` writes its label. The job's
+  inputs count an example's line from the start of its idea's text, not of the file, so the
+  lines `verified` adds to the frontmatter do not start the job again.
 - **The frontmatter** of each idea: the keys lengua writes come first, in the order of "The
-  idea file's grammar", then the agent's keys as they were. An example:
+  idea file's grammar", then the agent's keys as they were, then `title` and `status` when
+  they were absent. An example:
 
   ```
   ---
@@ -1211,18 +1267,58 @@ Decided at L1 (2026-11-13). The folder is an OKF v0.2 bundle: every idea is a co
   source: src/words.rs
   uses: []
   used_by: [idea, ideas/ui/summary]
-  label: unchecked
+  label: checked
   idea_sha256: 3b0f…
-  source_sha256: none
-  title: Words
+  source_sha256: 9c1e…
+  generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T14:02:11Z }
+  verified:
+    - { by: process:lengua-check, at: 2026-11-13T14:02:11Z }
+  title: words
+  status: draft
   ---
   ```
 
-- **`index.md`** is written new by every check. It has `okf_version: "0.2"` as its only
-  frontmatter (OKF allows this key in the root index), then up to three sections, `# Program`,
-  `# Modules` and `# Screens`, with one line per idea: ``* [<title>](<file>) - <description>
-  Label: `<label>`.`` The program's title is the folder's name; a module's or a screen's is its
-  name.
+- **`# Links`**, at the end of each idea (since L9, "The idea file's grammar"). For the module
+  above:
+
+  ```
+  # Links
+
+  * Used by: [tally](../idea.md), [ui/summary](ui/summary.md).
+  * Index: [tally](../index.md).
+  ```
+
+- **Component pages** (since L9). Each component from another language has a concept page,
+  `components/<the file's name without .wasm>.md`: `type: lengua Component`, a `description`
+  ("A component built from …"), `resource` (the `.wasm` file, from the folder's root, `/components/tax.wasm`),
+  `label: trusted`, `generated`, `title` and `status`, a short body that says lengua did not
+  build it or check its code, and its `# Links` (used by the top idea, the index). The index
+  and the top idea link to the page, not to the `.wasm` file. The pages are in the lock.
+- **`index.md`** is written new by every check that writes. It has `okf_version: "0.2"` as its only
+  frontmatter (OKF allows this key in a bundle's root index), then the sections that have lines:
+  `# Program`, `# Modules` and `# Screens`, with one line per idea,
+  ``* [<title>](<file>) - <description> Label: `<label>`.``; `# Libraries`, one line per lengua library with its own
+  label; `# Components`, one line per component page, label `trusted`; and `# Crates` (since
+  L9), the crate count of section 4, "Crates": the crates the ideas declare, the crates they
+  bring in (the external packages of the folder's `Cargo.lock`, so "not known until the first
+  build" before it), which of them have `unsafe` in their Rust code (the word, outside line
+  comments, in their sources in Cargo's folder), which are not pure Rust (a `links` key with a build script that links a native library, or
+  `cc`, `cmake`, `pkg-config`, `bindgen` or `vcpkg` among their build dependencies), and any
+  whose source lengua could not read. The count is kept in `target/lengua/crates.txt` under the
+  `Cargo.lock`'s SHA-256 once every source was read (before the first build ends, Cargo has
+  not downloaded them all; run 43519544263 kept a count made too early). An idea's title is its
+  `title` (above).
+- **Every page in the folder is a concept** (since L9): each `.md` file of the folder other than
+  `index.md` and `log.md` (the ideas, the component pages, and any page the agent adds, such
+  as `vision.md` at L11) has frontmatter with a non-empty `type` (`okf-type` otherwise), and
+  its OKF values are checked as an idea's are. `target/`, hidden folders and a folder with an
+  `idea.md` of its own are not part of the folder.
+- **Secrets** (the rule for L9's secrets grant, written now because there is no grant of a
+  secret yet, so there is nothing to test). A secret's value is given by the host at run time
+  and never read by `check`: it is never written to the frontmatter, `index.md`, `log.md`, a
+  component page, the lock or a reply. The idea names a secret, never its value. When the grant
+  is built, a test gives a secret whose value is a marked string and asserts that no file
+  `check` or `run` writes, and no reply, holds it.
 - **`log.md`** starts with `# Log`. OKF orders a log newest first, under `## YYYY-MM-DD`
   headings, so a check puts its entry at the top of today's heading, or adds today's heading
   above the older ones. "Append-only" means that no entry already there is changed or removed.
@@ -1236,11 +1332,53 @@ Decided at L1 (2026-11-13). The folder is an OKF v0.2 bundle: every idea is a co
   ```
 
   An idea or a code file is *new* when the frontmatter had no hash for it, *changed* when the
-  hash differs, and *removed* when its code file is gone. A check that changed nothing ends
-  its first line with `; nothing changed`. Each *Note* is also in the reply's `notes`. Since L5
-  the label is the program's (section 6), and when it is `checked` or `tested` the first line
-  also has the score: ``label `checked`, mutation score 6 of 6 (100%)``, or ``label `checked`, no
-  mutant counted``.
+  hash differs, and *removed* when its code file is gone. A check that changes only the label
+  or the index has an entry with its first line only. Each *Note* is also in the reply's
+  `notes`. Since L5 the label is the program's (section 6), and when it is `checked` or
+  `tested` the first line also has the score: ``label `checked`, mutation score 6 of 6
+  (100%)``, or ``label `checked`, no mutant counted``.
+
+#### One wiki across the repository
+
+Decided at L9 for L13's part (2026-11-13). The repository is an OKF bundle whose folders under
+`libraries/` and `examples/` are bundles of their own, each with its root `index.md`:
+
+- **Committed:** the frontmatter and `# Links` of every idea, the component pages, `index.md`
+  and `log.md` of each folder in `libraries/` and `examples/`, as `check` wrote them on a
+  runner, never by hand. Not committed: `lengua.lock` (signed with one user's key),
+  `Cargo.toml`, `wit/`, `Cargo.lock` and `target/`.
+- **Written on a runner:** the CI mode `wiki` (`gh workflow run ci.yml -f mode=wiki -f
+  targets=linux-x86_64`) runs the ignored test `crates/lengua-mcp/tests/wiki.rs`, which calls
+  `check` on every library and then every example, in place, until each job ends, then runs
+  `lengua-mcp wiki <repository>`; the files are its artifact `wiki-<run>-linux-x86_64`, which
+  is downloaded and committed.
+- **The root indexes:** `lengua-mcp wiki <root>` writes them from the folders' frontmatter, so
+  `check` stays about one folder: the repository's `index.md` (`okf_version: "0.2"`; `#
+  Documents`, the pages at the root; `# Folders`, `libraries/` and `examples/` with their
+  counts) and one `index.md` per folder of lengua folders (`# Programs`, `# Servers`,
+  `# Libraries`), a line per folder with its description and label, linking to its
+  `index.md`. Then it prints every finding of the tree, below, and fails when there is one.
+- **Who uses a library.** A library learns its users without its own files changing: `used_by`
+  is never written into a library's frontmatter, which is in its lock, so a new user does not
+  make every library's lock stale. The program's top idea has the library in `uses` and links
+  to it, and the folder index of `libraries/` says ``Used by: [shop](../examples/shop/index.md)``
+  from the programs' `uses`.
+- **The committed wiki stays as it is:** every test and every check of CI's mode `test` runs on
+  copies of the folders (`target/tmp`, the system's temporary folder), never on the committed
+  files, and a check that changes nothing writes nothing, so the committed `log.md` grows only
+  when the mode `wiki` runs after a change.
+- **The test of the tree** (`crates/lengua-idea/tests/wiki.rs`, every runner): every `.md` in
+  the repository but `index.md` and `log.md` has frontmatter with a non-empty `type` and valid
+  OKF values (OKF section 11); every `index.md` has only headings and list lines, and
+  frontmatter (`okf_version`) only at a bundle's root; every `log.md` has `## YYYY-MM-DD`
+  headings, newest first; every relative link, outside code, leads to a file or a folder; every
+  committed idea's `idea_sha256` and `source_sha256` are those of its files now
+  (`wiki-stale`: change an idea or its code, and dispatch the mode `wiki`); and the root
+  indexes are the ones `lengua-mcp wiki` writes. Not walked: hidden folders, `target/`, any
+  `fixtures/` folder (the tests' deliberately broken ideas) and a folder with a `SKILL.md`
+  (the plugin's skills follow the Agent Skills standard, whose frontmatter has no `type`). The
+  design documents (this file, `todo.md`, `README.md` and each crate's `README.md`) have a
+  `type` of their own: `lengua Design`, `lengua Plan`, `lengua Overview`, `lengua Crate`.
 
 ## 5. The Power of 10, for Rust compiled to WebAssembly
 
@@ -1525,22 +1663,33 @@ A review on 2026-11-13 against
 structure sound (concept ids, `index.md`, `log.md`) and these gaps. Each is part of the
 milestone named:
 
-- **L9, in `check`:**
-  - OKF's trust fields on every page: `generated` (by `lengua-mcp/<version>`, at), `verified` by
-    `process:lengua-check` on every passing check, and `status` (`draft` until approved);
-    agent-written values of these checked, not only kept.
-  - `title` written when absent, and used by `index.md`.
-  - A `# Links` section that `check` writes at the end of each idea, with real markdown links
-    (uses, used by, libraries, vision), kept out of the idea's hash like the frontmatter.
-  - Libraries in `uses`, with `used_by` written back; a concept page for each component
-    (`components/<name>.md`) in place of a link to a `.wasm` file.
-  - The crate count in `index.md`.
-  - A conformance pass: every `.md` in the folder other than `index.md` and `log.md` has
-    frontmatter with a `type`.
-  - No log entry when a check changes nothing.
-  - The type list in this document matches the code (`lengua Server`, `lengua Library` added).
-  - A finding when an idea's Purpose names a module or library its Constraints don't list.
-  - Secrets never written to the frontmatter, the index or the log.
+- **L9, in `check`:** all done ahead of L9, on 2026-11-13, on `wip/wiki` (the five-runner
+  landing run is named in the landing report); "The idea file's grammar" and "The wiki's formats"
+  say how each works.
+  - Done: OKF's trust fields on every page: `generated` (by `lengua-mcp/<version>`, at),
+    `verified` by `process:lengua-check` while the label is `checked` or `tested`, and `status`
+    (`draft` until approved); agent-written values of these checked, not only kept
+    (`okf-status`, `okf-time`, `okf-actor`, `okf-trust`, `okf-sources`).
+  - Done: `title` written when absent, and used by `index.md`.
+  - Done: a `# Links` section that `check` writes at the end of each idea, with real markdown
+    links (uses, used by, libraries, components, vision when it exists, the index), kept out of
+    the idea's hash like the frontmatter.
+  - Done: libraries in `uses`; `used_by` of a library written only in the root index of
+    `libraries/`, not in the library's own files (its lock would change with every new user);
+    a concept page for each component (`components/<name>.md`) in place of a link to a `.wasm`
+    file.
+  - Done: the crate count in `index.md`.
+  - Done: a conformance pass: every `.md` in the folder other than `index.md` and `log.md` has
+    frontmatter with a `type` (`okf-type`).
+  - Done: no log entry, and no file written, when a check changes nothing; a check whose job
+    has not ended keeps the label of the same files.
+  - Done: the type list in this document matches the code (`lengua Server`, `lengua Library`,
+    `lengua Component` added).
+  - Done: a finding when an idea's Purpose names a module or library its Constraints don't list
+    (`purpose-unlisted`, names in backticks only).
+  - Secrets never written to the frontmatter, the index or the log: the rule is written ("The
+    wiki's formats", "Secrets"); there is no grant of a secret yet, so its test comes with L9's
+    secrets grant.
 - **L10:** the "Where it runs" line first in `index.md`.
 - **L11, the query path and the person's part:**
   - `vision.md` as an OKF page (`type: lengua Vision`), first in `index.md`, quoting the
@@ -1552,12 +1701,17 @@ milestone named:
   - `check` holds the ideas to `vision.md` and says when they grow past it.
   - The idea grammar ships in the skill's references, so an agent needs nothing outside the
     plugin.
-- **L13, one wiki across the repository:**
-  - The generated frontmatter, `index.md` and `log.md` of `libraries/*` and `examples/*`
-    committed (not the per-user lock), so the shared libraries are a browsable wiki.
-  - Root `index.md` files for the repository, `libraries/` and `examples/`.
-  - A CI test that checks the whole tree against OKF.
-  - A decision on OKF's Attested Computation, which fits a locked program.
+- **L13, one wiki across the repository:** done ahead of L13, on 2026-11-13 (the five-runner
+  landing run is named in the landing report), as "One wiki across the repository" says.
+  - Done: the generated frontmatter, `# Links`, component pages, `index.md` and `log.md` of
+    `libraries/*` and `examples/*` committed from the CI mode `wiki` (run 43522428412), not the
+    per-user lock, so the shared libraries are a browsable wiki.
+  - Done: root `index.md` files for the repository, `libraries/` and `examples/`, written by
+    `lengua-mcp wiki <root>`.
+  - Done: a CI test that checks the whole tree against OKF (section 11), its links, and that
+    the committed wiki is current.
+  - A decision on OKF's Attested Computation, which fits a locked program: a recommendation is
+    in section 10; the decision stays with L13.
 
 ## 9. How the work is done
 
@@ -1875,6 +2029,30 @@ Decided for lengua 3 at L8 (2026-11-13), the parts that do not depend on the fro
     43508359575): the front end built, `wasm-bindgen` ran and the one file was made; the screens'
     tests, their mutants, the serving by `lengua-run` and the browser test never passed before
     the change of direction.
+
+- **Recommended on 2026-11-13, for L13 to decide: OKF's Attested Computation (OKF section 10).**
+  A checked lengua program is close to what OKF calls an Attested Computation: the idea is the
+  contract, the behaviours say what the computation does, the grants are the only inputs it can
+  reach, and the lock with its sealed code makes "did the sanctioned code run" a comparison of
+  hashes, not a judgement. The recommendation:
+  - Not to make the ideas themselves Attested Computations. An idea describes a program; it is
+    an OKF concept of its own type, as it is now.
+  - At L13, `check` writes one more page for a program that is `checked`, `attestation.md`,
+    `type: Attested Computation`: `runtime: lengua` (a WASI 0.2 component run by `lengua-run`),
+    `parameters` from the grants (`arguments` and `standard input` as strings, a server's
+    request), `computation` naming the component file, `executor` naming `lengua-run` with a
+    `receipt` of the component's SHA-256, the lock's SHA-256, the SHA-256 of the input, the
+    exit code and the SHA-256 of the output, and an `attester` that is lengua's own code with no
+    model in it: it checks the receipt's hashes against the lock and, as the run is
+    deterministic under the fixed clock and seed, can run the sealed code again and compare.
+  - Two things to wait for first. The lock is signed with an HMAC under the user's key, so it
+    proves a check only to that user; a receipt for others needs a public-key signature
+    (Ed25519, written on the standard library and tested with RFC 8032's vectors). And OKF v0.2
+    leaves the receipt and verdict formats and the attester's interface to a later version
+    (OKF section 12, "Considered and deferred"); lengua should follow them when they come
+    rather than invent its own.
+  - Until then, `verified` by `process:lengua-check` is the machine-confirmed tier OKF already
+    defines (OKF section 5.3), and it is on every checked page.
 
 ## Sources
 

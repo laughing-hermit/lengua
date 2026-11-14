@@ -1,3 +1,22 @@
+---
+type: lengua Program
+description: "The program adds prices."
+module: main
+source: src/main.rs
+uses: [../../libraries/decimal/idea]
+used_by: []
+label: checked
+idea_sha256: 533383b537de9fd9aa7e74be93491ce9429865cff250d980e7561549ad3d885c
+source_sha256: 6e982c49a2d135f377bf9cecf664977415042b03ad8092e7112b6be0743733a1
+cargo_sha256: bd9f215f334dceae8b36bf451135766efb2f2fd09a1b4147d15c73d4f69cc455
+world_sha256: 0a7313a3dd0aa5c41e90b244f039886104d47ce35544350dbfa738da23ba0d2c
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:02:15Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:02:15Z }
+title: prices
+status: draft
+---
+
 # Purpose
 
 The program adds prices. It reads one price a line from the standard input, with two places
@@ -54,3 +73,8 @@ Then it writes 0.00 and a line end.
 
 - `main`: reads the prices and writes their sum, or the error.
 - `total`: adds the prices of the lines of a text.
+
+# Links
+
+* Uses: [decimal](../../libraries/decimal/idea.md).
+* Index: [prices](index.md).

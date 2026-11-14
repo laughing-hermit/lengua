@@ -1,3 +1,20 @@
+---
+type: lengua Module
+description: "The module counts the lines of a text."
+module: lines
+source: src/lines.rs
+uses: []
+used_by: [idea]
+label: checked
+idea_sha256: b0c04c3aa0476d6bfd9d7010c7fab9d9b6cd2a26f00d73eadb90c3866b72c409
+source_sha256: 03ba8a5f304d1e933b2e97d3f275206bd05235eefb61d340902beed321e85673
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:03:20Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:03:20Z }
+title: lines
+status: draft
+---
+
 # Purpose
 
 The module counts the lines of a text. A line ends with a line end, and the last line can have
@@ -20,3 +37,8 @@ Then it writes 2 as the number of lines.
 # Structure
 
 - `count_lines`: gives the number of lines in a text.
+
+# Links
+
+* Used by: [tally](../idea.md).
+* Index: [tally](../index.md).

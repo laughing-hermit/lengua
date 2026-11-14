@@ -1,3 +1,22 @@
+---
+type: lengua Program
+description: "The program counts the words in a text."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: tested
+idea_sha256: 68a7bd92c70d162a0d669ada394268f49178cc0137c512e0d1a59949d8906d95
+source_sha256: 08db60f2d9b371b1c75d55e6986cfa343507be161898a9750bd9b743a09260d4
+cargo_sha256: 86de503ccc0d8a3ad0eb8c6d756dc9395f1cd2e3c214a3a88c38745bb54f388e
+world_sha256: 0a7313a3dd0aa5c41e90b244f039886104d47ce35544350dbfa738da23ba0d2c
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:01:27Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:01:27Z }
+title: count
+status: draft
+---
+
 # Purpose
 
 The program counts the words in a text. It reads the text from the standard input. It
@@ -38,3 +57,7 @@ Then it writes 0 and a line end to the standard output.
 # Structure
 
 - `main`: reads the standard input and writes the number of words.
+
+# Links
+
+* Index: [count](index.md).

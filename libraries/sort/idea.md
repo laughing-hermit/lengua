@@ -1,3 +1,22 @@
+---
+type: lengua Library
+description: "The library sorts a list in a stable order and finds a value in a sorted list."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: checked
+idea_sha256: 17a8a55af09597c2cf54343836d105967ac17d979bb8b4a28e269625042524d4
+source_sha256: 94a201e3431aa54bdfef66570ac9972e1fa9c95b9a594c6d41657c3146303bea
+cargo_sha256: e83072e9d240df5b619d3feedab9c8cfa79d88bfbf123ec4f537e627486787ac
+world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:00:37Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:00:37Z }
+title: sort
+status: draft
+---
+
 # Purpose
 
 The library sorts a list in a stable order and finds a value in a sorted list. A stable sort
@@ -105,3 +124,7 @@ Then it gives the position of the first of the two.
 - `merge`: adds two sorted runs to a list in one sorted run, and takes the left item when the
   keys are equal.
 - `binary_search`: gives the position of the first item that is equal to the value, or nothing.
+
+# Links
+
+* Index: [sort](index.md).

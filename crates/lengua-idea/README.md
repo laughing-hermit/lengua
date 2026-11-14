@@ -1,3 +1,9 @@
+---
+type: lengua Crate
+title: lengua-idea
+description: "The reader and checker of idea files, which also writes the generated files, the wiki and the lock."
+---
+
 # lengua-idea
 
 ## Purpose

@@ -1,3 +1,22 @@
+---
+type: lengua Library
+description: "The library reads and writes the messages of HTTP / 1.1, as RFC 9112 gives them."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: checked
+idea_sha256: 831ca8a9e89d7e2dd8922bb4822c50598280d90e8d3530f6c22db1a3949d39c3
+source_sha256: 21dd14779e5006b4ca78eb5ec14033f8aaec90d2e4dc9176be7ee0cc4cdc00be
+cargo_sha256: a3bf7d6d1451d1966e988f6b934131778b48f1856b6d3f0c26c6026738355ce9
+world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T22:58:03Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T22:58:03Z }
+title: http
+status: draft
+---
+
 # Purpose
 
 The library reads and writes the messages of HTTP/1.1, as RFC 9112 gives them. A message is a
@@ -241,3 +260,7 @@ Then the chunks have their sizes in hexadecimal digits, and the read gives the b
 - `write_response`: writes an answer.
 - `decode_chunked`: reads a body in chunks, and gives the body and the number of bytes it used.
 - `encode_chunked`: writes a body in chunks of a size, with a size of 1 or more.
+
+# Links
+
+* Index: [http](index.md).

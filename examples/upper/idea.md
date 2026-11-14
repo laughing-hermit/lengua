@@ -1,3 +1,22 @@
+---
+type: lengua Program
+description: "The program waits for one client on a TCP port and answers it."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: checked
+idea_sha256: dc33d9eacf4ef8ac20589cfaafbfd750d7f9a78259b8608fa3b8b7c38259a8b9
+source_sha256: 77678618da86c5b558cf95993acfe42473727eeebb547890cf73b97282375c12
+cargo_sha256: 3d38848280955e917acc905427f1c3127d6c5bd85beb4899416375349b2a781d
+world_sha256: c6f394502f55f9393f5efe11d08200f37d69d3dfdb32354fbbe65fa901a6b07f
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:03:35Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:03:35Z }
+title: upper
+status: draft
+---
+
 # Purpose
 
 The program waits for one client on a TCP port and answers it. It reads the port from its first
@@ -44,3 +63,7 @@ Then the host refuses the port, and the program writes `refused`.
 - `main`: reads the port, answers one client on it, or writes `refused`.
 - `answer_one`: listens on a port, reads the text of one client and sends it back in upper
   case, or gives nothing when the host refuses.
+
+# Links
+
+* Index: [upper](index.md).

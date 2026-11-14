@@ -1,3 +1,22 @@
+---
+type: lengua Library
+description: "The library reads and writes JSON text, as RFC 8259 gives it, with a value type of its own."
+module: main
+source: src/main.rs
+uses: [ideas/read, ideas/write]
+used_by: []
+label: checked
+idea_sha256: 6b21f83390618f5c3257843ed5c5f188f47ab3fe17dbfe427fb408fd0a681491
+source_sha256: 85fd1f1c20905b9ed5895291775b46eab3b1fd3636befdca1bc28c744ad6a637
+cargo_sha256: 5ef3ef8a7df65842f2a9e661ae55ad8cb2109c861f1fa9a565aab76a3786573f
+world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T22:59:44Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T22:59:44Z }
+title: json
+status: draft
+---
+
 # Purpose
 
 The library reads and writes JSON text, as RFC 8259 gives it, with a value type of its own. A
@@ -38,3 +57,8 @@ Then it gives the value of the field.
 # Structure
 
 - `get`: gives the value of a field of an object, or nothing.
+
+# Links
+
+* Uses: [read](ideas/read.md), [write](ideas/write.md).
+* Index: [json](index.md).

@@ -1,3 +1,20 @@
+---
+type: lengua Module
+description: "The module reads JSON text into a value."
+module: read
+source: src/read.rs
+uses: []
+used_by: [idea]
+label: checked
+idea_sha256: 134bbdcd4d5c5c7a9d84674c7a1293318a7226215554f522a9012ac1c9d5e26e
+source_sha256: 19dd9fd3c03d83630ebb94368c5213634aa3134c289fa5561036c38987758e63
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T22:59:44Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T22:59:44Z }
+title: read
+status: draft
+---
+
 # Purpose
 
 The module reads JSON text into a value. It cuts the text into tokens, and then it puts the
@@ -202,3 +219,8 @@ Then it gives the error and the position of the character where the text is wron
 - `place`: puts a value into the open list or object, or keeps it as the result.
 - `close`: closes the open list or object, and places it.
 - `assemble`: puts the tokens together into one value.
+
+# Links
+
+* Used by: [json](../idea.md).
+* Index: [json](../index.md).

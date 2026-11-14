@@ -1,3 +1,22 @@
+---
+type: lengua Program
+description: "The program counts the different words in a text."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: checked
+idea_sha256: 4f972326f63078e1219959f9da1589fad50eb4705013ec938075947ef1952ce4
+source_sha256: 3d8b6ede53e56abe4b10076078ca396f5e39044f501794609f160f3043cf0471
+cargo_sha256: 5b870ba55e62474a355b72175b357bbda0582940be31f0ce8515c8a6134bb01a
+world_sha256: 0a7313a3dd0aa5c41e90b244f039886104d47ce35544350dbfa738da23ba0d2c
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:03:38Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:03:38Z }
+title: words
+status: draft
+---
+
 # Purpose
 
 The program counts the different words in a text. It reads the text from the standard input.
@@ -40,3 +59,7 @@ Then it writes 0 and a line end to the standard output.
 # Structure
 
 - `main`: reads the standard input and writes the number of different words.
+
+# Links
+
+* Index: [words](index.md).

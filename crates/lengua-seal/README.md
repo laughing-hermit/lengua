@@ -1,3 +1,9 @@
+---
+type: lengua Crate
+title: lengua-seal
+description: "The one crate that loads sealed precompiled code, with lengua's one unsafe call."
+---
+
 # lengua-seal
 
 ## Purpose

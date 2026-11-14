@@ -1,3 +1,9 @@
+---
+type: lengua Crate
+title: lengua-host
+description: "The host that runs a lengua program's component on Wasmtime under exactly the grants of its idea."
+---
+
 # lengua-host
 
 ## Purpose

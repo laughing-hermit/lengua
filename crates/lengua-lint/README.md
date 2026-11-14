@@ -1,3 +1,9 @@
+---
+type: lengua Crate
+title: lengua-lint
+description: "The lint that holds a lengua program's Rust to the rules of the Power of 10."
+---
+
 # lengua-lint
 
 ## Purpose

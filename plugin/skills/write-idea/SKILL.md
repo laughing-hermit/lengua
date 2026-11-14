@@ -29,12 +29,15 @@ that the MCP tool `check` reports no problems. The full grammar is in `Lengua3.m
    ``- Uses: `cart` `` in its own `# Constraints`.
 4. Write every sentence in STE. See [the STE rules](references/ste.md).
 5. Do not write the frontmatter keys that lengua writes (`type`, `description`, `module`,
-   `source`, `uses`, `used_by`, `label`, `idea_sha256`, `source_sha256`). You may write OKF's
-   `title`, `tags` and `sources`; `check` keeps them.
+   `source`, `uses`, `used_by`, `label`, `idea_sha256`, `source_sha256`, `generated`,
+   `verified`). You may write OKF's `title`, `tags`, `sources` and `status` (`draft` or
+   `deprecated`; an idea becomes `stable` only when the person approves it); `check` keeps them
+   and checks their values.
 6. Call `check` with the folder's absolute path. It returns every problem at once, each with
    its file, line, code and message. Fix all of them, then call `check` again. Repeat until
    `ok` is true.
-7. Do not edit `index.md`, `log.md` or the frontmatter by hand; `check` writes them.
+7. Do not edit `index.md`, `log.md`, the frontmatter or the `# Links` section at the end of
+   each idea by hand; `check` writes them.
 
 ## A small idea
 

@@ -1,3 +1,9 @@
+---
+type: lengua Crate
+title: lengua-run
+description: "The lean runner, which runs a checked lengua program from a shell."
+---
+
 # lengua-run
 
 ## Purpose

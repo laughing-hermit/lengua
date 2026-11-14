@@ -1,3 +1,22 @@
+---
+type: lengua Program
+description: "The program sends `ping` to a server and writes the answer of the server."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: checked
+idea_sha256: 5039a50bf4e163fc3e0bb17c96bb7a34ebfa8ed4cdbf0691ea76ca22c512d462
+source_sha256: f4011392e20621e3e5599a4b12608184a42c2647437626dde3db8429e1dedf5c
+cargo_sha256: 21b8172c4970fc685e9dc87199e7ce13bcb1234ca105b37a49889d1dc97425ee
+world_sha256: c6f394502f55f9393f5efe11d08200f37d69d3dfdb32354fbbe65fa901a6b07f
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:01:40Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:01:40Z }
+title: fetch
+status: draft
+---
+
 # Purpose
 
 The program sends `ping` to a server and writes the answer of the server. It reads the address
@@ -45,3 +64,7 @@ Then the host refuses the connection, and the program writes `refused`.
 - `main`: reads the address, sends `ping` to it and writes the answer, or `refused`.
 - `fetch`: connects to an address, sends `ping` and gives the answer, or nothing when the
   connection fails.
+
+# Links
+
+* Index: [fetch](index.md).

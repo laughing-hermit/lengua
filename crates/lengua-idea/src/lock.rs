@@ -274,6 +274,25 @@ fn ideas(folder: &Path) -> Vec<String> {
     out
 }
 
+fn component_pages(folder: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(folder.join("components")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| {
+            Path::new(n)
+                .extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("md"))
+        })
+        .map(|n| format!("components/{n}"))
+        .collect();
+    names.sort();
+    names
+}
+
 fn sources(folder: &Path) -> Vec<String> {
     let mut found = Vec::new();
     generate::collect(folder, "src", &mut found);
@@ -287,6 +306,7 @@ pub fn program_files(folder: &Path) -> Vec<String> {
     let mut out = ideas(folder);
     out.push("index.md".to_string());
     out.push("log.md".to_string());
+    out.extend(component_pages(folder));
     out.extend(sources(folder));
     out.push("Cargo.toml".to_string());
     out.push("wit/world.wit".to_string());
