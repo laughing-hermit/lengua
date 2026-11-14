@@ -1,3 +1,9 @@
+---
+type: lengua Crate
+title: lengua-ts
+description: "The checks that hold the TypeScript of a lengua front end to the same rules as its Rust."
+---
+
 # lengua-ts
 
 ## Purpose
