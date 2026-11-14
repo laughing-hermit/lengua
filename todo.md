@@ -545,8 +545,10 @@ next starts (Lengua3.md, section 8).
   strips symbols, and `lengua-mcp` is the rustc wrapper of the build job: crates built for
   `wasm32` get a `-C metadata` and `-C extra-filename` of their own identity, since Cargo's mix in
   the host's triple through build scripts and proc macros and so reorder functions (runs
-  43543315033, 43560066261). CI's `same-bytes` holds every example; CI also builds `lengua-idea`
-  and `lengua-lint` for `wasm32-wasip2`.
+  43543315033, 43560066261). A front end's export is made the same too (pnpm's store names of one
+  length, Tailwind's sources, a `browserslist`, Next's segment file names; Lengua3.md section 9).
+  CI's `same-bytes` holds every example; CI also builds `lengua-idea` and `lengua-lint` for
+  `wasm32-wasip2`.
 - **2026-11-13, the LLM wiki and OKF fixed ahead of L9 and L13** (`wip/wiki`; Lengua3.md,
   section 8, "The LLM wiki and OKF, by milestone", and section 4, "The wiki's formats" and "One
   wiki across the repository"). The decisions taken:

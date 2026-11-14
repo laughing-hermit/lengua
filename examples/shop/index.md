@@ -4,13 +4,13 @@ okf_version: "0.2"
 
 # Back end: program
 
-* [shop](idea.md) - The program is the HTTP server of a small shop. Label: `unchecked`.
+* [shop](idea.md) - The program is the HTTP server of a small shop. Label: `checked`.
 
 # Back end: modules
 
-* [basket](ideas/basket.md) - The module reads a basket from the query of a request, as pairs of an item and a count, and gives its net sum. Label: `unchecked`.
-* [catalog](ideas/catalog.md) - The module holds the items of the shop and their prices in cents. Label: `unchecked`.
-* [pages](ideas/pages.md) - The module sends each path to its page, and writes the answers and the errors as JSON. Label: `unchecked`.
+* [basket](ideas/basket.md) - The module reads a basket from the query of a request, as pairs of an item and a count, and gives its net sum. Label: `checked`.
+* [catalog](ideas/catalog.md) - The module holds the items of the shop and their prices in cents. Label: `checked`.
+* [pages](ideas/pages.md) - The module sends each path to its page, and writes the answers and the errors as JSON. Label: `checked`.
 
 # Back end: libraries
 

@@ -8,12 +8,12 @@ used_by: []
 label: checked
 idea_sha256: 21d14e833a6203724731c682f621b90519a9f4eb96f4f6cf5526118c9a262df8
 source_sha256: 6749f59b9dcf23e799e9387e2ac6d03160ff9489971cf347d1872a40f04f858d
-cargo_sha256: 2c8c9f30d9917ef2802167edcac64c6c1c753dc96317cfd65e375e4a32db2579
+cargo_sha256: a71e617ef16a3533e8b7ccc811be90a821436cd6b0c75e52e9bc9f8971760d96
 world_sha256: 432ab60b895088c9bc0206a29ba4e132e6b86715dbabb9ceab8b2b6adf271f30
-web_sha256: ac9b16c6220121867f25fd73bcc0e0addc44d38fe3ad8f5d4d41d5ad38a464b6
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T07:56:57Z }
+web_sha256: 3c10a01c59ede2c82f1f315ee5d9a354e90bfc8d7bae13c065edeeefdcfb5a44
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T10:11:53Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T07:56:57Z }
+  - { by: process:lengua-check, at: 2026-11-14T10:11:53Z }
 title: notes
 status: draft
 ---

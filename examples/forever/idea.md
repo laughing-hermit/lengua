@@ -8,11 +8,11 @@ used_by: []
 label: tested
 idea_sha256: 35f052e24b702818e5f02f2f31c7692bdbfe466d72f0517dd8dd78ef71827537
 source_sha256: e31b5bf06e927b7cab213d51f5f126790abcc2ff6c99ae28d4cf25c007627617
-cargo_sha256: 2afa06e92e6bda7e6918a5167c2582912dc58229b8ecfe79dc8c6310f5e96266
+cargo_sha256: 2ed3e3c2ac69c8f4a0c9d2d11c2fd63dc54fe7818f84421912c5c0f73c1bb68c
 world_sha256: 0a7313a3dd0aa5c41e90b244f039886104d47ce35544350dbfa738da23ba0d2c
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T07:51:07Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T10:06:40Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T07:51:07Z }
+  - { by: process:lengua-check, at: 2026-11-14T10:06:40Z }
 title: forever
 status: draft
 ---

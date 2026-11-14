@@ -4,7 +4,7 @@ okf_version: "0.2"
 
 # Back end: program
 
-* [greet](idea.md) - The program is an HTTP server. Label: `unchecked`.
+* [greet](idea.md) - The program is an HTTP server. Label: `checked`.
 
 # Back end: crates
 

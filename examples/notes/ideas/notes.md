@@ -8,9 +8,9 @@ used_by: [idea, ideas/accounts, ideas/summary, ideas/ui/home, ideas/ui/login, id
 label: checked
 idea_sha256: 3f5bddf294d1f7259507c8c0a822d246be2f264b6288a0bfa292e5f40151696d
 source_sha256: 9ce5879a6258013dc4795624d8fa1baf387715a4807b2eb5a9e4915f1aaf31ee
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T07:56:57Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T10:11:53Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T07:56:57Z }
+  - { by: process:lengua-check, at: 2026-11-14T10:11:53Z }
 title: notes
 status: draft
 ---

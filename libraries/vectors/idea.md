@@ -8,11 +8,11 @@ used_by: []
 label: checked
 idea_sha256: 9d3bc26c1ee5e0bace3a9067d2198ea80b3eeb6a39294dc96271fabd932ebe18
 source_sha256: 73b6d3e80199c380b36b0e0d40eb661fc109e3924fb6dd2627e0dedc04929c45
-cargo_sha256: e74a3b6910203577513cee6b68bbaa624ba394806458dfeec5f1b04b810cdd5d
+cargo_sha256: ea71cc58f8a0095c38eeec84dc4245a43d2768c97fc90ddce611fb750a77342f
 world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T07:50:29Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T10:06:06Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T07:50:29Z }
+  - { by: process:lengua-check, at: 2026-11-14T10:06:06Z }
 title: vectors
 status: draft
 ---

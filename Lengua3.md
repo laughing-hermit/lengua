@@ -2386,7 +2386,14 @@ Decided for lengua 3 at L8 (2026-11-13):
   `-C extra-filename` from its own identity (name, crate types, edition, target, `--cfg`, extern
   names, version), and its outputs get Cargo's names back. Cargo's own values mix in the host's
   triple through build scripts and proc macros, and they order the functions rustc writes
-  (section 10). CI's job `same-bytes` holds every example's component to one SHA-256 on the
+  (section 10). A front end's export is the same on every system too: `pnpm-workspace.yaml` sets
+  `virtualStoreDirMaxLength: 60` (pnpm's default on Windows; 120 elsewhere), as Turbopack's module
+  ids hash the store's folder names; `globals.css` imports Tailwind with `source(none)` and scans
+  only the front's own folders; `package.json` has a `browserslist` (Chrome and Edge 111, Firefox
+  128, Safari 16.4) that keeps `oklch()` as written, not converted to `lab()` with digits that
+  differ by system; and `lengua-mcp` renames the segment files Next writes on Windows as
+  `__next.<page>/__PAGE__.txt` to Linux's `__next.<page>.__PAGE__.txt` (runs 43575965175,
+  43578946762). CI's job `same-bytes` holds every example's component to one SHA-256 on the
   five runners.
 - **CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2`**, and a failure fails the run.
 
