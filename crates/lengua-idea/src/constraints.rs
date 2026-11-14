@@ -3,11 +3,13 @@ use crate::idea::IdeaKind;
 use crate::ste::Dictionary;
 use crate::text::{Line, backticked, relative_path, snake, split_key, tokenize, upper_camel};
 
-const KEYS: &str = "`Reads`, `Writes`, `Connects to`, `Listens on`, `Serves`, `Memory`, `Time`, `Modules`, `Exports`, `Uses`, `Uses crate`, `Uses component`, `Uses package`, `Uses shadcn` and `Route`";
+const KEYS: &str = "`Reads`, `Writes`, `Connects to`, `Listens on`, `Serves`, `Asks`, `Calls`, `Memory`, `Time`, `Modules`, `Exports`, `Uses`, `Uses crate`, `Uses component`, `Uses package`, `Uses shadcn` and `Route`";
 const MAX_MEMORY: u64 = 4 << 30;
 const MAX_TIME_MS: u64 = 3_600_000;
 const RESERVED: [&str; 4] = ["main", "ui", "index", "log"];
-const TOP_ONLY: [&str; 12] = [
+const TOP_ONLY: [&str; 14] = [
+    "Asks",
+    "Calls",
     "Reads",
     "Writes",
     "Connects to",
@@ -32,6 +34,9 @@ pub(crate) enum Grant {
     Network,
     Listen,
     Http,
+    Ai,
+    Outgoing,
+    Secret,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,6 +64,9 @@ pub(crate) struct Constraints {
     pub packages: Vec<CrateUse>,
     pub shadcn: Vec<(String, usize)>,
     pub routes: Vec<(String, String, usize)>,
+    pub ai: Option<(u64, u64)>,
+    pub calls: Vec<String>,
+    pub secrets: Vec<String>,
 }
 
 pub(crate) const SHADCN: [&str; 5] = ["button", "card", "input", "label", "textarea"];
@@ -150,6 +158,7 @@ fn reads(value: &str) -> bool {
         value,
         "standard input" | "arguments" | "the clock" | "random numbers"
     ) || files_in(value)
+        || secret(value).is_some()
 }
 
 fn files_in(value: &str) -> bool {
@@ -173,6 +182,28 @@ fn host_port(value: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
     host_ok && port.parse::<u16>().is_ok_and(|p| p > 0)
+}
+
+fn secret(value: &str) -> Option<String> {
+    let name = value.strip_prefix("the secret ").and_then(backticked)?;
+    let good = name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    good.then(|| name.to_string())
+}
+
+fn asks(value: &str, line: usize, dictionary: &Dictionary, sink: &mut Sink) -> Option<(u64, u64)> {
+    let rest = value.strip_prefix("an AI model, for ")?;
+    let (reason, limits) = rest.rsplit_once(", up to ")?;
+    let mut tokens = Vec::new();
+    tokenize(reason, line, &mut tokens);
+    dictionary.words(&tokens, sink);
+    let (calls, tokens_text) = limits.split_once(" calls and ")?;
+    let tokens_count = tokens_text.strip_suffix(" tokens")?;
+    let calls = calls.trim().parse::<u64>().ok().filter(|n| *n > 0)?;
+    let most = tokens_count.trim().parse::<u64>().ok().filter(|n| *n > 0)?;
+    (!reason.trim().is_empty()).then_some((calls, most))
 }
 
 fn tcp_port(value: &str) -> Option<u16> {
@@ -373,6 +404,17 @@ impl Reader<'_> {
                 }
                 (found.is_some(), "`HTTP on TCP port <number>`")
             }
+            "Calls" => {
+                let found = value
+                    .strip_prefix("HTTP at ")
+                    .filter(|v| host_port(v))
+                    .and_then(backticked);
+                if let Some(host) = found {
+                    self.out.grants.push(Grant::Outgoing);
+                    self.out.calls.push(host.to_string());
+                }
+                (found.is_some(), "``HTTP at `host:port` ``")
+            }
             "Exports" => {
                 let list = names(value);
                 let good = list
@@ -407,7 +449,7 @@ impl Reader<'_> {
                 }
                 (
                     good,
-                    "`standard input`, `arguments`, `the clock`, `random numbers` or ``files in `folder` ``",
+                    "`standard input`, `arguments`, `the clock`, `random numbers`, ``files in `folder` `` or ``the secret `NAME` ``",
                 )
             }
             "Writes" => {
@@ -439,6 +481,25 @@ impl Reader<'_> {
                     self.out.time_ms = ms;
                 }
                 (found.is_some(), "a number and `ms` or `s`, up to 3600 s")
+            }
+            "Asks" => {
+                let found = asks(value, line, self.dictionary, sink);
+                let again = found.is_some() && self.out.ai.is_some();
+                if again {
+                    sink.add(
+                        line,
+                        "constraint-duplicate",
+                        "the idea has two `- Asks:` lines".to_string(),
+                    );
+                }
+                if let Some(limits) = found {
+                    self.out.grants.push(Grant::Ai);
+                    self.out.ai = Some(limits);
+                }
+                (
+                    found.is_some(),
+                    "`an AI model, for <what>, up to <N> calls and <M> tokens`",
+                )
             }
             "Modules" | "Uses" => self.listed(key, value, line),
             "Uses crate" => {
@@ -543,6 +604,10 @@ impl Reader<'_> {
             "arguments" => Grant::Arguments,
             "the clock" => Grant::Clock,
             "random numbers" => Grant::Random,
+            _ if secret(value).is_some() => {
+                self.out.secrets.extend(secret(value));
+                Grant::Secret
+            }
             _ => {
                 if let Some(path) = folder(value) {
                     self.out.folders.push((path, false));
@@ -681,5 +746,22 @@ mod tests {
         assert!(!super::library_path("json"));
         assert!(!super::library_path("../.."));
         assert!(!super::library_path("c:/json"));
+    }
+
+    #[test]
+    fn model_outgoing_and_secret_lines_are_read() {
+        let text = "- Asks: an AI model, for a short summary, up to 3 calls and 2000 tokens\n- Calls: HTTP at `localhost:7813`\n- Reads: the secret `SESSION_KEY`\n- Memory: 16 MiB\n- Time: 2 s\n";
+        let (codes, out) = run(IdeaKind::Program, text);
+        assert_eq!(codes, Vec::<&str>::new());
+        assert_eq!(out.ai, Some((3, 2000)));
+        assert_eq!(out.calls, ["localhost:7813"]);
+        assert_eq!(out.secrets, ["SESSION_KEY"]);
+        assert_eq!(out.grants, [Grant::Ai, Grant::Outgoing, Grant::Secret]);
+        let bad = "- Asks: an AI model, for a summary\n- Asks: a person, up to 1 calls and 2 tokens\n- Calls: `localhost`\n- Reads: the secret `key`\n- Memory: 16 MiB\n- Time: 2 s\n";
+        let (codes, _) = run(IdeaKind::Program, bad);
+        assert_eq!(codes.len(), 4, "{codes:?}");
+        assert!(codes.iter().all(|c| *c == "constraint-value"), "{codes:?}");
+        let (module, _) = run(IdeaKind::Module, "- Calls: HTTP at `a:1`\n");
+        assert_eq!(module, ["constraint-not-here"]);
     }
 }

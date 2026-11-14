@@ -104,6 +104,12 @@ pub enum Reach {
     Random,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Ai {
+    pub calls: u64,
+    pub tokens: u64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Grants {
     pub reaches: Vec<Reach>,
@@ -113,6 +119,9 @@ pub struct Grants {
     pub server: Option<u16>,
     pub memory: u64,
     pub time_ms: u64,
+    pub ai: Option<Ai>,
+    pub calls: Vec<String>,
+    pub secrets: Vec<String>,
 }
 
 impl Grants {
@@ -252,6 +261,9 @@ fn grants(top: &constraints::Constraints) -> Grants {
         server: top.serves.map(|(port, _)| port),
         memory: top.memory,
         time_ms: top.time_ms,
+        ai: top.ai.map(|(calls, tokens)| Ai { calls, tokens }),
+        calls: top.calls.clone(),
+        secrets: top.secrets.clone(),
     }
 }
 
@@ -288,9 +300,6 @@ fn shape_rules(top: &constraints::Constraints, findings: &mut Vec<Finding>) {
         if !top.grants.is_empty() {
             reached.push("grants");
         }
-        if !top.libraries.is_empty() {
-            reached.push("lengua libraries");
-        }
         if !top.components.is_empty() {
             reached.push("components");
         }
@@ -314,6 +323,17 @@ fn shape_rules(top: &constraints::Constraints, findings: &mut Vec<Finding>) {
             "server-input",
             "a server gets requests, not a standard input or arguments; remove `- Reads: standard input` and `- Reads: arguments`".to_string(),
         ));
+    }
+}
+
+fn model_rules(tests: &[Test], asks: bool, findings: &mut Vec<Finding>) {
+    for test in tests.iter().filter(|t| t.model.is_some() && !asks) {
+        findings.push(Finding {
+            file: test.file.clone(),
+            line: test.line,
+            code: "example-model",
+            message: "`- Model answers:` gives the answer of an AI model, and the idea does not grant `- Asks: an AI model, for ...`".to_string(),
+        });
     }
 }
 
@@ -954,6 +974,7 @@ fn prepare(folder: &Path, lint: Option<WebLint>) -> Result<Prepared, Vec<Finding
     if program {
         shape_rules(&top, &mut findings);
         test_rules(&read.tests, shape, &mut findings);
+        model_rules(&read.tests, top.ai.is_some(), &mut findings);
         screen_rules(&read, shape, &mut findings);
     }
     if shape != Shape::Command {

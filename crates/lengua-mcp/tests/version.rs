@@ -20,6 +20,6 @@ fn other_arguments_print_the_usage() {
     assert_eq!(output.status.code(), Some(2));
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .starts_with("usage: lengua-mcp [--version | doctor | wiki <root>]")
+            .starts_with("usage: lengua-mcp [--version | doctor | check <folder> | wiki <root>]")
     );
 }

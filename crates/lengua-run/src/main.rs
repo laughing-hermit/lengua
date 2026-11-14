@@ -37,7 +37,7 @@ fn watch(limit: Duration) {
     });
 }
 
-fn run(folder: &Path, arguments: &[String]) -> ExitCode {
+fn run(folder: &Path, arguments: &[String], listen: Option<&str>) -> ExitCode {
     let key = match lock::user_key() {
         Ok(key) => key,
         Err(message) => return refuse(&message),
@@ -90,8 +90,9 @@ fn run(folder: &Path, arguments: &[String]) -> ExitCode {
         build: &build,
     };
     if let Some(port) = build.grants.server {
-        eprintln!("lengua-run: serving HTTP on 127.0.0.1:{port}");
-        return match host.serve(&program, port, false) {
+        let address = listen.map_or_else(|| format!("127.0.0.1:{port}"), str::to_string);
+        eprintln!("lengua-run: serving HTTP on {address}");
+        return match host.serve(&program, &address, false) {
             Ok(()) => ExitCode::SUCCESS,
             Err(message) => refuse(&message),
         };
@@ -104,6 +105,7 @@ fn run(folder: &Path, arguments: &[String]) -> ExitCode {
         stdin: Vec::new(),
         fixed: false,
         root: None,
+        model: None,
     };
     let outcome = host.run(&program, &input, Streams::Inherit);
     let _ = std::io::stdout().flush();
@@ -123,12 +125,21 @@ fn run(folder: &Path, arguments: &[String]) -> ExitCode {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some((first, rest)) = args.split_first() else {
-        eprintln!("usage: {} <folder> [arguments...]", env!("CARGO_PKG_NAME"));
+        eprintln!(
+            "usage: {} [--listen <address:port>] <folder> [arguments...]",
+            env!("CARGO_PKG_NAME")
+        );
         return ExitCode::from(2);
     };
     if first == "--version" && rest.is_empty() {
         println!("{VERSION}");
         return ExitCode::SUCCESS;
     }
-    run(Path::new(first), rest)
+    if first == "--listen" {
+        return match rest {
+            [address, folder, more @ ..] => run(Path::new(folder), more, Some(address.as_str())),
+            _ => refuse("`--listen` takes an address and a port, then the folder"),
+        };
+    }
+    run(Path::new(first), rest, None)
 }

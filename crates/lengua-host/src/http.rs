@@ -2,7 +2,7 @@ use std::convert::Infallible;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread;
@@ -13,30 +13,13 @@ use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
 use wasmtime_wasi_http::p2::bindings::http::types::{ErrorCode, Scheme};
 use wasmtime_wasi_http::p2::bindings::sync::Proxy;
 use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
-use wasmtime_wasi_http::{
-    Error as HttpError, RequestOptions, WasiBody, WasiHttpHooks, WasiHttpView,
-};
+use wasmtime_wasi_http::WasiHttpView;
 
 use crate::{Ending, Host, Input, OUTPUT, Outcome, Prepared, Program, Streams, trap_ending};
 
 const HEAD_LIMIT: usize = 64 << 10;
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(5);
-
-pub(crate) struct Refuse;
-
-type Sent = Box<dyn Future<Output = Result<(), HttpError>> + Send>;
-
-impl WasiHttpHooks for Refuse {
-    fn send_request(
-        &mut self,
-        _request: hyper::Request<WasiBody>,
-        _options: Option<RequestOptions>,
-        _fut: Sent,
-    ) -> Box<dyn Future<Output = Result<(hyper::Response<WasiBody>, Sent), HttpError>> + Send> {
-        Box::new(std::future::ready(Err(HttpError::HttpRequestDenied)))
-    }
-}
 
 struct Whole(Option<Bytes>);
 
@@ -313,33 +296,98 @@ impl Host {
         })
     }
 
-    pub fn serve(&self, run: &Program, port: u16, fixed: bool) -> Result<(), String> {
-        let listener = TcpListener::bind(("127.0.0.1", port))
-            .map_err(|e| format!("lengua could not listen on TCP port {port}: {e}"))?;
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else {
-                continue;
-            };
-            let request = read_request(&mut stream);
-            let input = Input {
-                stdin: request,
-                fixed,
-                ..Input::default()
-            };
-            let outcome = self.answer(run, &input);
-            let mut bytes = outcome.stdout;
-            if bytes.is_empty() {
-                let message = match &outcome.ending {
-                    Ending::Exited(_) => String::new(),
-                    Ending::OutOfTime(m) | Ending::Trapped(m) | Ending::Refused(m) => m.clone(),
-                    Ending::OutOfMemory => "the server ran out of memory".to_string(),
-                };
-                bytes = response_bytes(500, &[], message.as_bytes());
+    pub fn serve(&self, run: &Program, address: &str, fixed: bool) -> Result<(), String> {
+        let listener = TcpListener::bind(address)
+            .map_err(|e| format!("lengua could not listen on `{address}`: {e}"))?;
+        let gate = RwLock::new(());
+        let writes = run.build.grants.folders.iter().any(|f| f.write);
+        let (send, receive) = mpsc::sync_channel::<TcpStream>(WORKERS * 4);
+        let receive = Mutex::new(receive);
+        thread::scope(|scope| {
+            for _ in 0..WORKERS {
+                scope.spawn(|| {
+                    loop {
+                        let next = receive
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .recv();
+                        let Ok(mut stream) = next else {
+                            break;
+                        };
+                        self.serve_one(run, &mut stream, fixed, (&gate, writes));
+                    }
+                });
             }
-            let _ = stream.write_all(&bytes);
-            let _ = stream.flush();
-        }
+            for stream in listener.incoming().flatten() {
+                if send.send(stream).is_err() {
+                    break;
+                }
+            }
+            drop(send);
+        });
         Ok(())
+    }
+
+    fn serve_one(&self, run: &Program, stream: &mut TcpStream, fixed: bool, gate: (&RwLock<()>, bool)) {
+        let started = Instant::now();
+        let request = read_request(stream);
+        let first = request_line(&request);
+        let method = first.split(' ').next().unwrap_or_default().to_string();
+        let input = Input {
+            stdin: request,
+            fixed,
+            ..Input::default()
+        };
+        let reads = !gate.1 || matches!(method.as_str(), "GET" | "HEAD" | "OPTIONS");
+        let outcome = if reads {
+            let _shared = gate.0.read().unwrap_or_else(PoisonError::into_inner);
+            self.answer(run, &input)
+        } else {
+            let _alone = gate.0.write().unwrap_or_else(PoisonError::into_inner);
+            self.answer(run, &input)
+        };
+        let mut bytes = outcome.stdout;
+        let problem = match &outcome.ending {
+            Ending::Exited(_) => String::new(),
+            Ending::OutOfTime(m) | Ending::Trapped(m) | Ending::Refused(m) => m.clone(),
+            Ending::OutOfMemory => "the server ran out of memory".to_string(),
+        };
+        if bytes.is_empty() {
+            bytes = response_bytes(500, &[], problem.as_bytes());
+        }
+        let _ = stream.write_all(&bytes);
+        let _ = stream.flush();
+        log_line(&first, &bytes, started, &problem, &outcome.stderr);
+    }
+}
+
+const WORKERS: usize = 8;
+
+fn request_line(request: &[u8]) -> String {
+    let end = request
+        .windows(2)
+        .position(|w| w == b"\r\n")
+        .unwrap_or(request.len().min(200));
+    String::from_utf8_lossy(request.get(..end).unwrap_or_default()).to_string()
+}
+
+fn log_line(first: &str, answer: &[u8], started: Instant, problem: &str, stderr: &[u8]) {
+    let status = String::from_utf8_lossy(answer.get(9..12).unwrap_or_default()).to_string();
+    let target: Vec<&str> = first.split(' ').take(2).collect();
+    let mut line = format!(
+        "lengua-run: {} {} {}ms",
+        target.join(" "),
+        status,
+        started.elapsed().as_millis()
+    );
+    if !problem.is_empty() {
+        line.push_str(": ");
+        line.push_str(problem);
+    }
+    let mut out = std::io::stderr().lock();
+    let _ = writeln!(out, "{line}");
+    for program_line in String::from_utf8_lossy(stderr).lines() {
+        let _ = writeln!(out, "lengua-run:   {program_line}");
     }
 }
 

@@ -31,9 +31,9 @@ export function queryParam(name: string): string {
   return new URLSearchParams(window.location.search).get(name) ?? "";
 }
 
-export type Answer<T, F> =
-  | { readonly ok: true; readonly status: number; readonly value: T }
-  | { readonly ok: false; readonly status: number; readonly error: F };
+export type Answer<T, F, S extends number = number, E extends number = number> =
+  | { readonly ok: true; readonly status: S; readonly value: T }
+  | { readonly ok: false; readonly status: E; readonly error: F };
 
 async function read(response: Response, json: boolean): Promise<unknown> {
   const text = await response.text();

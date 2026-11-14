@@ -74,6 +74,7 @@ pub(crate) struct Route {
     pub answer: Ty,
     pub failure: Ty,
     pub served_by: Vec<String>,
+    pub statuses: Vec<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -242,6 +243,10 @@ fn add_example(route: &mut Route, test: &Test) {
         route.body = Some(merge(&now, &types::of(&body)));
     }
     let status = test.status.unwrap_or(200);
+    if !route.statuses.contains(&status) {
+        route.statuses.push(status);
+        route.statuses.sort_unstable();
+    }
     match test.expect_body.as_deref().map(json::parse) {
         Some(Some(value)) if (200..300).contains(&status) => {
             route.answer = merge(&route.answer, &types::of(&value));
@@ -277,6 +282,7 @@ pub(crate) fn routes(top: &Constraints, tests: &[Test], findings: &mut Vec<Findi
             answer: Ty::Unknown,
             failure: Ty::Unknown,
             served_by: Vec::new(),
+            statuses: Vec::new(),
         };
         for test in tests.iter().filter(|t| !t.screen) {
             let found = test.request.as_deref().and_then(split_request);
@@ -296,7 +302,62 @@ pub(crate) fn routes(top: &Constraints, tests: &[Test], findings: &mut Vec<Findi
         }
         out.push(route);
     }
+    if !out.is_empty() {
+        unlisted_routes(&out, tests, findings);
+    }
     out
+}
+
+fn unlisted_routes(routes: &[Route], tests: &[Test], findings: &mut Vec<Finding>) {
+    for test in tests.iter().filter(|t| !t.screen) {
+        let Some((method, path)) = test.request.as_deref().and_then(split_request) else {
+            continue;
+        };
+        let good = (200..300).contains(&test.status.unwrap_or(200));
+        let known = routes
+            .iter()
+            .any(|r| r.method == method && matches(&r.path, path));
+        if good && path.starts_with("/api/") && !known {
+            findings.push(Finding {
+                file: test.file.clone(),
+                line: test.line,
+                code: "route-unlisted",
+                message: format!(
+                    "the example requests `{method} {path}` under `/api/` and the server answers it, but no `- Route:` line names it, so the front end's client has no function for it; add the route to `idea.md`"
+                ),
+            });
+        }
+    }
+}
+
+fn statuses_of(route: &Route, good: bool) -> (String, String) {
+    let found: Vec<String> = route
+        .statuses
+        .iter()
+        .filter(|s| (200..300).contains(*s) == good)
+        .map(u16::to_string)
+        .collect();
+    if found.is_empty() {
+        return ("number".to_string(), String::new());
+    }
+    let check = found
+        .iter()
+        .map(|s| format!("status === {s}"))
+        .collect::<Vec<_>>()
+        .join(" || ");
+    (found.join(" | "), check)
+}
+
+fn status_check(check: &str, label: &str) -> String {
+    if check.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n    assert({check}, {});",
+        quoted(&format!(
+            "the status of {label} is one of the statuses of its examples"
+        ))
+    )
 }
 
 fn type_name(route: &Route, part: &str) -> String {
@@ -368,9 +429,13 @@ fn route_code(route: &Route, out: &mut String) {
     validator(out, &answer, &checks.0);
     validator(out, &failure, &checks.1);
     let label = format!("`{} {}`", route.method, route.path);
+    let (good, good_check) = statuses_of(route, true);
+    let (bad, bad_check) = statuses_of(route, false);
+    let good_check = status_check(&good_check, &label);
+    let bad_check = status_check(&bad_check, &label).replace("\n    ", "\n  ");
     let _ = writeln!(
         out,
-        "\nexport async function {}({}): Promise<Answer<{answer}, {failure}>> {{\n  const got = await call({}, {}, {sent}, {});\n  if (got.ok) {{\n    assert(is{answer}(got.value), {});\n    return {{ ok: true, status: got.status, value: got.value }};\n  }}\n  assert(is{failure}(got.value), {});\n  return {{ ok: false, status: got.status, error: got.value }};\n}}",
+        "\nexport async function {}({}): Promise<Answer<{answer}, {failure}, {good}, {bad}>> {{\n  const got = await call({}, {}, {sent}, {});\n  const status = got.status;\n  if (got.ok) {{\n    assert(is{answer}(got.value), {});{good_check}\n    return {{ ok: true, status, value: got.value }};\n  }}\n  assert(is{failure}(got.value), {});{bad_check}\n  return {{ ok: false, status, error: got.value }};\n}}",
         route.function,
         params.join(", "),
         quoted(&route.method),

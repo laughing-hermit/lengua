@@ -9,6 +9,7 @@ use lengua_idea::lock::{self, Kind};
 
 const POLL: Duration = Duration::from_millis(5);
 const FRAME: u64 = 1 << 20;
+const MODEL: &str = "LENGUA_MODEL_ANSWERS";
 
 pub(crate) struct Request<'a> {
     pub kind: Kind,
@@ -104,6 +105,8 @@ pub(crate) fn run(request: &Request) -> Outcome {
         .arg(root)
         .arg(mode)
         .args(&input.arguments)
+        .env_remove(MODEL)
+        .envs(input.model.iter().map(|m| (MODEL, m.as_str())))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -226,6 +229,7 @@ pub(crate) fn serve(args: &[String]) -> ExitCode {
         stdin,
         fixed: mode == "fixed",
         root: Some(Path::new(root).to_path_buf()),
+        model: std::env::var(MODEL).ok(),
     };
     let result = outcome(kind, Path::new(lock_path), Path::new(folder), &input);
     let mut out = std::io::stdout().lock();
