@@ -2464,13 +2464,9 @@ Decided for lengua 3 at L8 (2026-11-13):
   - Threads that share memory: WebAssembly's **shared-everything-threads** proposal.
   - WebSockets: not in WASI 0.2's HTTP world; watch WASI 0.3 and later.
   - Timed jobs ("every night at 2 a.m."): no WASI standard yet.
-- **Decided 2026-11-13, the front end is GPUI and GPUI Kit,** after comparing Leptos and Native
-  Shell. **Replaced the same day by the owner's final decision:** the front end is Next.js in
-  TSX (shadcn/ui, Vercel's AI-UI tools, pnpm, Turbopack), exported statically and served by the
-  WebAssembly back end; desktop apps are Electron. GPUI, GPUI Kit, Leptos and Tauri are dropped;
-  GPUI's attempt is kept at the tag `archive/l8-gpui`. Why: Rust and TypeScript are the two
-  ecosystems that matter most for AI, and Next.js with shadcn/ui and Vercel's AI-UI tools is
-  where AI front ends are made; Electron's Chromium renders the same on every system.
+- **Decided 2026-11-13: the front end is Next.js**, exported statically and served by the back
+  end; desktop apps are Electron. GPUI, GPUI Kit, Leptos and Tauri are dropped (GPUI's attempt is
+  at the tag `archive/l8-gpui`).
 - **Crates that aren't pure Rust** (they wrap a C library) need a C compiler, build differently
   on each system and usually can't go into WebAssembly, so the `build` skill takes them last,
   and `check` flags them.
@@ -2536,5 +2532,4 @@ Decided for lengua 3 at L8 (2026-11-13):
 - Vitest: [vitest.dev](https://vitest.dev/); Testing Library: [testing-library.com](https://testing-library.com/);
   happy-dom: [github.com/capricorn86/happy-dom](https://github.com/capricorn86/happy-dom).
 - Chrome's DevTools protocol: [chromedevtools.github.io/devtools-protocol](https://chromedevtools.github.io/devtools-protocol/).
-- GPUI (dropped, as history): [gpui.rs](https://gpui.rs/), [gpui-kit.com](https://gpui-kit.com/).
 - The standards and the Power of 10: the links in sections 4 and 5.

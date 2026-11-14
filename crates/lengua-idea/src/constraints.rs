@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn good_grants_have_no_findings() {
-        let text = "- Reads: standard input\n- Reads: files in `data/`\n- Writes: files in `out`\n- Connects to: `example.com:443`\n- Memory: 16 MiB\n- Time: 2 s\n- Modules: `words`, `ui/summary`\n- Exports: `count`\n- Uses crate: `gpui` 0.2.0, for the screen\n";
+        let text = "- Reads: standard input\n- Reads: files in `data/`\n- Writes: files in `out`\n- Connects to: `example.com:443`\n- Memory: 16 MiB\n- Time: 2 s\n- Modules: `words`, `ui/summary`\n- Exports: `count`\n- Uses crate: `widgets` 0.2.0, for the screen\n";
         let (codes, out) = run(IdeaKind::Program, text);
         assert_eq!(codes, Vec::<&str>::new());
         let modules: Vec<&str> = out.modules.iter().map(|(n, _)| n.as_str()).collect();
@@ -594,7 +594,7 @@ mod tests {
         assert_eq!(
             out.crates,
             [CrateUse {
-                name: "gpui".to_string(),
+                name: "widgets".to_string(),
                 version: "0.2.0".to_string(),
                 line: 10,
             }]

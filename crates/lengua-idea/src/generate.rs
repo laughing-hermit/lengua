@@ -537,7 +537,7 @@ codegen-units = 1
     #[test]
     fn a_library_with_crates_and_modules_gets_lib_and_dependencies() {
         let sources = ["src/main.rs".to_string(), "src/words.rs".to_string()];
-        let crates = [("gpui".to_string(), "0.2.0".to_string())];
+        let crates = [("widgets".to_string(), "0.2.0".to_string())];
         let package = Package {
             name: "word-count",
             shape: Shape::Library,
@@ -547,7 +547,7 @@ codegen-units = 1
             web: false,
         };
         let text = cargo_toml(&package);
-        assert!(text.starts_with("[package]\nname = \"word-count\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\ninclude = [\"src/main.rs\", \"src/words.rs\"]\nautobins = false\n\n[lib]\nname = \"word_count\"\npath = \"src/main.rs\"\n\n[dependencies]\ngpui = \"=0.2.0\"\njson = { path = \"../json\" }\n\n[lints.rust]\n"));
+        assert!(text.starts_with("[package]\nname = \"word-count\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\ninclude = [\"src/main.rs\", \"src/words.rs\"]\nautobins = false\n\n[lib]\nname = \"word_count\"\npath = \"src/main.rs\"\n\n[dependencies]\njson = { path = \"../json\" }\nwidgets = \"=0.2.0\"\n\n[lints.rust]\n"));
         assert!(text.contains("indexing_slicing = \"deny\"\nmissing_errors_doc = \"allow\"\nmissing_panics_doc = \"allow\"\n"));
         assert!(text.ends_with("codegen-units = 1\n\n[workspace]\n"));
     }

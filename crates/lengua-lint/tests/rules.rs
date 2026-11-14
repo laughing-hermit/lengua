@@ -344,8 +344,8 @@ fn rule_8_macros_derives_attributes_and_cfg_from_elsewhere_are_refused() {
 
 #[test]
 fn rule_8_macros_and_derives_of_a_declared_crate_are_taken() {
-    let text = "use gpui::div;\n\n#[derive(gpui::Render)]\nstruct View;\n\nfn main() {\n    div!();\n    gpui::other!();\n}\n";
-    assert_eq!(found(text, &["main"], &["gpui"]), Vec::<Finding>::new());
+    let text = "use widgets::div;\n\n#[derive(widgets::Render)]\nstruct View;\n\nfn main() {\n    div!();\n    widgets::other!();\n}\n";
+    assert_eq!(found(text, &["main"], &["widgets"]), Vec::<Finding>::new());
     assert_ne!(found(text, &["main"], &[]), Vec::<Finding>::new());
 }
 
