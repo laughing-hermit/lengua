@@ -2090,9 +2090,8 @@ example.
 `oxc_parser`: the arithmetic, comparison and logical operators, decimal constants plus one,
 `true` and `false`, and an `if`'s condition negated, not inside `assert(...)`. The 40 mutants are
 spread over the functions of the Rust files and of the screens together, round robin. A screen's
-mutant is run without copying the folder: the generated `vitest.config.mts` reads two
-environment variables, the file and the file that replaces it, and its small plugin gives Vite
-the mutant's text in place of the file. A test that fails catches it.
+mutant is written over the screen's file in the build's copy of `web/` (`target/lengua/web/`, never
+`web/` itself), Vitest runs, and the file is put back. A test that fails catches it.
 
 **In a real browser.** In CI, on Linux x86-64, a test of `lengua-mcp` serves `examples/notes`
 with `lengua-run`, starts the Chrome that GitHub's runner already has, headless, through its

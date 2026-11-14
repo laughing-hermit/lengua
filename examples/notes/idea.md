@@ -77,6 +77,24 @@ Then the answer is a description of a card with the summary, for the AI part of 
 - Expect status: 200
 - Expect body: "{\"root\":\"card\",\"elements\":{\"card\":{\"type\":\"Card\",\"props\":{\"title\":\"Summary\"},\"children\":[\"text\"]},\"text\":{\"type\":\"Text\",\"props\":{\"content\":\"Milk: Buy two bottles.\"},\"children\":[]}}}"
 
+## Answer 404 for a route that is not there
+
+Given a path under `/api/` that is not a route of the server,
+When a client sends a request for it,
+Then the answer is 404 with an error in JSON.
+
+### Example: another path
+
+- Request: `GET /api/other`
+- Expect status: 404
+- Expect body: "{\"error\":\"No such route.\"}"
+
+### Example: another method
+
+- Request: `DELETE /api/notes`
+- Expect status: 404
+- Expect body: "{\"error\":\"No such route.\"}"
+
 ## Serve the front end
 
 Given the static files of the front end in the program,

@@ -520,20 +520,15 @@ pub(crate) fn judge(worker: &Worker, mutant: &Mutant) -> Option<bool> {
     let original = stage.join(inside);
     let text = fs::read_to_string(&original).ok()?;
     let changed = lengua_idea::apply(&text, &mutant.edits);
-    let place = stage.join(".lengua").join("mutant.tsx");
-    let _ = fs::create_dir_all(stage.join(".lengua"));
-    fs::write(&place, changed).ok()?;
-    let envs = [
-        ("LENGUA_MUTANT_FROM", plain(&original)),
-        ("LENGUA_MUTANT_TO", plain(&place)),
-    ];
+    fs::write(&original, changed).ok()?;
     let ran = pnpm(
         worker,
         &["exec", "vitest", "run", "--reporter=dot"],
         &stage,
-        &envs,
+        &[],
     );
-    if worker.stopped() {
+    let restored = fs::write(&original, &text).is_ok();
+    if worker.stopped() || !restored {
         return None;
     }
     ran.ok().map(|(passed, _)| !passed)

@@ -16,7 +16,7 @@ interface HomeState {
 export function countText(count: number): string {
   assert(count >= 0, "a count is not negative");
   assert(Number.isInteger(count), "a count is a whole number");
-  return count === 1 ? "1 note" : `${count} notes`;
+  return `${count} notes`;
 }
 
 export function NoteLink({ id, title }: Listed) {

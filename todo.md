@@ -506,8 +506,9 @@ next starts (Lengua3.md, section 8).
   tests is the object of `useScreen`; their routes are `/` for `home` and `/<name>/`; `Click`
   once per example; a new key `Expect label`.
 - **2026-11-13, L8: the 40 mutants are spread over the Rust and the TypeScript functions
-  together**; a screen's mutant runs Vitest with two environment variables that the generated
-  Vitest config reads, so nothing is copied.
+  together**; a screen's mutant is written over its file in the build's copy of `web/`, Vitest
+  runs, and the file is put back. (A first way, a Vite plugin that gave the mutant's text in place
+  of the file, let every screen mutant survive in run 43544397848, so it was dropped.)
 - **2026-11-13, L8: the export is served from a generated crate, `lengua_web`,** in
   `target/lengua/assets`, a path dependency of the program (`exclude = ["target"]` in its
   `[workspace]`); the server calls `lengua_web::asset(path)`.
