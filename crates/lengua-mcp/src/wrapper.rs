@@ -115,7 +115,10 @@ pub(crate) fn rename_outputs(folder: &Path, from: &str, to: &str) -> std::io::Re
             continue;
         }
         let target = folder.join(name.replace(from, to));
-        if Path::new(&name).extension().is_some_and(|e| e.eq_ignore_ascii_case("d")) {
+        if Path::new(&name)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("d"))
+        {
             let text = fs::read_to_string(entry.path())?;
             fs::write(&target, text.replace(from, to))?;
             fs::remove_file(entry.path())?;

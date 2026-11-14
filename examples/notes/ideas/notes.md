@@ -5,12 +5,10 @@ module: notes
 source: src/notes.rs
 uses: []
 used_by: [idea, ideas/ui/home, ideas/ui/note, ideas/ui/write]
-label: checked
+label: unchecked
 idea_sha256: 55de08672f7dab83fbe81d04c5497ddba7334127006594673e7d7c1fc29dbaee
 source_sha256: e7b7d86325163115c1a9b0b82a55296ae14299178ff3c5069fe711fa7de96b04
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T04:38:07Z }
-verified:
-  - { by: process:lengua-check, at: 2026-11-14T04:38:07Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T06:11:12Z }
 title: notes
 status: draft
 ---

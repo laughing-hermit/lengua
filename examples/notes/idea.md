@@ -5,15 +5,13 @@ module: main
 source: src/main.rs
 uses: [ideas/notes, ideas/ui/home, ideas/ui/note, ideas/ui/write, ../titles/idea]
 used_by: []
-label: checked
+label: unchecked
 idea_sha256: 34b4f6ae53a5e64798472c6a8c07d0bbfedf836c7f227d45946464e2f3dcf03b
 source_sha256: b662971b0dcdcd926bc8f537e992660dab25ae2ed7cc56e1fb3165b9a291d895
-cargo_sha256: 9ec37064ffe0e12b03922cb38eb02bb079f7f96d1ad20e15310df38d333d3c14
+cargo_sha256: e3c5ced1e41bf4c7583e06818328ef7e14860e3d87da8349441a59e72a1c8e77
 world_sha256: 6aa2f03d29a6dae284b24b3801913f715788aad0e8f74739ae1fde5efab7af5d
 web_sha256: 36eaf61e787ad441ca920b94259bb697cda5d491a0f15188dbe60c54970b8f71
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T04:38:07Z }
-verified:
-  - { by: process:lengua-check, at: 2026-11-14T04:38:07Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T06:11:12Z }
 title: notes
 status: draft
 ---

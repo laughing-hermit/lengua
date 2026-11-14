@@ -4,11 +4,11 @@ okf_version: "0.2"
 
 # Back end: program
 
-* [notes](idea.md) - The program is a small web application for notes. Label: `checked`.
+* [notes](idea.md) - The program is a small web application for notes. Label: `unchecked`.
 
 # Back end: modules
 
-* [notes](ideas/notes.md) - The module keeps the notes and answers the routes under `/api/`. Label: `checked`.
+* [notes](ideas/notes.md) - The module keeps the notes and answers the routes under `/api/`. Label: `unchecked`.
 
 # Back end: libraries
 
@@ -24,9 +24,9 @@ okf_version: "0.2"
 
 # Front end: screens
 
-* [ui/home](ideas/ui/home.md) - The screen shows the list of the notes, with a link to each note and a link to write a new note. Label: `checked`.
-* [ui/note](ideas/ui/note.md) - The screen shows one note, and a summary of it that the AI part of the screen draws from the answer of the server. Label: `checked`.
-* [ui/write](ideas/ui/write.md) - The screen is a form to write a new note, with a title and a text. Label: `checked`.
+* [ui/home](ideas/ui/home.md) - The screen shows the list of the notes, with a link to each note and a link to write a new note. Label: `unchecked`.
+* [ui/note](ideas/ui/note.md) - The screen shows one note, and a summary of it that the AI part of the screen draws from the answer of the server. Label: `unchecked`.
+* [ui/write](ideas/ui/write.md) - The screen is a form to write a new note, with a title and a text. Label: `unchecked`.
 
 # Front end: npm packages
 
@@ -35,4 +35,4 @@ okf_version: "0.2"
 
 # Interface
 
-* [api](api.md) - The routes of the back end that the front end calls, with the shapes of their requests and answers. Label: `checked`.
+* [api](api.md) - The routes of the back end that the front end calls, with the shapes of their requests and answers. Label: `unchecked`.

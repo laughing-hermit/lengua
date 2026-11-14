@@ -5,12 +5,10 @@ module: basket
 source: src/basket.rs
 uses: []
 used_by: [idea]
-label: checked
+label: unchecked
 idea_sha256: feeaa416d6dff53d79533b40cfab4856e370ecb6fe9842a109acf3303a8d2e37
 source_sha256: a482051b1caefb29990ede607aeb98b0c7c75a70af22c70a9ffff680ac8eb77c
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T04:39:13Z }
-verified:
-  - { by: process:lengua-check, at: 2026-11-14T04:39:13Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T06:11:37Z }
 title: basket
 status: draft
 ---

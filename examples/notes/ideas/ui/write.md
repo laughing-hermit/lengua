@@ -5,12 +5,10 @@ module: ui/write
 source: web/screens/write.tsx
 uses: [ideas/notes]
 used_by: [idea]
-label: checked
+label: unchecked
 idea_sha256: 0e79f3cc48ed008412f8cc01cce6d329956e9f16537ebbac63b59560e8792013
 source_sha256: f248fc2792ba530e7b2ee1772fc7870122c421ac9c8e97cee42243c4e8f22751
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T04:38:07Z }
-verified:
-  - { by: process:lengua-check, at: 2026-11-14T04:38:07Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T06:11:12Z }
 title: ui/write
 status: draft
 ---
