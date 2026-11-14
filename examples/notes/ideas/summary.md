@@ -1,3 +1,20 @@
+---
+type: lengua Module
+description: "The module asks an AI model for the summary of a note, through the host."
+module: summary
+source: src/summary.rs
+uses: [ideas/notes]
+used_by: [idea, ideas/notes]
+label: checked
+idea_sha256: d88c9e082f9fe5de466ed16e5809ced8dd971b93578c00333418ea180021b4f5
+source_sha256: 8d4941f268d0e0a9a2022546ea8ce5ca875f6ce2680b9a84c4c307ea7294ed6d
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T07:56:57Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-14T07:56:57Z }
+title: summary
+status: draft
+---
+
 # Purpose
 
 The module asks an AI model for the summary of a note, through the host. It describes a card
@@ -42,3 +59,11 @@ Then the answer is a card with no text.
 - `summary`: asks the model for the summary of a note, and gives the card or an error.
 - `spec`: describes a card with the summary, in the JSON of `json-render`.
 - `ask`: sends a prompt to the model through the host, and gives its answer.
+
+# Links
+
+* Uses: [notes](notes.md).
+* Used by: [notes](../idea.md), [notes](notes.md).
+* Serves: [`POST /api/ui`](../api.md).
+* Called by: [ui/note](ui/note.md).
+* Index: [notes](../index.md).

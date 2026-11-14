@@ -1,5 +1,6 @@
 # Programs
 
+* [ask](ask/index.md) - The program asks an AI model and another service, through its host, and writes what it gets. Label: `checked`.
 * [clock](clock/index.md) - The program writes the time and a random number to the standard output. Label: `tested`.
 * [count](count/index.md) - The program counts the words in a text. Label: `tested`.
 * [echo](echo/index.md) - The program writes its arguments to the standard output. Label: `checked`.

@@ -8,9 +8,9 @@ used_by: [idea]
 label: checked
 idea_sha256: 765521e18e9bbe7b241435168cea4cc8d3eaeece547e57ed894577154f4d2de2
 source_sha256: ebe159378247986c940391d9824b075148988ce116dfa065ac60333f465ed9e4
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T04:39:13Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T07:57:42Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T04:39:13Z }
+  - { by: process:lengua-check, at: 2026-11-14T07:57:42Z }
 title: catalog
 status: draft
 ---

@@ -1,3 +1,20 @@
+---
+type: lengua Module
+description: "The module keeps the accounts of the users in the file `data/users.txt`, one account on a line."
+module: accounts
+source: src/accounts.rs
+uses: [ideas/notes]
+used_by: [idea, ideas/notes]
+label: checked
+idea_sha256: 1eeca9403e02620668b7d47c627b1969b76bf8336cc71602491685c941edd447
+source_sha256: e4571e36c096c054eff70ffbc0757996070dade5dbede676e00d242cff17eac0
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T07:56:57Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-14T07:56:57Z }
+title: accounts
+status: draft
+---
+
 # Purpose
 
 The module keeps the accounts of the users in the file `data/users.txt`, one account on a line.
@@ -118,3 +135,11 @@ Then the answer is 200 with the name, or 401 when the token is not good.
 - `key`: gives the secret key of the tokens.
 - `load`: gives the accounts of the file.
 - `save`: writes the accounts to the file, one account on a line.
+
+# Links
+
+* Uses: [notes](notes.md).
+* Used by: [notes](../idea.md), [notes](notes.md).
+* Serves: [`POST /api/register`](../api.md), [`POST /api/login`](../api.md), [`GET /api/me`](../api.md).
+* Called by: [ui/login](ui/login.md).
+* Index: [notes](../index.md).

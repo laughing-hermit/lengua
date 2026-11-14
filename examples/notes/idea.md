@@ -3,17 +3,17 @@ type: lengua Server
 description: "The program is a small web application for notes."
 module: main
 source: src/main.rs
-uses: [ideas/notes, ideas/ui/home, ideas/ui/note, ideas/ui/write, ../titles/idea]
+uses: [ideas/notes, ideas/accounts, ideas/summary, ideas/ui/home, ideas/ui/login, ideas/ui/note, ideas/ui/write, ../titles/idea, ../../libraries/logins/idea]
 used_by: []
 label: checked
-idea_sha256: 34b4f6ae53a5e64798472c6a8c07d0bbfedf836c7f227d45946464e2f3dcf03b
-source_sha256: b662971b0dcdcd926bc8f537e992660dab25ae2ed7cc56e1fb3165b9a291d895
-cargo_sha256: 9ec37064ffe0e12b03922cb38eb02bb079f7f96d1ad20e15310df38d333d3c14
-world_sha256: 6aa2f03d29a6dae284b24b3801913f715788aad0e8f74739ae1fde5efab7af5d
-web_sha256: 36eaf61e787ad441ca920b94259bb697cda5d491a0f15188dbe60c54970b8f71
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T04:38:07Z }
+idea_sha256: 21d14e833a6203724731c682f621b90519a9f4eb96f4f6cf5526118c9a262df8
+source_sha256: 6749f59b9dcf23e799e9387e2ac6d03160ff9489971cf347d1872a40f04f858d
+cargo_sha256: 2c8c9f30d9917ef2802167edcac64c6c1c753dc96317cfd65e375e4a32db2579
+world_sha256: 432ab60b895088c9bc0206a29ba4e132e6b86715dbabb9ceab8b2b6adf271f30
+web_sha256: ac9b16c6220121867f25fd73bcc0e0addc44d38fe3ad8f5d4d41d5ad38a464b6
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T07:56:57Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T04:38:07Z }
+  - { by: process:lengua-check, at: 2026-11-14T07:56:57Z }
 title: notes
 status: draft
 ---
@@ -185,7 +185,7 @@ Then the answer is 200 with the page of the screen `home`.
 
 # Links
 
-* Uses: [notes](ideas/notes.md), [ui/home](ideas/ui/home.md), [ui/note](ideas/ui/note.md), [ui/write](ideas/ui/write.md), [titles](../titles/idea.md).
+* Uses: [notes](ideas/notes.md), [accounts](ideas/accounts.md), [summary](ideas/summary.md), [ui/home](ideas/ui/home.md), [ui/login](ideas/ui/login.md), [ui/note](ideas/ui/note.md), [ui/write](ideas/ui/write.md), [titles](../titles/idea.md), [logins](../../libraries/logins/idea.md).
 * Serves: [`GET /api/notes`](api.md), [`GET /api/notes/{id}`](api.md), [`POST /api/notes`](api.md), [`POST /api/ui`](api.md).
 * Called by: [ui/home](ideas/ui/home.md), [ui/note](ideas/ui/note.md), [ui/write](ideas/ui/write.md).
 * Index: [notes](index.md).

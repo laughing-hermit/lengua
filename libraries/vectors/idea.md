@@ -1,3 +1,22 @@
+---
+type: lengua Library
+description: "The library finds the texts that are near to a question by their vectors."
+module: main
+source: src/main.rs
+uses: [../json/idea]
+used_by: []
+label: checked
+idea_sha256: 9d3bc26c1ee5e0bace3a9067d2198ea80b3eeb6a39294dc96271fabd932ebe18
+source_sha256: 73b6d3e80199c380b36b0e0d40eb661fc109e3924fb6dd2627e0dedc04929c45
+cargo_sha256: e74a3b6910203577513cee6b68bbaa624ba394806458dfeec5f1b04b810cdd5d
+world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T07:50:29Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-14T07:50:29Z }
+title: vectors
+status: draft
+---
+
 # Purpose
 
 The library finds the texts that are near to a question by their vectors. An AI model gives the
@@ -119,3 +138,8 @@ Then it gives the places of the nearest vectors in the list, the nearest first.
 - `dot`: gives the sum of the products of the numbers of two vectors.
 - `cosine`: gives the cosine of the angle of two vectors.
 - `nearest`: gives the places of the nearest vectors to a question, the nearest first.
+
+# Links
+
+* Uses: [json](../json/idea.md).
+* Index: [vectors](index.md).

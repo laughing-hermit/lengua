@@ -1,3 +1,22 @@
+---
+type: lengua Library
+description: "The library keeps the logins of a program."
+module: main
+source: src/main.rs
+uses: [../hashes/idea]
+used_by: []
+label: checked
+idea_sha256: 8169b1c552876ac2888f0255e84d0a731d37bc1d5b28454a04cb817b9435612f
+source_sha256: e2b0e3b205edd229f6b2ed37160c95c4d9e1042ca6c0a051b56f693296d0620d
+cargo_sha256: ff91ffc8456ebd07524899f47e314b3dc0a9530740a83b1b43bebc26d957dece
+world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T07:49:59Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-14T07:49:59Z }
+title: logins
+status: draft
+---
+
 # Purpose
 
 The library keeps the logins of a program. It makes the hash of a password and compares a
@@ -183,3 +202,8 @@ Then it gives two hexadecimal digits in lower case for each byte.
 - `verify_password`: compares a password with the stored form of its hash.
 - `sign_token`: gives a token with a name, a time and their signature.
 - `check_token`: gives the name of a token, or the error of a bad token.
+
+# Links
+
+* Uses: [hashes](../hashes/idea.md).
+* Index: [logins](index.md).
