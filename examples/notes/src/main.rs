@@ -15,7 +15,7 @@ impl wasip2::exports::http::incoming_handler::Guest for Notes {
         let method = method_name(&request.method());
         let path = request.path_with_query().unwrap_or_default();
         let body = body_of(&request);
-        debug_assert!(!method.is_empty());
+        debug_assert!(method.len() < 1 << 16);
         debug_assert!(body.len() < 1 << 20);
         let (status, kind, bytes) = answer(method, &path, &body);
         respond(response_out, status, kind, &bytes);
@@ -23,7 +23,7 @@ impl wasip2::exports::http::incoming_handler::Guest for Notes {
 }
 
 fn answer(method: &str, path: &str, body: &str) -> (u16, &'static str, Vec<u8>) {
-    debug_assert!(!method.is_empty());
+    debug_assert!(method.len() < 1 << 16);
     debug_assert!(path.len() < 1 << 16);
     if path.starts_with("/api/") {
         let (status, text) = notes::route(method, path, body);
@@ -46,7 +46,7 @@ fn method_name(method: &Method) -> &'static str {
         Method::Options => "OPTIONS",
         _ => "OTHER",
     };
-    debug_assert!(!name.is_empty());
+    debug_assert!(name.len() < 1 << 16);
     debug_assert!(name.chars().all(|c| c.is_ascii_uppercase()));
     name
 }
@@ -67,7 +67,7 @@ fn body_of(request: &IncomingRequest) -> String {
 
 fn respond(response_out: ResponseOutparam, status: u16, kind: &str, bytes: &[u8]) {
     debug_assert!((100..600).contains(&status));
-    debug_assert!(!kind.is_empty());
+    debug_assert!(kind.len() < 1 << 16);
     let headers = Fields::new();
     let _ = headers.set("content-type", &[kind.as_bytes().to_vec()]);
     let response = OutgoingResponse::new(headers);

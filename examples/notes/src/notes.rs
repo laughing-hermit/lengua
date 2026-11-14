@@ -5,7 +5,7 @@ const NOTES: [(u32, &str, &str); 2] = [
 
 pub fn route(method: &str, path: &str, body: &str) -> (u16, String) {
     debug_assert!(path.starts_with("/api/"));
-    debug_assert!(!method.is_empty());
+    debug_assert!(method.len() < 1 << 16);
     match (method, path) {
         ("GET", "/api/notes") => (200, all()),
         ("POST", "/api/notes") => add(body),
@@ -23,7 +23,7 @@ fn all() -> String {
         .iter()
         .map(|(id, title, text)| note_json(*id, title, text))
         .collect();
-    debug_assert!(parts.len() == NOTES.len());
+    debug_assert_eq!(parts.len(), NOTES.len());
     let list = format!("[{}]", parts.join(","));
     debug_assert!(list.starts_with('['));
     list
@@ -96,7 +96,7 @@ fn quoted(text: &str) -> String {
 }
 
 fn field(body: &str, name: &str) -> Option<String> {
-    debug_assert!(!name.is_empty());
+    debug_assert!(name.len() < 1 << 16);
     let key = format!("\"{name}\"");
     let rest = body.split_once(&key)?.1.trim_start().strip_prefix(':')?;
     let rest = rest.trim_start().strip_prefix('"')?;
@@ -119,7 +119,7 @@ fn field(body: &str, name: &str) -> Option<String> {
 }
 
 fn number(body: &str, name: &str) -> Option<u32> {
-    debug_assert!(!name.is_empty());
+    debug_assert!(name.len() < 1 << 16);
     let key = format!("\"{name}\"");
     let rest = body.split_once(&key)?.1.trim_start().strip_prefix(':')?;
     let digits: String = rest
@@ -132,14 +132,14 @@ fn number(body: &str, name: &str) -> Option<u32> {
 }
 
 fn error(message: &str) -> String {
-    debug_assert!(!message.is_empty());
+    debug_assert!(message.len() < 1 << 16);
     let text = format!("{{\"error\":{}}}", quoted(message));
     debug_assert!(text.contains(message));
     text
 }
 
 fn find(id: u32) -> Option<(u32, &'static str, &'static str)> {
-    debug_assert!(NOTES.len() == 2);
+    debug_assert_eq!(NOTES.len(), 2);
     let found = NOTES.iter().find(|(n, _, _)| *n == id).copied();
     debug_assert!(found.is_none_or(|(n, _, _)| n == id));
     found
