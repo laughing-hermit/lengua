@@ -149,6 +149,16 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
     };
     let cargo_suffix = codegen(rest, "extra-filename").unwrap_or_default();
     let our_suffix = codegen(&arguments, "extra-filename").unwrap_or_default();
+    if std::env::var_os("LENGUA_RUSTC_WRAPPER_SHOW").is_some() {
+        eprintln!(
+            "{MARK}: {:?} {:?} -> {:?} in {:?} ({code:?}); emit {:?}",
+            value(rest, "--crate-name"),
+            our_suffix,
+            cargo_suffix,
+            value(rest, "--out-dir"),
+            value(rest, "--emit")
+        );
+    }
     if code == Some(0)
         && let Some(folder) = value(rest, "--out-dir").first()
         && let Err(error) = rename_outputs(Path::new(folder), &our_suffix, &cargo_suffix)
