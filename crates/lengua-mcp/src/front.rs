@@ -417,7 +417,7 @@ pub(crate) fn wrapper_text(browser: &Browser) -> String {
     out
 }
 
-fn browser_failed(name: &str, message: String) -> Failure {
+fn browser_failed(name: &str, message: &str) -> Failure {
     failed(
         Stage::BuildFailed,
         "idea.md",
@@ -437,7 +437,7 @@ fn browser(worker: &Worker, item: &Browser, stage: &Path) -> Result<(), Failure>
     let written = fs::create_dir_all(dir.join("src"))
         .and_then(|()| fs::write(dir.join("Cargo.toml"), manifest))
         .and_then(|()| fs::write(dir.join("src/lib.rs"), wrapper_text(item)));
-    written.map_err(|e| browser_failed(&item.name, e.to_string()))?;
+    written.map_err(|e| browser_failed(&item.name, &e.to_string()))?;
     let built = crate::build::cargo(
         &dir,
         &[
@@ -451,11 +451,11 @@ fn browser(worker: &Worker, item: &Browser, stage: &Path) -> Result<(), Failure>
     );
     match built {
         Ok((true, _)) => {}
-        Ok((false, text)) => return Err(browser_failed(&item.name, tail(&text, 20))),
-        Err(message) => return Err(browser_failed(&item.name, message)),
+        Ok((false, text)) => return Err(browser_failed(&item.name, &tail(&text, 20))),
+        Err(message) => return Err(browser_failed(&item.name, &message)),
     }
     let bindgen = doctor::find("wasm-bindgen")
-        .ok_or_else(|| browser_failed(&item.name, "wasm-bindgen is not on the PATH".to_string()))?;
+        .ok_or_else(|| browser_failed(&item.name, "wasm-bindgen is not on the PATH"))?;
     let out = stage.join("lib/wasm").join(&item.name);
     let input = dir
         .join("target/wasm32-unknown-unknown/release")
@@ -470,11 +470,11 @@ fn browser(worker: &Worker, item: &Browser, stage: &Path) -> Result<(), Failure>
     );
     match ran {
         Ok((true, _)) => {}
-        Ok((false, text)) => return Err(browser_failed(&item.name, tail(&text, 20))),
-        Err(message) => return Err(browser_failed(&item.name, message)),
+        Ok((false, text)) => return Err(browser_failed(&item.name, &tail(&text, 20))),
+        Err(message) => return Err(browser_failed(&item.name, &message)),
     }
     let bytes = fs::read(out.join(format!("{}_bg.wasm", item.name)))
-        .map_err(|e| browser_failed(&item.name, e.to_string()))?;
+        .map_err(|e| browser_failed(&item.name, &e.to_string()))?;
     let name = &item.name;
     let module = format!(
         "import {{ initSync }} from \"./{name}/{name}.js\";\nimport {{ bytes }} from \"./{name}/bytes\";\n\ninitSync({{ module: bytes }});\n\nexport * from \"./{name}/{name}.js\";\n"
@@ -485,7 +485,7 @@ fn browser(worker: &Worker, item: &Browser, stage: &Path) -> Result<(), Failure>
     );
     fs::write(out.join("bytes.ts"), data)
         .and_then(|()| fs::write(stage.join("lib/wasm").join(format!("{name}.ts")), module))
-        .map_err(|e| browser_failed(&item.name, e.to_string()))
+        .map_err(|e| browser_failed(&item.name, &e.to_string()))
 }
 
 fn browsers(worker: &Worker, front: &Front, stage: &Path) -> Result<(), Failure> {
