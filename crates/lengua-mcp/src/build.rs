@@ -351,6 +351,7 @@ pub(crate) fn cargo(
         .env("CARGO_NET_RETRY", "10")
         .env("RUSTC_WRAPPER", std::env::current_exe().unwrap_or_default())
         .env(crate::wrapper::MARK, "1")
+        .env("CARGO_BUILD_PIPELINING", "false")
         .args(args)
         .current_dir(folder)
         .env("CARGO_TERM_COLOR", "never")

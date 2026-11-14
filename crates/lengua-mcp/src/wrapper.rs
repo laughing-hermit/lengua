@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::Path;
 use std::process::{Command, ExitCode};
 
 pub(crate) const MARK: &str = "LENGUA_RUSTC_WRAPPER";
@@ -50,31 +52,78 @@ pub(crate) fn metadata(args: &[String], version: &str) -> String {
     hex.get(..16).unwrap_or(&hex).to_string()
 }
 
-pub(crate) fn rewritten(args: &[String], version: &str) -> Vec<String> {
-    if !wasm_target(args) {
-        return args.to_vec();
+fn codegen(args: &[String], key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    let mut found = None;
+    for (at, arg) in args.iter().enumerate() {
+        let option = if arg == "-C" || arg == "--codegen" {
+            args.get(at + 1).map(String::as_str)
+        } else {
+            arg.strip_prefix("-C")
+        };
+        if let Some(text) = option.and_then(|o| o.strip_prefix(&prefix)) {
+            found = Some(text.to_string());
+        }
     }
-    let fixed = metadata(args, version);
+    found
+}
+
+fn replaced(args: &[String], key: &str, new: &str) -> Vec<String> {
+    let prefix = format!("{key}=");
     let mut out = Vec::with_capacity(args.len());
     let mut at = 0;
     while at < args.len() {
         let arg = &args[at];
-        let next_is_metadata = (arg == "-C" || arg == "--codegen")
-            && args.get(at + 1).is_some_and(|n| n.starts_with("metadata="));
-        if next_is_metadata {
+        let split = (arg == "-C" || arg == "--codegen")
+            && args.get(at + 1).is_some_and(|n| n.starts_with(&prefix));
+        if split {
             out.push(arg.clone());
-            out.push(format!("metadata={fixed}"));
+            out.push(format!("{prefix}{new}"));
             at += 2;
             continue;
         }
-        if arg.starts_with("-Cmetadata=") {
-            out.push(format!("-Cmetadata={fixed}"));
+        if arg.starts_with(&format!("-C{prefix}")) {
+            out.push(format!("-C{prefix}{new}"));
         } else {
             out.push(arg.clone());
         }
         at += 1;
     }
     out
+}
+
+pub(crate) fn rewritten(args: &[String], version: &str) -> Vec<String> {
+    if !wasm_target(args) {
+        return args.to_vec();
+    }
+    let fixed = metadata(args, version);
+    let out = replaced(args, "metadata", &fixed);
+    if codegen(args, "extra-filename").is_some() {
+        replaced(&out, "extra-filename", &format!("-{fixed}"))
+    } else {
+        out
+    }
+}
+
+pub(crate) fn rename_outputs(folder: &Path, from: &str, to: &str) -> std::io::Result<()> {
+    if from == to || from.is_empty() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(folder)?.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.contains(from) {
+            continue;
+        }
+        let target = folder.join(name.replace(from, to));
+        if name.ends_with(".d") {
+            let text = fs::read_to_string(entry.path())?;
+            fs::write(&target, text.replace(from, to))?;
+            fs::remove_file(entry.path())?;
+        } else {
+            fs::rename(entry.path(), &target)?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn run(args: &[String]) -> ExitCode {
@@ -84,30 +133,27 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
     };
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
     let arguments = rewritten(rest, &version);
-    if std::env::var_os("LENGUA_RUSTC_WRAPPER_SHOW").is_some() {
-        let shown: Vec<&String> = arguments
-            .iter()
-            .filter(|a| a.starts_with("metadata=") || a.starts_with("wasm32"))
-            .collect();
-        eprintln!(
-            "{MARK}: {} {shown:?}",
-            value(rest, "--crate-name").join(" ")
-        );
-    }
     let status = Command::new(program)
         .args(&arguments)
         .env_remove(MARK)
         .status();
-    match status {
-        Ok(status) => status
-            .code()
-            .and_then(|c| u8::try_from(c).ok())
-            .map_or(ExitCode::FAILURE, ExitCode::from),
+    let code = match status {
+        Ok(status) => status.code().and_then(|c| u8::try_from(c).ok()),
         Err(error) => {
             eprintln!("{MARK}: could not start {program}: {error}");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
         }
+    };
+    let cargo_suffix = codegen(rest, "extra-filename").unwrap_or_default();
+    let our_suffix = codegen(&arguments, "extra-filename").unwrap_or_default();
+    if code == Some(0)
+        && let Some(folder) = value(rest, "--out-dir").first()
+        && let Err(error) = rename_outputs(Path::new(folder), &our_suffix, &cargo_suffix)
+    {
+        eprintln!("{MARK}: could not give the outputs Cargo's names: {error}");
+        return ExitCode::FAILURE;
     }
+    code.map_or(ExitCode::FAILURE, ExitCode::from)
 }
 
 #[cfg(test)]
@@ -136,7 +182,14 @@ mod tests {
         };
         assert_eq!(pick(&a), pick(&b));
         assert_ne!(pick(&a), "metadata=a1b2");
-        assert!(a.contains(&"extra-filename=-a1b2".to_string()));
+        let suffix = |all: &[String]| {
+            all.iter()
+                .find(|x| x.starts_with("extra-filename="))
+                .cloned()
+                .unwrap_or_default()
+        };
+        assert_eq!(suffix(&a), suffix(&b));
+        assert_ne!(suffix(&a), "extra-filename=-a1b2");
         assert_ne!(metadata(&linux, "2.0.1"), metadata(&linux, "2.0.2"));
         let other =
             args("--crate-name wasip2 --crate-type lib -C metadata=a1b2 --target wasm32-wasip2");
@@ -147,5 +200,22 @@ mod tests {
     fn a_crate_for_the_host_keeps_cargo_s_metadata() {
         let host = args("--crate-name proc --crate-type proc-macro -C metadata=a1b2");
         assert_eq!(rewritten(&host, "1.0.0"), host);
+    }
+
+    #[test]
+    fn the_outputs_get_cargo_s_names_back() {
+        let folder =
+            std::env::temp_dir().join(format!("lengua-mcp-{}-renamed", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("a folder");
+        std::fs::write(folder.join("libwasip2-ours.rlib"), "code").expect("a file");
+        std::fs::write(folder.join("wasip2-ours.d"), "libwasip2-ours.rlib: src/lib.rs\n")
+            .expect("a file");
+        super::rename_outputs(&folder, "-ours", "-cargo").expect("renamed");
+        assert!(folder.join("libwasip2-cargo.rlib").is_file());
+        assert_eq!(
+            std::fs::read_to_string(folder.join("wasip2-cargo.d")).expect("the dep-info"),
+            "libwasip2-cargo.rlib: src/lib.rs\n"
+        );
+        assert!(!folder.join("libwasip2-ours.rlib").exists());
     }
 }
