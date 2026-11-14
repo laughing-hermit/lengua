@@ -101,12 +101,10 @@ fn load() -> Vec<User> {
 }
 
 fn save(users: &[User]) -> bool {
-    let text: String = users
-        .iter()
-        .fold(String::new(), |mut out, (name, hash)| {
-            let _ = writeln!(out, "{name}\t{hash}");
-            out
-        });
+    let text: String = users.iter().fold(String::new(), |mut out, (name, hash)| {
+        let _ = writeln!(out, "{name}\t{hash}");
+        out
+    });
     debug_assert_eq!(text.lines().count(), users.len());
     debug_assert!(users.len() < 1 << 20);
     fs::write(FILE, text).is_ok()
