@@ -911,8 +911,9 @@ HTTP.
 for its identical Chromium on every system and its stability, shows the same front end in a
 window. The idea says `- Native: a desktop window, for the Electron shell of a desktop app`
 (`native-desktop` without screens). `check` then adds `electron` 45.3.2 to the generated
-`web/package.json`, allows its one install script (`allowBuilds: electron: true`: it downloads
-Electron's own binary and checks it against the SHA-256 sums the package carries), and writes
+`web/package.json` (no install script runs: after `pnpm install` the build runs Electron's own
+installer, `pnpm exec install-electron`, which downloads its binary and
+checks it against the SHA-256 sums the package carries), and writes
 `web/desktop/main.mjs`, the shell: one window on the app's address, no navigation away from it,
 no new windows, the page sandboxed with no Node.js. `lengua-run --desktop <folder>` verifies the
 lock, serves the one file on its port, starts Electron from `target/lengua/web/node_modules`
@@ -2479,7 +2480,7 @@ Decided for lengua 3 at L10 (2026-11-14):
 - **Candle, not Burn**, for the example: pure Rust, fewer crates; a model built from a rule, so
   CI downloads nothing.
 - **A desktop app is `lengua-run --desktop`**: the one file served in the same process, Electron
-  from the app's own `node_modules`, one install script allowed (Electron's).
+  from the app's own `node_modules`, installed by its own `install-electron` (no install script).
 - **CI's check job has 120 minutes** (60 before): the native part builds Candle and its mutants
   on each runner.
 

@@ -15,7 +15,6 @@ pub const CLIENT: &str = "web/lib/lengua.ts";
 pub const PNPM: &str = "12.18.0";
 pub const DESKTOP: &str = "web/desktop/main.mjs";
 const ELECTRON: (&str, &str) = ("electron", "45.3.2");
-const ALLOW_ELECTRON: &str = "allowBuilds:\n  electron: true\n";
 
 const BASE: [(&str, &str); 3] = [
     ("next", "16.4.6"),
@@ -730,14 +729,11 @@ fn texts(
         "web/package.json".to_string(),
         package_json(title, dependencies, desktop),
     )];
-    for (file, text) in STATIC {
-        let text = if desktop && file == "web/pnpm-workspace.yaml" {
-            format!("{text}{ALLOW_ELECTRON}")
-        } else {
-            text.to_string()
-        };
-        out.push((file.to_string(), text));
-    }
+    out.extend(
+        STATIC
+            .iter()
+            .map(|(f, t)| ((*f).to_string(), (*t).to_string())),
+    );
     if desktop {
         out.push((
             DESKTOP.to_string(),

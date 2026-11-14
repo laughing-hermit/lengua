@@ -1159,10 +1159,9 @@ pub fn check_web(
             .map_or(&[][..], |w| w.front.packages.as_slice()),
         large: &large,
     };
-    let browser: Vec<String> = prepared
-        .web
-        .as_ref()
-        .map_or_else(Vec::new, |w| w.front.browser.iter().map(|b| b.name.clone()).collect());
+    let browser: Vec<String> = prepared.web.as_ref().map_or_else(Vec::new, |w| {
+        w.front.browser.iter().map(|b| b.name.clone()).collect()
+    });
     let parts = wiki::Parts {
         title: &title,
         shape: prepared.shape,

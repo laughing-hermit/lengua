@@ -658,8 +658,9 @@ next starts (Lengua3.md, section 8).
   nothing and caches nothing. Metal on macOS through ``with `metal` on macOS``; CUDA is not
   declared (NVIDIA's toolkit is not pure Rust and not on the runners).
 - **2026-11-14, L10: desktop apps**: `electron` 45.3.2 (the current release on 2026-11-14, read
-  from the npm registry), the one install script allowed (`allowBuilds`), since Electron's
-  package is a download of its binary checked against the sums it carries; `web/desktop/main.mjs`
+  from the npm registry); its package has no install script, so the build runs its
+  installer, `pnpm exec install-electron`, which downloads the binary and checks it against the
+  sums the package carries; `web/desktop/main.mjs`
   is generated and held like the other files of `web/`; `lengua-run --desktop <folder>` serves
   the one file and starts Electron, and the smoke test (`LENGUA_SMOKE`, `LENGUA_SMOKE_BODY`,
   `LENGUA_SMOKE_OUT`) loads the first page, asks one request and quits. Nothing signed or
