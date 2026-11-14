@@ -1403,12 +1403,14 @@ fn the_wiki_joins_the_screens_and_the_server_through_api_md() {
     assert!(home.contains("source: web/screens/home.tsx\n"), "{home}");
     assert!(
         home.contains("\n# Links\n")
-            && home.contains("* Calls [`GET /api/notes`](api.md), served by "),
+            && home.contains("* Calls: [`GET /api/notes`](../../api.md)."),
         "{home}"
     );
     let top = read(&folder, "idea.md");
     assert!(
-        top.contains("* Serves [`GET /api/notes`](api.md), called by [ui/home](ideas/ui/home.md)."),
+        top.contains("* Serves: [`GET /api/notes`](api.md), ")
+            && top.contains("* Called by: [")
+            && top.contains("](ideas/ui/home.md)"),
         "{top}"
     );
     let index = read(&folder, "index.md");
