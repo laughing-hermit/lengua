@@ -1,6 +1,6 @@
 # Purpose
 
-The program is a small language model, and a native part: it runs on a GPU of the computer
+The program is a small language model, and it is a native part. It runs on a GPU of the computer
 when the build can use one, and on the CPU if not. It reads a prompt on its standard input. It
 writes the prompt and the next eight letters that the model gives, one letter at a time. A rule in
 the program gives the weights of the model, so the model needs no download.
@@ -29,7 +29,7 @@ Then it writes the prompt and the eight letters that come after it, from the mod
 - Expect standard output: "helloeedbfbed\n"
 - Expect exit code: 0
 
-### Example: capital letters
+### Example: letters in upper case
 
 - Standard input: "Zz\n"
 - Expect standard output: "zzbfbedbfb\n"

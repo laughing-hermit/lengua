@@ -262,7 +262,7 @@ of "Which part does what" each part of it is.
   native program, built for this computer's system and CPU, for <reason>. It runs outside the
   sandbox: it can do what the user's account can." A program that names native parts adds
   "Native, beside it: `<name>` (for <reason>), built for this computer and outside the sandbox."
-  Since L10 the line is the reply's `where_it_runs` and the first line of `index.md`.
+  Since L10 the line is the reply's `where_it_runs` and the first section of `index.md`, `# Where it runs`.
 
 ### The vision: the best lengua solution, before the idea
 

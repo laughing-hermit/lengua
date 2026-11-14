@@ -879,7 +879,7 @@ mod tests {
 
     #[test]
     fn native_lines_and_crate_features_are_read() {
-        let text = "- Native: a small model on the GPU, for the fastest local inference\n- Native: `../model`, for the fastest local inference of the notes\n- Native: a window, for a faster screen\n- Uses crate: `candle-core` 0.11.1 with `metal` on macOS, for the tensors of the model\n- Memory: 16 MiB\n- Time: 2 s\n";
+        let text = "- Native: a small model on the GPU, for the fastest local inference\n- Native: `../model`, for the fastest local inference of the notes\n- Native: a window, for a faster screen\n- Uses crate: `candle-core` 0.11.1 with `metal` on macOS, for the numbers of the model\n- Memory: 16 MiB\n- Time: 2 s\n";
         let (codes, out) = run(IdeaKind::Program, text);
         assert_eq!(codes, Vec::<&str>::new());
         assert_eq!(
@@ -904,7 +904,7 @@ mod tests {
             out.crates.first().and_then(|c| c.feature.clone()),
             Some(("metal".to_string(), Some("macos")))
         );
-        let bad = "- Native: `/etc`, for large AI models\n- Native: for large AI models\n- Uses crate: `candle-core` 0.11.1 with `metal` on Plan 9, for tensors\n- Memory: 16 MiB\n- Time: 2 s\n";
+        let bad = "- Native: `/etc`, for large AI models\n- Native: for large AI models\n- Uses crate: `candle-core` 0.11.1 with `metal` on Plan 9, for numbers\n- Memory: 16 MiB\n- Time: 2 s\n";
         let (codes, _) = run(IdeaKind::Program, bad);
         assert_eq!(codes, ["constraint-value"; 3], "{codes:?}");
         let (module, _) = run(IdeaKind::Module, "- Native: a part, for large AI models\n");

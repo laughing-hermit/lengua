@@ -2240,7 +2240,7 @@ fn a_native_part_and_a_desktop_app_run_on_this_computer() {
     assert!(lock.contains(" ../model/lengua.lock\n"), "{lock}");
     let index = read(&desk, "index.md");
     for part in [
-        "\nWhere it runs: An Electron app",
+        "\n# Where it runs\n\n* An Electron app",
         "Native, beside it: `model` (for the fastest local inference)",
         "\n# Back end: native parts\n",
     ] {

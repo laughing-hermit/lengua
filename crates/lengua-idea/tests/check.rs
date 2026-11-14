@@ -119,7 +119,7 @@ title: lengua-idea-"
     assert!(!words.contains("label: checked"));
     let index = read(&folder, "index.md");
     assert!(index.starts_with(
-        "---\nokf_version: \"0.2\"\n---\n\nWhere it runs: One WebAssembly file. Runs on any OS and CPU. Sandboxed: it reaches only what the idea grants.\n\n# Back end: program\n\n* ["
+        "---\nokf_version: \"0.2\"\n---\n\n# Where it runs\n\n* One WebAssembly file. Runs on any OS and CPU. Sandboxed: it reaches only what the idea grants.\n\n# Back end: program\n\n* ["
     ));
     assert!(
         index
@@ -848,5 +848,5 @@ fn a_native_need_is_declared_with_a_named_reason_or_refused() {
     let manifest = read(&native, "Cargo.toml");
     assert!(!manifest.contains("lto = true"), "{manifest}");
     let index = read(&native, "index.md");
-    assert!(index.contains("\nWhere it runs: A native program, built for this computer's system and CPU, for the fastest local inference."), "{index}");
+    assert!(index.contains("\n# Where it runs\n\n* A native program, built for this computer's system and CPU, for the fastest local inference."), "{index}");
 }

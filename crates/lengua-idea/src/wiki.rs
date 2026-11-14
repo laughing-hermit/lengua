@@ -485,7 +485,7 @@ fn index_line(title: &str, link: &str, description: &str, label: &str) -> String
 
 pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
     let mut out = format!(
-        "---\nokf_version: \"0.2\"\n---\n\nWhere it runs: {}\n",
+        "---\nokf_version: \"0.2\"\n---\n\n# Where it runs\n\n* {}\n",
         parts.place
     );
     let of = |kind: IdeaKind| -> Vec<String> {
