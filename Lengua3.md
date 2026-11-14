@@ -688,6 +688,7 @@ opt-level = 3
 panic = "abort"
 lto = true
 codegen-units = 1
+strip = true
 
 [workspace]
 ```

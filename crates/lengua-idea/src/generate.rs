@@ -217,6 +217,7 @@ pub(crate) fn cargo_toml(package: &Package) -> String {
         "panic = \"abort\"",
         "lto = true",
         "codegen-units = 1",
+        "strip = true",
         "",
         "[workspace]",
     ] {
@@ -485,6 +486,7 @@ opt-level = 3
 panic = \"abort\"
 lto = true
 codegen-units = 1
+strip = true
 
 [workspace]
 ";
@@ -516,7 +518,7 @@ codegen-units = 1
         let text = cargo_toml(&package);
         assert!(text.starts_with("[package]\nname = \"word-count\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\ninclude = [\"src/main.rs\", \"src/words.rs\"]\nautobins = false\n\n[lib]\nname = \"word_count\"\npath = \"src/main.rs\"\n\n[dependencies]\ngpui = \"=0.2.0\"\njson = { path = \"../json\" }\n\n[lints.rust]\n"));
         assert!(text.contains("indexing_slicing = \"deny\"\nmissing_errors_doc = \"allow\"\nmissing_panics_doc = \"allow\"\n"));
-        assert!(text.ends_with("codegen-units = 1\n\n[workspace]\n"));
+        assert!(text.ends_with("codegen-units = 1\nstrip = true\n\n[workspace]\n"));
     }
 
     #[test]
