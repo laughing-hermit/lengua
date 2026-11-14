@@ -7,6 +7,7 @@ import { examples } from "./server";
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 function canonical(text: string | null): string {
@@ -34,7 +35,13 @@ function answer(input: RequestInfo | URL, init?: RequestInit): Promise<Response>
   return Promise.resolve(new Response(empty ? null : found.answer, { status: found.status }));
 }
 
+const errors: string[] = [];
+
 export function show(element: ReactElement, first: Readonly<Record<string, unknown>>): ScreenRecord {
+  errors.length = 0;
+  vi.spyOn(console, "error").mockImplementation((...parts: unknown[]) => {
+    errors.push(parts.map(String).join(" "));
+  });
   const record: ScreenRecord = { first, current: {} };
   vi.stubGlobal("fetch", answer);
   render(<ScreenContext.Provider value={record}>{element}</ScreenContext.Provider>);
@@ -57,7 +64,7 @@ export function click(name: string): void {
 export async function expectText(text: string): Promise<void> {
   await waitFor(
     () => {
-      expect(document.body.textContent ?? "").toContain(text);
+      expect(document.body.textContent ?? "", errors.join(" | ").slice(0, 600)).toContain(text);
     },
     { timeout: 5000 },
   );
