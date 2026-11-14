@@ -902,6 +902,10 @@ pub fn check_web(
     }
     let planned = build(folder, &prepared);
     report.trust = trust(&planned);
+    let large = prepared
+        .web
+        .as_ref()
+        .map_or_else(Vec::new, |w| large_packages(folder, &w.front.packages));
     let interface = wiki::Interface {
         routes: &prepared.routes,
         calls: &prepared.calls,
@@ -915,7 +919,8 @@ pub fn check_web(
             .web
             .as_ref()
             .map_or(&[][..], |w| w.front.packages.as_slice()),
-        crates: prepared.plan.crates,
+        crates: &prepared.plan.crate_names,
+        large: &large,
     };
     let parts = wiki::Parts {
         shape: prepared.shape,
@@ -988,4 +993,42 @@ pub fn mutant_groups(folder: &Path, build: &Build) -> (Vec<Vec<Mutant>>, String)
         })
         .collect();
     lengua_lint::groups(&sources)
+}
+
+fn dir_size(root: &Path) -> u64 {
+    let Ok(start) = fs::canonicalize(root) else {
+        return 0;
+    };
+    let mut stack = vec![start];
+    let mut total = 0u64;
+    let mut seen = 0usize;
+    while let Some(dir) = stack.pop() {
+        seen += 1;
+        if seen > 100_000 {
+            break;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+                continue;
+            };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else if meta.is_file() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+fn large_packages(folder: &Path, packages: &[(String, String)]) -> Vec<(String, u64)> {
+    let modules = folder.join("target/lengua/web/node_modules");
+    packages
+        .iter()
+        .map(|(name, _)| (name.clone(), dir_size(&modules.join(name))))
+        .filter(|(_, size)| *size > 1 << 20)
+        .collect()
 }

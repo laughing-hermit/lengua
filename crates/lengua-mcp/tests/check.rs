@@ -1466,6 +1466,13 @@ fn the_wiki_joins_the_screens_and_the_server_through_api_md() {
         !package.contains('^') && !package.contains('~'),
         "{package}"
     );
+}
+
+#[test]
+fn a_changed_screen_and_a_changed_route_show_in_the_log_and_in_api_md() {
+    let folder = notes_ideas_only("notes-wiki-changes");
+    let mut server = Server::start();
+    assert_eq!(server.check(10, &folder)["ok"], true);
     let screen = read(&folder, "web/screens/home.tsx").replace(
         "<CardTitle>Notes</CardTitle>",
         "<CardTitle>All notes</CardTitle>",
@@ -1685,14 +1692,14 @@ impl Socket {
         if payload.len() < 126 {
             frame.push(0x80 | u8::try_from(payload.len()).expect("a short length"));
         } else if payload.len() < 65_536 {
-            frame.push(0x80 | 126);
+            frame.push(0x80 | 0x7e);
             frame.extend_from_slice(
                 &u16::try_from(payload.len())
                     .expect("a length")
                     .to_be_bytes(),
             );
         } else {
-            frame.push(0x80 | 127);
+            frame.push(0x80 | 0x7f);
             frame.extend_from_slice(
                 &u64::try_from(payload.len())
                     .expect("a length")
@@ -1763,7 +1770,7 @@ fn http_put(port: u16, path: &str) -> String {
 fn names(tree: &Value) -> Vec<String> {
     tree["result"]["nodes"]
         .as_array()
-        .map(|nodes| {
+        .map_or_default(|nodes| {
             nodes
                 .iter()
                 .filter_map(|n| n["name"]["value"].as_str())
@@ -1771,7 +1778,6 @@ fn names(tree: &Value) -> Vec<String> {
                 .map(|n| n.trim().to_string())
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 fn chrome_labels(chrome: &Path, port: u16) -> Vec<String> {

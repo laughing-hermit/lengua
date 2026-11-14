@@ -1510,9 +1510,10 @@ it reads any code.
 - **`index.md` has a section for each side:** `# Back end` (the program, its modules, its
   libraries and components), `# Front end` (the screens), `# Interface` (`api.md`), and later
   `# Vision` (L11) and `# Desktop` (L10); each line with its label. Its `# Dependencies` line
-  counts the crates and the npm packages (direct, and every one in `web/pnpm-lock.yaml`), and
-  names the npm packages that are large (over 1 MiB in pnpm's copy, when the build has
-  installed them).
+  names each crate the ideas declare (a `-sys` crate marked as not pure Rust, since it binds a C
+  library; lengua can't tell more without reading the crate), counts and names the npm packages
+  of `web/package.json`, and names the npm packages that are large (over 1 MiB in pnpm's copy,
+  when the build has installed them).
 - **The query path.** An agent reads `index.md`, then `api.md`, then the pages of the side it
   changes, and only then the code. The skills say so at L11; the builder of lengua works that
   way now.

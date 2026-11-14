@@ -299,8 +299,7 @@ fn next_build(worker: &Worker, stage: &Path) -> Result<(), Failure> {
 pub(crate) fn media_type(path: &str) -> &'static str {
     let extension = Path::new(path)
         .extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
+        .map_or_default(|e| e.to_string_lossy().to_ascii_lowercase());
     match extension.as_str() {
         "html" => "text/html; charset=utf-8",
         "js" | "mjs" => "text/javascript; charset=utf-8",

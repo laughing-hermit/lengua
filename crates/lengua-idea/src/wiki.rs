@@ -20,7 +20,8 @@ pub(crate) struct Interface<'a> {
     pub calls: &'a [(String, Vec<String>)],
     pub client_hash: Option<String>,
     pub packages: &'a [(String, String)],
-    pub crates: usize,
+    pub crates: &'a [String],
+    pub large: &'a [(String, u64)],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,14 +187,37 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
     }
     let packages = parts.interface.packages;
     let mut counts = Vec::new();
-    if parts.interface.crates > 0 {
-        counts.push(format!("* Crates: {}.\n", parts.interface.crates));
+    let crates = parts.interface.crates;
+    if !crates.is_empty() {
+        let names: Vec<String> = crates
+            .iter()
+            .map(|n| {
+                if n.ends_with("-sys") {
+                    format!("`{n}` (not pure Rust: a `-sys` crate binds a C library)")
+                } else {
+                    format!("`{n}`")
+                }
+            })
+            .collect();
+        counts.push(format!("* Crates: {} ({}).\n", crates.len(), names.join(", ")));
     }
     if !packages.is_empty() {
         let names: Vec<String> = packages.iter().map(|(n, v)| format!("`{n}` {v}")).collect();
         counts.push(format!(
             "* npm packages: {} in `web/package.json` ({}), with the packages every front end has for its build and tests, pinned in `web/pnpm-lock.yaml`.\n",
             packages.len(),
+            names.join(", ")
+        ));
+    }
+    if !parts.interface.large.is_empty() {
+        let names: Vec<String> = parts
+            .interface
+            .large
+            .iter()
+            .map(|(n, size)| format!("`{n}` ({} KiB)", size / 1024))
+            .collect();
+        counts.push(format!(
+            "* Large npm packages, over 1 MiB in pnpm's copy: {}.\n",
             names.join(", ")
         ));
     }
