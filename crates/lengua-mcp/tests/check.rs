@@ -1086,10 +1086,21 @@ fn done(server: &mut Server, folder: &Path, base: u64) -> Value {
 }
 
 fn shared_library(name: &str) {
+    shared_library_using(name, &[]);
+}
+
+fn shared_library_using(name: &str, used: &[&str]) {
     let path = format!("libraries/{name}");
-    let root = bundle(&format!("lib-{name}"), &[path.as_str()]);
+    let mut parts: Vec<String> = used.iter().map(|u| format!("libraries/{u}")).collect();
+    parts.push(path.clone());
+    let names: Vec<&str> = parts.iter().map(String::as_str).collect();
+    let root = bundle(&format!("lib-{name}"), &names);
     let folder = root.join(&path);
     let mut server = Server::start();
+    for (k, part) in used.iter().enumerate() {
+        let reply = done(&mut server, &root.join("libraries").join(part), 5000 + k as u64 * 1000);
+        assert_eq!(reply["label"], "checked", "{part}: {reply:#}");
+    }
     let reply = done(&mut server, &folder, 10);
     assert_eq!(reply["label"], "checked", "{reply:#}");
     assert_eq!(reply["build"]["tests"]["failed"], 0, "{reply:#}");
@@ -1107,7 +1118,132 @@ fn shared_library(name: &str) {
     assert!(!lock.contains("\nsealed "), "{lock}");
     let cargo = fs::read_to_string(folder.join("Cargo.toml")).expect("Cargo.toml");
     assert!(cargo.contains("[lib]\n"), "{cargo}");
-    assert!(!cargo.contains("[dependencies]"), "{cargo}");
+    assert_eq!(cargo.contains("[dependencies]"), !used.is_empty(), "{cargo}");
+    for part in used {
+        assert!(
+            lock.contains(&format!(" ../{part}/lengua.lock\n")),
+            "{lock}"
+        );
+    }
+}
+
+#[test]
+fn the_shared_library_logins_uses_hashes_and_is_checked() {
+    shared_library_using("logins", &["hashes"]);
+}
+
+#[test]
+fn the_shared_library_ai_uses_json_and_is_checked() {
+    shared_library_using("ai", &["json"]);
+}
+
+#[test]
+fn the_shared_library_vectors_uses_json_and_is_checked() {
+    shared_library_using("vectors", &["json"]);
+}
+
+fn ask_checked(test: &str, server: &mut Server) -> PathBuf {
+    let root = bundle(
+        test,
+        &[
+            "libraries/json",
+            "libraries/ai",
+            "libraries/vectors",
+            "examples/ask",
+        ],
+    );
+    for (k, library) in ["json", "ai", "vectors"].iter().enumerate() {
+        let reply = done(server, &root.join("libraries").join(library), 100 + k as u64 * 1000);
+        assert_eq!(reply["label"], "checked", "{library}: {reply:#}");
+    }
+    root.join("examples/ask")
+}
+
+#[test]
+fn a_program_asks_a_model_calls_a_service_and_gets_a_secret_under_its_grants() {
+    let mut server = Server::start();
+    let folder = ask_checked("ask", &mut server);
+    let reply = done(&mut server, &folder, 5000);
+    assert_ne!(reply["label"], "unchecked", "{reply:#}");
+    assert_eq!(reply["build"]["tests"]["failed"], 0, "{reply:#}");
+    let world = read(&folder, "wit/world.wit");
+    assert!(world.contains("import wasi:http/outgoing-handler@"), "{world}");
+    let lock = read(&folder, "lengua.lock");
+    assert!(lock.contains(" ../../libraries/ai/lengua.lock\n"), "{lock}");
+    let live = server.run_to_end(8000, &folder, &json!({"stdin": "call\n"}));
+    assert_eq!(live["state"], "refused", "{live:#}");
+    assert!(
+        live["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("the secret `SERVICE_KEY`")),
+        "{live:#}"
+    );
+}
+
+fn files_holding(folder: &Path, marked: &str, found: &mut Vec<String>) {
+    for entry in fs::read_dir(folder).expect("a folder").flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if entry.file_name() != "target" {
+                files_holding(&path, marked, found);
+            }
+        } else if fs::read(&path).is_ok_and(|bytes| {
+            bytes
+                .windows(marked.len())
+                .any(|w| w == marked.as_bytes())
+        }) {
+            found.push(path.display().to_string());
+        }
+    }
+}
+
+#[test]
+fn a_secret_reaches_the_program_and_no_file_or_reply_of_lengua() {
+    let marked = "lengua-marked-secret-7f3a";
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lengua-mcp"));
+    command
+        .env("SERVICE_KEY", marked)
+        .env("LENGUA_MODEL_URL", "http://127.0.0.1:9")
+        .env("LENGUA_MODEL", "none");
+    let mut server = Server::start_with(command);
+    let folder = ask_checked("ask-secret", &mut server);
+    let reply = done(&mut server, &folder, 5000);
+    let started = Instant::now();
+    let service = loop {
+        match std::net::TcpListener::bind("localhost:7813") {
+            Ok(listener) => break listener,
+            Err(error) => {
+                assert!(started.elapsed() < Duration::from_secs(60), "{error}");
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+    };
+    let answering = thread::spawn(move || {
+        let (mut stream, _) = service.accept().expect("a client");
+        let request = lengua_host::read_request(&mut stream);
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nhi")
+            .expect("an answer");
+        String::from_utf8_lossy(&request).to_string()
+    });
+    let run = server.run_to_end(9000, &folder, &json!({"stdin": "call\n"}));
+    let request = answering.join().expect("the service");
+    assert_eq!(run["stdout"], "200 hi, and the key has 25 letters\n", "{run:#}");
+    assert!(request.contains(&format!("Bearer {marked}")), "{request}");
+    let asked = server.run_to_end(9100, &folder, &json!({"stdin": "ask\nBuy milk."}));
+    assert!(
+        asked["stdout"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("the model failed for a short time (503)")),
+        "{asked:#}"
+    );
+    let again = server.check(9200, &folder);
+    let mut found = Vec::new();
+    files_holding(&folder, marked, &mut found);
+    assert_eq!(found, Vec::<String>::new());
+    for shown in [&reply, &run, &again, &asked] {
+        assert!(!shown.to_string().contains(marked), "{shown:#}");
+    }
 }
 
 #[test]
@@ -1373,14 +1509,20 @@ fn the_shop_is_one_file_of_three_modules_two_libraries_and_a_c_component() {
 }
 
 fn notes_ideas_only(test: &str) -> PathBuf {
-    let root = bundle(test, &["examples/titles", "examples/notes"]);
+    let root = bundle(test, &["libraries/hashes", "libraries/logins", "examples/titles", "examples/notes"]);
     let folder = root.join("examples/notes");
     fs::remove_dir_all(folder.join("src")).expect("the Rust removed");
     folder
 }
 
 fn titles_checked(server: &mut Server, notes: &Path, base: u64) {
-    let titles = notes.parent().expect("examples").join("titles");
+    let examples = notes.parent().expect("examples");
+    let libraries = examples.parent().expect("the root").join("libraries");
+    for (k, library) in ["hashes", "logins"].iter().enumerate() {
+        let reply = done(server, &libraries.join(library), 20_000 + k as u64 * 10_000);
+        assert_eq!(reply["label"], "checked", "{library}: {reply:#}");
+    }
+    let titles = examples.join("titles");
     let reply = done(server, &titles, base);
     assert_eq!(reply["label"], "checked", "{reply:#}");
 }
@@ -1598,7 +1740,7 @@ fn typescript_that_breaks_a_rule_and_hand_edits_of_the_front_end_are_refused() {
 
 #[test]
 fn notes_is_checked_as_one_file_that_serves_its_front_end() {
-    let root = bundle("notes", &["examples/titles", "examples/notes"]);
+    let root = bundle("notes", &["libraries/hashes", "libraries/logins", "examples/titles", "examples/notes"]);
     let folder = root.join("examples/notes");
     let mut server = Server::start();
     titles_checked(&mut server, &folder, 2000);
@@ -1627,8 +1769,10 @@ fn notes_is_checked_as_one_file_that_serves_its_front_end() {
     let mut child = Command::new(lengua_run())
         .arg(&folder)
         .env("LENGUA_HOME", home())
+        .env("SESSION_KEY", "a key of the test")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("lengua-run starts");
     let started = Instant::now();
@@ -1636,11 +1780,41 @@ fn notes_is_checked_as_one_file_that_serves_its_front_end() {
     let milliseconds = started.elapsed().as_millis();
     let notes = http_get(7812, "/api/notes");
     let note_page = http_get(7812, "/note/?id=1");
+    let at_once: Vec<thread::JoinHandle<String>> = (0..8)
+        .map(|_| thread::spawn(|| http_get(7812, "/api/notes/1")))
+        .collect();
+    let answers: Vec<String> = at_once
+        .into_iter()
+        .map(|t| t.join().expect("a client"))
+        .collect();
+    let account = "{\"name\":\"bob\",\"password\":\"long password\"}";
+    let made = http_send(7812, "POST", "/api/register", account, "");
+    let signed = http_send(7812, "POST", "/api/login", account, "");
+    let token = signed
+        .split("\"token\":\"")
+        .nth(1)
+        .and_then(|t| t.split('"').next())
+        .unwrap_or_default()
+        .to_string();
+    let me = http_send(7812, "GET", "/api/me", "", &format!("Bearer {token}"));
     let browser = std::env::var_os("LENGUA_CHROME")
         .filter(|c| !c.is_empty())
         .map(|chrome| chrome_labels(&PathBuf::from(chrome), 7812));
     let _ = child.kill();
     let _ = child.wait();
+    let mut logs = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let _ = std::io::Read::read_to_string(&mut stderr, &mut logs);
+    }
+    for answer in &answers {
+        assert!(answer.ends_with("\"title\":\"Milk\",\"text\":\"Buy two bottles.\"}"), "{answer}");
+    }
+    assert!(made.starts_with("HTTP/1.1 201"), "{made}");
+    assert!(signed.starts_with("HTTP/1.1 200"), "{signed}");
+    assert!(me.ends_with("{\"name\":\"bob\"}"), "{me}");
+    assert!(logs.contains("lengua-run: GET /api/notes 200 "), "{logs}");
+    assert!(logs.contains("lengua-run: POST /api/login 200 "), "{logs}");
+    assert!(!logs.contains("a key of the test"), "{logs}");
     assert!(
         page.starts_with("HTTP/1.1 200") && page.contains("<html"),
         "{page}"
@@ -1773,6 +1947,24 @@ impl Socket {
             }
         }
     }
+}
+
+fn http_send(port: u16, method: &str, path: &str, body: &str, authorization: &str) -> String {
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("the server");
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+    let header = if authorization.is_empty() {
+        String::new()
+    } else {
+        format!("Authorization: {authorization}\r\n")
+    };
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{header}Content-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).expect("a request");
+    let mut answer = String::new();
+    let _ = std::io::Read::read_to_string(&mut stream, &mut answer);
+    answer
 }
 
 fn http_put(port: u16, path: &str) -> String {

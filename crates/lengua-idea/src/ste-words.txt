@@ -705,6 +705,7 @@ sure a
 surrogate n
 symbol n
 system n
+tab n
 table n
 tag n
 take v

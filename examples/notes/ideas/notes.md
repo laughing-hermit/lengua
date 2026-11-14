@@ -17,8 +17,9 @@ status: draft
 
 # Purpose
 
-The module keeps the notes and answers the routes under `/api/`. It checks a new note and
-makes the summary of a note.
+The module keeps the notes in the file `data/notes.txt`, one note on a line, and answers the
+routes under `/api/`. It checks a new note, and it gives the routes of the accounts and of the
+summary to the modules `accounts` and `summary`.
 
 # Behaviours
 
@@ -35,6 +36,34 @@ Then the answer is 400 with an error.
 - Expect status: 400
 - Expect body: "{\"error\":\"A title has 40 characters or fewer.\"}"
 
+## Give a kept note
+
+Given the file of the notes with a note of the number 3,
+When a client sends `GET /api/notes/3`,
+Then the answer is 200 with that note.
+
+### Example: the note of the number 3
+
+- File `data/notes.txt`: "1\tMilk\tBuy two bottles.\n2\tCall\tCall the shop at noon.\n3\tTea\tBuy green tea.\n"
+- Request: `GET /api/notes/3`
+- Expect status: 200
+- Expect body: "{\"id\":3,\"title\":\"Tea\",\"text\":\"Buy green tea.\"}"
+
+## Add a note after the kept notes
+
+Given the file of the notes with a note of the number 7,
+When a client sends a note with `POST /api/notes`,
+Then the new note gets the number 8, and the server writes its line with no tab in it.
+
+### Example: the next number
+
+- File `data/notes.txt`: "7\tTea\tBuy green tea.\n"
+- Request: `POST /api/notes`
+- Request body: "{\"title\":\"Rice\",\"text\":\"Two\tbags.\"}"
+- Expect status: 201
+- Expect body: "{\"id\":8,\"title\":\"Rice\",\"text\":\"Two bags.\"}"
+- Expect file `data/notes.txt`: "7\tTea\tBuy green tea.\n8\tRice\tTwo bags.\n"
+
 ## Refuse a summary of a note that is not there
 
 Given no note with the number 7,
@@ -48,13 +77,20 @@ Then the answer is 404 with an error.
 - Expect status: 404
 - Expect body: "{\"error\":\"No note has this number.\"}"
 
+# Constraints
+
+- Uses: `accounts`, `summary`
+
 # Structure
 
 - `route`: gives the status and the JSON for a method and a path under `/api/`.
+- `load`: gives the notes of the file, or the two first notes when there is no file.
+- `note_line`: reads one line of the file of the notes.
+- `save`: writes the notes to the file, one note on a line.
 - `all`: gives every note as a JSON list.
 - `one`: gives the note with a number, or an error.
-- `add`: gives a new note with its new number, or an error for a bad title.
-- `summary`: gives the description of a card with the summary of a note.
+- `clean`: gives a text with a space in place of each tab and line end.
+- `add`: keeps a new note with its new number, or gives an error for a bad title.
 - `note_json`: writes one note as JSON.
 - `quoted`: writes a text as a JSON string.
 - `field`: finds the value of a text field in a JSON object.

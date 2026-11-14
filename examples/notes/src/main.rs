@@ -1,4 +1,6 @@
+mod accounts;
 mod notes;
+mod summary;
 
 use std::io::{Read, Write};
 
@@ -14,19 +16,20 @@ impl wasip2::exports::http::incoming_handler::Guest for Notes {
     fn handle(request: IncomingRequest, response_out: ResponseOutparam) {
         let method = method_name(&request.method());
         let path = request.path_with_query().unwrap_or_default();
+        let token = header(&request, "authorization");
         let body = body_of(&request);
         debug_assert!(method.len() < 1 << 16);
         debug_assert!(body.len() < 1 << 20);
-        let (status, kind, bytes) = answer(method, &path, &body);
+        let (status, kind, bytes) = answer(method, &path, &body, &token);
         respond(response_out, status, kind, &bytes);
     }
 }
 
-fn answer(method: &str, path: &str, body: &str) -> (u16, &'static str, Vec<u8>) {
+fn answer(method: &str, path: &str, body: &str, token: &str) -> (u16, &'static str, Vec<u8>) {
     debug_assert!(method.len() < 1 << 16);
     debug_assert!(path.len() < 1 << 16);
     if path.starts_with("/api/") {
-        let (status, text) = notes::route(method, path, body);
+        let (status, text) = notes::route(method, path, body, token);
         return (status, "application/json", text.into_bytes());
     }
     match lengua_web::asset(path) {
@@ -81,4 +84,15 @@ fn respond(response_out: ResponseOutparam, status: u16, kind: &str, bytes: &[u8]
         let _ = stream.flush();
     }
     let _ = OutgoingBody::finish(out, None);
+}
+
+fn header(request: &IncomingRequest, name: &str) -> String {
+    let values = request.headers().get(name);
+    let text = values
+        .first()
+        .map(|value| String::from_utf8_lossy(value).to_string())
+        .unwrap_or_default();
+    debug_assert!(name.len() < 1 << 10);
+    debug_assert!(text.len() < 1 << 16);
+    text
 }

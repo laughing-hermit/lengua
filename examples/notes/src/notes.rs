@@ -1,15 +1,23 @@
-const NOTES: [(u32, &str, &str); 2] = [
+use std::fs;
+
+const FILE: &str = "data/notes.txt";
+const FIRST: [(u32, &str, &str); 2] = [
     (1, "Milk", "Buy two bottles."),
     (2, "Call", "Call the shop at noon."),
 ];
 
-pub fn route(method: &str, path: &str, body: &str) -> (u16, String) {
+pub type Note = (u32, String, String);
+
+pub fn route(method: &str, path: &str, body: &str, token: &str) -> (u16, String) {
     debug_assert!(path.starts_with("/api/"));
     debug_assert!(method.len() < 1 << 16);
     match (method, path) {
         ("GET", "/api/notes") => (200, all()),
         ("POST", "/api/notes") => add(body),
-        ("POST", "/api/ui") => summary(body),
+        ("POST", "/api/ui") => crate::summary::summary(body),
+        ("POST", "/api/register") => crate::accounts::register(body),
+        ("POST", "/api/login") => crate::accounts::login(body),
+        ("GET", "/api/me") => crate::accounts::me(token),
         ("GET", _) => match path.strip_prefix("/api/notes/") {
             Some(id) => one(id),
             None => (404, error("No such route.")),
@@ -18,14 +26,47 @@ pub fn route(method: &str, path: &str, body: &str) -> (u16, String) {
     }
 }
 
+pub fn load() -> Vec<Note> {
+    let Ok(text) = fs::read_to_string(FILE) else {
+        return FIRST
+            .iter()
+            .map(|(id, title, text)| (*id, (*title).to_string(), (*text).to_string()))
+            .collect();
+    };
+    let notes: Vec<Note> = text.lines().filter_map(note_line).collect();
+    debug_assert!(notes.len() <= text.lines().count());
+    debug_assert!(notes.iter().all(|(id, _, _)| *id > 0));
+    notes
+}
+
+fn note_line(line: &str) -> Option<Note> {
+    let mut parts = line.splitn(3, '\t');
+    let id = parts.next()?.parse::<u32>().ok().filter(|n| *n > 0)?;
+    let title = parts.next()?.to_string();
+    let text = parts.next().unwrap_or_default().to_string();
+    debug_assert!(!line.is_empty());
+    debug_assert!(title.len() < line.len());
+    Some((id, title, text))
+}
+
+fn save(notes: &[Note]) -> bool {
+    let text: String = notes
+        .iter()
+        .map(|(id, title, text)| format!("{id}\t{title}\t{text}\n"))
+        .collect();
+    debug_assert_eq!(text.lines().count(), notes.len());
+    debug_assert!(notes.len() < 1 << 20);
+    fs::write(FILE, text).is_ok()
+}
+
 fn all() -> String {
-    let parts: Vec<String> = NOTES
+    let parts: Vec<String> = load()
         .iter()
         .map(|(id, title, text)| note_json(*id, title, text))
         .collect();
-    debug_assert_eq!(parts.len(), NOTES.len());
     let list = format!("[{}]", parts.join(","));
     debug_assert!(list.starts_with('['));
+    debug_assert!(list.ends_with(']'));
     list
 }
 
@@ -33,39 +74,39 @@ fn one(id: &str) -> (u16, String) {
     debug_assert!(id.len() < 1 << 10);
     let found = id.parse::<u32>().ok().and_then(find);
     let answer = match found {
-        Some((id, title, text)) => (200, note_json(id, title, text)),
+        Some((id, title, text)) => (200, note_json(id, &title, &text)),
         None => (404, error("No note has this number.")),
     };
     debug_assert!(answer.0 == 200 || answer.0 == 404);
     answer
 }
 
+fn clean(text: &str) -> String {
+    let out: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    debug_assert!(!out.contains('\t'));
+    debug_assert!(!out.contains('\n'));
+    out
+}
+
 fn add(body: &str) -> (u16, String) {
     debug_assert!(body.len() < 1 << 20);
-    let title = field(body, "title").unwrap_or_default();
-    let text = field(body, "text").unwrap_or_default();
+    let title = clean(&field(body, "title").unwrap_or_default());
+    let text = clean(&field(body, "text").unwrap_or_default());
     let problem = titles::title_error(&title);
     if !problem.is_empty() {
         return (400, error(&problem));
     }
-    let next = u32::try_from(NOTES.len())
-        .unwrap_or(u32::MAX)
-        .saturating_add(1);
-    debug_assert!(next > 2);
+    let mut notes = load();
+    let next = notes.iter().map(|(id, _, _)| *id).max().unwrap_or(0).saturating_add(1);
+    debug_assert!(next > 0);
+    notes.push((next, title.clone(), text.clone()));
+    if !save(&notes) {
+        return (500, error("The note was not saved."));
+    }
     (201, note_json(next, &title, &text))
-}
-
-fn summary(body: &str) -> (u16, String) {
-    debug_assert!(body.len() < 1 << 20);
-    let Some((_, title, text)) = number(body, "id").and_then(find) else {
-        return (404, error("No note has this number."));
-    };
-    let content = quoted(&format!("{title}: {text}"));
-    let spec = format!(
-        "{{\"root\":\"card\",\"elements\":{{\"card\":{{\"type\":\"Card\",\"props\":{{\"title\":\"Summary\"}},\"children\":[\"text\"]}},\"text\":{{\"type\":\"Text\",\"props\":{{\"content\":{content}}},\"children\":[]}}}}}}"
-    );
-    debug_assert!(spec.contains(&content));
-    (200, spec)
 }
 
 fn note_json(id: u32, title: &str, text: &str) -> String {
@@ -78,7 +119,7 @@ fn note_json(id: u32, title: &str, text: &str) -> String {
     )
 }
 
-fn quoted(text: &str) -> String {
+pub fn quoted(text: &str) -> String {
     let mut out = String::from("\"");
     for c in text.chars() {
         match c {
@@ -95,7 +136,7 @@ fn quoted(text: &str) -> String {
     out
 }
 
-fn field(body: &str, name: &str) -> Option<String> {
+pub fn field(body: &str, name: &str) -> Option<String> {
     debug_assert!(name.len() < 1 << 16);
     let key = format!("\"{name}\"");
     let rest = body.split_once(&key)?.1.trim_start().strip_prefix(':')?;
@@ -118,7 +159,7 @@ fn field(body: &str, name: &str) -> Option<String> {
     None
 }
 
-fn number(body: &str, name: &str) -> Option<u32> {
+pub fn number(body: &str, name: &str) -> Option<u32> {
     debug_assert!(name.len() < 1 << 16);
     let key = format!("\"{name}\"");
     let rest = body.split_once(&key)?.1.trim_start().strip_prefix(':')?;
@@ -131,16 +172,17 @@ fn number(body: &str, name: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
-fn error(message: &str) -> String {
+pub fn error(message: &str) -> String {
     debug_assert!(message.len() < 1 << 16);
     let text = format!("{{\"error\":{}}}", quoted(message));
     debug_assert!(text.contains(message));
     text
 }
 
-fn find(id: u32) -> Option<(u32, &'static str, &'static str)> {
-    debug_assert_eq!(NOTES.len(), 2);
-    let found = NOTES.iter().find(|(n, _, _)| *n == id).copied();
-    debug_assert!(found.is_none_or(|(n, _, _)| n == id));
+pub fn find(id: u32) -> Option<Note> {
+    let notes = load();
+    let found = notes.into_iter().find(|(n, _, _)| *n == id);
+    debug_assert!(found.as_ref().is_none_or(|(n, _, _)| *n == id));
+    debug_assert!(found.as_ref().is_none_or(|(_, title, _)| !title.contains('\t')));
     found
 }

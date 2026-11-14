@@ -19,9 +19,14 @@ fn main() {
 fn answer(mode: &str, text: &str) -> String {
     debug_assert!(mode.len() < 1 << 16);
     debug_assert!(text.len() < 1 << 20);
-    let prompt = ai::fill("Give a short title for this note: {text}", &[("text", text)]);
+    let prompt = ai::fill(
+        "Give a short title for this note: {text}",
+        &[("text", text)],
+    );
     match mode {
-        "ask" => reply(send(MODEL, "/ask", Some(&prompt), &[]), |pieces| pieces.concat()),
+        "ask" => reply(send(MODEL, "/ask", Some(&prompt), &[]), |pieces| {
+            pieces.concat()
+        }),
         "stream" => reply(send(MODEL, "/stream", Some(&prompt), &[]), streamed),
         "json" => reply(
             send(MODEL, "/ask", Some(&prompt), &[("x-lengua-reply", "json")]),
@@ -123,12 +128,18 @@ fn send(
         let _ = fields.append(name, value.as_bytes());
     }
     let request = OutgoingRequest::new(fields);
-    let method = if body.is_some() { Method::Post } else { Method::Get };
+    let method = if body.is_some() {
+        Method::Post
+    } else {
+        Method::Get
+    };
     let _ = request.set_method(&method);
     let _ = request.set_scheme(Some(&Scheme::Http));
     let _ = request.set_authority(Some(authority));
     let _ = request.set_path_with_query(Some(path));
-    let outgoing = request.body().map_err(|()| "the request has no body".to_string())?;
+    let outgoing = request
+        .body()
+        .map_err(|()| "the request has no body".to_string())?;
     let future = outgoing_handler::handle(request, None).map_err(|e| format!("{e:?}"))?;
     write_body(&outgoing, body.unwrap_or_default());
     let _ = OutgoingBody::finish(outgoing, None);

@@ -21,15 +21,16 @@ status: draft
 # Purpose
 
 The program is a small web application for notes. Its back end is an HTTP server in Rust that
-gives the notes as JSON. The server adds a note when the library `titles` accepts its title. It
-also makes a summary of a note for the AI part of the screen. The front end has three screens in
-TypeScript with `Next.js`: `home`, `note` and `write`. The server carries the front end and
-serves it, so the application is one WebAssembly file.
+keeps the notes in the folder `data` and gives them as JSON. The server adds a note when the
+library `titles` accepts its title. It keeps the accounts of its users with the library
+`logins`, and it asks an AI model for the summary of a note. The front end has four screens in
+TypeScript with `Next.js`: `home`, `login`, `note` and `write`. The server carries the front end
+and serves it, so the application is one WebAssembly file.
 
 The screen `write` checks a title in the browser with the same library, so the browser and the
-server give the same answer. The summary is a fixed answer of the server until `lengua` has the
-grant for an AI model. The notes are fixed until `lengua` has the grant for storage. So the
-server checks a new note and gives it back, but it does not keep it.
+server give the same answer. The module `notes` keeps the notes, the module `accounts` keeps the
+accounts, and the module `summary` asks the model. Before the first note is added, the server
+gives two notes.
 
 # Behaviours
 
@@ -68,7 +69,7 @@ Then the answer is 200 with the note as JSON.
 
 Given a note with a title and a text,
 When a client sends it with `POST /api/notes`,
-Then the answer is 201 with the note and its new number.
+Then the answer is 201 with the note and its new number, and the server keeps it.
 
 ### Example: a good note
 
@@ -76,6 +77,7 @@ Then the answer is 201 with the note and its new number.
 - Request body: "{\"title\":\"Tea\",\"text\":\"Buy green tea.\"}"
 - Expect status: 201
 - Expect body: "{\"id\":3,\"title\":\"Tea\",\"text\":\"Buy green tea.\"}"
+- Expect file `data/notes.txt`: "1\tMilk\tBuy two bottles.\n2\tCall\tCall the shop at noon.\n3\tTea\tBuy green tea.\n"
 
 ### Example: a note with no title
 
@@ -86,7 +88,7 @@ Then the answer is 201 with the note and its new number.
 
 ## Give a summary for the screen
 
-Given the note with the number 1,
+Given the note with the number 1 and the answer of the model,
 When a client sends `POST /api/ui` with the number,
 Then the answer is a description of a card with the summary, for the AI part of the screen.
 
@@ -94,8 +96,16 @@ Then the answer is a description of a card with the summary, for the AI part of 
 
 - Request: `POST /api/ui`
 - Request body: "{\"id\":1}"
+- Model answers: " Milk: Buy two bottles.\n"
 - Expect status: 200
 - Expect body: "{\"root\":\"card\",\"elements\":{\"card\":{\"type\":\"Card\",\"props\":{\"title\":\"Summary\"},\"children\":[\"text\"]},\"text\":{\"type\":\"Text\",\"props\":{\"content\":\"Milk: Buy two bottles.\"},\"children\":[]}}}"
+
+### Example: no answer of the model
+
+- Request: `POST /api/ui`
+- Request body: "{\"id\":2}"
+- Expect status: 503
+- Expect body: "{\"error\":\"The summary is not ready.\"}"
 
 ## Answer 404 for a route that is not there
 
@@ -142,15 +152,23 @@ Then the answer is 200 with the page of the screen `home`.
 # Constraints
 
 - Serves: HTTP on TCP port 7812
+- Reads: random numbers
+- Reads: the clock
+- Reads: the secret `SESSION_KEY`
+- Writes: files in `data`
+- Asks: an AI model, for the summary of a note, up to 1 calls and 400 tokens
 - Memory: 64 MiB
 - Time: 5 s
-- Modules: `notes`, `ui/home`, `ui/note`, `ui/write`
+- Modules: `notes`, `accounts`, `summary`, `ui/home`, `ui/login`, `ui/note`, `ui/write`
 - Uses crate: `wasip2` 2.0.1, for the interface of the server to its host, the HTTP world of `WASI`
-- Uses: `../titles`
+- Uses: `../titles`, `../../libraries/logins`
 - Route: `GET /api/notes`
 - Route: `GET /api/notes/{id}`
 - Route: `POST /api/notes`
 - Route: `POST /api/ui`
+- Route: `POST /api/register`
+- Route: `POST /api/login`
+- Route: `GET /api/me`
 - Uses shadcn: `button`, `card`, `input`, `label`, `textarea`
 - Uses package: `@json-render/core` 0.22.0, for the catalog of the parts that an AI model can put on the screen
 - Uses package: `@json-render/react` 0.22.0, for the parts of the screen that an AI model describes
@@ -163,6 +181,7 @@ Then the answer is 200 with the page of the screen `home`.
 - `method_name`: gives the name of the method of a request.
 - `body_of`: reads the body of a request as text.
 - `respond`: writes the answer to the client.
+- `header`: gives the first value of a header of a request, or no text.
 
 # Links
 
