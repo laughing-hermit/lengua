@@ -213,7 +213,7 @@ jobs:
             echo "$f: $(wc -c < "$f") bytes"
             cargo run --locked -q -p lengua-mcp -- imports "$f"
           done
-      - name: the shop built again on one system, to see whether its bytes change from build to build
+      - name: the shop built again from clean on one system, to see whether its bytes change from build to build
         if: ${{ !cancelled() && needs.plan.outputs.mode == 'test' && matrix.target == 'linux-x86_64' }}
         run: |
           curl -sSfL -o wt.tar.gz https://github.com/bytecodealliance/wasm-tools/releases/download/v1.263.0/wasm-tools-1.263.0-x86_64-linux.tar.gz
@@ -224,7 +224,7 @@ jobs:
           out="$PWD/again"
           mkdir -p "$out"
           for i in 1 2 3 4; do
-            touch "$d/src/main.rs"
+            (cd "$d" && cargo clean -q)
             (cd "$d" && cargo build -q --release --target wasm32-wasip2 --offline)
             cp "$d/target/wasm32-wasip2/release/shop.wasm" "$out/shop-$i.wasm"
             sha256sum "$out/shop-$i.wasm"
