@@ -496,8 +496,8 @@ fn read_lines(folder: &Path, body: &str, key: &Key) -> Reading {
             "kind" => out.found = Kind::parse(rest),
             "label" => out.label = rest.to_string(),
             "file" | "component" | "sealed" | "library" | "trusted" | "sealed-trusted"
-            | "export"
-            | "browser" => match check_entry(folder, (tag, rest), key, &mut out.changed) {
+            | "export" | "browser" => match check_entry(folder, (tag, rest), key, &mut out.changed)
+            {
                 Some((path, code)) => {
                     out.files.push(path);
                     if tag == "sealed-trusted" {

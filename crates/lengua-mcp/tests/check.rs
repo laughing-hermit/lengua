@@ -1410,8 +1410,7 @@ fn the_wiki_joins_the_screens_and_the_server_through_api_md() {
     assert!(home.contains("type: lengua Screen\n"), "{home}");
     assert!(home.contains("source: web/screens/home.tsx\n"), "{home}");
     assert!(
-        home.contains("\n# Links\n")
-            && home.contains("* Calls: [`GET /api/notes`](../../api.md)."),
+        home.contains("\n# Links\n") && home.contains("* Calls: [`GET /api/notes`](../../api.md)."),
         "{home}"
     );
     let top = read(&folder, "idea.md");

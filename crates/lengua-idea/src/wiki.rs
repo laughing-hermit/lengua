@@ -277,7 +277,11 @@ fn calls_route(interface: &Interface, page: &Page, route: &Route) -> bool {
         .any(|(source, called)| *source == page.source && called.contains(&route.function))
 }
 
-fn interface_groups(page: &Page, pages: &[Page], parts: &Parts) -> Vec<(&'static str, Vec<String>)> {
+fn interface_groups(
+    page: &Page,
+    pages: &[Page],
+    parts: &Parts,
+) -> Vec<(&'static str, Vec<String>)> {
     let interface = parts.interface;
     let api = okf::relative(&page.file, "api.md");
     let route_link = |r: &Route| format!("[`{} {}`]({api})", r.method, r.path);
@@ -306,8 +310,7 @@ fn interface_groups(page: &Page, pages: &[Page], parts: &Parts) -> Vec<(&'static
     ]
 }
 
-pub(crate) const API_DESCRIPTION: &str =
-    "The routes of the back end that the front end calls, with the shapes of their requests and answers.";
+pub(crate) const API_DESCRIPTION: &str = "The routes of the back end that the front end calls, with the shapes of their requests and answers.";
 
 fn file_link(pages: &[Page], file: &str) -> String {
     let title = pages
@@ -333,7 +336,11 @@ pub(crate) fn api_text(pages: &[Page], label: &str, interface: &Interface) -> St
             .body
             .as_ref()
             .map_or("none".to_string(), |b| format!("`{}`", render(b)));
-        let served: Vec<String> = route.served_by.iter().map(|f| file_link(pages, f)).collect();
+        let served: Vec<String> = route
+            .served_by
+            .iter()
+            .map(|f| file_link(pages, f))
+            .collect();
         let called: Vec<String> = pages
             .iter()
             .filter(|p| calls_route(interface, p, route))
@@ -720,7 +727,10 @@ fn texts(
     }
     out.push(("index.md".to_string(), index_text(pages, label, parts)));
     if !parts.interface.routes.is_empty() {
-        out.push(("api.md".to_string(), api_text(pages, label, parts.interface)));
+        out.push((
+            "api.md".to_string(),
+            api_text(pages, label, parts.interface),
+        ));
     }
     out.extend(generated.iter().cloned());
     out

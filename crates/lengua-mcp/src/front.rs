@@ -440,7 +440,13 @@ fn browser(worker: &Worker, item: &Browser, stage: &Path) -> Result<(), Failure>
     written.map_err(|e| browser_failed(&item.name, e.to_string()))?;
     let built = crate::build::cargo(
         &dir,
-        &["build", "--release", "--target", "wasm32-unknown-unknown", "--message-format=short"],
+        &[
+            "build",
+            "--release",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--message-format=short",
+        ],
         &worker.child,
     );
     match built {

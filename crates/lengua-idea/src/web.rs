@@ -137,11 +137,7 @@ fn signature(text: &str) -> Option<BrowserFn> {
 
 #[must_use]
 pub fn browser_functions(text: &str) -> Vec<BrowserFn> {
-    let flat: String = text
-        .lines()
-        .map(str::trim)
-        .collect::<Vec<_>>()
-        .join(" ");
+    let flat: String = text.lines().map(str::trim).collect::<Vec<_>>().join(" ");
     flat.split("pub fn ")
         .skip(1)
         .filter_map(|part| signature(part.split('{').next().unwrap_or("")))

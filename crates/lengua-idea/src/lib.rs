@@ -31,8 +31,8 @@ pub use crate::generate::ASSETS;
 pub use crate::library::Library;
 pub use crate::tree::{findings as wiki_findings, write_indexes as write_wiki_indexes};
 pub use crate::web::{
-    Browser, BrowserFn, browser_functions,
-    CLIENT, Front, PNPM, SUM, ScreenRun, component_name, screen_route, screen_runs,
+    Browser, BrowserFn, CLIENT, Front, PNPM, SUM, ScreenRun, browser_functions, component_name,
+    screen_route, screen_runs,
 };
 pub use lengua_lint::{Edit, Mutant, Mutation, apply, choose};
 

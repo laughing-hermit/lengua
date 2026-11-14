@@ -62,8 +62,10 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
     assert_eq!(report.build.as_ref().map(|b| b.code), Some(false));
     let words = read(&folder, "ideas/words.md");
     assert!(words.contains("type: lengua Module\n"));
-    assert!(words.contains("used_by: [idea]
-"));
+    assert!(words.contains(
+        "used_by: [idea]
+"
+    ));
     assert!(words.contains(&format!(
         "source_sha256: none
 generated: {{ by: lengua-mcp/{VERSION}, at: 2026-11-13T00:00:00Z }}
@@ -74,24 +76,46 @@ status: draft
 "
     )));
     assert!(!words.contains("verified:"));
-    assert!(words.contains("
+    assert!(
+        words.contains(
+            "
 # Links
 
-* Used by: ["), "{words}");
-    assert!(words.contains("](../idea.md).
-* Index: ["), "{words}");
-    assert!(words.ends_with("](../index.md).
-"), "{words}");
+* Used by: ["
+        ),
+        "{words}"
+    );
     assert!(
-        top.contains("
+        words.contains(
+            "](../idea.md).
+* Index: ["
+        ),
+        "{words}"
+    );
+    assert!(
+        words.ends_with(
+            "](../index.md).
+"
+        ),
+        "{words}"
+    );
+    assert!(
+        top.contains(
+            "
 # Links
 
 * Uses: [Words](ideas/words.md).
-"),
+"
+        ),
         "{top}"
     );
-    assert!(top.contains("
-title: lengua-idea-"), "{top}");
+    assert!(
+        top.contains(
+            "
+title: lengua-idea-"
+        ),
+        "{top}"
+    );
     assert!(!words.contains("label: checked"));
     let index = read(&folder, "index.md");
     assert!(index.starts_with("---\nokf_version: \"0.2\"\n---\n\n# Back end\n\n## Program\n\n* ["));
@@ -99,11 +123,13 @@ title: lengua-idea-"), "{top}");
         index
             .contains("](idea.md) - The program counts the words in a text. Label: `unchecked`.\n")
     );
-    assert!(index.contains("
+    assert!(index.contains(
+        "
 ## Modules
 
 * [Words](ideas/words.md) - The module finds the words in a text. Label: `unchecked`.
-"));
+"
+    ));
     let log = read(&folder, "log.md");
     assert!(log.starts_with(
         "# Log\n\n## 2026-11-13\n\n* **Check** at 00:00:00Z: no problems; label `unchecked`.\n"
