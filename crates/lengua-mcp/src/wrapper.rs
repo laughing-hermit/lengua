@@ -1,6 +1,6 @@
 use std::fs;
-use std::path::Path;
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
 
 pub(crate) const MARK: &str = "LENGUA_RUSTC_WRAPPER";
@@ -130,7 +130,11 @@ pub(crate) fn rename_outputs(folder: &Path, from: &str, to: &str) -> std::io::Re
     Ok(())
 }
 
-pub(crate) fn artifact_line(line: &str, from: &str, to: &str) -> (String, Option<(String, String)>) {
+pub(crate) fn artifact_line(
+    line: &str,
+    from: &str,
+    to: &str,
+) -> (String, Option<(String, String)>) {
     if from.is_empty() || from == to || !line.contains("\"artifact\"") || !line.contains(from) {
         return (line.to_string(), None);
     }
@@ -171,7 +175,7 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
         for line in BufReader::new(pipe).lines().map_while(Result::ok) {
             let (shown, renamed) = artifact_line(&line, &our_suffix, &cargo_suffix);
             if let Some((from, to)) = renamed {
-                let _ = fs::rename(from.replace("\\\\", "\\"), to.replace("\\\\", "\\"));
+                let _ = fs::copy(from.replace("\\\\", "\\"), to.replace("\\\\", "\\"));
             }
             eprintln!("{shown}");
         }
