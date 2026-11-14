@@ -428,6 +428,7 @@ fn route_code(route: &Route, out: &mut String) {
     };
     validator(out, &answer, &checks.0);
     validator(out, &failure, &checks.1);
+    params.push("token = \"\"".to_string());
     let label = format!("`{} {}`", route.method, route.path);
     let (good, good_check) = statuses_of(route, true);
     let (bad, bad_check) = statuses_of(route, false);
@@ -435,7 +436,7 @@ fn route_code(route: &Route, out: &mut String) {
     let bad_check = status_check(&bad_check, &label).replace("\n    ", "\n  ");
     let _ = writeln!(
         out,
-        "\nexport async function {}({}): Promise<Answer<{answer}, {failure}, {good}, {bad}>> {{\n  const got = await call({}, {}, {sent}, {});\n  const status = got.status;\n  if (got.ok) {{\n    assert(is{answer}(got.value), {});{good_check}\n    return {{ ok: true, status, value: got.value }};\n  }}\n  assert(is{failure}(got.value), {});{bad_check}\n  return {{ ok: false, status, error: got.value }};\n}}",
+        "\nexport async function {}({}): Promise<Answer<{answer}, {failure}, {good}, {bad}>> {{\n  const got = await call({}, {}, {sent}, {}, token);\n  const status = got.status;\n  if (got.ok) {{\n    assert(is{answer}(got.value), {});{good_check}\n    return {{ ok: true, status, value: got.value }};\n  }}\n  assert(is{failure}(got.value), {});{bad_check}\n  return {{ ok: false, status, error: got.value }};\n}}",
         route.function,
         params.join(", "),
         quoted(&route.method),
@@ -562,7 +563,7 @@ fn screen_test(screen: &str, runs: &[&ScreenRun]) -> String {
 
 fn server_examples(tests: &[Test]) -> String {
     let mut out = String::from(
-        "export interface Example {\n  readonly method: string;\n  readonly path: string;\n  readonly body: string | null;\n  readonly status: number;\n  readonly answer: string;\n}\n\nexport const examples: readonly Example[] = [\n",
+        "export interface Example {\n  readonly method: string;\n  readonly path: string;\n  readonly body: string | null;\n  readonly authorization: string;\n  readonly status: number;\n  readonly answer: string;\n}\n\nexport const examples: readonly Example[] = [\n",
     );
     for test in tests.iter().filter(|t| !t.screen && t.request.is_some()) {
         for case in cases(test) {
@@ -573,9 +574,15 @@ fn server_examples(tests: &[Test]) -> String {
             let body = t.request_body.as_deref().map_or("null".to_string(), quoted);
             let _ = writeln!(
                 out,
-                "  {{ method: {}, path: {}, body: {body}, status: {}, answer: {} }},",
+                "  {{ method: {}, path: {}, body: {body}, authorization: {}, status: {}, answer: {} }},",
                 quoted(method),
                 quoted(path),
+                quoted(
+                    t.request_headers
+                        .iter()
+                        .find(|(n, _)| n.eq_ignore_ascii_case("authorization"))
+                        .map_or("", |(_, v)| v.as_str())
+                ),
                 t.status.unwrap_or(200),
                 quoted(t.expect_body.as_deref().unwrap_or(""))
             );

@@ -53,11 +53,17 @@ export async function call(
   path: string,
   body: unknown,
   json: boolean,
+  token: string,
 ): Promise<{ readonly ok: boolean; readonly status: number; readonly value: unknown }> {
+  const headers: Record<string, string> = {};
+  if (body !== undefined) {
+    headers["content-type"] = "application/json";
+  }
+  if (token !== "") {
+    headers["authorization"] = `Bearer ${token}`;
+  }
   const init: RequestInit =
-    body === undefined
-      ? { method }
-      : { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+    body === undefined ? { method, headers } : { method, headers, body: JSON.stringify(body) };
   const response = await fetch(path, init);
   const value = await read(response, json);
   return { ok: response.ok, status: response.status, value };

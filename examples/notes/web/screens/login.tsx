@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { assert, postLogin, useScreen } from "@/lib/lengua";
+import { assert, getMe, postLogin, useScreen } from "@/lib/lengua";
 
 interface LoginState {
   readonly name: string;
@@ -10,16 +10,23 @@ interface LoginState {
   readonly error: string;
   readonly signed: boolean;
   readonly token: string;
+  readonly who: string;
 }
 
 export async function signIn(state: LoginState, set: (next: LoginState) => void): Promise<void> {
   assert(state.name.length < 100, "a name is short");
   assert(state.password.length < 1000, "a password is short");
   const answer = await postLogin({ name: state.name, password: state.password });
-  if (answer.ok) {
-    set({ ...state, error: "", signed: true, token: answer.value.token });
-  } else {
+  if (!answer.ok) {
     set({ ...state, error: answer.error.error, signed: false });
+    return;
+  }
+  const token = answer.value.token;
+  const me = await getMe(token);
+  if (me.ok) {
+    set({ ...state, error: "", signed: true, token, who: me.value.name });
+  } else {
+    set({ ...state, error: me.error.error, signed: false, token: "" });
   }
 }
 
@@ -30,6 +37,7 @@ export function LoginScreen() {
     error: "",
     signed: false,
     token: "",
+    who: "",
   });
   return (
     <main className="mx-auto max-w-xl p-6">
@@ -56,7 +64,7 @@ export function LoginScreen() {
             }}
           />
           <p role="alert">{state.error}</p>
-          <p>{state.signed ? `Signed in as ${state.name}.` : ""}</p>
+          <p>{state.signed ? `Signed in as ${state.who}.` : ""}</p>
           <Button
             onClick={() => {
               signIn(state, setState).catch(() => {

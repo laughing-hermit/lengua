@@ -30,6 +30,7 @@ impl Budget {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Endpoint {
+    pub scheme: &'static str,
     pub authority: String,
     pub base: String,
     pub model: String,
@@ -56,26 +57,40 @@ fn env(name: &str) -> Option<String> {
 
 pub(crate) fn endpoint() -> Result<Endpoint, String> {
     let url = env("LENGUA_MODEL_URL").unwrap_or_else(|| "http://127.0.0.1:11434".to_string());
-    let rest = url.strip_prefix("http://").ok_or_else(|| {
-        format!(
-            "`LENGUA_MODEL_URL` is `{url}`; lengua reaches a model server over plain HTTP, `http://host:port`"
-        )
-    })?;
+    endpoint_of(&url, env("LENGUA_MODEL"), env("LENGUA_EMBED_MODEL"), env("LENGUA_MODEL_KEY"))
+}
+
+pub(crate) fn endpoint_of(
+    url: &str,
+    model: Option<String>,
+    embed: Option<String>,
+    key: Option<String>,
+) -> Result<Endpoint, String> {
+    let (scheme, rest) = if let Some(rest) = url.strip_prefix("https://") {
+        ("https", rest)
+    } else if let Some(rest) = url.strip_prefix("http://") {
+        ("http", rest)
+    } else {
+        return Err(format!(
+            "`LENGUA_MODEL_URL` is `{url}`; lengua reaches a model server at `http://host:port` or `https://host`"
+        ));
+    };
     let (authority, base) = rest.split_once('/').unwrap_or((rest, ""));
-    let model = env("LENGUA_MODEL").ok_or_else(|| {
+    let model = model.ok_or_else(|| {
         "no model is named: set `LENGUA_MODEL` to the model's name, for example `llama3.2`"
             .to_string()
     })?;
     Ok(Endpoint {
+        scheme,
         authority: authority.to_string(),
         base: if base.is_empty() {
             String::new()
         } else {
             format!("/{}", base.trim_end_matches('/'))
         },
-        embed: env("LENGUA_EMBED_MODEL").unwrap_or_else(|| model.clone()),
+        embed: embed.unwrap_or_else(|| model.clone()),
         model,
-        key: env("LENGUA_MODEL_KEY"),
+        key,
     })
 }
 
@@ -217,7 +232,8 @@ async fn live(
     let mut builder = hyper::Request::builder()
         .method("POST")
         .uri(format!(
-            "http://{}{}{path}",
+            "{}://{}{}{path}",
+            endpoint.scheme,
             endpoint.authority, endpoint.base
         ))
         .header("host", &endpoint.authority)
@@ -390,6 +406,7 @@ mod tests {
     #[test]
     fn the_request_to_a_model_server_is_open_ai_s_shape() {
         let endpoint = Endpoint {
+            scheme: "http",
             authority: "127.0.0.1:11434".to_string(),
             base: String::new(),
             model: "m".to_string(),

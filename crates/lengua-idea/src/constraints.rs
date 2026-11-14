@@ -407,13 +407,16 @@ impl Reader<'_> {
             "Calls" => {
                 let found = value
                     .strip_prefix("HTTP at ")
-                    .filter(|v| host_port(v))
-                    .and_then(backticked);
+                    .map(|v| (v, ""))
+                    .or_else(|| value.strip_prefix("HTTPS at ").map(|v| (v, "https://")))
+                    .filter(|(v, _)| host_port(v))
+                    .and_then(|(v, scheme)| backticked(v).map(|h| format!("{scheme}{h}")));
+                let good = found.is_some();
                 if let Some(host) = found {
                     self.out.grants.push(Grant::Outgoing);
-                    self.out.calls.push(host.to_string());
+                    self.out.calls.push(host);
                 }
-                (found.is_some(), "``HTTP at `host:port` ``")
+                (good, "``HTTP at `host:port` `` or ``HTTPS at `host:port` ``")
             }
             "Exports" => {
                 let list = names(value);
@@ -750,13 +753,16 @@ mod tests {
 
     #[test]
     fn model_outgoing_and_secret_lines_are_read() {
-        let text = "- Asks: an AI model, for a short summary, up to 3 calls and 2000 tokens\n- Calls: HTTP at `localhost:7813`\n- Reads: the secret `SESSION_KEY`\n- Memory: 16 MiB\n- Time: 2 s\n";
+        let text = "- Asks: an AI model, for a short summary, up to 3 calls and 2000 tokens\n- Calls: HTTP at `localhost:7813`\n- Calls: HTTPS at `api.example.com:443`\n- Reads: the secret `SESSION_KEY`\n- Memory: 16 MiB\n- Time: 2 s\n";
         let (codes, out) = run(IdeaKind::Program, text);
         assert_eq!(codes, Vec::<&str>::new());
         assert_eq!(out.ai, Some((3, 2000)));
-        assert_eq!(out.calls, ["localhost:7813"]);
+        assert_eq!(out.calls, ["localhost:7813", "https://api.example.com:443"]);
         assert_eq!(out.secrets, ["SESSION_KEY"]);
-        assert_eq!(out.grants, [Grant::Ai, Grant::Outgoing, Grant::Secret]);
+        assert_eq!(
+            out.grants,
+            [Grant::Ai, Grant::Outgoing, Grant::Outgoing, Grant::Secret]
+        );
         let bad = "- Asks: an AI model, for a summary\n- Asks: a person, up to 1 calls and 2 tokens\n- Calls: `localhost`\n- Reads: the secret `key`\n- Memory: 16 MiB\n- Time: 2 s\n";
         let (codes, _) = run(IdeaKind::Program, bad);
         assert_eq!(codes.len(), 4, "{codes:?}");

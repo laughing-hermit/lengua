@@ -18,7 +18,8 @@ status: draft
 # Purpose
 
 The screen is a form to sign in with a name and a password. It sends them to the server, and it
-keeps the token of the session that the server gives.
+keeps the token of the session that the server gives. Then it sends the token with `GET /api/me`,
+and it shows the name that the server gives for the token.
 
 # Behaviours
 
@@ -57,7 +58,8 @@ Then the screen shows the error of the server.
 # Structure
 
 - `LoginScreen`: shows the form, the error and the result.
-- `signIn`: sends the name and the password to the server, and keeps the token or the error.
+- `signIn`: sends the name and the password, then sends the token to get the name, and keeps the
+  token or the error.
 
 # Links
 
