@@ -201,7 +201,7 @@ fn a_good_folder_is_ok_and_gets_its_wiki() {
     assert!(folder.join("index.md").is_file());
     assert!(folder.join("log.md").is_file());
     let written = reply["written"].as_array().expect("a list of files");
-    assert_eq!(written.len(), 7);
+    assert_eq!(written.len(), 6);
     assert_eq!(reply["build"]["state"], "no_code", "{reply:#}");
     assert!(folder.join("Cargo.toml").is_file());
     assert!(folder.join("wit/world.wit").is_file());

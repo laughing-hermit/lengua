@@ -146,6 +146,7 @@ pub(crate) fn check(ty: &Ty, value: &str, depth: usize) -> String {
         Ty::Bool => format!("typeof {value} === \"boolean\""),
         Ty::Number => format!("typeof {value} === \"number\""),
         Ty::Text => format!("typeof {value} === \"string\""),
+        Ty::List(item) if **item == Ty::Unknown => format!("Array.isArray({value})"),
         Ty::List(item) => {
             let inner = format!("v{}", depth + 1);
             format!(
