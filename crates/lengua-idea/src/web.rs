@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::cases::{StateValue, Test, cases};
-use crate::constraints::Constraints;
+use crate::constraints::{Constraints, Part, Reason};
 use crate::generate::{collect_skipping, held};
 use crate::idea::IdeaKind;
 use crate::types::{self, Ty, merge, quoted, render};
@@ -13,6 +13,9 @@ use crate::{Finding, Library, json, sha256};
 pub const SUM: &str = "web/lengua.sum";
 pub const CLIENT: &str = "web/lib/lengua.ts";
 pub const PNPM: &str = "12.18.0";
+pub const DESKTOP: &str = "web/desktop/main.mjs";
+const ELECTRON: (&str, &str) = ("electron", "45.3.2");
+const ALLOW_ELECTRON: &str = "allowBuilds:\n  electron: true\n";
 
 const BASE: [(&str, &str); 3] = [
     ("next", "16.4.6"),
@@ -95,6 +98,7 @@ pub struct Front {
     pub packages: Vec<(String, String)>,
     pub runs: Vec<ScreenRun>,
     pub browser: Vec<Browser>,
+    pub desktop: bool,
 }
 
 const BROWSER_TYPES: [&str; 11] = [
@@ -600,11 +604,14 @@ fn json_object(pairs: &[(String, String)]) -> String {
     format!("{{\n{}\n  }}", lines.join(",\n"))
 }
 
-fn package_json(title: &str, dependencies: &[(String, String)]) -> String {
+fn package_json(title: &str, dependencies: &[(String, String)], desktop: bool) -> String {
     let mut dev: Vec<(String, String)> = DEV
         .iter()
         .map(|(n, v)| ((*n).to_string(), (*v).to_string()))
         .collect();
+    if desktop {
+        dev.push((ELECTRON.0.to_string(), ELECTRON.1.to_string()));
+    }
     dev.sort();
     format!(
         "{{\n  \"name\": {},\n  \"version\": \"0.1.0\",\n  \"private\": true,\n  \"packageManager\": \"pnpm@{PNPM}\",\n  \"dependencies\": {},\n  \"devDependencies\": {}\n}}\n",
@@ -716,16 +723,26 @@ fn texts(
     routes: &[Route],
     tests: &[Test],
     dependencies: &[(String, String)],
+    desktop: bool,
 ) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = vec![(
         "web/package.json".to_string(),
-        package_json(title, dependencies),
+        package_json(title, dependencies, desktop),
     )];
-    out.extend(
-        STATIC
-            .iter()
-            .map(|(f, t)| ((*f).to_string(), (*t).to_string())),
-    );
+    for (file, text) in STATIC {
+        let text = if desktop && file == "web/pnpm-workspace.yaml" {
+            format!("{text}{ALLOW_ELECTRON}")
+        } else {
+            text.to_string()
+        };
+        out.push((file.to_string(), text));
+    }
+    if desktop {
+        out.push((
+            DESKTOP.to_string(),
+            include_str!("front/desktop.mjs").to_string(),
+        ));
+    }
     out.push(("web/app/layout.tsx".to_string(), layout(title)));
     for screen in screens {
         let file = if screen == "home" {
@@ -780,7 +797,11 @@ pub(crate) fn plan(
     }
     let top = constraints.first().cloned().unwrap_or_default();
     let dependencies = packages(pages, constraints, !top.shadcn.is_empty(), findings);
-    let made = texts(title, &screens, &top, routes, tests, &dependencies);
+    let desktop = top
+        .natives
+        .iter()
+        .any(|n| matches!(n.part, Part::Own(_)) && n.reason == Some(Reason::Desktop));
+    let made = texts(title, &screens, &top, routes, tests, &dependencies, desktop);
     let stamp = pages.first().and_then(|p| p.front.value("web_sha256"));
     let previous = previous_sums(folder, stamp);
     let mut sum = String::new();
@@ -818,6 +839,7 @@ pub(crate) fn plan(
             packages: dependencies,
             runs: screen_runs(tests),
             browser: browsers(folder, libraries),
+            desktop,
         },
     })
 }

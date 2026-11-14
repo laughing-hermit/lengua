@@ -3,11 +3,12 @@ use crate::idea::IdeaKind;
 use crate::ste::Dictionary;
 use crate::text::{Line, backticked, relative_path, snake, split_key, tokenize, upper_camel};
 
-const KEYS: &str = "`Reads`, `Writes`, `Connects to`, `Listens on`, `Serves`, `Asks`, `Calls`, `Memory`, `Time`, `Modules`, `Exports`, `Uses`, `Uses crate`, `Uses component`, `Uses package`, `Uses shadcn` and `Route`";
+const KEYS: &str = "`Reads`, `Writes`, `Connects to`, `Listens on`, `Serves`, `Asks`, `Calls`, `Native`, `Memory`, `Time`, `Modules`, `Exports`, `Uses`, `Uses crate`, `Uses component`, `Uses package`, `Uses shadcn` and `Route`";
 const MAX_MEMORY: u64 = 4 << 30;
 const MAX_TIME_MS: u64 = 3_600_000;
 const RESERVED: [&str; 4] = ["main", "ui", "index", "log"];
-const TOP_ONLY: [&str; 14] = [
+const TOP_ONLY: [&str; 15] = [
+    "Native",
     "Asks",
     "Calls",
     "Reads",
@@ -37,6 +38,7 @@ pub(crate) enum Grant {
     Ai,
     Outgoing,
     Secret,
+    Native,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,6 +46,79 @@ pub(crate) struct CrateUse {
     pub name: String,
     pub version: String,
     pub line: usize,
+    pub feature: Option<(String, Option<&'static str>)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reason {
+    Models,
+    Threads,
+    Device,
+    Desktop,
+}
+
+pub(crate) const REASONS: [(&str, Reason); 6] = [
+    ("large AI models", Reason::Models),
+    ("the fastest local inference", Reason::Models),
+    ("training or fine-tuning", Reason::Models),
+    ("heavy compute with shared-memory threads", Reason::Threads),
+    ("a device with no host grant", Reason::Device),
+    ("the Electron shell of a desktop app", Reason::Desktop),
+];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Part {
+    Own(String),
+    Folder(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NativeLine {
+    pub part: Part,
+    pub reason: Option<Reason>,
+    pub because: String,
+    pub line: usize,
+}
+
+const SYSTEMS: [(&str, &str); 3] = [("Linux", "linux"), ("macOS", "macos"), ("Windows", "windows")];
+
+fn native_line(value: &str, line: usize) -> Option<NativeLine> {
+    let (part, because) = value.split_once(", for ")?;
+    let part = match backticked(part) {
+        Some(folder) => library_path(folder).then(|| Part::Folder(folder.to_string()))?,
+        None if !part.trim().is_empty() && !part.contains('`') => Part::Own(part.trim().to_string()),
+        None => return None,
+    };
+    let because = because.trim().to_string();
+    let reason = REASONS
+        .iter()
+        .find(|(phrase, _)| because.starts_with(phrase))
+        .map(|(_, reason)| *reason);
+    (!because.is_empty()).then_some(NativeLine {
+        part,
+        reason,
+        because,
+        line,
+    })
+}
+
+fn crate_feature(head: &str) -> Option<(&str, Feature)> {
+    let Some((left, right)) = head.split_once(" with ") else {
+        return Some((head, None));
+    };
+    let (feature, system) = match right.split_once(" on ") {
+        Some((feature, name)) => {
+            let found = SYSTEMS.iter().find(|(shown, _)| *shown == name.trim())?;
+            (feature, Some(found.1))
+        }
+        None => (right, None),
+    };
+    let feature = backticked(feature).filter(|f| {
+        !f.is_empty()
+            && f.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    })?;
+    Some((left, Some((feature.to_string(), system))))
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -67,6 +142,7 @@ pub(crate) struct Constraints {
     pub ai: Option<(u64, u64)>,
     pub calls: Vec<String>,
     pub secrets: Vec<String>,
+    pub natives: Vec<NativeLine>,
 }
 
 pub(crate) const SHADCN: [&str; 5] = ["button", "card", "input", "label", "textarea"];
@@ -250,13 +326,16 @@ fn semver(version: &str) -> bool {
             .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }
 
+type Feature = Option<(String, Option<&'static str>)>;
+
 fn crate_line(
     value: &str,
     line: usize,
     dictionary: &Dictionary,
     sink: &mut Sink,
-) -> Option<(String, String)> {
+) -> Option<(String, String, Feature)> {
     let (head, reason) = value.split_once(", for ")?;
+    let (head, feature) = crate_feature(head.trim())?;
     let (name, version) = head.trim().rsplit_once(' ')?;
     let mut tokens = Vec::new();
     tokenize(reason, line, &mut tokens);
@@ -266,7 +345,8 @@ fn crate_line(
             && n.chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
     })?;
-    (semver(version) && !reason.trim().is_empty()).then(|| (name.to_string(), version.to_string()))
+    (semver(version) && !reason.trim().is_empty())
+        .then(|| (name.to_string(), version.to_string(), feature))
 }
 
 struct Reader<'d> {
@@ -404,6 +484,20 @@ impl Reader<'_> {
                 }
                 (found.is_some(), "`HTTP on TCP port <number>`")
             }
+            "Native" => {
+                let found = native_line(value, line);
+                let good = found.is_some();
+                if let Some(native) = found {
+                    if matches!(native.part, Part::Folder(_)) {
+                        self.out.grants.push(Grant::Native);
+                    }
+                    self.out.natives.push(native);
+                }
+                (
+                    good,
+                    "``<what the part is>, for <reason>`` or `` `<folder of a native part>`, for <reason> ``",
+                )
+            }
             "Calls" => {
                 let found = value
                     .strip_prefix("HTTP at ")
@@ -511,11 +605,12 @@ impl Reader<'_> {
             "Uses crate" => {
                 let found = crate_line(value, line, self.dictionary, sink);
                 let good = found.is_some();
-                if let Some((name, version)) = found {
+                if let Some((name, version, feature)) = found {
                     self.out.crates.push(CrateUse {
                         name,
                         version,
                         line,
+                        feature,
                     });
                 }
                 (good, "`` `name` 1.2.3, for <reason> ``")
@@ -551,6 +646,7 @@ impl Reader<'_> {
                         name,
                         version,
                         line,
+                        feature: None,
                     });
                 }
                 (good, "`` `name` 1.2.3, for <reason> ``")
@@ -668,6 +764,7 @@ mod tests {
                 name: "widgets".to_string(),
                 version: "0.2.0".to_string(),
                 line: 10,
+                feature: None,
             }]
         );
     }
@@ -771,6 +868,40 @@ mod tests {
         assert_eq!(codes.len(), 4, "{codes:?}");
         assert!(codes.iter().all(|c| *c == "constraint-value"), "{codes:?}");
         let (module, _) = run(IdeaKind::Module, "- Calls: HTTP at `a:1`\n");
+        assert_eq!(module, ["constraint-not-here"]);
+    }
+
+    #[test]
+    fn native_lines_and_crate_features_are_read() {
+        let text = "- Native: a small model on the GPU, for the fastest local inference\n- Native: `../model`, for the fastest local inference of the notes\n- Native: a window, for a faster screen\n- Uses crate: `candle-core` 0.11.1 with `metal` on macOS, for the tensors of the model\n- Memory: 16 MiB\n- Time: 2 s\n";
+        let (codes, out) = run(IdeaKind::Program, text);
+        assert_eq!(codes, Vec::<&str>::new());
+        assert_eq!(
+            out.natives
+                .iter()
+                .map(|n| (n.part.clone(), n.reason))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    super::Part::Own("a small model on the GPU".to_string()),
+                    Some(super::Reason::Models)
+                ),
+                (
+                    super::Part::Folder("../model".to_string()),
+                    Some(super::Reason::Models)
+                ),
+                (super::Part::Own("a window".to_string()), None),
+            ]
+        );
+        assert_eq!(out.grants, [Grant::Native]);
+        assert_eq!(
+            out.crates.first().and_then(|c| c.feature.clone()),
+            Some(("metal".to_string(), Some("macos")))
+        );
+        let bad = "- Native: `/etc`, for large AI models\n- Native: for large AI models\n- Uses crate: `candle-core` 0.11.1 with `metal` on Plan 9, for tensors\n- Memory: 16 MiB\n- Time: 2 s\n";
+        let (codes, _) = run(IdeaKind::Program, bad);
+        assert_eq!(codes, ["constraint-value"; 3], "{codes:?}");
+        let (module, _) = run(IdeaKind::Module, "- Native: a part, for large AI models\n");
         assert_eq!(module, ["constraint-not-here"]);
     }
 }

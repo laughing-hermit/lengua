@@ -1,0 +1,101 @@
+# Purpose
+
+The program is a desktop app. Its window shows a screen with a form for a prompt, and the
+server gives the prompt to a small language model. The model is the native part `model` in the
+folder next to it. The server is one WebAssembly file, and `lengua-run` runs it beside the window.
+The host starts the native part for each request, outside the sandbox.
+
+The server reads the prompt from a JSON body with the library `json`, and it sends the prompt to
+the native part. Then it gives the text of the model in JSON. Any other path is a file of the
+front end.
+
+# Behaviours
+
+## Write the next letters of a prompt
+
+Given a prompt of letters,
+When a client sends `POST /api/write` with the prompt,
+Then the answer is 200 with the prompt and the letters that the model gives.
+
+### Example: two letters
+
+- Request: `POST /api/write`
+- Request body: "{\"prompt\":\"ab\"}"
+- Expect status: 200
+- Expect header `content-type`: "application/json"
+- Expect body: "{\"text\":\"abfbedbfbe\"}"
+
+### Example: a word
+
+- Request: `POST /api/write`
+- Request body: "{\"prompt\":\"hello\"}"
+- Expect status: 200
+- Expect body: "{\"text\":\"helloeedbfbed\"}"
+
+## Refuse a long prompt
+
+Given a prompt of more than 40 characters,
+When a client sends it,
+Then the answer is 400 with an error, and the server does not start the model.
+
+### Example: a long prompt
+
+- Request: `POST /api/write`
+- Request body: "{\"prompt\":\"a long prompt of more than forty letters in all\"}"
+- Expect status: 400
+- Expect body: "{\"error\":\"Give a prompt of 40 characters or fewer.\"}"
+
+## Refuse a body that is not a prompt
+
+Given a body with no prompt,
+When a client sends it,
+Then the answer is 400 with the same error.
+
+### Example: no prompt
+
+- Request: `POST /api/write`
+- Request body: "{\"prompt\":\"\",\"more\":1}"
+- Expect status: 400
+- Expect body: "{\"error\":\"Give a prompt of 40 characters or fewer.\"}"
+
+## Serve the front end
+
+Given the files of the front end,
+When a client asks for a path that is not a route,
+Then the answer is the file, or 404.
+
+### Example: the first page
+
+- Request: `GET /`
+- Expect status: 200
+- Expect header `content-type`: "text/html; charset=utf-8"
+
+### Example: a path that is not there
+
+- Request: `GET /api/other`
+- Expect status: 404
+- Expect body: "not found"
+
+# Constraints
+
+- Serves: HTTP on TCP port 7820
+- Native: `../model`, for the fastest local inference
+- Native: a desktop window, for the Electron shell of a desktop app
+- Memory: 64 MiB
+- Time: 20 s
+- Modules: `ui/home`
+- Uses crate: `wasip2` 2.0.1, for the interface of the server to its host, the HTTP world of `WASI`
+- Uses: `../../libraries/json`
+- Route: `POST /api/write`
+- Uses shadcn: `button`, `card`, `input`, `label`
+
+# Structure
+
+- `Desk::handle`: answers a request with what `answer` gives.
+- `answer`: answers `POST /api/write` with the text of the model, and any other path with a file of the front end.
+- `write`: reads the prompt of a body, asks the model, and gives the status and the JSON.
+- `prompt_of`: gives the prompt of a JSON body, or nothing when the prompt is empty or too long.
+- `error`: gives the JSON of an error.
+- `ask`: sends the prompt to the native part and gives its text.
+- `body_of`: reads the body of a request as text.
+- `respond`: writes the answer to the client.

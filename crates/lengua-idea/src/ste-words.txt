@@ -39,6 +39,7 @@ answer nv
 any d
 anyone o
 anything o
+app n
 applicable a
 application n
 apply v
@@ -76,6 +77,7 @@ behind p
 being m
 below p
 be m
+beside p
 best a
 better a
 between p
@@ -155,6 +157,7 @@ compare v
 compile v
 complete av
 component n
+computer n
 condition n
 configuration n
 connection n
@@ -191,6 +194,7 @@ definition n
 delete v
 describe v
 description n
+desktop n
 detail n
 deterministic a
 device n
@@ -213,6 +217,7 @@ do mv
 done x
 dot n
 down pr
+download nv
 drawn x
 draw v
 drew v
@@ -353,6 +358,7 @@ incorrect a
 increase v
 independent a
 index n
+inference n
 information n
 initial a
 in p
@@ -454,6 +460,7 @@ multiply v
 must m
 my o
 name n
+native a
 near p
 nearest a
 necessary a
@@ -640,6 +647,7 @@ seven q
 several d
 shape n
 she o
+shell n
 shift v
 shop n
 short a
@@ -787,6 +795,7 @@ wait v
 warning n
 was m
 week n
+weight n
 went v
 we o
 were m

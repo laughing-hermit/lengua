@@ -24,6 +24,8 @@ pub(crate) struct Hooks {
     pub calls: Vec<String>,
     pub budget: Option<Arc<Mutex<Budget>>>,
     pub model: Arc<Model>,
+    pub natives: Vec<lengua_idea::Native>,
+    pub limit: Duration,
 }
 
 pub(crate) struct Pieces(pub VecDeque<Bytes>);
@@ -175,6 +177,14 @@ impl WasiHttpHooks for Hooks {
                     "the idea does not grant `- Asks: an AI model, for ...`, so the program can't ask one"
                         .to_string(),
                 ),
+            };
+        }
+        if let Some(name) = host.strip_suffix(lengua_idea::NATIVE_HOST) {
+            return match self.natives.iter().find(|n| n.name == name) {
+                Some(part) => Box::new(crate::native::call(request, part.clone(), self.limit)),
+                None => refuse(format!(
+                    "the idea does not name the native part `{name}` with `- Native: `<folder>`, for <reason>`, so the program can't call it"
+                )),
             };
         }
         if self.calls.contains(&granted_name(request.uri())) {

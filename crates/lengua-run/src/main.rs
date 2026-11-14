@@ -1,6 +1,8 @@
+use std::fs;
 use std::io::Write;
-use std::path::Path;
-use std::process::ExitCode;
+use std::net::TcpStream;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode};
 use std::thread;
 use std::time::Duration;
 
@@ -14,6 +16,7 @@ const OUT_OF_TIME: u8 = 124;
 const REFUSED: u8 = 125;
 const OUT_OF_MEMORY: u8 = 126;
 const TRAPPED: u8 = 134;
+const NATIVE: &str = "the folder is a native part: it runs outside the sandbox, beside the WebAssembly program that names it with `- Native:`; run that program";
 
 fn refuse(message: &str) -> ExitCode {
     eprintln!("lengua-run: refused: {message}");
@@ -37,7 +40,52 @@ fn watch(limit: Duration) {
     });
 }
 
-fn run(folder: &Path, arguments: &[String], listen: Option<&str>) -> ExitCode {
+fn electron(folder: &Path) -> Result<PathBuf, String> {
+    let package = folder.join("target/lengua/web/node_modules/electron");
+    let inside = fs::read_to_string(package.join("path.txt")).map_err(|_| {
+        "Electron is not installed for this app; call check on its folder, which installs it with the front end".to_string()
+    })?;
+    Ok(package.join("dist").join(inside.trim()))
+}
+
+fn open_window(shell: PathBuf, main: PathBuf, address: String) {
+    thread::spawn(move || {
+        for _ in 0..200 {
+            if TcpStream::connect(&address).is_ok() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        let status = Command::new(&shell)
+            .arg(&main)
+            .env("LENGUA_URL", format!("http://{address}/"))
+            .status();
+        let _ = std::io::stdout().flush();
+        let code = match status {
+            Ok(status) => status.code().unwrap_or(1),
+            Err(error) => {
+                eprintln!("lengua-run: refused: Electron did not start: {error}");
+                i32::from(REFUSED)
+            }
+        };
+        std::process::exit(code);
+    });
+}
+
+fn not_this_kind(build: Option<&lengua_idea::Build>, desktop: bool) -> Option<&'static str> {
+    if build.is_some_and(|b| b.native) {
+        return Some(NATIVE);
+    }
+    (desktop && !build.is_some_and(|b| b.desktop)).then_some(
+        "the idea is not a desktop app: it has no `- Native: a desktop window, for the Electron shell of a desktop app`",
+    )
+}
+
+fn run(folder: &Path, arguments: &[String], listen: Option<&str>, desktop: bool) -> ExitCode {
+    let first = lengua_idea::program(folder);
+    if let Some(problem) = not_this_kind(first.build.as_ref(), desktop) {
+        return refuse(problem);
+    }
     let key = match lock::user_key() {
         Ok(key) => key,
         Err(message) => return refuse(&message),
@@ -46,7 +94,7 @@ fn run(folder: &Path, arguments: &[String], listen: Option<&str>) -> ExitCode {
         Ok(verified) => verified,
         Err(message) => return refuse(&message),
     };
-    let report = lengua_idea::program(folder);
+    let report = first;
     if !report.findings.is_empty() {
         let codes: Vec<&str> = report.findings.iter().map(|f| f.code).collect();
         return refuse(&format!(
@@ -92,6 +140,12 @@ fn run(folder: &Path, arguments: &[String], listen: Option<&str>) -> ExitCode {
     if let Some(port) = build.grants.server {
         let address = listen.map_or_else(|| format!("127.0.0.1:{port}"), str::to_string);
         eprintln!("lengua-run: serving HTTP on {address}");
+        if desktop {
+            match electron(folder) {
+                Ok(shell) => open_window(shell, folder.join(lengua_idea::DESKTOP), address.clone()),
+                Err(message) => return refuse(&message),
+            }
+        }
         return match host.serve(&program, &address, false) {
             Ok(()) => ExitCode::SUCCESS,
             Err(message) => refuse(&message),
@@ -126,7 +180,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some((first, rest)) = args.split_first() else {
         eprintln!(
-            "usage: {} [--listen <address:port>] <folder> [arguments...]",
+            "usage: {} [--listen <address:port>] <folder> [arguments...] | --desktop <folder>",
             env!("CARGO_PKG_NAME")
         );
         return ExitCode::from(2);
@@ -137,9 +191,17 @@ fn main() -> ExitCode {
     }
     if first == "--listen" {
         return match rest {
-            [address, folder, more @ ..] => run(Path::new(folder), more, Some(address.as_str())),
+            [address, folder, more @ ..] => {
+                run(Path::new(folder), more, Some(address.as_str()), false)
+            }
             _ => refuse("`--listen` takes an address and a port, then the folder"),
         };
     }
-    run(Path::new(first), rest, None)
+    if first == "--desktop" {
+        return match rest {
+            [folder] => run(Path::new(folder), &[], None, true),
+            _ => refuse("`--desktop` takes the folder of a desktop app"),
+        };
+    }
+    run(Path::new(first), rest, None, false)
 }

@@ -118,7 +118,9 @@ title: lengua-idea-"
     );
     assert!(!words.contains("label: checked"));
     let index = read(&folder, "index.md");
-    assert!(index.starts_with("---\nokf_version: \"0.2\"\n---\n\n# Back end: program\n\n* ["));
+    assert!(index.starts_with(
+        "---\nokf_version: \"0.2\"\n---\n\nWhere it runs: One WebAssembly file. Runs on any OS and CPU. Sandboxed: it reaches only what the idea grants.\n\n# Back end: program\n\n* ["
+    ));
     assert!(
         index
             .contains("](idea.md) - The program counts the words in a text. Label: `unchecked`.\n")
@@ -765,4 +767,72 @@ fn the_label_in_the_frontmatter_does_not_change_the_build_s_inputs() {
     });
     assert!(read(&folder, "idea.md").contains("\nverified:\n"));
     assert_eq!(checked.build.expect("a build").inputs, before);
+}
+
+fn native_folder(test: &str, constraints: &str, code: &str) -> PathBuf {
+    let to = std::env::temp_dir().join(format!("lengua-idea-{}-native-{test}", std::process::id()));
+    if to.exists() {
+        fs::remove_dir_all(&to).expect("an old copy removed");
+    }
+    fs::create_dir_all(to.join("src")).expect("a folder");
+    let idea = format!(
+        "# Purpose\n\nThe program writes a word.\n\n# Behaviours\n\n## Write the word\n\nGiven no input,\nWhen the program runs,\nThen it writes the word.\n\n### Example: the word\n\n- Expect standard output: \"word\\n\"\n- Expect exit code: 0\n\n# Constraints\n\n{constraints}- Memory: 16 MiB\n- Time: 2 s\n\n# Structure\n\n- `main`: writes the word.\n"
+    );
+    fs::write(to.join("idea.md"), idea).expect("the idea");
+    fs::write(to.join("src/main.rs"), code).expect("the code");
+    to
+}
+
+#[test]
+fn a_native_need_is_declared_with_a_named_reason_or_refused() {
+    let plain = "fn main() {\n    println!(\"word\");\n}\n";
+    let threads = "fn main() {\n    let _ = std::thread::spawn(|| 1).join();\n    println!(\"word\");\n}\n";
+    let cases = [
+        ("threads", "", threads, vec![("src/main.rs".to_string(), "native-undeclared")]),
+        (
+            "reason",
+            "- Native: a faster screen, for speed alone\n",
+            plain,
+            vec![("idea.md".to_string(), "native-reason")],
+        ),
+        (
+            "grant",
+            "- Native: a small model, for the fastest local inference\n- Reads: the clock\n",
+            plain,
+            vec![("idea.md".to_string(), "native-grant")],
+        ),
+        (
+            "desktop",
+            "- Native: a desktop window, for the Electron shell of a desktop app\n",
+            plain,
+            vec![("idea.md".to_string(), "native-desktop")],
+        ),
+        (
+            "missing",
+            "- Native: `../nothing`, for large AI models\n",
+            plain,
+            vec![("idea.md".to_string(), "native-missing")],
+        ),
+    ];
+    for (test, constraints, code, wanted) in cases {
+        let folder = native_folder(test, constraints, code);
+        assert_eq!(codes_of(&folder), wanted, "{test}");
+    }
+    let native = native_folder(
+        "good",
+        "- Native: a small model on the GPU, for the fastest local inference\n",
+        threads,
+    );
+    let report = lengua_idea::program(&native);
+    assert_eq!(report.findings, []);
+    let build = report.build.expect("a build");
+    assert!(build.native);
+    assert!(build.artifact.starts_with("target/release/"), "{}", build.artifact);
+    assert!(build.place.starts_with("A native program"), "{}", build.place);
+    let cargo = lengua_idea::check(&native, NOV_13_2026);
+    assert_eq!(cargo.findings, []);
+    let manifest = read(&native, "Cargo.toml");
+    assert!(!manifest.contains("lto = true"), "{manifest}");
+    let index = read(&native, "index.md");
+    assert!(index.contains("\nWhere it runs: A native program, built for this computer's system and CPU, for the fastest local inference."), "{index}");
 }

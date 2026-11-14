@@ -122,7 +122,9 @@ pub(crate) fn interfaces(grant: Grant) -> &'static [&'static str] {
             "wasi:sockets/udp-create-socket",
         ],
         Grant::Http => &["wasi:http/types"],
-        Grant::Ai | Grant::Outgoing => &["wasi:http/outgoing-handler", "wasi:http/types"],
+        Grant::Ai | Grant::Outgoing | Grant::Native => {
+            &["wasi:http/outgoing-handler", "wasi:http/types"]
+        }
     }
 }
 
@@ -134,6 +136,12 @@ pub(crate) fn package_name(name: &str) -> bool {
         && !NOT_NAMES.contains(&name)
 }
 
+pub(crate) struct Feature {
+    pub name: String,
+    pub feature: String,
+    pub system: Option<&'static str>,
+}
+
 pub(crate) struct Package<'a> {
     pub name: &'a str,
     pub shape: Shape,
@@ -141,6 +149,8 @@ pub(crate) struct Package<'a> {
     pub crates: &'a [(String, String)],
     pub libraries: &'a [(String, String)],
     pub web: bool,
+    pub native: bool,
+    pub features: &'a [Feature],
 }
 
 fn quoted_list(items: &[String]) -> String {
@@ -148,11 +158,28 @@ fn quoted_list(items: &[String]) -> String {
     format!("[{}]", quoted.join(", "))
 }
 
+fn crate_entry(name: &str, version: &str, features: &[&Feature], system: Option<&str>) -> String {
+    let named: Vec<String> = features
+        .iter()
+        .filter(|f| f.name == name && f.system == system)
+        .map(|f| f.feature.clone())
+        .collect();
+    if named.is_empty() {
+        format!("{name} = \"={version}\"")
+    } else {
+        format!(
+            "{name} = {{ version = \"={version}\", features = {} }}",
+            quoted_list(&named)
+        )
+    }
+}
+
 fn dependencies(package: &Package) -> Vec<String> {
+    let all: Vec<&Feature> = package.features.iter().collect();
     let mut lines: Vec<(String, String)> = package
         .crates
         .iter()
-        .map(|(name, version)| (name.clone(), format!("{name} = \"={version}\"")))
+        .map(|(name, version)| (name.clone(), crate_entry(name, version, &all, None)))
         .collect();
     lines.extend(
         package
@@ -168,6 +195,24 @@ fn dependencies(package: &Package) -> Vec<String> {
     }
     lines.sort();
     lines.into_iter().map(|(_, line)| line).collect()
+}
+
+fn target_sections(package: &Package, lines: &mut Vec<String>) {
+    let all: Vec<&Feature> = package.features.iter().collect();
+    let mut systems: Vec<&str> = package.features.iter().filter_map(|f| f.system).collect();
+    systems.sort_unstable();
+    systems.dedup();
+    for system in systems {
+        lines.push(format!(
+            "[target.'cfg(target_os = \"{system}\")'.dependencies]"
+        ));
+        for (name, version) in package.crates {
+            if all.iter().any(|f| f.name == *name && f.system == Some(system)) {
+                lines.push(crate_entry(name, version, &all, Some(system)));
+            }
+        }
+        lines.push(String::new());
+    }
 }
 
 pub(crate) fn cargo_toml(package: &Package) -> String {
@@ -201,6 +246,7 @@ pub(crate) fn cargo_toml(package: &Package) -> String {
         lines.extend(dependencies);
         lines.push(String::new());
     }
+    target_sections(package, &mut lines);
     for line in [
         "[lints.rust]",
         "warnings = \"deny\"",
@@ -219,18 +265,15 @@ pub(crate) fn cargo_toml(package: &Package) -> String {
         lines.push("missing_errors_doc = \"allow\"".to_string());
         lines.push("missing_panics_doc = \"allow\"".to_string());
     }
-    for line in [
-        "",
-        "[profile.release]",
-        "opt-level = 3",
-        "panic = \"abort\"",
-        "lto = true",
-        "codegen-units = 1",
-        "",
-        "[workspace]",
-    ] {
+    for line in ["", "[profile.release]", "opt-level = 3", "panic = \"abort\""] {
         lines.push(line.to_string());
     }
+    if !package.native {
+        lines.push("lto = true".to_string());
+        lines.push("codegen-units = 1".to_string());
+    }
+    lines.push(String::new());
+    lines.push("[workspace]".to_string());
     if package.web {
         lines.push("exclude = [\"target\"]".to_string());
     }
@@ -275,8 +318,11 @@ pub(crate) fn world(grants: &[Grant], shape: Shape) -> String {
     text
 }
 
-pub(crate) fn artifact(name: &str, shape: Shape) -> String {
+pub(crate) fn artifact(name: &str, shape: Shape, native: bool) -> String {
     let snake = name.replace('-', "_");
+    if native {
+        return format!("target/release/{name}{}", std::env::consts::EXE_SUFFIX);
+    }
     match shape {
         Shape::Library => format!("target/{TARGET}/release/lib{snake}.rlib"),
         Shape::Server => format!("target/{TARGET}/release/{snake}.wasm"),
@@ -359,7 +405,7 @@ pub(crate) fn plan(
     title: &str,
     pages: &[Page],
     constraints: &[Constraints],
-    (shape, libraries): (Shape, &[Library]),
+    (shape, libraries, native): (Shape, &[Library], bool),
     findings: &mut Vec<Finding>,
 ) -> Plan {
     let top = constraints.first().cloned().unwrap_or_default();
@@ -374,6 +420,18 @@ pub(crate) fn plan(
         });
     }
     let used = crates(pages, constraints, findings);
+    let features: Vec<Feature> = constraints
+        .iter()
+        .flat_map(|c| c.crates.iter())
+        .filter_map(|c| {
+            let (feature, system) = c.feature.clone()?;
+            Some(Feature {
+                name: c.name.clone(),
+                feature,
+                system,
+            })
+        })
+        .collect();
     let sources: Vec<String> = pages
         .iter()
         .map(|p| p.source.clone())
@@ -393,6 +451,8 @@ pub(crate) fn plan(
         crates: &used,
         libraries: &linked,
         web,
+        native,
+        features: &features,
     };
     let files = [
         ("cargo_sha256", CARGO_TOML, cargo_toml(&package)),
@@ -531,6 +591,8 @@ codegen-units = 1
             crates: &[],
             libraries: &[],
             web: false,
+            native: false,
+            features: &[],
         };
         assert_eq!(cargo_toml(&package), HELLO);
     }
@@ -546,6 +608,8 @@ codegen-units = 1
             crates: &crates,
             libraries: &[("json".to_string(), "../json".to_string())],
             web: false,
+            native: false,
+            features: &[],
         };
         let text = cargo_toml(&package);
         assert!(text.starts_with("[package]\nname = \"word-count\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\ninclude = [\"src/main.rs\", \"src/words.rs\"]\nautobins = false\n\n[lib]\nname = \"word_count\"\npath = \"src/main.rs\"\n\n[dependencies]\njson = { path = \"../json\" }\nwidgets = \"=0.2.0\"\n\n[lints.rust]\n"));
@@ -678,6 +742,8 @@ world program {
             crates: &[],
             libraries: &[],
             web: false,
+            native: false,
+            features: &[],
         };
         let text = cargo_toml(&package);
         assert!(text.contains(

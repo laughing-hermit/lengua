@@ -61,6 +61,13 @@ fn one(
         )
     };
     let idea = fs::read_to_string(place.join("idea.md")).map_err(|_| missing())?;
+    if crate::native::declares_native(&idea) {
+        return Err(finding(
+            line,
+            "native-undeclared",
+            format!("`{path}` is a native part, not a library: it runs outside the sandbox, so the program names it with `- Native: `{path}`, for <reason>`"),
+        ));
+    }
     let name = fs::canonicalize(&place)
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))

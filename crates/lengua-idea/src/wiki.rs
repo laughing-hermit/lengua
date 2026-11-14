@@ -18,6 +18,8 @@ pub(crate) struct Parts<'a> {
     pub components: &'a [(String, String, usize)],
     pub crates: Count,
     pub vision: bool,
+    pub place: &'a str,
+    pub natives: &'a [crate::Native],
     pub interface: &'a Interface<'a>,
 }
 
@@ -482,7 +484,10 @@ fn index_line(title: &str, link: &str, description: &str, label: &str) -> String
 }
 
 pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
-    let mut out = String::from("---\nokf_version: \"0.2\"\n---\n");
+    let mut out = format!(
+        "---\nokf_version: \"0.2\"\n---\n\nWhere it runs: {}\n",
+        parts.place
+    );
     let of = |kind: IdeaKind| -> Vec<String> {
         pages
             .iter()
@@ -520,6 +525,19 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
         })
         .collect();
     section(&mut out, "# Back end: libraries", &libraries);
+    let natives: Vec<String> = parts
+        .natives
+        .iter()
+        .map(|n| {
+            index_line(
+                &n.name,
+                &format!("{}/idea.md", n.path),
+                &n.description,
+                &n.label,
+            )
+        })
+        .collect();
+    section(&mut out, "# Back end: native parts", &natives);
     let components: Vec<String> = parts
         .components
         .iter()
@@ -762,7 +780,12 @@ pub(crate) fn write(
     };
     let stamp = iso(now);
     let unchecked = Label::Unchecked.name();
-    let known = [unchecked, Label::Tested.name(), Label::Checked.name()];
+    let known = [
+        unchecked,
+        Label::Tested.name(),
+        Label::Checked.name(),
+        Label::Native.name(),
+    ];
     let previous = pages
         .first()
         .and_then(|p| p.front.value("label"))

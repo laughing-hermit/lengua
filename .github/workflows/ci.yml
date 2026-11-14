@@ -121,27 +121,34 @@ jobs:
           node-version: lts/*
       - name: pnpm
         run: npm install --global pnpm@12.18.0
-      - name: web/pnpm-lock.yaml of examples/notes up to date
+      - name: web/pnpm-lock.yaml of examples/notes and examples/desk up to date
         id: lock
         run: |
-          cargo test --locked -p lengua-mcp --test check the_wiki_joins_the_screens_and_the_server_through_api_md
-          d=target/tmp/lengua-mcp-notes-wiki/examples/notes/web
-          if [ -f examples/notes/web/pnpm-lock.yaml ]; then
-            cp examples/notes/web/pnpm-lock.yaml "$d/pnpm-lock.yaml"
+          cargo test --locked -p lengua-mcp --test check -- the_wiki_joins_the_screens_and_the_server_through_api_md the_desktop_app_gets_electron_and_its_window_in_the_generated_files
+          differs=false
+          for pair in notes:notes-wiki desk:desk-wiki; do
+            name=${pair%%:*}
+            d=target/tmp/lengua-mcp-${pair#*:}/examples/$name/web
+            if [ -f "examples/$name/web/pnpm-lock.yaml" ]; then
+              cp "examples/$name/web/pnpm-lock.yaml" "$d/pnpm-lock.yaml"
+            fi
+            (cd "$d" && CI=true pnpm install --lockfile-only)
+            if ! cmp -s "$d/pnpm-lock.yaml" "examples/$name/web/pnpm-lock.yaml"; then
+              mkdir -p "locks/$name"
+              cp "$d/pnpm-lock.yaml" "locks/$name/pnpm-lock.yaml"
+              echo "$name: $(grep -c '^  /\|^  [@a-z]' "locks/$name/pnpm-lock.yaml") lines of packages"
+              differs=true
+            fi
+          done
+          if [ "$differs" = true ]; then
+            echo "differs=true" >> "$GITHUB_OUTPUT"
+            exit 1
           fi
-          (cd "$d" && CI=true pnpm install --lockfile-only)
-          if cmp -s "$d/pnpm-lock.yaml" examples/notes/web/pnpm-lock.yaml; then
-            exit 0
-          fi
-          cp "$d/pnpm-lock.yaml" pnpm-lock.yaml
-          echo "the packages resolved: $(grep -c '^  /\|^  [@a-z]' pnpm-lock.yaml) lines of packages"
-          echo "differs=true" >> "$GITHUB_OUTPUT"
-          exit 1
       - if: ${{ failure() && steps.lock.outputs.differs == 'true' }}
         uses: actions/upload-artifact@v5
         with:
           name: pnpm-lock-${{ github.run_number }}
-          path: pnpm-lock.yaml
+          path: locks
 
   component:
     runs-on: ubuntu-24.04
@@ -204,7 +211,7 @@ jobs:
     needs: [plan, component]
     name: ${{ needs.plan.outputs.mode }} (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -251,11 +258,26 @@ jobs:
       - name: tests built
         if: ${{ needs.plan.outputs.mode == 'compile' }}
         run: cargo test --workspace --locked --no-run
+      - name: xvfb, for the desktop app's window on Linux
+        if: ${{ needs.plan.outputs.mode == 'test' && startsWith(matrix.target, 'linux') }}
+        run: |
+          if ! command -v xvfb-run > /dev/null; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q xvfb
+          fi
+          command -v xvfb-run
       - name: tests run
         if: ${{ needs.plan.outputs.mode == 'test' }}
         env:
           LENGUA_CHROME: ${{ matrix.target == 'linux-x86_64' && '/usr/bin/google-chrome' || '' }}
-        run: cargo test --workspace --locked --no-fail-fast
+          LENGUA_ELECTRON: "1"
+          ELECTRON_DISABLE_SANDBOX: ${{ startsWith(matrix.target, 'linux') && '1' || '' }}
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a cargo test --workspace --locked --no-fail-fast
+          else
+            cargo test --workspace --locked --no-fail-fast
+          fi
       - name: the wiki of libraries/ and examples/, written in place by check
         if: ${{ needs.plan.outputs.mode == 'wiki' }}
         run: cargo test --locked -p lengua-mcp --test wiki -- --ignored --nocapture

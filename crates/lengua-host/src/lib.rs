@@ -2,6 +2,7 @@ mod http;
 mod json;
 mod model;
 mod network;
+mod native;
 mod outgoing;
 mod tls;
 
@@ -396,6 +397,8 @@ fn hooks(run: &Program, input: &Input) -> outgoing::Hooks {
             }))
         }),
         model: Arc::new(model),
+        natives: run.build.natives.clone(),
+        limit: Duration::from_millis(grants.time_ms),
     }
 }
 
