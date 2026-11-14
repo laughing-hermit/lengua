@@ -159,6 +159,7 @@ fn browsers(folder: &Path, libraries: &[Library]) -> Vec<Browser> {
             functions: fs::read_to_string(folder.join(&l.path).join("src/main.rs"))
                 .map_or_else(|_| Vec::new(), |t| browser_functions(&t)),
         })
+        .filter(|b| !b.functions.is_empty())
         .collect()
 }
 

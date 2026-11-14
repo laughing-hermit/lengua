@@ -20,6 +20,7 @@ pub(crate) struct Parts<'a> {
     pub vision: bool,
     pub place: &'a str,
     pub natives: &'a [crate::Native],
+    pub browser: &'a [String],
     pub interface: &'a Interface<'a>,
 }
 
@@ -509,12 +510,11 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
             )
         })
         .collect();
-    let front = pages.iter().any(|p| p.kind == IdeaKind::Screen);
     let libraries: Vec<String> = libraries
         .into_iter()
         .zip(parts.libraries)
         .map(|(line, l)| {
-            if front {
+            if parts.browser.contains(&l.name) {
                 format!(
                     "{line}* In the browser, `{}` is `@/lib/wasm/{}`.\n",
                     l.name, l.name
