@@ -177,6 +177,29 @@ jobs:
           name: components
           path: examples/shop/components/tax.wasm
 
+  container:
+    needs: [plan]
+    if: ${{ needs.plan.outputs.mode == 'test' && contains(needs.plan.outputs.matrix, 'linux-x86_64') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: the back end as a container image of lengua-run, built and run here, never pushed
+        run: |
+          docker build --platform linux/amd64 -f deploy/Dockerfile --build-arg APP=examples/greet -t lengua-greet .
+          echo "the image: $(docker image inspect lengua-greet --format '{{.Size}}') bytes, $(docker image inspect lengua-greet --format '{{.Architecture}}')"
+          docker run -d --name greet -p 8080:8080 -e PORT=8080 lengua-greet
+          answer=""
+          for i in $(seq 60); do
+            if answer=$(curl -sf 'http://127.0.0.1:8080/hello?name=Ada'); then
+              break
+            fi
+            sleep 1
+          done
+          docker logs greet
+          echo "$answer"
+          test "$answer" = "Hello, Ada!"
+
   check:
     needs: [plan, component]
     name: ${{ needs.plan.outputs.mode }} (${{ matrix.target }})
@@ -276,6 +299,7 @@ jobs:
             fi
           done
           for pair in "shop target/tmp/lengua-mcp-shop/examples/shop/target/wasm32-wasip2/release/shop.wasm" \
+                      "ask target/tmp/lengua-mcp-ask/examples/ask/target/wasm32-wasip2/release/ask.wasm" \
                       "notes target/tmp/lengua-mcp-notes/examples/notes/target/wasm32-wasip2/release/notes.wasm"; do
             set -- $pair
             if [ -f "$2" ]; then
@@ -404,7 +428,7 @@ jobs:
         run: |
           ls built
           status=0
-          for name in hello tally greet echo count files clock forever greedy words fetch upper sleepy shop notes; do
+          for name in hello tally greet echo count files clock forever greedy words fetch upper sleepy shop ask notes; do
             echo "== $name"
             first=""
             for dir in built/*/; do

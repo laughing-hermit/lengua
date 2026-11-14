@@ -311,7 +311,15 @@ fn tests(worker: &Worker, front: &Front, stage: &Path) -> Result<usize, Failure>
 
 fn next_build(worker: &Worker, stage: &Path) -> Result<(), Failure> {
     match pnpm_limited(worker, &["exec", "next", "build"], stage, 600) {
-        Ok((true, _)) if stage.join("out").is_dir() => Ok(()),
+        Ok((true, _)) if stage.join("out").is_dir() => flatten_segments(&stage.join("out"))
+            .map_err(|e| {
+                failed(
+                    Stage::BuildFailed,
+                    "web/package.json",
+                    "web-build",
+                    format!("lengua could not name the export's segment files: {e}"),
+                )
+            }),
         Ok((_, text)) => Err(failed(
             Stage::BuildFailed,
             "web/package.json",
@@ -325,6 +333,41 @@ fn next_build(worker: &Worker, stage: &Path) -> Result<(), Failure> {
             message,
         )),
     }
+}
+
+fn flatten_segments(dir: &Path) -> io::Result<()> {
+    let mut entries: Vec<PathBuf> = fs::read_dir(dir)?.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for path in entries.into_iter().filter(|p| p.is_dir()) {
+        let name = path
+            .file_name()
+            .map_or_default(|n| n.to_string_lossy().to_string());
+        if name.starts_with("__next.") {
+            flatten_into(&path, dir, &name)?;
+            fs::remove_dir_all(&path)?;
+        } else {
+            flatten_segments(&path)?;
+        }
+    }
+    Ok(())
+}
+
+fn flatten_into(from: &Path, to: &Path, prefix: &str) -> io::Result<()> {
+    let mut entries: Vec<PathBuf> = fs::read_dir(from)?.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for path in entries {
+        let name = format!(
+            "{prefix}.{}",
+            path.file_name()
+                .map_or_default(|n| n.to_string_lossy().to_string())
+        );
+        if path.is_dir() {
+            flatten_into(&path, to, &name)?;
+        } else {
+            fs::rename(&path, to.join(name))?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn media_type(path: &str) -> &'static str {
@@ -578,8 +621,26 @@ pub(crate) fn screen_files(folder: &Path, front: &Front) -> Vec<(String, String)
 
 #[cfg(test)]
 mod tests {
-    use super::{assets_text, base64, media_type, type_problems, wrapper_text};
+    use super::{assets_text, base64, flatten_segments, media_type, type_problems, wrapper_text};
     use lengua_idea::{Browser, BrowserFn};
+    use std::fs;
+
+    #[test]
+    fn a_segment_folder_becomes_the_file_name_next_writes_on_linux() {
+        let out = std::env::temp_dir().join(format!("lengua-mcp-{}-segments", std::process::id()));
+        let _ = fs::remove_dir_all(&out);
+        fs::create_dir_all(out.join("note/__next.note")).expect("folders");
+        fs::write(out.join("note/__next.note/__PAGE__.txt"), "p").expect("a file");
+        fs::write(out.join("note/index.html"), "i").expect("a file");
+        flatten_segments(&out).expect("flattened");
+        assert_eq!(
+            fs::read_to_string(out.join("note/__next.note.__PAGE__.txt")).expect("renamed"),
+            "p"
+        );
+        assert!(!out.join("note/__next.note").exists());
+        assert!(out.join("note/index.html").is_file());
+        let _ = fs::remove_dir_all(&out);
+    }
 
     #[test]
     fn bytes_become_base64_and_a_library_gets_its_wrapper() {

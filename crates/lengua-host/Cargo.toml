@@ -13,7 +13,10 @@ wasmtime = { version = "=50.0.1", default-features = false, features = ["runtime
 wasmtime-wasi = { version = "=50.0.1", default-features = false, features = ["p2"] }
 wasmtime-wasi-io = { version = "=50.0.1", default-features = false, features = ["std"] }
 wasmtime-wasi-http = { version = "=50.0.1", default-features = false, features = ["p2"] }
-hyper = { version = "1", default-features = false }
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+http = "1"
+http-body-util = "0.1"
+tokio = { version = "1", default-features = false, features = ["net", "rt", "time"] }
 
 [lints]
 workspace = true

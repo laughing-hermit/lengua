@@ -44,8 +44,18 @@ component that `lengua-seal` loaded from sealed precompiled code. The grants and
 - Given a server (`- Serves: HTTP on TCP port N`), when `Host::run` gets a request on its
   standard input, then the host reads it, gives it to the component's `wasi:http/incoming-handler`
   through `wasmtime-wasi-http` (its synchronous bindings, with lengua's own hooks that refuse
-  every outgoing request), and returns the answer as HTTP/1.1 bytes with a `content-length`;
-  `Host::serve` does the same for each connection on `127.0.0.1:N` (since L7).
+  every outgoing request the idea does not grant), and returns the answer as HTTP/1.1 bytes with a
+  `content-length`;
+  `Host::serve` does the same for each connection on `127.0.0.1:N` or a given address, eight at a
+  time, a request that may write alone, with one line of log a request (since L7; L9).
+- Given `- Asks: an AI model`, when the program sends `POST /ask`, `/stream` or `/embed` to
+  `ai.lengua`, then the host answers from the example's `- Model answers:` in a fixed run, or from
+  the model server of `LENGUA_MODEL_URL` in a live one, within the calls and tokens of the grant
+  (429 past them) (since L9).
+- Given ``- Calls: HTTP at `host:port` ``, when the program sends a request there, then the host
+  sends it over TCP and streams the answer back; any other address is denied (since L9).
+- Given ``- Reads: the secret `NAME` ``, when the program reads its environment, then it finds
+  `NAME` with the host's value, or `test-NAME` in a fixed run (since L9).
 ## Structure
 
 - `config`: the engine's `wasmtime::Config`: epoch interruption on, relaxed SIMD and
@@ -56,7 +66,8 @@ component that `lengua-seal` loaded from sealed precompiled code. The grants and
   world to the linker, `context` makes the WASI context from the grants, the input and the
   `Streams`, `Limits` (with `limiter`) holds the memory, `Steps` and `Fixed` are the stepped and
   the fixed clock, `seeded` the fixed random bytes, `Guest` and `Table` the store's data, and
-  `ending` reads how the run ended.
+  `ending` reads how the run ended; `hooks` makes the hooks of the grants and `secrets` gives
+  the granted environment variables.
 - `Input`, `Ending`, `Outcome` (with `Outcome::refused`), `Streams` and `OUTPUT` are its input
   and result.
 - `Program` is what runs: the folder, the component, the trusted components and the build;
@@ -66,8 +77,15 @@ component that `lengua-seal` loaded from sealed precompiled code. The grants and
   component exports.
 - `network.rs`: `allow` sets TCP, UDP, name lookup and the socket address check from the grants;
   `granted_addresses` resolves the granted hosts; `permitted` decides each use of an address.
-- `http.rs`: `Refuse` is the hooks that refuse outgoing requests; `Whole` is a request body in
+- `http.rs`: `Whole` is a request body in
   memory; `Unpark` wakes the thread that reads the answer's body; `parse`, `head_end`,
   `content_length`, `chunked` and `dechunk` read a request; `collect` reads the answer's body;
   `answer_bytes` and `response_bytes` write the answer; `Host::answer` and `Host::handle` serve
-  one request; `Host::serve` and `read_request` serve a TCP port.
+  one request; `Host::serve`, `Host::serve_one`, `request_line`, `log_line` and `read_request`
+  serve a TCP port, `WORKERS` at a time.
+- `outgoing.rs`: `Hooks` are the hooks of the granted calls; `send` sends a request over TCP;
+  `Pieces`, `whole`, `done` and `reply` make an answer; `authority_of` gives `host:port`.
+- `model.rs`: `ask` answers the address `ai.lengua`; `Budget` holds the calls and tokens left;
+  `Model` and `Endpoint` are the given answer or the model server; `given`, `live`,
+  `request_body` and `finish` make the answer; `Events` and `event_text` read a streamed one.
+- `json.rs`: `parse`, `quote` and `Value` read and write the JSON of a model server.

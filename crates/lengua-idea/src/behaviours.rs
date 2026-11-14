@@ -9,7 +9,7 @@ use crate::text::{
 };
 
 const KEYWORDS: [&str; 4] = ["Given", "When", "Then", "And"];
-const PROGRAM_KEYS: &str = "`Standard input`, `Arguments`, `File `path``, `Server `host:port``, `Client `port``, `Call`, `Request`, `Request header `name``, `Request body`, `Expect standard output`, `Expect standard error`, `Expect exit code`, `Expect end`, `Expect file `path``, `Expect answer`, `Expect value`, `Expect status`, `Expect header `name``, `Expect body`";
+const PROGRAM_KEYS: &str = "`Standard input`, `Arguments`, `File `path``, `Server `host:port``, `Client `port``, `Call`, `Request`, `Request header `name``, `Request body`, `Model answers`, `Expect standard output`, `Expect standard error`, `Expect exit code`, `Expect end`, `Expect file `path``, `Expect answer`, `Expect value`, `Expect status`, `Expect header `name``, `Expect body`";
 type Make = fn(String) -> Key;
 
 const METHODS: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
@@ -44,6 +44,7 @@ enum Key {
     Status,
     ExpectHeader(String),
     ExpectBody,
+    ModelAnswers,
 }
 
 impl Key {
@@ -65,6 +66,7 @@ impl Key {
             "Request body" => Self::RequestBody,
             "Expect status" => Self::Status,
             "Expect body" => Self::ExpectBody,
+            "Model answers" => Self::ModelAnswers,
             _ => return None,
         })
     }
@@ -115,7 +117,8 @@ impl Key {
             | Self::RequestBody
             | Self::Status
             | Self::ExpectHeader(_)
-            | Self::ExpectBody => Some(false),
+            | Self::ExpectBody
+            | Self::ModelAnswers => Some(false),
             Self::State(_)
             | Self::Click
             | Self::TypeInto(_)
@@ -405,7 +408,8 @@ fn values(key: &Key, item: &Item, value: &str, sink: &mut Sink) -> Vec<String> {
         | Key::RequestHeader(_)
         | Key::RequestBody
         | Key::ExpectHeader(_)
-        | Key::ExpectBody => one_string(item, value, sink).into_iter().collect(),
+        | Key::ExpectBody
+        | Key::ModelAnswers => one_string(item, value, sink).into_iter().collect(),
         Key::Call => {
             let found = backticked(value).map(str::to_string);
             if found.is_none() {
@@ -544,6 +548,7 @@ fn record(key: &Key, value: &str, found: &[String], test: &mut Test) {
             .expect_headers
             .push((name.to_lowercase(), first.unwrap_or_default())),
         Key::ExpectBody => test.expect_body = first,
+        Key::ModelAnswers => test.model = first,
         Key::Range(_) => {}
     }
 }

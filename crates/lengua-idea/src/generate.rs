@@ -98,7 +98,7 @@ const ALWAYS: [&str; 15] = [
 
 pub(crate) fn interfaces(grant: Grant) -> &'static [&'static str] {
     match grant {
-        Grant::StandardInput | Grant::Arguments => &[],
+        Grant::StandardInput | Grant::Arguments | Grant::Secret => &[],
         Grant::Clock => &["wasi:clocks/wall-clock"],
         Grant::Random => &[
             "wasi:random/insecure",
@@ -122,6 +122,7 @@ pub(crate) fn interfaces(grant: Grant) -> &'static [&'static str] {
             "wasi:sockets/udp-create-socket",
         ],
         Grant::Http => &["wasi:http/types"],
+        Grant::Ai | Grant::Outgoing => &["wasi:http/outgoing-handler", "wasi:http/types"],
     }
 }
 

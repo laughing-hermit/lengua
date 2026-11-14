@@ -20,7 +20,8 @@ The design of record is [Lengua3.md](Lengua3.md). The work and its state are in
 lengua is an [Agent Plugin](https://agent-plugins.org/): the skills and the MCP server are in
 [plugin/](plugin/), and the server's source is in [crates/lengua-mcp](crates/lengua-mcp). A checked program
 runs from a shell with the lean runner, [crates/lengua-run](crates/lengua-run), which loads
-only the sealed code its signed `lengua.lock` names.
+only the sealed code its signed `lengua.lock` names; a checked server also ships as a container
+image of `lengua-run`, [deploy/Dockerfile](deploy/Dockerfile).
 
 Everything is built and tested on GitHub's free runners for Linux, macOS and Windows, on x86-64
 and ARM64.

@@ -98,6 +98,7 @@ pub struct Test {
     pub expect_state: Vec<StateValue>,
     pub expect_text: Option<String>,
     pub expect_label: Option<String>,
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -237,6 +238,7 @@ fn filled(test: &Test, values: &[(String, String)]) -> Test {
         expect_state: states(&test.expect_state, values),
         expect_text: test.expect_text.as_ref().map(one),
         expect_label: test.expect_label.as_ref().map(one),
+        model: test.model.as_ref().map(one),
         ..test.clone()
     }
 }

@@ -585,6 +585,7 @@ impl Lengua {
             stdin: params.stdin.unwrap_or_default().into_bytes(),
             fixed: params.fixed,
             root: None,
+            model: None,
         };
         Ok(Json(run_reply(self.runs.run(&folder, &build, input))))
     }
@@ -609,6 +610,54 @@ async fn serve() -> Result<(), String> {
     server.waiting().await.map_err(|e| e.to_string())?;
     Ok(())
 }
+
+fn check_folder(folder: &str) -> ExitCode {
+    let found = std::fs::canonicalize(folder)
+        .map_err(|e| format!("{folder}: {e}"))
+        .and_then(|absolute| Ok((absolute, Host::new()?)));
+    let (absolute, host) = match found {
+        Ok(found) => found,
+        Err(error) => {
+            eprintln!("{}: {error}", env!("CARGO_PKG_NAME"));
+            return ExitCode::FAILURE;
+        }
+    };
+    let lengua = Lengua {
+        name: VERSION,
+        builds: Builds::new(host),
+        runs: Runs::default(),
+    };
+    let params = || CheckParams {
+        folder: absolute.to_string_lossy().to_string(),
+    };
+    for _ in 0..CHECK_POLLS {
+        let reply = match lengua.check(Parameters(params())) {
+            Ok(Json(reply)) => reply,
+            Err(error) => {
+                eprintln!("{}: {error}", env!("CARGO_PKG_NAME"));
+                return ExitCode::FAILURE;
+            }
+        };
+        let state = reply.build.as_ref().map_or("none", |b| b.state.as_str());
+        if !["building", "testing", "mutating"].contains(&state) {
+            for f in &reply.findings {
+                println!("{}:{}: {}: {}", f.file, f.line, f.code, f.message);
+            }
+            println!("state {state}, label {}", reply.label);
+            let checked = state == "done" && reply.label != "unchecked";
+            return if checked {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            };
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    eprintln!("{}: the check did not end in time", env!("CARGO_PKG_NAME"));
+    ExitCode::FAILURE
+}
+
+const CHECK_POLLS: usize = 7200;
 
 fn run_doctor() -> ExitCode {
     let folder = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -688,6 +737,11 @@ fn main() -> ExitCode {
     {
         return write_wiki(Path::new(root));
     }
+    if let [command, folder] = args.as_slice()
+        && command == "check"
+    {
+        return check_folder(folder);
+    }
     if let Some((command, rest)) = args.split_first()
         && command == "worker"
     {
@@ -695,7 +749,7 @@ fn main() -> ExitCode {
     }
     if !args.is_empty() {
         eprintln!(
-            "usage: {} [--version | doctor | wiki <root>]",
+            "usage: {} [--version | doctor | check <folder> | wiki <root>]",
             env!("CARGO_PKG_NAME")
         );
         return ExitCode::from(2);

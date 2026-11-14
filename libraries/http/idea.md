@@ -8,11 +8,11 @@ used_by: []
 label: checked
 idea_sha256: 831ca8a9e89d7e2dd8922bb4822c50598280d90e8d3530f6c22db1a3949d39c3
 source_sha256: 21dd14779e5006b4ca78eb5ec14033f8aaec90d2e4dc9176be7ee0cc4cdc00be
-cargo_sha256: b4656a604ef5671f22202dce679b5edb2a202ed9daf5ae055948ab9582955144
+cargo_sha256: a3bf7d6d1451d1966e988f6b934131778b48f1856b6d3f0c26c6026738355ce9
 world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T06:06:30Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T07:44:51Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T06:06:30Z }
+  - { by: process:lengua-check, at: 2026-11-14T07:44:51Z }
 title: http
 status: draft
 ---

@@ -22,7 +22,7 @@ next starts (Lengua3.md, section 8).
 | L6 | The lock, sealed precompiled code, `lengua-run`, the `run` tool | Landed on main at cb314b2 (run 43450491850, green on five) |
 | L7 | Applications of several modules; network and HTTP grants; lengua libraries and the shared libraries; a component from another language | Landed on main at af89139 (run 43483075983, green on five) |
 | L8 | The Next.js front end, exported statically and embedded in the one file; TypeScript held like Rust; the wiki across both sides | Built on `wip/l8-next`; the five-runner landing run is named in the landing report |
-| L9 | Full stack: AI models as a grant, storage, outgoing calls, secrets, logins, shared types, logs, embeddings, deployment, libraries using libraries, concurrent serving | Not started |
+| L9 | Full stack: AI models as a grant, storage, outgoing calls, secrets, logins, shared types, logs, embeddings, deployment, libraries using libraries, concurrent serving | Built on `wip/l9`; the five-runner landing run is named in the landing report |
 | L10 | Native parts and the Electron desktop app | Not started |
 | L11 | The three skills (`vision`, `write-idea`, `build`), approval, "Where it runs", a product test in an interactive session | Not started |
 | L12 | The scale test: a Next.js and Rust full-stack application with an AI call | Not started |
@@ -577,6 +577,58 @@ next starts (Lengua3.md, section 8).
   - Secrets: the rule is written for L9's secrets grant; nothing to test until that grant.
   - Attested Computation: a recommendation in Lengua3.md, section 10, for L13 to decide.
 
+- **2026-11-14, L9: the AI grant is HTTP to the host's address `ai.lengua`** (`POST /ask`,
+  `/stream`, `/embed`), through `wasi:http/outgoing-handler`, not a WIT interface of lengua's
+  own: the program needs only `wasip2`, which a server already has, and streaming is the answer's
+  body. The host speaks the OpenAI-compatible API over plain HTTP. To reverse: a `lengua:ai` WIT
+  interface linked by the host, with `wit-bindgen` in each program.
+- **2026-11-14, L9: no TLS.** `rustls` needs `ring` or `aws-lc-rs` (C and assembly), and
+  `wasmtime-wasi-http`'s `default-send-request` brings them; a cloud model or HTTPS service is
+  reached through a local gateway. To reverse: turn on `default-send-request` (about ten
+  packages, not pure Rust) and allow `https` in the hooks.
+- **2026-11-14, L9: `- Model answers:` is one answer for every call of a run**, a token is four
+  bytes of the prompt and the answer, and `/stream` gives one word a piece, so a test is exact.
+  To reverse: one key per call (``- Model answer `n`:``).
+- **2026-11-14, L9: a secret is a host environment variable of the same name**; a fixed run
+  gives `test-<NAME>`; a live run refuses to start without it.
+- **2026-11-14, L9: storage is the `- Writes:` folder**, with no store of its own; on Vercel the
+  folder lasts only as long as an instance (Lengua3.md, "Deployment"). To reverse: a
+  `- Stores:` grant for a key-value store that the host backs with a folder or a service.
+- **2026-11-14, L9: concurrent serving** is eight worker threads in `lengua-run`, each request
+  an instance of its own; when the idea writes files, a request other than `GET`, `HEAD` or
+  `OPTIONS` runs alone (WASI 0.2 has no file locks).
+- **2026-11-14, L9: logins are the library `logins`** (PBKDF2-HMAC-SHA256 hashes, HMAC-signed
+  tokens `<name>.<expires>.<hmac>`), on `hashes`; `notes` hashes new passwords with 20,000
+  rounds, under OWASP's 600,000 for PBKDF2-SHA256, so a test of a request stays well within its
+  5 s. To reverse: raise `ROUNDS` in `examples/notes/src/accounts.rs` and the idea's time.
+- **2026-11-14, L9: libraries may use libraries** (`library-grant` no longer counts them); the
+  vectors in `openssl` (`kdf`, `dgst -hmac`) gave the libraries' expected values.
+- **2026-11-14, L9: the TS client's statuses are literal types**, checked at run time, and a 2xx
+  example under `/api/` with no `- Route:` is `route-unlisted`.
+- **2026-11-14, L9: the container image** (`deploy/Dockerfile`) checks the app in its first
+  stage, so the image has its own key and code sealed for its CPU; CI builds and runs it for
+  `examples/greet` on `ubuntu-24.04` and pushes nothing.
+- **2026-11-14, L9: the STE dictionary** gains `angle`, `chain`, `cosine`, `dot`, `embedding`,
+  `nearest`, `piece`, `prompt`, `question`, `round`, `salt`, `score`, `secret`, `signature`,
+  `tab` and `vector`.
+- **2026-11-14, L9: lengua's own dependencies**: `lengua-host` names `tokio` 1 (`net`, `rt`,
+  `time`), `http` 1 and `http-body-util` 0.1 for its outgoing sender, and `hyper`'s `client` and
+  `http1` features; all were in the graph through Wasmtime, so `Cargo.lock` gains no package
+  (run 43563716392's lockfile job). No new crate or npm package for a program.
+
+## Never exercised
+
+What the milestones built and no run has used, with the reason.
+
+- A live model: no run asks Ollama, llama.cpp or a cloud model (the `$0` rule and no model on
+  the runners); `model::live` and `Events` are tested only by their unit tests.
+- HTTPS anywhere (no TLS, above).
+- A deployment to Vercel (the owner's account), its `vercel.json` services and rewrites, and
+  a lasting store behind `- Calls:`.
+- The container image on `linux/arm64`, and of an app with screens (CI builds `examples/greet`).
+- MCP sampling (Claude Code does not support it).
+- `lengua-run` serving under real load past eight requests at a time.
+
 ## Runs
 
 The five-runner run a landing rests on is at the head it tests, so it is named in the landing report and added here at the next milestone.
@@ -650,6 +702,11 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-14 | [43544397848](https://github.com/laughing-hermit/lengua/actions/runs/43544397848) | wip/l8-next b15c296 | test, linux-x86_64 | `notes` done but `tested`, 23 of 38: every screen mutant survived, since the Vite plugin did not take the mutant's text (now the file is replaced in the copy) |
 | 2026-11-14 | [43546518725](https://github.com/laughing-hermit/lengua/actions/runs/43546518725) | wip/l8-next c2cf402 | test, linux-x86_64 | Cancelled at the job's 60 minutes: the notes test did not end (now Vitest and `next build` have time limits, and the tests' sockets read timeouts) |
 | 2026-11-14 | [43552069900](https://github.com/laughing-hermit/lengua/actions/runs/43552069900) | wip/l8-next eb7398e | test, linux-x86_64 | Every test green but the committed wiki (`wiki-stale` for the new examples). `notes` `checked`, 37 of 38 mutants, 21 tests (screens and server), done in 305.9 s; one file of 1,095,636 bytes, the export 39 files and 1,017,050 bytes; `lengua-run`'s first page 414 ms after its start; Chrome read every label of the three screens; `titles` `checked`, 7 of 7, in 15 to 22 s |
+| 2026-11-14 | [43563716392](https://github.com/laughing-hermit/lengua/actions/runs/43563716392) to [43564479444](https://github.com/laughing-hermit/lengua/actions/runs/43564479444) | wip/l9 96f7702 to 8bebf4d | compile, linux-x86_64 | `Cargo.lock` gained no package, only `lengua-host`'s three names; a clippy `manual_contains`; then green |
+| 2026-11-14 | [43565151329](https://github.com/laughing-hermit/lengua/actions/runs/43565151329) | wip/l9 9ca72cb | test, linux-x86_64 | Failed: clippy `too_many_lines` in a test, and `debug_assert!(!x.is_empty())` in the new code; the job `container` green: `examples/greet` as an image of 106,826,960 bytes for `amd64`, its first answer 1 ms |
+| 2026-11-14 | [43565796219](https://github.com/laughing-hermit/lengua/actions/runs/43565796219) to [43569345579](https://github.com/laughing-hermit/lengua/actions/runs/43569345579) | wip/l9 4c8530b to 71a98e3 | test, linux-x86_64 | Failed on STE (sentences over 25 words, `named`), clippy in the new examples (`map(_).unwrap_or_default()`, `format!` collected, a constant assertion) and `rustfmt`, each fixed; `logins` 23 of 25, `ai` 18 of 19, `vectors` 11 of 11, `ask` 18 of 20, all `checked` |
+| 2026-11-14 | [43571805500](https://github.com/laughing-hermit/lengua/actions/runs/43571805500) | wip/l9 a39789b | test, linux-x86_64 | Every test green but the tree test (the new folders' wiki not committed yet). `notes` `checked`, 37 of 38, 39 tests, done in 433 s; one file of 1,189,438 bytes, the export 45 files and 1,041,922 bytes; `lengua-run`'s first page 408 ms after its start; eight requests at once, an account made and signed in with a real clock, salt and key |
+| 2026-11-14 | [43571807934](https://github.com/laughing-hermit/lengua/actions/runs/43571807934) | wip/l9 a39789b | wiki, linux-x86_64 | Green: the committed wiki (artifact `wiki-724-linux-x86_64`); every example's log has two lines more, since the build's inputs hold the grants, which have three fields more |
 
 ## What the permission checks refused
 

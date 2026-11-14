@@ -288,36 +288,37 @@ and the lock and the log record when and what was approved.
 
 An AI language's programs can ask an AI model as part of their own work: classify this,
 summarise that, extract these fields, then carry on with the answer, the way LangChain does.
-In lengua it is a grant like any other.
+In lengua it is a grant like any other. Built at L9 (2026-11-14), in `crates/lengua-host/src/model.rs`.
 
-- **The idea declares it:** `- Asks: an AI model, for <what>`, with limits:
-  `up to N calls, M tokens` per run. Without the grant, the program can't ask.
-- **One interface, provided by the host:** send a prompt, get a reply; or ask for a structured
-  reply that must match a shape, which the host checks. Streaming replies too. The program
-  never holds an API key.
-- **The person running it chooses the model**, outside the program:
-  - a cloud API (such as Anthropic's), with its key held by the host;
-  - a local model (such as Ollama or llama.cpp), so nothing leaves the machine;
-  - the agent's own model through MCP sampling, when the program runs from an agent that
-    supports it. Claude Code does not support sampling yet
-    ([issue #1785](https://github.com/anthropics/claude-code/issues/1785),
-    [MCP sampling](https://modelcontextprotocol.io/specification/2025-11-25/client/sampling)),
-    so this path waits; cloud and local work now.
-- **Tests stay exact and free.** An example gives the model's answer:
-  ``Given the model answers `urgent` ``. A separate, optional live run asks the real model and
-  is never part of the label.
-- **AI output is untrusted input.** The program checks every answer (parses it into a shape,
-  refuses anything else); the Power of 10's "every result handled" applies.
-- **Still one WebAssembly file.** The interface is a WIT interface the host links only with
-  the grant. (`wasi-nn` is for running a model inside the program; it is on the watch list.)
+- **The idea declares it:** `- Asks: an AI model, for <what>, up to N calls and M tokens`, per
+  run (for a server, per request: each request is an instance of its own). Without the grant,
+  the program can't ask, and an example with `- Model answers:` is `example-model`.
+- **One interface, provided by the host:** WASI's own HTTP client (`wasi:http/outgoing-handler`,
+  linked only with the grant) to the host's address `ai.lengua`: `POST /ask` gives the whole
+  answer, `POST /stream` the answer in pieces as they come, `POST /embed` a vector as a JSON
+  list. The body is the prompt; `x-lengua-reply: json` asks for a structured reply, and the host
+  refuses an answer that is not JSON (502). Past the calls or the tokens the host answers 429;
+  with no model, 503. The program never holds an API key.
+- **The person running it chooses the model**, outside the program, through the host's
+  environment: `LENGUA_MODEL_URL` (default `http://127.0.0.1:11434`, Ollama), `LENGUA_MODEL`,
+  `LENGUA_EMBED_MODEL` and `LENGUA_MODEL_KEY` (sent as a bearer token). The host speaks the
+  OpenAI-compatible `/v1/chat/completions` and `/v1/embeddings`, which Ollama, llama.cpp's server
+  and cloud gateways speak, over plain HTTP: a cloud model over HTTPS is reached through a local
+  gateway until the host has TLS (section 10). MCP sampling waits for Claude Code
+  ([issue #1785](https://github.com/anthropics/claude-code/issues/1785),
+  [MCP sampling](https://modelcontextprotocol.io/specification/2025-11-25/client/sampling)).
+- **Tests stay exact and free.** ``- Model answers: "<text>"`` gives the answer of every call of
+  the run; `/stream` gives it one word a piece; a token is four bytes of the prompt and the
+  answer. A live run, with a real model, is never part of the label.
+- **AI output is untrusted input.** The program checks every answer (the `ai` library's
+  `fields` refuses an answer that is not a JSON object with each field).
 - **The front end never holds a key.** Its AI UI (json-render, section 4) calls the back end,
-  and the back end asks a cloud or local model under this grant, so AI keys never reach the
-  browser. A small model that runs inside the browser on WebGPU ("Which part does what") needs no
-  key and no grant.
-- **A shared library, `ai`,** on the standard library alone: prompt templates, structured
-  replies, retries, and steps chained one after another.
-- **Where it runs and what it costs are said plainly:** the "Where it runs" line names the
-  model's kind (cloud, local), and the reply shows the call and token limits.
+  and the back end asks the model under this grant. A small model inside the browser on WebGPU
+  ("Which part does what") needs no key and no grant.
+- **A shared library, `ai`,** on `json`: `fill` (a prompt's `{name}`s), `then` (steps chained),
+  `fields`, `retryable` and `estimate_tokens`.
+- **The limits are the idea's**, which the host reads at each run; the examples `ask` (a program)
+  and `notes` (a server) use the grant.
 
 ### Nothing unless absolutely necessary
 
@@ -633,6 +634,7 @@ The keys of a network fixture, a library call and a server request (since L7):
 | `Expect status` | a number from 100 to 599 | the answer's status; required with `Request` |
 | ``Expect header `<name>` `` | a string | a header of the answer, the name in any case |
 | `Expect body` | a string | the answer's body, compared exactly; not compared when absent |
+| `Model answers` | a string | the answer of an AI model to every call of the run (L9); only with `- Asks:` (`example-model`) |
 
 A call or a request has no exit code (`example-exit-code-unused`); `Expect value` goes with
 `Call` (`example-call-missing`, `example-value-missing`), and the keys of a request with
@@ -671,7 +673,7 @@ run").
 
 | Key | Value | Where |
 |---|---|---|
-| `Reads` | `standard input`, `arguments`, `the clock`, `random numbers` or ``files in `<folder>` `` | top idea |
+| `Reads` | `standard input`, `arguments`, `the clock`, `random numbers`, ``files in `<folder>` `` or ``the secret `<NAME>` `` (L9; the name in capitals, digits and `_`) | top idea |
 | `Writes` | ``files in `<folder>` `` | top idea |
 | `Connects to` | `` `<host>:<port>` ``, a name or an IP address and a port (since L7) | top idea |
 | `Listens on` | `TCP port <number>`, 1 to 65535 (since L7) | top idea |
@@ -686,6 +688,8 @@ run").
 | `Uses package` | `` `<name>` <major.minor.patch>, for <reason> ``: an npm package of the front end, pinned (since L8) | any idea |
 | `Uses shadcn` | shadcn/ui component names in backticks, commas between them: `button`, `card`, `input`, `label`, `textarea` (since L8) | top idea |
 | `Route` | `` `<METHOD> <path>` ``, a path from `/` whose parts may be `{<name>}`: a route of the server that the front end calls (since L8) | top idea of a server |
+| `Asks` | `an AI model, for <what>, up to <N> calls and <M> tokens`, per run (L9) | top idea |
+| `Calls` | ``HTTP at `<host>:<port>` ``: outgoing HTTP to a service, a name or an IP address (L9) | top idea |
 
 Standard output and standard error are always granted. Every file in `ideas/` must be in
 `- Modules:`, and every name there must have its file. A `Uses` name with no `/` must be a module
@@ -693,9 +697,9 @@ of the program; one with a `/` is a lengua library (L7). The same line two times
 
 **The shape of the top idea** (since L7). An idea is a *program* (it exports `wasi:cli/run`), a
 *server* (`- Serves:`; it exports `wasi:http/incoming-handler`) or a *library* (`- Exports:`; a
-Rust `[lib]`). Two of them at once is `constraint-kind`. A library has no grants of its own, no
-libraries and no components (`library-grant`): the program that uses it grants what it reaches,
-and its examples are calls (`example-library-call` otherwise). A server's examples are requests
+Rust `[lib]`). Two of them at once is `constraint-kind`. A library has no grants of its own and no
+components (`library-grant`), and since L9 it may use other libraries: the program that uses it
+grants what it reaches, and its examples are calls (`example-library-call` otherwise). A server's examples are requests
 (`example-server-request`), and a server reads no standard input and no arguments
 (`server-input`). A server and a library need no `main` in `# Structure`. Each module must have
 its `mod <name>;` line in `src/main.rs` (`module-undeclared`), and each name of `- Exports:` a
@@ -805,8 +809,9 @@ tools were looked at: [AI Elements](https://elements.ai-sdk.dev/) (shadcn/ui com
 apps, copied into the app like shadcn's) and the [AI SDK](https://ai-sdk.dev/)'s UI hooks
 (`useChat` from `@ai-sdk/react`, which reads the AI SDK's stream protocol). They are not used at
 L8: both are made for chat and for a route that streams in the AI SDK's own protocol, which the
-back end would have to speak, and they bring more packages. They stay candidates for a chat app
-at L9, under the merit test below.
+back end would have to speak, and they bring more packages. Looked at again at L9: still not
+used, since the model's `/stream` gives plain pieces of text, not that protocol; a chat app
+would take them under the merit test below.
 
 **Screens.** Each screen of the front end has its own idea in `ideas/ui/`, in Given/When/Then
 and STE like every other idea, and its own TSX file in `web/screens/`. Every rule holds for them
@@ -816,7 +821,10 @@ server: lengua's grants hold the server; the browser's sandbox holds the front e
 **The typed connection.** From the server idea's `- Route:` lines and its examples, `check`
 generates `web/lib/lengua.ts`: a TypeScript type for each route's request body and answer
 (read from the JSON of the examples), a function per route that calls it with `fetch`, and a
-check of each answer's shape when it arrives, since TypeScript's types are gone at run time. A
+check of each answer's shape and status when it arrives, since TypeScript's types are gone at run time
+(since L9 the statuses of the examples are literal types, `Answer<T, F, 200 | 201, 400 | 409>`,
+and a 2xx example under `/api/` that no `- Route:` names is `route-unlisted`, so the client has
+every route the front end can call). A
 screen calls the back end only through these functions (`ts-fetch` otherwise), so a change of
 the server that the front end does not follow fails `tsc`.
 
@@ -866,18 +874,35 @@ stays WebAssembly and TSX.
 
 ### Deployment
 
-Decided by the owner on 2026-11-13; a tested target of L9. The rule stays: native Rust only where
-absolutely necessary, so deploying never turns the back end native.
+Decided by the owner on 2026-11-13; a tested target since L9. The rule stays: native Rust only
+where absolutely necessary, so deploying never turns the back end native.
 
-- **Vercel.** The Next.js front end deploys natively on Vercel, as its own static export. The
-  Rust back end deploys as a small container (Vercel's container-image Functions on Fluid
-  compute) that runs `lengua-run` serving the one `.wasm` file, so the back end is the same file,
-  with lengua's sandbox and grants kept. Not Vercel's Rust runtime (native, in beta) and not jco
-  (an experimental shim). To verify at L9: the container's CPU architecture, its size limits and
-  the feature's status; storage goes through the storage grant to an external store, since the
-  container has no persistent disk.
-- **Any server or virtual machine** that runs `lengua-run`, serving the one file (the front end
-  inside it).
+- **Any server or virtual machine** runs `lengua-run --listen 0.0.0.0:<port> <folder>`, serving
+  the one file (the front end inside it), with the folder checked on that machine, so the lock is
+  signed with its key and the sealed code is for its CPU.
+- **A container image**, `deploy/Dockerfile`: a first stage builds `lengua-mcp` and
+  `lengua-run` from the repository and runs `lengua-mcp check` on the libraries named in
+  `LIBRARIES` and the folder `APP`, which makes a key of the image's own; the second stage, on
+  `debian:bookworm-slim`, holds only `lengua-run`, the key and the checked folders (no build
+  folders), and serves `$PORT`. CI's job `container` builds it for `linux/amd64` from
+  `examples/greet`, runs it and asks it a request, on every test run; nothing is pushed.
+- **Vercel** (from its documents, read on 2026-11-14). The Next.js front end deploys natively as
+  its own static export (`target/lengua/web/out`); the back end deploys as the image above on
+  Vercel's Container Runtime, with a `vercel.json` whose `services` name the two and whose
+  `rewrites` send `/api/(.*)` to the back end
+  ([Container Runtime](https://vercel.com/docs/functions/runtimes/container)). What the documents
+  say: the Container Runtime is "available in Beta on all plans", built from a `Dockerfile` at the
+  project's root; images are built for `linux/amd64`; the server listens on `PORT` (80 when it is
+  not set); the limits of Vercel Functions apply (Hobby: 2 GB and 1 vCPU, 300 s; Pro: 4 GB and 2
+  vCPU, up to 800 s; a body of 4.5 MB at most, a streamed answer past it), with images up to 15 GB
+  in its registry; an instance is stopped after 5 minutes with no traffic (30 s in preview), with
+  `SIGTERM` and 30 s; its standard output and standard error are the logs; no document promises a
+  disk that lasts ([limits](https://vercel.com/docs/functions/limitations),
+  [registry](https://vercel.com/docs/container-registry/limits-and-pricing)). So on Vercel the
+  folder `data` of a `- Writes:` grant lasts only as long as an instance: lasting storage there is
+  a service reached with `- Calls:` and a key in a secret (plain HTTP until the host has TLS,
+  section 10). The registry stores images at $0.10 a GB, so a deployment may cost money. Never
+  deployed: an account and a deployment are the owner's alone.
 - **The desktop**, through Electron (L10).
 
 ### The build
@@ -1045,6 +1070,8 @@ of each grant, with the interfaces their types come from:
 | `- Reads:` or `- Writes: files in ...` | `wasi:filesystem/types`, `preopens`; `wasi:clocks/wall-clock` (for the type `datetime`) |
 | `- Connects to: ...` or `- Listens on: ...` | `wasi:sockets/network`, `instance-network`, `tcp`, `tcp-create-socket`, `ip-name-lookup`, and since L7 `udp` and `udp-create-socket`; `wasi:clocks/monotonic-clock` (for the type `duration`), and since L7 `wasi:clocks/wall-clock`, which `std`'s sockets import (run 43464215484) |
 | `- Serves: HTTP on TCP port N` (L7) | `wasi:http/types` |
+| `- Asks: an AI model, ...` or ``- Calls: HTTP at `host:port` `` (L9) | `wasi:http/outgoing-handler`, `wasi:http/types` |
+| ``- Reads: the secret `NAME` `` (L9) | none more: the host gives the one environment variable |
 
 UDP is in no grant: since L7 the world of a network grant names `wasi:sockets/udp` and
 `udp-create-socket`, because `std`'s sockets (through `wasi-libc`) can import them with TCP, and
@@ -1172,8 +1199,11 @@ How each grant maps to the host:
 | `- Time:` | the store's epoch deadline (the time over 10 ms, plus one); the program stops and `run` replies `out_of_time` |
 | `- Connects to:` (L7) | TCP on and UDP off; each granted `host:port` resolved when the run starts; the socket address check of `wasmtime-wasi` permits a connection only to those addresses, and the bind of the wildcard address that a connection makes; name lookup only when a granted host is a name |
 | `- Listens on:` (L7) | TCP on; a bind and a listen only on the granted ports, of `127.0.0.1` or of any local address; every client accepted |
-| `- Serves: HTTP on TCP port N` (L7) | the server is a component that exports `wasi:http/incoming-handler`; `wasmtime-wasi-http`'s synchronous bindings give it each request, with hooks of lengua's own that refuse every outgoing request; `run` and the tests give one request on the standard input and get the answer as HTTP/1.1 bytes; `lengua-run` serves `127.0.0.1:N`, one request at a time, each under the idea's time and memory |
+| `- Serves: HTTP on TCP port N` (L7) | the server is a component that exports `wasi:http/incoming-handler`; `wasmtime-wasi-http`'s synchronous bindings give it each request, with hooks of lengua's own that refuse every outgoing request the idea does not grant (L9: `- Asks:`, `- Calls:`); `run` and the tests give one request on the standard input and get the answer as HTTP/1.1 bytes; `lengua-run` serves `127.0.0.1:N` (or `--listen <address:port>`), eight requests at a time, each an instance of its own under the idea's time and memory; when the idea writes files, a request other than `GET`, `HEAD` or `OPTIONS` runs alone; one line on standard error for each request (method, path, status, milliseconds, the program's own standard error after it) |
 | `- Uses component:` (L7) | the host instantiates the component first, in the same store and under the same grants, and links each function of each interface it exports into the program's imports |
+| `- Asks: an AI model, ...` (L9) | the hooks of `wasmtime-wasi-http` answer the address `ai.lengua` ("Programs that ask AI models"), counting the calls and tokens of the run; in a fixed run the answer is the example's `- Model answers:`, in a live run the model server of `LENGUA_MODEL_URL` |
+| ``- Calls: HTTP at `<host>:<port>` `` (L9) | outgoing HTTP/1.1 only to the granted `host:port` (a name is looked up when the call starts), over plain TCP; any other address is `HTTP-request-denied`; the answer's body reaches the program as it comes, so a streamed answer streams |
+| ``- Reads: the secret `<NAME>` `` (L9) | the environment variable `NAME` of the host, and no other, as the program's own; a live run refuses to start without it; a fixed run gives `test-<NAME>` |
 
 Wasmtime keeps a preopened folder's paths inside it: `..` out of it, an absolute path, and a
 symbolic link that points out of it are refused (tested at L3).
@@ -1351,14 +1381,14 @@ do the job:
 
 lengua ships a small set of its own libraries, written as lengua programs on the standard library alone, so the common needs
 of an application don't send it to crates.io: reading and writing JSON, parsing and building
-HTTP messages, decimal numbers, text and lines, sorting, CRC and hashes, dates and times. Each
+HTTP messages, decimal numbers, text and lines, sorting, CRC and hashes, dates and times, and since L9 prompts, logins and vectors. Each
 has its own idea, tests and lock, and builds for both Rust targets. The front end's framework,
 Next.js, stays external: writing a UI framework is not lengua's work.
 
 Built at L7, in `libraries/` at the repository's root. Each is a lengua library on the standard
 library alone, with no recursion, no `unsafe` and every rule of section 5, checked to the label
 `checked` by the tests, and built for `wasm32-unknown-unknown` too by CI. A program names one
-with ``- Uses: `<path>/libraries/<name>` ``; the `build` skill (L9) will point to them.
+with ``- Uses: `<path>/libraries/<name>` ``; the `build` skill (L11) will point to them. Since L9 a library may use another (`- Uses: `../json``): its lock has a `library` line for each, which `verify` checks in turn, so a program that uses `ai` holds `json` to its lock too.
 
 | Library | Exports |
 |---|---|
@@ -1369,6 +1399,9 @@ with ``- Uses: `<path>/libraries/<name>` ``; the `build` skill (L9) will point t
 | `sort` | `stable_sort(&mut [T])`, `stable_sort_by_key(&mut [T], key)` (a bottom-up merge sort with one buffer), `binary_search(&[T], &T) -> Option<usize>` (the first equal item) |
 | `hashes` | `sha256(&[u8]) -> [u8; 32]`, `sha256_hex(&[u8]) -> String` (FIPS 180-4), `crc32(&[u8]) -> u32` (ISO 3309, `zlib`) |
 | `dates` | `Date` (`year`, `month`, `day`), `Error` (`Form(position)`, `Month`, `Day`, `Time`), `is_leap`, `days_in_month`, `days_from_civil(Date) -> i64` and `civil_from_days(i64) -> Date` (day 0 is 1970-01-01, the Gregorian calendar), `days_between`, `parse_date` and `format_date` (`YYYY-MM-DD`), `parse_timestamp` and `format_timestamp` (`YYYY-MM-DDTHH:MM:SSZ`, seconds from 1970) |
+| `ai` (uses `json`, L9) | `Error` (`NotJson`, `NotObject`, `Missing(name)`), `fill(&str, &[(&str, &str)]) -> String`, `then(template, answer)`, `fields(answer, names) -> Result<Vec<(String, String)>, Error>`, `retryable(u16) -> bool` (500, 502, 503, 504), `estimate_tokens(&str) -> u64` |
+| `logins` (uses `hashes`, L9) | `Error` (`Form`, `Signature`, `Expired`), `to_hex`, `hmac_sha256_hex(key, message)` (RFC 2104), `hash_password(password, salt, rounds)` (PBKDF2-HMAC-SHA256, RFC 8018, stored as `pbkdf2-sha256$<rounds>$<salt>$<hex>`), `verify_password`, `same` (compares every byte), `sign_token(subject, expires, key)` (`<subject>.<expires>.<HMAC>`), `check_token(token, now, key) -> Result<String, Error>`; the program gives the salt, the key and the time |
+| `vectors` (uses `json`, L9) | `parse_vector(&str) -> Option<Vec<f64>>` (an embedding as a JSON list), `dot`, `cosine` (0 for vectors of two sizes or of zeros), `nearest(query, items, count) -> Vec<usize>` (the nearest first, ties by place) |
 
 ### The lock
 
@@ -1526,7 +1559,7 @@ then the message, standard output and standard error. `lengua-run` is a process 
 already: a thread ends it at the same time. The example `sleepy` (a 30 s sleep, `- Time: 1 s`)
 tests it.
 
-**`lengua-run`.** `lengua-run <folder> [arguments...]` runs a checked folder from a shell, on
+**`lengua-run`.** `lengua-run [--listen <address:port>] <folder> [arguments...]` runs a checked folder from a shell, on
 `lengua-host` and `lengua-seal` alone: Wasmtime with no compiler (`runtime`, `std` and
 `component-model`; CI fails if `cargo tree -p lengua-run` has a code generator (`cranelift-codegen`,
 `cranelift-frontend`, `cranelift-native`, `wasmtime-internal-cranelift`, Winch), and builds it
@@ -1645,12 +1678,12 @@ the folder's root are OKF's reserved files (OKF sections 8 and 9).
   as `vision.md` at L11) has frontmatter with a non-empty `type` (`okf-type` otherwise), and
   its OKF values are checked as an idea's are. `target/`, hidden folders and a folder with an
   `idea.md` of its own are not part of the folder.
-- **Secrets** (the rule for L9's secrets grant, written now because there is no grant of a
-  secret yet, so there is nothing to test). A secret's value is given by the host at run time
-  and never read by `check`: it is never written to the frontmatter, `index.md`, `log.md`, a
-  component page, the lock or a reply. The idea names a secret, never its value. When the grant
-  is built, a test gives a secret whose value is a marked string and asserts that no file
-  `check` or `run` writes, and no reply, holds it.
+- **Secrets** (since L9, ``- Reads: the secret `NAME` ``). A secret's value is given by the host at
+  run time and never read by `check`: it is never written to the frontmatter, `index.md`,
+  `log.md`, a component page, the lock or a reply. The idea names a secret, never its value. The
+  test `a_secret_reaches_the_program_and_no_file_or_reply_of_lengua` gives a marked value, checks
+  that the program sends it to the service it calls, and finds it in no file of the folder and in
+  no reply.
 - **Since L8, `index.md` groups the sections by side** ("The two sides in one wiki" below):
   `# Back end` with `## Program`, `## Modules`, `## Libraries`, `## Components` and `## Crates`;
   `# Front end` with `## Screens` and `## npm packages`; and `# Interface`, the line of `api.md`.
@@ -2171,9 +2204,8 @@ milestone named:
     `lengua Component` added).
   - Done: a finding when an idea's Purpose names a module or library its Constraints don't list
     (`purpose-unlisted`, names in backticks only).
-  - Secrets never written to the frontmatter, the index or the log: the rule is written ("The
-    wiki's formats", "Secrets"); there is no grant of a secret yet, so its test comes with L9's
-    secrets grant.
+  - Done at L9: secrets never written to the frontmatter, the index, the log, the lock or a
+    reply, tested with a marked value ("The wiki's formats", "Secrets").
 - **L10:** the "Where it runs" line first in `index.md`.
 - **L11, the query path and the person's part:**
   - `vision.md` as an OKF page (`type: lengua Vision`), first in `index.md`, quoting the
@@ -2358,6 +2390,22 @@ Decided for lengua 3 at L8 (2026-11-13):
   five runners.
 - **CI builds `lengua-idea` and `lengua-lint` for `wasm32-wasip2`**, and a failure fails the run.
 
+Decided for lengua 3 at L9 (2026-11-14):
+
+- **The AI grant is WASI's HTTP client to the host's own address**, `ai.lengua`, not a WIT
+  interface of lengua's own: the program needs only `wasip2`, streaming is the body of the answer,
+  and the host holds the key, the model and the limits (section 1, "Programs that ask AI models").
+- **Outgoing HTTP is `- Calls:`, exact `host:port` pairs**, sent by the host's own sender on
+  Tokio and `hyper` (already in the graph); no TLS yet (section 10).
+- **A secret is one environment variable of the host**, by name, through `wasi:cli/environment`.
+- **Storage is the `- Writes:` folder**; a store of its own waits until a deployment needs one.
+- **Logins, prompts and vectors are lengua libraries** (`logins`, `ai`, `vectors`), and a
+  library may use another library.
+- **`lengua-run` serves eight requests at a time** and logs one line for each; `--listen` names
+  the address, for a container; `lengua-mcp check <folder>` checks a folder from a shell.
+- **No new package**: `lengua-host` names `tokio`, `http` and `http-body-util`, which Wasmtime
+  already brings.
+
 ## 10. Risks and open questions
 
 - **WASI 0.2, decided at L0 (2026-11-13): lengua 3 targets WASI 0.2, `wasm32-wasip2`.**
@@ -2503,13 +2551,45 @@ Decided for lengua 3 at L8 (2026-11-13):
 - **Open at L7: `generate!` and the folder `wit/`.** `wit-bindgen`'s `generate!` reads `wit/` by
   default, and lengua's `wit/world.wit` is a statement for the host, not WIT for a binding
   generator (it imports WASI with no `wit/deps/`). A program writes `path: []` with `inline`; the
-  `build` skill (L9) says so.
+  `build` skill (L11) says so.
 - **Found at L8: why a program with crates was not the same file on every system.** Programs
   with no external crate matched on all five runners; `greet` and the shop did not, in versions
   of the same size where functions stood in another order (`wasm-tools print`, runs 43543315033
   and 43560066261). Cargo's `-C metadata` and `-C extra-filename` of a crate mix in those of its
   build scripts and proc macros, built for the host and so holding its triple; rustc orders the
   functions by the names they make. Fixed by `lengua-mcp` as the rustc wrapper (section 9).
+- **Open at L9: no TLS in the host.** Outgoing calls and the model server are plain HTTP/1.1 over
+  TCP; `https` is refused (`HTTP-protocol-error`). TLS needs `rustls` and a crypto provider
+  (`ring` or `aws-lc-rs`, both with C and assembly, not pure Rust), so a cloud model or service is
+  reached through a gateway on the same machine or network until a provider merits it.
+- **Found at L9: a server keeps nothing in memory between requests.** Each request is an instance
+  of its own, so state is in a `- Writes:` folder, and the limits of `- Asks:` are per request.
+  Concurrent requests share the folder; the host runs a request that may write (not `GET`,
+  `HEAD` or `OPTIONS`) alone, as WASI 0.2 has no locks of files.
+
+- **Recommended on 2026-11-13, for L13 to decide: OKF's Attested Computation (OKF section 10).**
+  A checked lengua program is close to what OKF calls an Attested Computation: the idea is the
+  contract, the behaviours say what the computation does, the grants are the only inputs it can
+  reach, and the lock with its sealed code makes "did the sanctioned code run" a comparison of
+  hashes, not a judgement. The recommendation:
+  - Not to make the ideas themselves Attested Computations. An idea describes a program; it is
+    an OKF concept of its own type, as it is now.
+  - At L13, `check` writes one more page for a program that is `checked`, `attestation.md`,
+    `type: Attested Computation`: `runtime: lengua` (a WASI 0.2 component run by `lengua-run`),
+    `parameters` from the grants (`arguments` and `standard input` as strings, a server's
+    request), `computation` naming the component file, `executor` naming `lengua-run` with a
+    `receipt` of the component's SHA-256, the lock's SHA-256, the SHA-256 of the input, the
+    exit code and the SHA-256 of the output, and an `attester` that is lengua's own code with no
+    model in it: it checks the receipt's hashes against the lock and, as the run is
+    deterministic under the fixed clock and seed, can run the sealed code again and compare.
+  - Two things to wait for first. The lock is signed with an HMAC under the user's key, so it
+    proves a check only to that user; a receipt for others needs a public-key signature
+    (Ed25519, written on the standard library and tested with RFC 8032's vectors). And OKF v0.2
+    leaves the receipt and verdict formats and the attester's interface to a later version
+    (OKF section 12, "Considered and deferred"); lengua should follow them when they come
+    rather than invent its own.
+  - Until then, `verified` by `process:lengua-check` is the machine-confirmed tier OKF already
+    defines (OKF section 5.3), and it is on every checked page.
 
 ## Sources
 

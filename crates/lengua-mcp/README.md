@@ -35,8 +35,12 @@ and 7.
   `wasm32-unknown-unknown`, with the
   command that installs each missing part, and stops with exit code 0, or 1 when a part is
   missing.
+- Given `check <folder>`, when `lengua-mcp` runs, then it checks the folder as the tool `check`
+  does until its job ends, writes each finding and the state and label, and stops with exit code
+  0 when the label is `checked` or `tested`, 1 otherwise (since L9; for a container's build).
 - Given any other arguments, when `lengua-mcp` runs, then it writes `usage: lengua-mcp
-  [--version | doctor]` to standard error and stops with exit code 2.
+  [--version | doctor | check <folder> | wiki <root>]` to standard error and stops with exit
+  code 2.
 - Given a client that lists the tools, when the server replies, then the list has two tools,
   `check` (input `folder`) and `run` (inputs `folder`, `arguments`, `stdin` and `fixed`), each
   with an output schema.
@@ -106,7 +110,8 @@ and 7.
 ## Structure
 
 - `main`: reads the arguments and writes the version line or the usage line, runs `doctor`,
-  prints the imports of a component (`print_imports`), or
+  prints the imports of a component (`print_imports`), checks a folder (`check_folder`,
+  `CHECK_POLLS`), or
   serves.
 - `serve`: starts the host and the Tokio runtime on one thread, and serves `Lengua` on standard
   input and output.

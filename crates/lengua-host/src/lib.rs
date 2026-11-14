@@ -1,9 +1,13 @@
 mod http;
+mod json;
+mod model;
 mod network;
+mod outgoing;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -41,6 +45,7 @@ pub struct Input {
     pub stdin: Vec<u8>,
     pub fixed: bool,
     pub root: Option<PathBuf>,
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,7 +127,7 @@ struct Guest {
     table: ResourceTable,
     limits: Limits,
     http: WasiHttpCtx,
-    hooks: http::Refuse,
+    hooks: outgoing::Hooks,
 }
 
 impl WasiView for Guest {
@@ -223,6 +228,7 @@ fn link_sockets(l: &mut Linker<Guest>, interface: &str) -> wasmtime::Result<bool
             sockets::network::add_to_linker::<Guest, WasiSockets>(l, &network, view)?;
         }
         "wasi:http/types" => wasmtime_wasi_http::p2::add_only_http_to_linker_sync(l)?,
+        "wasi:http/outgoing-handler" => {}
         _ => return Ok(false),
     }
     Ok(true)
@@ -342,6 +348,7 @@ fn context(
             .insecure_random(Deterministic::new(seeded(SEED ^ 1, RANDOM_BYTES)));
     }
     network::allow(&mut builder, grants);
+    secrets(&mut builder, grants, input.fixed)?;
     let root = input.root.as_deref().unwrap_or(run.folder);
     for granted in &grants.folders {
         let place = root.join(&granted.path);
@@ -369,6 +376,41 @@ fn context(
             .map_err(|e| format!("lengua could not open the folder `{}`: {e:#}", granted.path))?;
     }
     Ok(builder.build())
+}
+
+fn hooks(run: &Program, input: &Input) -> outgoing::Hooks {
+    let grants = &run.build.grants;
+    let model = if input.fixed {
+        model::Model::Given(input.model.clone())
+    } else {
+        model::Model::Live(model::endpoint())
+    };
+    outgoing::Hooks {
+        calls: grants.calls.clone(),
+        budget: grants.ai.map(|ai| {
+            Arc::new(Mutex::new(model::Budget {
+                calls: ai.calls,
+                tokens: ai.tokens,
+            }))
+        }),
+        model: Arc::new(model),
+    }
+}
+
+fn secrets(builder: &mut WasiCtxBuilder, grants: &Grants, fixed: bool) -> Result<(), String> {
+    for name in &grants.secrets {
+        let value = if fixed {
+            format!("test-{name}")
+        } else {
+            std::env::var(name).map_err(|_| {
+                format!(
+                    "the idea grants the secret `{name}`, and the host has no environment variable `{name}` to give; set it before the run"
+                )
+            })?
+        };
+        builder.env(name, &value);
+    }
+    Ok(())
 }
 
 fn ending(result: &wasmtime::Result<Result<(), ()>>, memory_hit: bool) -> Ending {
@@ -471,7 +513,7 @@ impl Host {
             table: ResourceTable::new(),
             limits: Limits { memory, hit: false },
             http: WasiHttpCtx::new(),
-            hooks: http::Refuse,
+            hooks: hooks(run, input),
         };
         let mut store = Store::new(&self.engine, guest);
         store.limiter(limiter);

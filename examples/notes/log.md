@@ -2,10 +2,23 @@
 
 ## 2026-11-14
 
-* **Check** at 06:11:28Z: no problems; label `unchecked`.
-* **Check** at 06:11:14Z: no problems; label `unchecked`.
-* **Check** at 06:11:12Z: no problems; label `unchecked`.
-  * Generated `Cargo.toml`, changed: `e3c5ced1e41bf4c7583e06818328ef7e14860e3d87da8349441a59e72a1c8e77`.
+* **Check** at 07:56:57Z: no problems; label `checked`, mutation score 37 of 38 (97%).
+* **Check** at 07:53:37Z: no problems; label `unchecked`.
+* **Check** at 07:53:19Z: no problems; label `unchecked`.
+* **Check** at 07:53:17Z: no problems; label `unchecked`.
+  * Idea [notes](idea.md), changed: `21d14e833a6203724731c682f621b90519a9f4eb96f4f6cf5526118c9a262df8`.
+  * Code `src/main.rs`, changed: `6749f59b9dcf23e799e9387e2ac6d03160ff9489971cf347d1872a40f04f858d`.
+  * Generated `Cargo.toml`, changed: `2c8c9f30d9917ef2802167edcac64c6c1c753dc96317cfd65e375e4a32db2579`.
+  * Generated `wit/world.wit`, changed: `432ab60b895088c9bc0206a29ba4e132e6b86715dbabb9ceab8b2b6adf271f30`.
+  * Generated `web/lengua.sum`, changed: `ac9b16c6220121867f25fd73bcc0e0addc44d38fe3ad8f5d4d41d5ad38a464b6`.
+  * Idea [accounts](ideas/accounts.md), new: `1eeca9403e02620668b7d47c627b1969b76bf8336cc71602491685c941edd447`.
+  * Code `src/accounts.rs`, new: `e4571e36c096c054eff70ffbc0757996070dade5dbede676e00d242cff17eac0`.
+  * Idea [notes](ideas/notes.md), changed: `3f5bddf294d1f7259507c8c0a822d246be2f264b6288a0bfa292e5f40151696d`.
+  * Code `src/notes.rs`, changed: `9ce5879a6258013dc4795624d8fa1baf387715a4807b2eb5a9e4915f1aaf31ee`.
+  * Idea [summary](ideas/summary.md), new: `d88c9e082f9fe5de466ed16e5809ced8dd971b93578c00333418ea180021b4f5`.
+  * Code `src/summary.rs`, new: `8d4941f268d0e0a9a2022546ea8ce5ca875f6ce2680b9a84c4c307ea7294ed6d`.
+  * Idea [ui/login](ideas/ui/login.md), new: `8c025d3ae4581d45dadcae910f16d7dbe0551b35a6d58fd66be47f11ce0047af`.
+  * Code `web/screens/login.tsx`, new: `ddb30d34a0dbfd0c54ec4b40b75fe84aa171c0a081bffd0688f4c54f53a16e7d`.
 * **Check** at 04:38:07Z: no problems; label `checked`, mutation score 37 of 38 (97%).
 * **Check** at 04:34:44Z: no problems; label `unchecked`.
 * **Check** at 04:34:26Z: no problems; label `unchecked`.

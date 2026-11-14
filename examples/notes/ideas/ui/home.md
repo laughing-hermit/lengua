@@ -5,10 +5,12 @@ module: ui/home
 source: web/screens/home.tsx
 uses: [ideas/notes]
 used_by: [idea]
-label: unchecked
+label: checked
 idea_sha256: de5feaa51145148e9a2a2d2e06c0c60bc054d214a10b6f271a67bf365fa6b776
 source_sha256: dde75252c4a1f81a078b4397b8ee30247ef8536f74cf22e6eb875e916b65f870
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T06:11:12Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T07:56:57Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-14T07:56:57Z }
 title: ui/home
 status: draft
 ---

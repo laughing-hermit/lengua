@@ -237,6 +237,7 @@ fn input_of(test: &Test, index: usize, root: &Path) -> Input {
         stdin,
         fixed: true,
         root: Some(root.to_path_buf()),
+        model: test.model.clone(),
     }
 }
 

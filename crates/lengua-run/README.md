@@ -9,7 +9,7 @@ description: "The lean runner, which runs a checked lengua program from a shell.
 ## Purpose
 
 `lengua-run` is the lean runner: it runs a checked lengua program from a shell,
-`lengua-run <folder> [arguments...]`. It has Wasmtime without its compiler (no Cranelift; the
+`lengua-run [--listen <address:port>] <folder> [arguments...]`. It has Wasmtime without its compiler (no Cranelift; the
 `runtime` feature only), so it loads only the sealed precompiled code that `check` made, and only
 after it verified the program's `lengua.lock` exactly as the `run` tool does. It grants only
 what the idea grants, and passes standard input (when granted), standard output and standard
@@ -31,6 +31,8 @@ error through. See [Lengua3.md](../../Lengua3.md), section 4, "The lock" and "`l
   writes `lengua-run: out of time: ...` and stops with exit code 124; the process's end stops
   the waiting call too.
 - Given a program that grows its memory past its idea, then exit code 126; a trap, 134.
+- Given a server and `--listen <address:port>`, then it serves that address in place of
+  `127.0.0.1:N`, as a container needs (since L9).
 - Given `--version`, then it writes `lengua-run <version>`; given no arguments, the usage line
   and exit code 2.
 

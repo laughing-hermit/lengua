@@ -346,6 +346,12 @@ pub(crate) fn api_text(pages: &[Page], label: &str, interface: &Interface) -> St
             .filter(|p| calls_route(interface, p, route))
             .map(|p| format!("[{}]({})", p.title, p.file))
             .collect();
+        let statuses = route
+            .statuses
+            .iter()
+            .map(u16::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
         let called = if called.is_empty() {
             "no screen".to_string()
         } else {
@@ -353,7 +359,7 @@ pub(crate) fn api_text(pages: &[Page], label: &str, interface: &Interface) -> St
         };
         let _ = write!(
             out,
-            "\n## `{} {}`\n\n* Function: `{}` in `web/lib/lengua.ts`.\n* Request body: {body}.\n* Answer: `{answer}`.\n* Failure: `{failure}`.\n* Served by: {}.\n* Called by: {called}.\n",
+            "\n## `{} {}`\n\n* Function: `{}` in `web/lib/lengua.ts`.\n* Request body: {body}.\n* Answer: `{answer}`.\n* Failure: `{failure}`.\n* Statuses: {statuses}.\n* Served by: {}.\n* Called by: {called}.\n",
             route.method,
             route.path,
             route.function,
