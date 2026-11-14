@@ -45,7 +45,7 @@ fn ask(prompt: &str) -> Option<String> {
     let _ = OutgoingBody::finish(outgoing, None);
     future.subscribe().block();
     let response = future.get()?.ok()?.ok()?;
-    debug_assert!(!prompt.is_empty());
+    debug_assert!(prompt.starts_with("Write"));
     debug_assert!(response.status() >= 100);
     if response.status() != 200 {
         return None;

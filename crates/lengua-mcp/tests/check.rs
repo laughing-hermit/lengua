@@ -1098,7 +1098,11 @@ fn shared_library_using(name: &str, used: &[&str]) {
     let folder = root.join(&path);
     let mut server = Server::start();
     for (k, part) in used.iter().enumerate() {
-        let reply = done(&mut server, &root.join("libraries").join(part), 5000 + k as u64 * 1000);
+        let reply = done(
+            &mut server,
+            &root.join("libraries").join(part),
+            5000 + k as u64 * 1000,
+        );
         assert_eq!(reply["label"], "checked", "{part}: {reply:#}");
     }
     let reply = done(&mut server, &folder, 10);
@@ -1118,7 +1122,11 @@ fn shared_library_using(name: &str, used: &[&str]) {
     assert!(!lock.contains("\nsealed "), "{lock}");
     let cargo = fs::read_to_string(folder.join("Cargo.toml")).expect("Cargo.toml");
     assert!(cargo.contains("[lib]\n"), "{cargo}");
-    assert_eq!(cargo.contains("[dependencies]"), !used.is_empty(), "{cargo}");
+    assert_eq!(
+        cargo.contains("[dependencies]"),
+        !used.is_empty(),
+        "{cargo}"
+    );
     for part in used {
         assert!(
             lock.contains(&format!(" ../{part}/lengua.lock\n")),
@@ -1153,7 +1161,11 @@ fn ask_checked(test: &str, server: &mut Server) -> PathBuf {
         ],
     );
     for (k, library) in ["json", "ai", "vectors"].iter().enumerate() {
-        let reply = done(server, &root.join("libraries").join(library), 100 + k as u64 * 1000);
+        let reply = done(
+            server,
+            &root.join("libraries").join(library),
+            100 + k as u64 * 1000,
+        );
         assert_eq!(reply["label"], "checked", "{library}: {reply:#}");
     }
     root.join("examples/ask")
@@ -1167,7 +1179,10 @@ fn a_program_asks_a_model_calls_a_service_and_gets_a_secret_under_its_grants() {
     assert_ne!(reply["label"], "unchecked", "{reply:#}");
     assert_eq!(reply["build"]["tests"]["failed"], 0, "{reply:#}");
     let world = read(&folder, "wit/world.wit");
-    assert!(world.contains("import wasi:http/outgoing-handler@"), "{world}");
+    assert!(
+        world.contains("import wasi:http/outgoing-handler@"),
+        "{world}"
+    );
     let lock = read(&folder, "lengua.lock");
     assert!(lock.contains(" ../../libraries/ai/lengua.lock\n"), "{lock}");
     let live = server.run_to_end(8000, &folder, &json!({"stdin": "call\n"}));
@@ -1187,11 +1202,9 @@ fn files_holding(folder: &Path, marked: &str, found: &mut Vec<String>) {
             if entry.file_name() != "target" {
                 files_holding(&path, marked, found);
             }
-        } else if fs::read(&path).is_ok_and(|bytes| {
-            bytes
-                .windows(marked.len())
-                .any(|w| w == marked.as_bytes())
-        }) {
+        } else if fs::read(&path)
+            .is_ok_and(|bytes| bytes.windows(marked.len()).any(|w| w == marked.as_bytes()))
+        {
             found.push(path.display().to_string());
         }
     }
@@ -1228,7 +1241,10 @@ fn a_secret_reaches_the_program_and_no_file_or_reply_of_lengua() {
     });
     let run = server.run_to_end(9000, &folder, &json!({"stdin": "call\n"}));
     let request = answering.join().expect("the service");
-    assert_eq!(run["stdout"], "200 hi, and the key has 25 letters\n", "{run:#}");
+    assert_eq!(
+        run["stdout"], "200 hi, and the key has 25 letters\n",
+        "{run:#}"
+    );
     assert!(request.contains(&format!("Bearer {marked}")), "{request}");
     let asked = server.run_to_end(9100, &folder, &json!({"stdin": "ask\nBuy milk."}));
     assert!(
@@ -1509,7 +1525,15 @@ fn the_shop_is_one_file_of_three_modules_two_libraries_and_a_c_component() {
 }
 
 fn notes_ideas_only(test: &str) -> PathBuf {
-    let root = bundle(test, &["libraries/hashes", "libraries/logins", "examples/titles", "examples/notes"]);
+    let root = bundle(
+        test,
+        &[
+            "libraries/hashes",
+            "libraries/logins",
+            "examples/titles",
+            "examples/notes",
+        ],
+    );
     let folder = root.join("examples/notes");
     fs::remove_dir_all(folder.join("src")).expect("the Rust removed");
     folder
@@ -1740,7 +1764,15 @@ fn typescript_that_breaks_a_rule_and_hand_edits_of_the_front_end_are_refused() {
 
 #[test]
 fn notes_is_checked_as_one_file_that_serves_its_front_end() {
-    let root = bundle("notes", &["libraries/hashes", "libraries/logins", "examples/titles", "examples/notes"]);
+    let root = bundle(
+        "notes",
+        &[
+            "libraries/hashes",
+            "libraries/logins",
+            "examples/titles",
+            "examples/notes",
+        ],
+    );
     let folder = root.join("examples/notes");
     let mut server = Server::start();
     titles_checked(&mut server, &folder, 2000);
@@ -1780,23 +1812,7 @@ fn notes_is_checked_as_one_file_that_serves_its_front_end() {
     let milliseconds = started.elapsed().as_millis();
     let notes = http_get(7812, "/api/notes");
     let note_page = http_get(7812, "/note/?id=1");
-    let at_once: Vec<thread::JoinHandle<String>> = (0..8)
-        .map(|_| thread::spawn(|| http_get(7812, "/api/notes/1")))
-        .collect();
-    let answers: Vec<String> = at_once
-        .into_iter()
-        .map(|t| t.join().expect("a client"))
-        .collect();
-    let account = "{\"name\":\"bob\",\"password\":\"long password\"}";
-    let made = http_send(7812, "POST", "/api/register", account, "");
-    let signed = http_send(7812, "POST", "/api/login", account, "");
-    let token = signed
-        .split("\"token\":\"")
-        .nth(1)
-        .and_then(|t| t.split('"').next())
-        .unwrap_or_default()
-        .to_string();
-    let me = http_send(7812, "GET", "/api/me", "", &format!("Bearer {token}"));
+    notes_live_requests();
     let browser = std::env::var_os("LENGUA_CHROME")
         .filter(|c| !c.is_empty())
         .map(|chrome| chrome_labels(&PathBuf::from(chrome), 7812));
@@ -1806,12 +1822,6 @@ fn notes_is_checked_as_one_file_that_serves_its_front_end() {
     if let Some(mut stderr) = child.stderr.take() {
         let _ = std::io::Read::read_to_string(&mut stderr, &mut logs);
     }
-    for answer in &answers {
-        assert!(answer.ends_with("\"title\":\"Milk\",\"text\":\"Buy two bottles.\"}"), "{answer}");
-    }
-    assert!(made.starts_with("HTTP/1.1 201"), "{made}");
-    assert!(signed.starts_with("HTTP/1.1 200"), "{signed}");
-    assert!(me.ends_with("{\"name\":\"bob\"}"), "{me}");
     assert!(logs.contains("lengua-run: GET /api/notes 200 "), "{logs}");
     assert!(logs.contains("lengua-run: POST /api/login 200 "), "{logs}");
     assert!(!logs.contains("a key of the test"), "{logs}");
@@ -1848,6 +1858,35 @@ fn notes_is_checked_as_one_file_that_serves_its_front_end() {
             reply["build"]["size"], export["files"], export["bytes"], reply["build"]["mutants"]
         );
     }
+}
+
+fn notes_live_requests() {
+    let at_once: Vec<thread::JoinHandle<String>> = (0..8)
+        .map(|_| thread::spawn(|| http_get(7812, "/api/notes/1")))
+        .collect();
+    let answers: Vec<String> = at_once
+        .into_iter()
+        .map(|t| t.join().expect("a client"))
+        .collect();
+    let account = "{\"name\":\"bob\",\"password\":\"long password\"}";
+    let made = http_send(7812, "POST", "/api/register", account, "");
+    let signed = http_send(7812, "POST", "/api/login", account, "");
+    let token = signed
+        .split("\"token\":\"")
+        .nth(1)
+        .and_then(|t| t.split('"').next())
+        .unwrap_or_default()
+        .to_string();
+    let me = http_send(7812, "GET", "/api/me", "", &format!("Bearer {token}"));
+    for answer in &answers {
+        assert!(
+            answer.ends_with("\"title\":\"Milk\",\"text\":\"Buy two bottles.\"}"),
+            "{answer}"
+        );
+    }
+    assert!(made.starts_with("HTTP/1.1 201"), "{made}");
+    assert!(signed.starts_with("HTTP/1.1 200"), "{signed}");
+    assert!(me.ends_with("{\"name\":\"bob\"}"), "{me}");
 }
 
 struct Socket {

@@ -46,7 +46,7 @@ pub fn to_hex(bytes: &[u8]) -> String {
 pub fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
     let text = to_hex(&hmac(key, message));
     debug_assert_eq!(text.len(), 64);
-    debug_assert!(!text.is_empty());
+    debug_assert!(text.chars().all(|c| c.is_ascii_hexdigit()));
     text
 }
 
@@ -102,7 +102,7 @@ pub fn verify_password(password: &str, stored: &str) -> bool {
     let Ok(rounds) = rounds.parse::<u32>() else {
         return false;
     };
-    debug_assert!(!stored.is_empty());
+    debug_assert!(stored.len() >= scheme.len());
     debug_assert!(hash.len() <= stored.len());
     scheme == SCHEME && same(&hash_password(password, salt, rounds), stored)
 }

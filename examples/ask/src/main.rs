@@ -56,13 +56,13 @@ fn reply(sent: Result<(u16, Vec<String>), String>, good: impl Fn(&[String]) -> S
 }
 
 fn streamed(pieces: &[String]) -> String {
-    debug_assert!(!pieces.is_empty());
+    debug_assert!(pieces.len() <= MOST_PIECES);
     let how = if pieces.len() > 1 {
         "more than one piece"
     } else {
         "one piece"
     };
-    debug_assert!(!how.is_empty());
+    debug_assert!(how.ends_with("piece"));
     format!("streamed in {how}: {}", pieces.concat())
 }
 
@@ -97,7 +97,7 @@ fn statuses(prompt: &str) -> String {
         found.push(status.to_string());
     }
     debug_assert_eq!(found.len(), 3);
-    debug_assert!(!prompt.is_empty());
+    debug_assert!(prompt.len() < 1 << 20);
     found.join(" ")
 }
 

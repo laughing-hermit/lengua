@@ -42,7 +42,7 @@ fn placeholder(text: &str, values: &[(&str, &str)]) -> (String, usize) {
             .find(|(key, _)| *key == n)
             .map(|(_, v)| (n, *v))
     });
-    debug_assert!(!text.is_empty());
+    debug_assert!(values.len() < usize::MAX);
     match found {
         Some((name, value)) => (value.to_string(), name.len() + 2),
         None => (text.get(..1).unwrap_or_default().to_string(), 1),

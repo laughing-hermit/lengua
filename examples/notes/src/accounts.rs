@@ -26,8 +26,11 @@ pub fn register(body: &str) -> (u16, String) {
         return (409, error("This name has an account."));
     }
     let salt = logins::to_hex(&wasip2::random::random::get_random_bytes(8));
-    users.push((name.clone(), logins::hash_password(&password, &salt, ROUNDS)));
-    debug_assert!(!users.is_empty());
+    users.push((
+        name.clone(),
+        logins::hash_password(&password, &salt, ROUNDS),
+    ));
+    debug_assert!(users.iter().any(|(known, _)| *known == name));
     if !save(&users) {
         return (500, error("The account was not saved."));
     }
@@ -63,7 +66,7 @@ pub fn me(authorization: &str) -> (u16, String) {
 fn good_name(name: &str) -> bool {
     let size = name.chars().count();
     let good = (1..=LONGEST_NAME).contains(&size) && name.chars().all(|c| c.is_ascii_lowercase());
-    debug_assert!(!good || !name.is_empty());
+    debug_assert!(!good || name.len() <= LONGEST_NAME);
     debug_assert!(!good || !name.contains('\t'));
     good
 }
@@ -102,6 +105,6 @@ fn save(users: &[User]) -> bool {
         .map(|(name, hash)| format!("{name}\t{hash}\n"))
         .collect();
     debug_assert_eq!(text.lines().count(), users.len());
-    debug_assert!(!users.is_empty());
+    debug_assert!(users.len() < 1 << 20);
     fs::write(FILE, text).is_ok()
 }

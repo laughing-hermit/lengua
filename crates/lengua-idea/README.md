@@ -86,7 +86,8 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
   `template_names` and `templates` their items.
 - `constraints.rs`: `parse` and `Reader::item` read the constraints; `module_name`, `names`,
   `reads`, `files_in` (with `folder`), `host_port`, `amount`, `semver` and `crate_line` check
-  their values, and keep the folders, the hosts, the memory and the time.
+  their values, and keep the folders, the hosts, the memory and the time; since L9 `asks` reads
+  `- Asks:` (the calls and tokens), `secret` a secret's name, and `Calls` its `host:port`.
 - `structure.rs`: `parse` reads the structure, with the line of each name; `function_name`
   checks a name.
 - `rust.rs`: `lint`, when `src/main.rs` is there, reads the Rust file of each idea and gives it
@@ -130,7 +131,8 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
   `front/`; a route `page.tsx` per screen; shadcn's components from `shadcn/`; the client from
   `routes`; the screen tests from `screen_runs`; `web/lengua.sum`), holds each to its previous
   text, and finds TypeScript files of no screen (`ts-source-unlisted`); `routes` reads `- Route:`
-  and the server's examples into types.
+  and the server's examples into types, with the statuses of each route (since L9), and
+  `unlisted_routes` finds a 2xx request under `/api/` that no route names (`route-unlisted`).
 - `json.rs` and `types.rs` (since L8): a JSON reader that keeps only the shapes, and the
   TypeScript types made from them (`of`, `merge`, `render`) with their checks at run time
   (`check`).

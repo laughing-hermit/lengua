@@ -116,7 +116,10 @@ fn the_wiki_of_every_folder_is_written_in_place() {
     all.extend(folders(&root, "examples"));
     all.sort_by_key(|f| {
         let text = fs::read_to_string(f.join("idea.md")).unwrap_or_default();
-        (!text.contains("\n- Exports:"), text.contains("\n- Uses: `../"))
+        (
+            !text.contains("\n- Exports:"),
+            text.contains("\n- Uses: `../"),
+        )
     });
     for folder in all {
         let mut reply = Value::Null;

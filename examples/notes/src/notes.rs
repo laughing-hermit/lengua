@@ -44,7 +44,7 @@ fn note_line(line: &str) -> Option<Note> {
     let id = parts.next()?.parse::<u32>().ok().filter(|n| *n > 0)?;
     let title = parts.next()?.to_string();
     let text = parts.next().unwrap_or_default().to_string();
-    debug_assert!(!line.is_empty());
+    debug_assert!(id > 0);
     debug_assert!(title.len() < line.len());
     Some((id, title, text))
 }
@@ -100,7 +100,12 @@ fn add(body: &str) -> (u16, String) {
         return (400, error(&problem));
     }
     let mut notes = load();
-    let next = notes.iter().map(|(id, _, _)| *id).max().unwrap_or(0).saturating_add(1);
+    let next = notes
+        .iter()
+        .map(|(id, _, _)| *id)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
     debug_assert!(next > 0);
     notes.push((next, title.clone(), text.clone()));
     if !save(&notes) {
@@ -183,6 +188,10 @@ pub fn find(id: u32) -> Option<Note> {
     let notes = load();
     let found = notes.into_iter().find(|(n, _, _)| *n == id);
     debug_assert!(found.as_ref().is_none_or(|(n, _, _)| *n == id));
-    debug_assert!(found.as_ref().is_none_or(|(_, title, _)| !title.contains('\t')));
+    debug_assert!(
+        found
+            .as_ref()
+            .is_none_or(|(_, title, _)| !title.contains('\t'))
+    );
     found
 }
