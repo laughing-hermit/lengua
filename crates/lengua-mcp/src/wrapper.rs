@@ -83,8 +83,16 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     let version = std::env::var("CARGO_PKG_VERSION").unwrap_or_default();
+    let arguments = rewritten(rest, &version);
+    if std::env::var_os("LENGUA_RUSTC_WRAPPER_SHOW").is_some() {
+        let shown: Vec<&String> = arguments
+            .iter()
+            .filter(|a| a.starts_with("metadata=") || a.starts_with("wasm32"))
+            .collect();
+        eprintln!("{MARK}: {} {shown:?}", value(rest, "--crate-name").join(" "));
+    }
     let status = Command::new(program)
-        .args(rewritten(rest, &version))
+        .args(&arguments)
         .env_remove(MARK)
         .status();
     match status {
