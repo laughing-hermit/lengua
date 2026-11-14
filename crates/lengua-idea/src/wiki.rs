@@ -199,7 +199,11 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
                 }
             })
             .collect();
-        counts.push(format!("* Crates: {} ({}).\n", crates.len(), names.join(", ")));
+        counts.push(format!(
+            "* Crates: {} ({}).\n",
+            crates.len(),
+            names.join(", ")
+        ));
     }
     if !packages.is_empty() {
         let names: Vec<String> = packages.iter().map(|(n, v)| format!("`{n}` {v}")).collect();

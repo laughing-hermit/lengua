@@ -1768,16 +1768,14 @@ fn http_put(port: u16, path: &str) -> String {
 }
 
 fn names(tree: &Value) -> Vec<String> {
-    tree["result"]["nodes"]
-        .as_array()
-        .map_or_default(|nodes| {
-            nodes
-                .iter()
-                .filter_map(|n| n["name"]["value"].as_str())
-                .filter(|n| !n.trim().is_empty())
-                .map(|n| n.trim().to_string())
-                .collect()
-        })
+    tree["result"]["nodes"].as_array().map_or_default(|nodes| {
+        nodes
+            .iter()
+            .filter_map(|n| n["name"]["value"].as_str())
+            .filter(|n| !n.trim().is_empty())
+            .map(|n| n.trim().to_string())
+            .collect()
+    })
 }
 
 fn chrome_labels(chrome: &Path, port: u16) -> Vec<String> {
