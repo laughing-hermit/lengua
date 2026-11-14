@@ -6,7 +6,6 @@ const config = {
   generateBuildId: () => "lengua",
   typescript: { ignoreBuildErrors: true },
   turbopack: { root: import.meta.dirname },
-  experimental: { turbopackModuleIds: "named" },
 };
 
 export default config;
