@@ -89,7 +89,10 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
             .iter()
             .filter(|a| a.starts_with("metadata=") || a.starts_with("wasm32"))
             .collect();
-        eprintln!("{MARK}: {} {shown:?}", value(rest, "--crate-name").join(" "));
+        eprintln!(
+            "{MARK}: {} {shown:?}",
+            value(rest, "--crate-name").join(" ")
+        );
     }
     let status = Command::new(program)
         .args(&arguments)
