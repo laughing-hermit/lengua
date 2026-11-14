@@ -74,8 +74,8 @@ fn weights(device: &Device) -> candle_core::Result<(Tensor, Tensor)> {
             second.push(weight(row * 5, column * 11, 7));
         }
     }
-    debug_assert!(first.len() == 2 * LETTERS * HIDDEN);
-    debug_assert!(second.len() == HIDDEN * LETTERS);
+    debug_assert_eq!(first.len(), 2 * LETTERS * HIDDEN);
+    debug_assert_eq!(second.len(), HIDDEN * LETTERS);
     Ok((
         Tensor::from_vec(first, (2 * LETTERS, HIDDEN), device)?,
         Tensor::from_vec(second, (HIDDEN, LETTERS), device)?,
@@ -111,7 +111,7 @@ fn next(
     let input = Tensor::from_vec(hot, (1, 2 * LETTERS), device)?;
     let hidden = input.matmul(&model.0)?.relu()?;
     let scores = hidden.matmul(&model.1)?.to_vec2::<f32>()?;
-    let best = highest(scores.first().map(Vec::as_slice).unwrap_or_default());
+    let best = highest(scores.first().map_or_default(Vec::as_slice));
     debug_assert!(best < LETTERS);
     Ok(best)
 }

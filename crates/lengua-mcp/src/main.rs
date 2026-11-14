@@ -499,16 +499,17 @@ impl Lengua {
             });
         }
         let build = report.build.map(|plan| {
+            let target = if plan.native() { "native" } else { plan.target };
             if plan.code {
                 let status = snapshot
                     .filter(|(inputs, _)| *inputs == plan.inputs)
                     .map_or_else(|| self.builds.status(folder, &plan), |(_, status)| status);
-                build_reply(plan.target, status, &mut findings, &mut notes)
+                build_reply(target, status, &mut findings, &mut notes)
             } else {
                 BuildReply {
                     state: "no_code".to_string(),
                     seconds: 0,
-                    target: plan.target.to_string(),
+                    target: target.to_string(),
                     component: None,
                     size: None,
                     sha256: None,
