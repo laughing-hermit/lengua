@@ -152,8 +152,7 @@ fn browsers(folder: &Path, libraries: &[Library]) -> Vec<Browser> {
             crate_name: l.crate_name.clone(),
             path: l.path.clone(),
             functions: fs::read_to_string(folder.join(&l.path).join("src/main.rs"))
-                .map(|t| browser_functions(&t))
-                .unwrap_or_default(),
+                .map_or_else(|_| Vec::new(), |t| browser_functions(&t)),
         })
         .collect()
 }
