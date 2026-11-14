@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T09:58:28Z }
 title: decimal
 status: draft
+approved: { sha256: 4b280788615850a274f3cebc26ae2782b366fe6514727fe798a382ee94b2a7f2, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

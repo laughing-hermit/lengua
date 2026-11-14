@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:04:00Z }
 title: text
 status: draft
+approved: { sha256: edbd93798b65ba9c92a3ac387c8183010b1bf1365b0c0ecafdd35cf85bbd9ccd, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

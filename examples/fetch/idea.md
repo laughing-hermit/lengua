@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:06:25Z }
 title: fetch
 status: draft
+approved: { sha256: 86237aa289351ef3db7165c13dbe17e4d95414066d55b260d53a789add273434, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

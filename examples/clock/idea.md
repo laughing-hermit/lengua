@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:06:10Z }
 title: clock
 status: draft
+approved: { sha256: 52c51adfcedd810f24ebde609c3f55a07acdddeab3c543ba66147712b2df359a, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

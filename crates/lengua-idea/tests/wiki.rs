@@ -125,8 +125,7 @@ fn the_repository_s_wiki_keeps_to_okf_and_is_current() {
 fn principle_rows(text: &str, heading: &str) -> Vec<String> {
     text.replace("\r\n", "\n")
         .split_once(heading)
-        .map(|(_, rest)| rest)
-        .unwrap_or_default()
+        .map_or_default(|(_, rest)| rest)
         .lines()
         .skip(1)
         .take_while(|l| !l.starts_with('#'))

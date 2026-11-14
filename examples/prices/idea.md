@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:12:00Z }
 title: prices
 status: draft
+approved: { sha256: 2c0008e9f511b9d95c44b5ddbbd7cc536045826699bee96053b3c01e96a42bd7, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

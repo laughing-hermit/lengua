@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:06:06Z }
 title: vectors
 status: draft
+approved: { sha256: 120e17099b03b58b78c86b4605650a8e881917354c02eb20dada182b44f7c91a, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

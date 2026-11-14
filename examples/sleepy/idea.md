@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:07:00Z }
 title: sleepy
 status: draft
+approved: { sha256: 9fc31809c9334140a85713b63e1574a6688f8191b2f0021a9f81bff943fb9b0b, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

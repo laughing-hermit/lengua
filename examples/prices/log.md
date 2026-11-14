@@ -2,6 +2,7 @@
 
 ## 2026-11-14
 
+* **Approval** at 12:00:00Z by human:owner: the ideas `2c0008e9f511b9d95c44b5ddbbd7cc536045826699bee96053b3c01e96a42bd7`. The person's words: "Approved with milestone L11: lengua's own examples and libraries, as the owner's milestones asked for them.".
 * **Check** at 10:12:00Z: no problems; label `checked`, mutation score 4 of 4 (100%).
 * **Check** at 10:11:53Z: no problems; label `unchecked`.
   * Generated `Cargo.toml`, changed: `ddbdc4e9c6ab3af45cdc58c850868cfa3bed82d08e3afdfdebc3750ded0a8c54`.

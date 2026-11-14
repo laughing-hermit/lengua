@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:06:40Z }
 title: forever
 status: draft
+approved: { sha256: 2785ab01103221035922238f757f394e8490813d87b2e530f94ab611afbad64e, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

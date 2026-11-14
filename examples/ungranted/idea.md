@@ -13,6 +13,7 @@ world_sha256: 0a7313a3dd0aa5c41e90b244f039886104d47ce35544350dbfa738da23ba0d2c
 generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T00:35:32Z }
 title: ungranted
 status: draft
+approved: { sha256: 0cba96626f217bae5044bb4c140bf023667ab7b3d8fbeca96b7f72e4aa03243a, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

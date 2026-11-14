@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:01:04Z }
 title: http
 status: draft
+approved: { sha256: eb717b98489c5b488421bb8987b0ad328ef810d997a906b37fa47c1a33165c76, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

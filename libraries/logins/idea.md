@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:05:39Z }
 title: logins
 status: draft
+approved: { sha256: edcda9a6b6f4191f7f416f8f37036c1a8ce7007733eb5e2f9784cc5c36ceef82, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

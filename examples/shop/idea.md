@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:12:36Z }
 title: shop
 status: draft
+approved: { sha256: 88b2ba64344288d7cbaaf5779371e619eb81845c9d2d5e899e752e50d4d9edac, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

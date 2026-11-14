@@ -16,6 +16,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:11:53Z }
 title: notes
 status: draft
+approved: { sha256: 7048ff4a72c232f317ac7cd746074574215570a3768d84901ed643f3e88fd768, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

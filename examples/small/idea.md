@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:07:08Z }
 title: small
 status: draft
+approved: { sha256: 46e391fad5d63242e4a85aed965e8734a1e442730d1859dfbaed4a451bb852f6, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

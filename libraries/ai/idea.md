@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:04:48Z }
 title: ai
 status: draft
+approved: { sha256: 82e935fcda7bf16fba3c7386e7b01771e7660fff59f5aeb768f3a02643497e8e, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

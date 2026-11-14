@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:06:45Z }
 title: greedy
 status: draft
+approved: { sha256: 109c77a4781e2bf05f99e9140da2d25939353b127bb926382b7a4bdcc0ee671a, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:07:17Z }
 title: tally
 status: draft
+approved: { sha256: aa388143487d3d335c8ae85378126af4b304e305d94adee7b52c0dfdd2fd5c6f, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose

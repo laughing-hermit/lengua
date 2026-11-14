@@ -15,6 +15,7 @@ verified:
   - { by: process:lengua-check, at: 2026-11-14T10:06:50Z }
 title: greet
 status: draft
+approved: { sha256: caf8c847b97adf899649f2cee11eadbb097d3a0657c31a19f1f9a89d92982ab9, by: human:owner, at: 2026-11-14T12:00:00Z }
 ---
 
 # Purpose
