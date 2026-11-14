@@ -516,7 +516,30 @@ next starts (Lengua3.md, section 8).
   (`LENGUA_CHROME`); no Playwright, which downloads its own browsers.
 - **2026-11-13, L8: the wiki joins both sides**: `api.md` (`lengua Interface`), `# Links` on every
   idea of an application with screens or routes (out of the idea's hash), `index.md`'s
-  `# Back end`, `# Front end`, `# Interface` and `# Dependencies`.
+  `# Back end` (with main's sections and crate count), `# Front end` (screens, npm packages) and
+  `# Interface`; `# Links` gains `Calls`, `Serves` and `Called by` (merged with main's wiki at
+  40659bb).
+- **2026-11-13, L8: the two connections of Next.js to the Rust side** (owner: "yes both, add
+  it"): HTTP to the back end through the typed client, and the lengua libraries the application
+  uses built for the browser. **wasm-bindgen, not jco**: a generated wrapper crate
+  (`target/lengua/browser/<library>/`) has one `#[wasm_bindgen]` function per exported function
+  of the library whose types the browser takes, calling the library, so the library's code and
+  its checks stay as they are; it is built for `wasm32-unknown-unknown`, where `std` imports
+  nothing; jco would need the WASI shims (`@bytecodealliance/preview2-shim`) and its own
+  packages in the browser for the interfaces `std` always imports. Pinned `wasm-bindgen`
+  0.2.130 (the current release, 2026-10-30) in the wrapper and `wasm-bindgen-cli` 0.2.130 on the
+  user's machine (`doctor` checks it when a screen app uses a library; CI installs it with
+  `cargo install`). The module starts from inline bytes (`initSync`), so neither Turbopack nor
+  Vite has to serve a `.wasm` file. Only top-level `pub fn` of the library's `src/main.rs` with
+  `&str`, `String`, `bool`, integers up to 32 bits and floats are exposed (to widen later). A
+  library has no grants (`library-grant`, L7), so nothing it can't do in the browser can reach
+  it. The example library `examples/titles` checks a title in the screen `write` and in the
+  server's `POST /api/notes`.
+- **2026-11-13, L8: the owner's line**, written in Lengua3.md: "Rust to WebAssembly for anything
+  that can be; native Rust only for the specific parts that can't." Native stays narrow:
+  training or fine-tuning, the heaviest GPU work (large local models at full speed),
+  shared-memory threads, a device with no host grant, and Electron's shell. L10 proves the native
+  path with one example, a local model on the GPU with Candle or Burn.
 - **2026-11-13, the LLM wiki and OKF fixed ahead of L9 and L13** (`wip/wiki`; Lengua3.md,
   section 8, "The LLM wiki and OKF, by milestone", and section 4, "The wiki's formats" and "One
   wiki across the repository"). The decisions taken:
