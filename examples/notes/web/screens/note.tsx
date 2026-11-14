@@ -1,5 +1,12 @@
 import { defineCatalog, type Spec } from "@json-render/core";
-import { ActionProvider, Renderer, StateProvider, defineRegistry } from "@json-render/react";
+import {
+  ActionProvider,
+  Renderer,
+  StateProvider,
+  ValidationProvider,
+  VisibilityProvider,
+  defineRegistry,
+} from "@json-render/react";
 import { schema } from "@json-render/react/schema";
 import { useEffect } from "react";
 import { z } from "zod";
@@ -122,9 +129,13 @@ export function NoteScreen() {
           </Button>
           {state.spec === null ? null : (
             <StateProvider initialState={{}}>
-              <ActionProvider handlers={{}}>
-                <Renderer spec={state.spec} registry={registry} />
-              </ActionProvider>
+              <VisibilityProvider>
+                <ValidationProvider>
+                  <ActionProvider handlers={{}}>
+                    <Renderer spec={state.spec} registry={registry} />
+                  </ActionProvider>
+                </ValidationProvider>
+              </VisibilityProvider>
             </StateProvider>
           )}
         </CardContent>
