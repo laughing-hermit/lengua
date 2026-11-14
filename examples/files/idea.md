@@ -1,3 +1,22 @@
+---
+type: lengua Program
+description: "The program shows the text of files."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: checked
+idea_sha256: 7c82c772c7ac7710ca211f5dd854639d078038c3606d84db0784ee5cfda8eae2
+source_sha256: ab9840bfc067a7fabaf52d7e2dd5d1ee08ded2741956c7264263ba7545a860d7
+cargo_sha256: b826835f16647dd095249389f334ad08f101d0c91b5e55c842b41658f801cfc4
+world_sha256: cbdc5c096384a41f695cc82d201f1ef28c2d1270d259ddd0014340d04e0b359e
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:01:51Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:01:51Z }
+title: files
+status: draft
+---
+
 # Purpose
 
 The program shows the text of files. Each argument is the path of a file. For each path, it
@@ -50,3 +69,7 @@ standard output.
 # Structure
 
 - `main`: writes the text of each file, tries to write in `data`, and writes the count to `out`.
+
+# Links
+
+* Index: [files](index.md).

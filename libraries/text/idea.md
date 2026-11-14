@@ -1,3 +1,22 @@
+---
+type: lengua Library
+description: "The library cuts text into lines, parts and words."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: checked
+idea_sha256: 00d9fcae028d21a72bd74ca691544398d7bf99043a6d6b698a5193e3b70d15cd
+source_sha256: 1e857ae6a3f7ae38f70c6b508cd6013782cab1c1ca1a080db019f38ce07f7b52
+cargo_sha256: 23b7a7244864da21996752a279b52e37e77b6512baba0394c8ad89446ab19cb8
+world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:01:18Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:01:18Z }
+title: text
+status: draft
+---
+
 # Purpose
 
 The library cuts text into lines, parts and words. It removes the blank characters at the ends of
@@ -167,3 +186,7 @@ Then it gives the position of the first byte of the character that is not valid.
 - `sequence_length`: gives the number of bytes of a character from its first byte, or nothing
   for a byte that starts no character.
 - `continues`: tells if the bytes after the first byte continue the character.
+
+# Links
+
+* Index: [text](index.md).

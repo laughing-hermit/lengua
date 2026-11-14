@@ -1,3 +1,22 @@
+---
+type: lengua Server
+description: "The program is an HTTP server."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: checked
+idea_sha256: 9a517252c8d1cdbe8ac71397406306bc095f51effb4816df196d09074176ce98
+source_sha256: a9c40126a927642ba422a94ecf445b455885054af29900adae682a1436f04903
+cargo_sha256: 687df52b60c4767198dfb82695c2c921a86b2ededdcaa6da70a33c9fdebf1ce8
+world_sha256: 6aa2f03d29a6dae284b24b3801913f715788aad0e8f74739ae1fde5efab7af5d
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:02:06Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:02:06Z }
+title: greet
+status: draft
+---
+
 # Purpose
 
 The program is an HTTP server. It answers `GET /hello?name=<name>` with the text
@@ -54,3 +73,7 @@ Then the status is 404.
 
 - `Greet::handle`: answers a request with the status and the body that `answer` gives.
 - `answer`: gives the status and the body for the path of a request.
+
+# Links
+
+* Index: [greet](index.md).

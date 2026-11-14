@@ -1,3 +1,20 @@
+---
+type: lengua Module
+description: "The module writes a value as JSON text with no spaces."
+module: write
+source: src/write.rs
+uses: []
+used_by: [idea]
+label: checked
+idea_sha256: d4157785b45bdd1af01dffea240052342bade1a1405fe128d665df38b8d5ee6e
+source_sha256: 9a6f8b92e1b413e25c1c8ea457c934748db48d95d3701c2ab537dddae5670a4e
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T22:59:44Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T22:59:44Z }
+title: write
+status: draft
+---
+
 # Purpose
 
 The module writes a value as JSON text with no spaces. It writes a text in quotes, with an
@@ -68,3 +85,8 @@ Then it gives the JSON text with commas between the parts.
 - `write`: writes a value as JSON text, with a stack of tasks in place of recursion.
 - `expand`: writes a single value, or puts the parts of a list or an object on the stack.
 - `quote`: writes a text in quotes, with its escapes.
+
+# Links
+
+* Used by: [json](../idea.md).
+* Index: [json](../index.md).

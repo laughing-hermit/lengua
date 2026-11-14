@@ -1,3 +1,9 @@
+---
+type: lengua Plan
+title: "lengua 3: todo"
+description: "The milestones of lengua 3, their decisions and their CI runs."
+---
+
 # lengua 3: todo
 
 The design is [Lengua3.md](Lengua3.md). Each milestone is green on all five runners before the
@@ -511,6 +517,35 @@ next starts (Lengua3.md, section 8).
 - **2026-11-13, L8: the wiki joins both sides**: `api.md` (`lengua Interface`), `# Links` on every
   idea of an application with screens or routes (out of the idea's hash), `index.md`'s
   `# Back end`, `# Front end`, `# Interface` and `# Dependencies`.
+- **2026-11-13, the LLM wiki and OKF fixed ahead of L9 and L13** (`wip/wiki`; Lengua3.md,
+  section 8, "The LLM wiki and OKF, by milestone", and section 4, "The wiki's formats" and "One
+  wiki across the repository"). The decisions taken:
+  - OKF's `generated` and `verified` are keys lengua writes; `verified` keeps other actors'
+    entries and holds one of lengua's, `process:lengua-check`, only while the label is
+    `checked` or `tested`. Their times change only when the page's text changes, so a check that
+    changes nothing writes nothing, not even a log entry.
+  - `title` and `status: draft` are written when absent and then kept as the agent's;
+    `status: stable` from the agent is a finding until L11's approval.
+  - A check whose job has not ended keeps the label the wiki has when the files are the same, so
+    a new session or a fresh clone does not log `unchecked` and then `checked`. The old lock
+    stays valid only while every file is as it signed them.
+  - A library learns its users only in the folder index of `libraries/`, never in its own
+    files, which its lock holds.
+  - The crate count reads the folder's `Cargo.lock` and the crates' sources in Cargo's folder
+    (`unsafe` as a word outside line comments; not pure Rust: a `links` key whose `build.rs` links a native library (`prettyplease` has a `links` key for its version alone, run 43516471987), or `cc`, `cmake`,
+    `pkg-config`, `bindgen` or `vcpkg` among the build dependencies), kept in
+    `target/lengua/crates.txt` under the lock's hash.
+  - Each folder under `libraries/` and `examples/` is an OKF bundle of its own (its `index.md`
+    keeps `okf_version`); the repository is a bundle of them, with root indexes written by
+    `lengua-mcp wiki <root>`, not by `check`.
+  - The committed wiki is written only by CI's new mode `wiki` and stays put: the tests check
+    copies, and the tree test fails (`wiki-stale`) when an idea or its code changes without a
+    new run of the mode `wiki`. Not walked by the tree test: hidden folders, `target/`,
+    `fixtures/`, and a folder with a `SKILL.md` (Agent Skills' own frontmatter has no `type`).
+  - The design documents get a `type`: `lengua Design`, `lengua Plan`, `lengua Overview`,
+    `lengua Crate`.
+  - Secrets: the rule is written for L9's secrets grant; nothing to test until that grant.
+  - Attested Computation: a recommendation in Lengua3.md, section 10, for L13 to decide.
 
 ## Runs
 
@@ -569,6 +604,12 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 | 2026-11-13 | [43473833819](https://github.com/laughing-hermit/lengua/actions/runs/43473833819) | wip/l7 58cad84 | test, linux-x86_64 | Failed only on the shop: its `generate!` read the folder `wit/` (lengua's statement of the world) by default; now `path: []` |
 | 2026-11-13 | [43476045199](https://github.com/laughing-hermit/lengua/actions/runs/43476045199) | wip/l7 e3109dd | test, linux-x86_64 | Failed only on the shop: it built and passed clippy (so the bindings' macros pass `unsafe_code = "forbid"`), and the import check wanted a WASI version on `lengua:tax/rates`; now an exact name is taken |
 | 2026-11-13 | [43478821353](https://github.com/laughing-hermit/lengua/actions/runs/43478821353) | wip/l7 5d04e13 | test, linux-x86_64 | Green. Seconds from the first check to `done`, and the mutation score: `tally` 23.1, 6 of 6; `fetch` 23.4, 3 of 3; `upper` 28.8, 4 of 4; `greet` 13.0, 2 of 2; `prices` 11.4, 4 of 4; the libraries `decimal` 106 to 125, 27 of 30; `sort` 66 to 89, 22 of 27; `text` 50 to 70, 22 of 23; `hashes` 82 to 92, 33 of 36 (4 unbuilt); `dates` 137 to 160, 34 of 36 (4 unbuilt); `json` 113 to 161, 37 of 39 (1 unbuilt); `http` 181 to 188, 37 of 40; each `checked`, and each built for `wasm32-unknown-unknown` too; `shop` 58.5, 14 of 14, `checked`: one file of 98,722 bytes, `lengua-run`'s first answer 106 ms after its start. The C component `tax.wasm`: 50,628 bytes |
+| 2026-11-13 | [43513488146](https://github.com/laughing-hermit/lengua/actions/runs/43513488146) | wip/wiki ec3e0ce | test, linux-x86_64 | Failed: 11 clippy findings in `lengua-idea` (`similar_names`, `manual_is_multiple_of`, `map_unwrap_or`) and a format patch |
+| 2026-11-13 | [43514346508](https://github.com/laughing-hermit/lengua/actions/runs/43514346508) | wip/wiki 9f468f5 | test, linux-x86_64 | Failed: the tree test (no committed wiki yet, as planned); the usage test; and every job ran twice, all mutants cached: `verified` added two frontmatter lines, which moved the examples' lines in the build's inputs (now counted from the idea's text) |
+| 2026-11-13 | [43516467060](https://github.com/laughing-hermit/lengua/actions/runs/43516467060) | wip/wiki 2f3b5c4 | test, linux-x86_64 | Every test green but the tree test (no committed wiki yet, as planned) |
+| 2026-11-13 | [43516471987](https://github.com/laughing-hermit/lengua/actions/runs/43516471987) | wip/wiki 2f3b5c4 | wiki, linux-x86_64 | Green: every library and example checked in place (`ungranted` `build_failed`, as it should), `lengua-mcp wiki` with no finding; `prettyplease` read as not pure Rust from its `links` key alone (fixed) |
+| 2026-11-13 | [43519544263](https://github.com/laughing-hermit/lengua/actions/runs/43519544263) | wip/wiki eb43c24 | wiki, linux-x86_64 | Green, but the shop's crate count was kept before Cargo had downloaded five crates (now kept only once every source is read); a format patch |
+| 2026-11-13 | [43522428412](https://github.com/laughing-hermit/lengua/actions/runs/43522428412) | wip/wiki c0d7201 | wiki, linux-x86_64 | Green: the committed wiki (84 files, artifact `wiki-670-linux-x86_64`); the shop: 2 crates declared, 32 brought in, 20 with `unsafe`, none not pure Rust |
 
 ## What the permission checks refused
 
@@ -587,3 +628,6 @@ The five-runner run a landing rests on is at the head it tests, so it is named i
 - **2026-11-13, L8:** a shell command of the builder that began with `perl -v` (a slip, before a
   `grep`) was refused. Again a mistake, not a need: the work went on with `grep` and the
   editor's tools.
+- **2026-11-13, the wiki fix:** a shell command that ran `python3 --version` (a slip, while
+  checking a file) was refused. Nothing needed it; the work went on with the editor's tools and
+  `sed`.

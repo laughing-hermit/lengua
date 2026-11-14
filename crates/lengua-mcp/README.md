@@ -1,3 +1,9 @@
+---
+type: lengua Crate
+title: lengua-mcp
+description: "The MCP server of the lengua plugin, with the tools check and run."
+---
+
 # lengua-mcp
 
 ## Purpose

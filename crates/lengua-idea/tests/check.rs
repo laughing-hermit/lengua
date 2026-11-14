@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const NOV_13_2026: u64 = 1_794_528_000;
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn copy(from: &Path, to: &Path) {
     fs::create_dir_all(to).expect("a folder");
@@ -61,8 +62,36 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
     assert_eq!(report.build.as_ref().map(|b| b.code), Some(false));
     let words = read(&folder, "ideas/words.md");
     assert!(words.contains("type: lengua Module\n"));
-    assert!(words.contains("used_by: [idea]\n"));
-    assert!(words.contains("source_sha256: none\ntitle: Words\ntags: [text]\n---\n"));
+    assert!(words.contains("used_by: [idea]
+"));
+    assert!(words.contains(&format!(
+        "source_sha256: none
+generated: {{ by: lengua-mcp/{VERSION}, at: 2026-11-13T00:00:00Z }}
+title: Words
+tags: [text]
+status: draft
+---
+"
+    )));
+    assert!(!words.contains("verified:"));
+    assert!(words.contains("
+# Links
+
+* Used by: ["), "{words}");
+    assert!(words.contains("](../idea.md).
+* Index: ["), "{words}");
+    assert!(words.ends_with("](../index.md).
+"), "{words}");
+    assert!(
+        top.contains("
+# Links
+
+* Uses: [Words](ideas/words.md).
+"),
+        "{top}"
+    );
+    assert!(top.contains("
+title: lengua-idea-"), "{top}");
     assert!(!words.contains("label: checked"));
     let index = read(&folder, "index.md");
     assert!(index.starts_with("---\nokf_version: \"0.2\"\n---\n\n# Back end\n\n## Program\n\n* ["));
@@ -70,26 +99,173 @@ fn a_good_program_has_no_findings_and_check_writes_the_wiki() {
         index
             .contains("](idea.md) - The program counts the words in a text. Label: `unchecked`.\n")
     );
-    assert!(index.contains("\n## Modules\n\n* [words](ideas/words.md) - The module finds the words in a text. Label: `unchecked`.\n"));
+    assert!(index.contains("
+## Modules
+
+* [Words](ideas/words.md) - The module finds the words in a text. Label: `unchecked`.
+"));
     let log = read(&folder, "log.md");
     assert!(log.starts_with(
         "# Log\n\n## 2026-11-13\n\n* **Check** at 00:00:00Z: no problems; label `unchecked`.\n"
     ));
-    assert!(log.contains("  * Idea [words](ideas/words.md), new: `"));
+    assert!(log.contains("  * Idea [Words](ideas/words.md), new: `"));
     assert!(log.contains("  * Generated `Cargo.toml`, new: `"));
     assert!(log.contains("  * Generated `wit/world.wit`, new: `"));
 }
 
 #[test]
-fn a_second_check_changes_only_the_log() {
+fn a_second_check_that_changes_nothing_writes_nothing() {
     let folder = fixture("good", "again");
     let first = lengua_idea::check(&folder, NOV_13_2026);
     assert_eq!(first.findings, []);
+    let log = read(&folder, "log.md");
+    let top = read(&folder, "idea.md");
+    assert!(read(&folder, "index.md").contains("\n## Crates\n\n* Declared in the ideas: none;"));
     let second = lengua_idea::check(&folder, NOV_13_2026 + 60);
     assert_eq!(second.findings, []);
-    assert_eq!(second.written, ["log.md"]);
-    let log = read(&folder, "log.md");
-    assert!(log.starts_with("# Log\n\n## 2026-11-13\n\n* **Check** at 00:01:00Z: no problems; label `unchecked`; nothing changed.\n* **Check** at 00:00:00Z"));
+    assert_eq!(second.written, Vec::<String>::new());
+    assert_eq!(read(&folder, "log.md"), log);
+    assert_eq!(read(&folder, "idea.md"), top);
+}
+
+#[test]
+fn a_check_whose_job_is_not_done_keeps_the_label_of_the_same_files() {
+    use lengua_idea::{Label, Trust};
+    let folder = fixture("good", "pending");
+    let checked = Trust {
+        label: Label::Checked,
+        score: Some((9, 10)),
+    };
+    let first = lengua_idea::check_with(&folder, NOV_13_2026, |_| Some(checked));
+    assert_eq!(first.findings, []);
+    let top = read(&folder, "idea.md");
+    assert!(
+        top.contains("\nverified:\n  - { by: process:lengua-check, at: 2026-11-13T00:00:00Z }\n")
+    );
+    let pending = lengua_idea::check_with(&folder, NOV_13_2026 + 60, |_| None);
+    assert_eq!(pending.written, Vec::<String>::new());
+    assert_eq!(read(&folder, "idea.md"), top);
+    fs::create_dir_all(folder.join("src")).expect("src");
+    fs::write(folder.join("src/words.rs"), "fn count_words() {}\n").expect("a file");
+    let changed = lengua_idea::check_with(&folder, NOV_13_2026 + 120, |_| None);
+    assert_eq!(changed.findings, []);
+    let top = read(&folder, "idea.md");
+    assert!(top.contains("\nlabel: unchecked\n"), "{top}");
+    assert!(!top.contains("process:lengua-check"), "{top}");
+    assert!(top.contains("at: 2026-11-13T00:02:00Z }"), "{top}");
+    assert!(read(&folder, "log.md").starts_with(
+        "# Log\n\n## 2026-11-13\n\n* **Check** at 00:02:00Z: no problems; label `unchecked`.\n"
+    ));
+}
+
+#[test]
+fn the_links_section_is_check_s_own_and_outside_the_idea_s_hash() {
+    let folder = fixture("good", "links");
+    assert_eq!(lengua_idea::check(&folder, NOV_13_2026).findings, []);
+    let words = read(&folder, "ideas/words.md");
+    let edited = words.replace("* Index: [", "* Other: [");
+    fs::write(folder.join("ideas/words.md"), &edited).expect("an edit");
+    let again = lengua_idea::check(&folder, NOV_13_2026 + 1);
+    assert_eq!(again.findings, []);
+    assert_eq!(
+        read(&folder, "ideas/words.md").replace("00:00:01Z", "00:00:00Z"),
+        words
+    );
+    assert!(!read(&folder, "log.md").contains("Idea [Words](ideas/words.md), changed"));
+}
+
+#[test]
+fn agent_written_okf_values_are_checked_and_kept() {
+    use lengua_idea::{Label, Trust};
+    let folder = fixture("good", "okf");
+    let words = read(&folder, "ideas/words.md");
+    let bad = words.replace(
+        "label: checked\n",
+        "status: stable\nverified: { by: ana, at: yesterday }\nstale_after: 2026-13-01T00:00:00Z\n",
+    );
+    fs::write(folder.join("ideas/words.md"), bad).expect("a file");
+    let found: Vec<(String, &str)> = lengua_idea::check(&folder, NOV_13_2026)
+        .findings
+        .into_iter()
+        .map(|f| (f.file, f.code))
+        .collect();
+    for code in ["okf-status", "okf-actor", "okf-time"] {
+        assert!(
+            found.contains(&("ideas/words.md".to_string(), code)),
+            "{code} in {found:?}"
+        );
+    }
+    let good = words.replace(
+        "label: checked\n",
+        "status: deprecated\nverified: { by: human:ana, at: 2026-11-12T10:00:00+01:00 }\n",
+    );
+    fs::write(folder.join("ideas/words.md"), good).expect("a file");
+    let report = lengua_idea::check_with(&folder, NOV_13_2026, |_| {
+        Some(Trust {
+            label: Label::Tested,
+            score: Some((1, 4)),
+        })
+    });
+    assert_eq!(report.findings, []);
+    let written = read(&folder, "ideas/words.md");
+    assert!(written.contains("\nverified:\n  - { by: human:ana, at: 2026-11-12T10:00:00+01:00 }\n  - { by: process:lengua-check, at: 2026-11-13T00:00:00Z }\n"), "{written}");
+    assert!(written.contains("\nstatus: deprecated\n"), "{written}");
+    assert!(!written.contains("status: draft"), "{written}");
+}
+
+#[test]
+fn every_page_in_the_folder_is_an_okf_concept() {
+    let folder = fixture("good", "conformance");
+    fs::write(folder.join("notes.md"), "# Notes\n").expect("a file");
+    let found: Vec<(String, &str)> = lengua_idea::check(&folder, NOV_13_2026)
+        .findings
+        .into_iter()
+        .map(|f| (f.file, f.code))
+        .collect();
+    assert_eq!(found, [("notes.md".to_string(), "okf-type")]);
+    fs::write(folder.join("notes.md"), "---\ntype: Note\n---\n\n# Notes\n").expect("a file");
+    assert_eq!(lengua_idea::check(&folder, NOV_13_2026).findings, []);
+}
+
+#[test]
+fn a_purpose_that_names_a_module_its_constraints_do_not_list_is_a_finding() {
+    let folder = fixture("good", "named");
+    let words = read(&folder, "ideas/words.md");
+    fs::write(
+        folder.join("ideas/words.md"),
+        words.replace(
+            "A word is a group of characters with no space in it.",
+            "The library `json` can write the words.",
+        ),
+    )
+    .expect("a file");
+    let found: Vec<(String, &str)> = lengua_idea::program(&folder)
+        .findings
+        .into_iter()
+        .map(|f| (f.file, f.code))
+        .collect();
+    assert!(
+        found.contains(&("ideas/words.md".to_string(), "purpose-unlisted")),
+        "{found:?}"
+    );
+    let top = read(&folder, "idea.md");
+    fs::write(
+        folder.join("idea.md"),
+        top.replace(
+            "It reads the text from the standard input.",
+            "It reads the text from the standard input, and the module `words` finds the words.",
+        ),
+    )
+    .expect("a file");
+    let found: Vec<(String, &str)> = lengua_idea::program(&folder)
+        .findings
+        .into_iter()
+        .map(|f| (f.file, f.code))
+        .collect();
+    assert!(
+        !found.contains(&("idea.md".to_string(), "purpose-unlisted")),
+        "{found:?}"
+    );
 }
 
 #[test]
@@ -252,6 +428,7 @@ fn every_example_keeps_every_rule() {
     let mut names: Vec<String> = fs::read_dir(&examples)
         .expect("the examples")
         .flatten()
+        .filter(|e| e.path().join("idea.md").is_file())
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
     names.sort();
@@ -316,9 +493,11 @@ fn code_that_breaks_the_rules_is_refused_with_the_idea_s_findings() {
 fn the_label_and_the_score_go_into_the_wiki() {
     use lengua_idea::{Label, Trust};
     let folder = fixture("good", "label");
-    let report = lengua_idea::check_with(&folder, NOV_13_2026, |_| Trust {
-        label: Label::Checked,
-        score: Some((9, 10)),
+    let report = lengua_idea::check_with(&folder, NOV_13_2026, |_| {
+        Some(Trust {
+            label: Label::Checked,
+            score: Some((9, 10)),
+        })
     });
     assert_eq!(report.findings, []);
     assert_eq!(report.trust.label, Label::Checked);
@@ -330,15 +509,17 @@ fn the_label_and_the_score_go_into_the_wiki() {
         read(&folder, "log.md")
             .contains("no problems; label `checked`, mutation score 9 of 10 (90%).\n")
     );
-    let tested = lengua_idea::check_with(&folder, NOV_13_2026 + 1, |_| Trust {
-        label: Label::Tested,
-        score: Some((1, 4)),
+    let tested = lengua_idea::check_with(&folder, NOV_13_2026 + 1, |_| {
+        Some(Trust {
+            label: Label::Tested,
+            score: Some((1, 4)),
+        })
     });
     assert_eq!(
         tested.written,
         ["idea.md", "ideas/words.md", "index.md", "log.md"]
     );
-    assert!(read(&folder, "log.md").starts_with("# Log\n\n## 2026-11-13\n\n* **Check** at 00:00:01Z: no problems; label `tested`, mutation score 1 of 4 (25%); nothing changed.\n"));
+    assert!(read(&folder, "log.md").starts_with("# Log\n\n## 2026-11-13\n\n* **Check** at 00:00:01Z: no problems; label `tested`, mutation score 1 of 4 (25%).\n"));
 }
 
 #[test]
@@ -548,4 +729,20 @@ fn a_library_that_is_not_checked_is_refused_by_the_program_that_uses_it() {
     );
     fs::remove_dir_all(&library).expect("removed");
     assert!(codes_of(&program).contains(&("idea.md".to_string(), "library-missing")));
+}
+
+#[test]
+fn the_label_in_the_frontmatter_does_not_change_the_build_s_inputs() {
+    use lengua_idea::{Label, Trust};
+    let folder = fixture("good", "inputs");
+    let first = lengua_idea::check(&folder, NOV_13_2026);
+    let before = first.build.expect("a build").inputs;
+    let checked = lengua_idea::check_with(&folder, NOV_13_2026 + 1, |_| {
+        Some(Trust {
+            label: Label::Checked,
+            score: Some((9, 10)),
+        })
+    });
+    assert!(read(&folder, "idea.md").contains("\nverified:\n"));
+    assert_eq!(checked.build.expect("a build").inputs, before);
 }

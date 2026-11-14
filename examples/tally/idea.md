@@ -1,3 +1,22 @@
+---
+type: lengua Program
+description: "The program counts the lines and the words of a text."
+module: main
+source: src/main.rs
+uses: [ideas/lines, ideas/words, ideas/report]
+used_by: []
+label: checked
+idea_sha256: 238fd78c54f537125f9a3cffc11795162b67534197b6398447af91405c3f4e01
+source_sha256: 98ebf70faf3b5dc6935b1a3006b791330fec18a9337317b888155da2f079be9c
+cargo_sha256: 4e669d6ebf1d86ced98951146ad93838bda2883c1b2384310567d1bae34aa410
+world_sha256: 0a7313a3dd0aa5c41e90b244f039886104d47ce35544350dbfa738da23ba0d2c
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:03:20Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:03:20Z }
+title: tally
+status: draft
+---
+
 # Purpose
 
 The program counts the lines and the words of a text. It reads the text from the standard
@@ -40,3 +59,8 @@ Then it writes `lines 0, words 0, maximum 0` and a line end.
 # Structure
 
 - `main`: reads the standard input and writes the report of the text.
+
+# Links
+
+* Uses: [lines](ideas/lines.md), [words](ideas/words.md), [report](ideas/report.md).
+* Index: [tally](index.md).

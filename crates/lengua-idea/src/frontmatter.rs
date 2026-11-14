@@ -1,6 +1,6 @@
 use crate::Sink;
 
-pub(crate) const LENGUA_KEYS: [&str; 12] = [
+pub(crate) const LENGUA_KEYS: [&str; 14] = [
     "type",
     "description",
     "module",
@@ -13,12 +13,15 @@ pub(crate) const LENGUA_KEYS: [&str; 12] = [
     "cargo_sha256",
     "world_sha256",
     "web_sha256",
+    "generated",
+    "verified",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Entry {
     pub key: String,
     pub text: String,
+    pub line: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,20 +33,27 @@ pub(crate) struct Front {
 
 impl Front {
     pub(crate) fn value(&self, key: &str) -> Option<&str> {
-        let entry = self.entries.iter().find(|e| e.key == key)?;
+        let entry = self.entry(key)?;
         let first = entry.text.lines().next()?;
         Some(first[key.len() + 1..].trim())
+    }
+
+    pub(crate) fn entry(&self, key: &str) -> Option<&Entry> {
+        self.entries.iter().find(|e| e.key == key)
     }
 
     pub(crate) fn body_text(&self) -> &str {
         self.body.trim_start_matches('\n')
     }
 
-    pub(crate) fn render(&self, lengua: &[(&str, String)]) -> String {
+    pub(crate) fn render(&self, lengua: &[(&str, String)], fill: &[(&str, String)]) -> String {
         let mut out = String::from("---\n");
         for (key, value) in lengua {
             out.push_str(key);
-            out.push_str(": ");
+            out.push(':');
+            if !value.starts_with('\n') {
+                out.push(' ');
+            }
             out.push_str(value);
             out.push('\n');
         }
@@ -52,31 +62,18 @@ impl Front {
                 out.push_str(&entry.text);
             }
         }
+        for (key, value) in fill {
+            if self.entry(key).is_none() {
+                out.push_str(key);
+                out.push_str(": ");
+                out.push_str(value);
+                out.push('\n');
+            }
+        }
         out.push_str("---\n\n");
         out.push_str(self.body_text());
         out
     }
-}
-
-pub(crate) fn without_links(body: &str) -> String {
-    let mut fence = false;
-    let mut at = 0;
-    for line in body.split_inclusive('\n') {
-        if line.trim_start().starts_with("```") {
-            fence = !fence;
-        }
-        if !fence && line.trim_end() == "# Links" {
-            let mut kept = body
-                .get(..at)
-                .unwrap_or(body)
-                .trim_end_matches('\n')
-                .to_string();
-            kept.push('\n');
-            return kept;
-        }
-        at += line.len();
-    }
-    body.to_string()
 }
 
 fn valid_key(key: &str) -> bool {
@@ -154,6 +151,7 @@ pub(crate) fn split(text: &str, sink: &mut Sink) -> Front {
                 entries.push(Entry {
                     key: key.to_string(),
                     text: format!("{line}\n"),
+                    line: number,
                 });
             }
             _ => sink.add(
@@ -193,10 +191,16 @@ mod tests {
         assert_eq!(sink.findings, []);
         assert_eq!(front.value("label"), Some("checked"));
         assert_eq!(front.body_line, 7);
-        let out = front.render(&[("label", "unchecked".to_string())]);
+        let out = front.render(
+            &[("label", "unchecked".to_string())],
+            &[
+                ("title", "Other".to_string()),
+                ("status", "draft".to_string()),
+            ],
+        );
         assert_eq!(
             out,
-            "---\nlabel: unchecked\ntitle: Words\ntags:\n  - text\n---\n\n# Purpose\n"
+            "---\nlabel: unchecked\ntitle: Words\ntags:\n  - text\nstatus: draft\n---\n\n# Purpose\n"
         );
     }
 

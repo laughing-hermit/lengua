@@ -21,7 +21,6 @@ use crate::build::{Builds, Stage, Status};
 use crate::host::Host;
 use crate::runs::{Progress, Runs};
 use lengua_host::{Ending, Input, Outcome};
-use lengua_idea::Trust;
 use lengua_idea::lock::{self, Facts, Key, Kind};
 
 const VERSION: &str = concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION"));
@@ -533,7 +532,8 @@ impl Lengua {
                 };
                 snapshot
                     .as_ref()
-                    .map_or_else(Trust::default, |(_, status)| status.trust())
+                    .filter(|(_, status)| !status.stage.running())
+                    .map(|(_, status)| status.trust())
             },
             Some(lint),
         );
@@ -637,6 +637,29 @@ fn print_imports(path: &str) -> ExitCode {
     }
 }
 
+fn write_wiki(root: &Path) -> ExitCode {
+    match lengua_idea::write_wiki_indexes(root) {
+        Ok(written) => {
+            for file in written {
+                println!("wrote {file}");
+            }
+        }
+        Err(error) => {
+            eprintln!("{}: {error}", env!("CARGO_PKG_NAME"));
+            return ExitCode::FAILURE;
+        }
+    }
+    let findings = lengua_idea::wiki_findings(root);
+    for f in &findings {
+        println!("{}:{}: {}: {}", f.file, f.line, f.code, f.message);
+    }
+    if findings.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args == ["--version"] {
@@ -651,13 +674,21 @@ fn main() -> ExitCode {
     {
         return print_imports(path);
     }
+    if let [command, root] = args.as_slice()
+        && command == "wiki"
+    {
+        return write_wiki(Path::new(root));
+    }
     if let Some((command, rest)) = args.split_first()
         && command == "worker"
     {
         return worker::serve(rest);
     }
     if !args.is_empty() {
-        eprintln!("usage: {} [--version | doctor]", env!("CARGO_PKG_NAME"));
+        eprintln!(
+            "usage: {} [--version | doctor | wiki <root>]",
+            env!("CARGO_PKG_NAME")
+        );
         return ExitCode::from(2);
     }
     match serve() {

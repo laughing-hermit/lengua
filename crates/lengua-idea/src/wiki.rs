@@ -2,16 +2,22 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
-use crate::frontmatter::Front;
+use crate::dependencies::Count;
+use crate::frontmatter::{self, Front};
 use crate::idea::IdeaKind;
+use crate::okf::{self, GENERATED_BY, LENGUA_CHECK};
+use crate::text::is_fence;
 use crate::types::render;
 use crate::web::Route;
-use crate::{Finding, Library, Note, Shape, Trust};
+use crate::{Finding, Label, Library, Note, Shape, Sink, Trust};
 
 pub(crate) struct Parts<'a> {
+    pub title: &'a str,
     pub shape: Shape,
     pub libraries: &'a [Library],
     pub components: &'a [(String, String, usize)],
+    pub crates: Count,
+    pub vision: bool,
     pub interface: &'a Interface<'a>,
 }
 
@@ -20,7 +26,6 @@ pub(crate) struct Interface<'a> {
     pub calls: &'a [(String, Vec<String>)],
     pub client_hash: Option<String>,
     pub packages: &'a [(String, String)],
-    pub crates: &'a [String],
     pub large: &'a [(String, u64)],
 }
 
@@ -60,6 +65,25 @@ impl Page {
     }
 }
 
+pub(crate) fn without_links(body: &str) -> String {
+    let lines: Vec<&str> = body.split_inclusive('\n').collect();
+    let mut fence = false;
+    let mut last: Option<(usize, bool)> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if is_fence(line) {
+            fence = !fence;
+        } else if !fence && line.starts_with("# ") {
+            last = Some((i, line.trim_end() == "# Links"));
+        }
+    }
+    let kept = if let Some((i, true)) = last {
+        lines[..i].concat()
+    } else {
+        body.to_string()
+    };
+    format!("{}\n", kept.trim_end_matches('\n'))
+}
+
 pub(crate) fn date(now: u64) -> (u64, u64, u64) {
     let z = now / 86_400 + 719_468;
     let era = z / 146_097;
@@ -88,6 +112,10 @@ fn time_text(now: u64) -> String {
     )
 }
 
+pub(crate) fn iso(now: u64) -> String {
+    format!("{}T{}", day_text(now), time_text(now))
+}
+
 pub(crate) fn quoted(text: &str) -> String {
     let mut out = String::from("\"");
     for c in text.chars() {
@@ -100,6 +128,19 @@ pub(crate) fn quoted(text: &str) -> String {
     }
     out.push('"');
     out
+}
+
+pub(crate) fn scalar(text: &str) -> String {
+    let special = text.is_empty()
+        || text.contains(": ")
+        || text.starts_with(['-', '?', '!', '&', '*', '|', '>', '%', '@', '`', '\'', ' '])
+        || text.ends_with(' ')
+        || text.contains(['"', ',', '{', '}', '[', ']', '#']);
+    if special {
+        quoted(text)
+    } else {
+        text.to_string()
+    }
 }
 
 fn flow(list: &[String]) -> String {
@@ -118,146 +159,162 @@ fn type_name(kind: IdeaKind, shape: Shape) -> &'static str {
     }
 }
 
-pub(crate) fn page_text(page: &Page, used_by: &[String], label: &str, shape: Shape) -> String {
-    let source_hash = page
-        .source_hash
-        .clone()
-        .unwrap_or_else(|| "none".to_string());
-    let mut keys = vec![
-        ("type", type_name(page.kind, shape).to_string()),
-        ("description", quoted(&page.description)),
-        ("module", page.name.clone()),
-        ("source", page.source.clone()),
-        ("uses", flow(&page.uses)),
-        ("used_by", flow(used_by)),
-        ("label", label.to_string()),
-        ("idea_sha256", page.idea_hash.clone()),
-        ("source_sha256", source_hash),
-    ];
-    keys.extend(page.generated.iter().map(|s| (s.key, s.hash.clone())));
-    page.front.render(&keys)
+fn previous_generated(front: &Front) -> Option<String> {
+    let maps = okf::mappings(front.entry("generated")?)?;
+    maps.first()
+        .and_then(|m| okf::get(m, "at"))
+        .map(str::to_string)
 }
 
-pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
-    let mut out = String::from("---\nokf_version: \"0.2\"\n---\n");
-    let line = |p: &Page| {
-        format!(
-            "* [{}]({}) - {} Label: `{label}`.\n",
-            p.title, p.file, p.description
-        )
-    };
-    let of = |kind: IdeaKind| -> Vec<String> {
-        pages.iter().filter(|p| p.kind == kind).map(&line).collect()
-    };
-    out.push_str("\n# Back end\n");
-    section(&mut out, "## Program", &of(IdeaKind::Program));
-    section(&mut out, "## Modules", &of(IdeaKind::Module));
-    let libraries: Vec<String> = parts
+fn previous_check(front: &Front) -> Option<String> {
+    let maps = okf::mappings(front.entry("verified")?)?;
+    maps.iter()
+        .find(|m| okf::get(m, "by") == Some(LENGUA_CHECK))
+        .and_then(|m| okf::get(m, "at"))
+        .map(str::to_string)
+}
+
+fn verified_value(front: &Front, check: Option<&str>) -> Option<String> {
+    let others = front
+        .entry("verified")
+        .and_then(okf::mappings)
+        .unwrap_or_default();
+    let mut lines: Vec<String> = others
+        .iter()
+        .filter(|m| okf::get(m, "by") != Some(LENGUA_CHECK))
+        .map(|m| {
+            let pairs: Vec<String> = m
+                .iter()
+                .map(|(k, v)| format!("{k}: {}", scalar(v)))
+                .collect();
+            format!("  - {{ {} }}", pairs.join(", "))
+        })
+        .collect();
+    if let Some(at) = check {
+        lines.push(format!("  - {{ by: {LENGUA_CHECK}, at: {at} }}"));
+    }
+    (!lines.is_empty()).then(|| format!("\n{}", lines.join("\n")))
+}
+
+struct Time<'a> {
+    now: &'a str,
+    keep: bool,
+}
+
+impl Time<'_> {
+    fn at(&self, previous: Option<String>) -> String {
+        previous
+            .filter(|_| self.keep)
+            .unwrap_or_else(|| self.now.to_string())
+    }
+}
+
+fn generated_value(front: &Front, time: &Time) -> String {
+    format!(
+        "{{ by: {GENERATED_BY}, at: {} }}",
+        time.at(previous_generated(front))
+    )
+}
+
+pub(crate) fn component_page(file: &str) -> String {
+    let stem = Path::new(file)
+        .file_stem()
+        .map_or_else(|| file.to_string(), |s| s.to_string_lossy().to_string());
+    format!("components/{stem}.md")
+}
+
+fn component_name(file: &str) -> String {
+    component_page(file)
+        .trim_start_matches("components/")
+        .trim_end_matches(".md")
+        .to_string()
+}
+
+fn title_of(pages: &[Page], parts: &Parts, id: &str) -> String {
+    if let Some(page) = pages.iter().find(|p| p.id() == id) {
+        return page.title.clone();
+    }
+    parts
         .libraries
         .iter()
-        .map(|l| {
-            format!(
-                "* [{}]({}/idea.md) - {} Label: `{}`.\n",
-                l.name, l.path, l.description, l.label
-            )
-        })
-        .collect();
-    section(&mut out, "## Libraries", &libraries);
-    let components: Vec<String> = parts
-        .components
+        .find(|l| format!("{}/idea", l.path) == id)
+        .map_or_else(|| id.to_string(), |l| l.name.clone())
+}
+
+fn links_text(from: &str, parts: &Parts, groups: &[(&str, Vec<String>)]) -> String {
+    let mut lines = Vec::new();
+    for (what, links) in groups {
+        if !links.is_empty() {
+            lines.push(format!("* {what}: {}.\n", links.join(", ")));
+        }
+    }
+    if parts.vision {
+        lines.push(format!(
+            "* Vision: [vision]({}).\n",
+            okf::relative(from, "vision.md")
+        ));
+    }
+    lines.push(format!(
+        "* Index: [{}]({}).\n",
+        parts.title,
+        okf::relative(from, "index.md")
+    ));
+    format!("# Links\n\n{}", lines.concat())
+}
+
+fn idea_link(from: &str, id: &str, pages: &[Page], parts: &Parts) -> String {
+    format!(
+        "[{}]({})",
+        title_of(pages, parts, id),
+        okf::relative(from, &format!("{id}.md"))
+    )
+}
+
+fn calls_route(interface: &Interface, page: &Page, route: &Route) -> bool {
+    interface
+        .calls
         .iter()
-        .map(|(file, built, _)| {
-            format!("* [{file}]({file}) - A component built from {built}. Label: `trusted`.\n")
-        })
+        .any(|(source, called)| *source == page.source && called.contains(&route.function))
+}
+
+fn interface_groups(page: &Page, pages: &[Page], parts: &Parts) -> Vec<(&'static str, Vec<String>)> {
+    let interface = parts.interface;
+    let api = okf::relative(&page.file, "api.md");
+    let route_link = |r: &Route| format!("[`{} {}`]({api})", r.method, r.path);
+    let calls: Vec<String> = interface
+        .routes
+        .iter()
+        .filter(|r| calls_route(interface, page, r))
+        .map(route_link)
         .collect();
-    section(&mut out, "## Components", &components);
-    let screens = of(IdeaKind::Screen);
-    if !screens.is_empty() {
-        out.push_str("\n# Front end\n");
-        section(&mut out, "## Screens", &screens);
+    let served: Vec<&Route> = interface
+        .routes
+        .iter()
+        .filter(|r| r.served_by.contains(&page.file))
+        .collect();
+    let mut callers: Vec<String> = Vec::new();
+    for other in pages {
+        let link = idea_link(&page.file, other.id(), pages, parts);
+        if served.iter().any(|r| calls_route(interface, other, r)) && !callers.contains(&link) {
+            callers.push(link);
+        }
     }
-    if !parts.interface.routes.is_empty() {
-        section(
-            &mut out,
-            "# Interface",
-            &[format!(
-                "* [api](api.md) - {API_DESCRIPTION} Label: `{label}`.\n"
-            )],
-        );
-    }
-    let packages = parts.interface.packages;
-    let mut counts = Vec::new();
-    let crates = parts.interface.crates;
-    if !crates.is_empty() {
-        let names: Vec<String> = crates
-            .iter()
-            .map(|n| {
-                if n.ends_with("-sys") {
-                    format!("`{n}` (not pure Rust: a `-sys` crate binds a C library)")
-                } else {
-                    format!("`{n}`")
-                }
-            })
-            .collect();
-        counts.push(format!(
-            "* Crates: {} ({}).\n",
-            crates.len(),
-            names.join(", ")
-        ));
-    }
-    if !packages.is_empty() {
-        let names: Vec<String> = packages.iter().map(|(n, v)| format!("`{n}` {v}")).collect();
-        counts.push(format!(
-            "* npm packages: {} in `web/package.json` ({}), with the packages every front end has for its build and tests, pinned in `web/pnpm-lock.yaml`.\n",
-            packages.len(),
-            names.join(", ")
-        ));
-    }
-    if !parts.interface.large.is_empty() {
-        let names: Vec<String> = parts
-            .interface
-            .large
-            .iter()
-            .map(|(n, size)| format!("`{n}` ({} KiB)", size / 1024))
-            .collect();
-        counts.push(format!(
-            "* Large npm packages, over 1 MiB in pnpm's copy: {}.\n",
-            names.join(", ")
-        ));
-    }
-    section(&mut out, "# Dependencies", &counts);
-    out
+    vec![
+        ("Calls", calls),
+        ("Serves", served.iter().map(|r| route_link(r)).collect()),
+        ("Called by", callers),
+    ]
 }
 
-pub(crate) const API_DESCRIPTION: &str = "The routes of the back end that the front end calls, with the shapes of their requests and answers.";
+pub(crate) const API_DESCRIPTION: &str =
+    "The routes of the back end that the front end calls, with the shapes of their requests and answers.";
 
-fn section(out: &mut String, heading: &str, lines: &[String]) {
-    if !lines.is_empty() {
-        out.push('\n');
-        out.push_str(heading);
-        out.push_str("\n\n");
-        out.push_str(&lines.concat());
-    }
-}
-
-fn idea_link(pages: &[Page], file: &str) -> String {
+fn file_link(pages: &[Page], file: &str) -> String {
     let title = pages
         .iter()
         .find(|p| p.file == file)
         .map_or(file, |p| p.title.as_str());
     format!("[{title}]({file})")
-}
-
-fn callers<'a>(pages: &'a [Page], interface: &Interface, function: &str) -> Vec<&'a Page> {
-    pages
-        .iter()
-        .filter(|p| {
-            interface
-                .calls
-                .iter()
-                .any(|(source, called)| *source == p.source && called.iter().any(|c| c == function))
-        })
-        .collect()
 }
 
 pub(crate) fn api_text(pages: &[Page], label: &str, interface: &Interface) -> String {
@@ -276,13 +333,10 @@ pub(crate) fn api_text(pages: &[Page], label: &str, interface: &Interface) -> St
             .body
             .as_ref()
             .map_or("none".to_string(), |b| format!("`{}`", render(b)));
-        let served: Vec<String> = route
-            .served_by
+        let served: Vec<String> = route.served_by.iter().map(|f| file_link(pages, f)).collect();
+        let called: Vec<String> = pages
             .iter()
-            .map(|f| idea_link(pages, f))
-            .collect();
-        let called: Vec<String> = callers(pages, interface, &route.function)
-            .iter()
+            .filter(|p| calls_route(interface, p, route))
             .map(|p| format!("[{}]({})", p.title, p.file))
             .collect();
         let called = if called.is_empty() {
@@ -299,63 +353,208 @@ pub(crate) fn api_text(pages: &[Page], label: &str, interface: &Interface) -> St
             served.join(", ")
         );
     }
+    out.push_str("\n# Links\n\n* Index: [index](index.md).\n");
     out
 }
 
-pub(crate) fn links_text(
+fn page_text(
     page: &Page,
-    pages: &[Page],
     used_by: &[String],
-    interface: &Interface,
+    label: &str,
+    (pages, parts): (&[Page], &Parts),
+    time: &Time,
 ) -> String {
-    let mut lines: Vec<String> = Vec::new();
-    for used in &page.uses {
-        lines.push(format!(
-            "* Uses {}.\n",
-            idea_link(pages, &format!("{used}.md"))
-        ));
+    let source_hash = page
+        .source_hash
+        .clone()
+        .unwrap_or_else(|| "none".to_string());
+    let mut keys = vec![
+        ("type", type_name(page.kind, parts.shape).to_string()),
+        ("description", quoted(&page.description)),
+        ("module", page.name.clone()),
+        ("source", page.source.clone()),
+        ("uses", flow(&page.uses)),
+        ("used_by", flow(used_by)),
+        ("label", label.to_string()),
+        ("idea_sha256", page.idea_hash.clone()),
+        ("source_sha256", source_hash),
+    ];
+    keys.extend(page.generated.iter().map(|s| (s.key, s.hash.clone())));
+    keys.push(("generated", generated_value(&page.front, time)));
+    let confirmed = label != Label::Unchecked.name();
+    let check = confirmed.then(|| time.at(previous_check(&page.front)));
+    if let Some(value) = verified_value(&page.front, check.as_deref()) {
+        keys.push(("verified", value));
     }
-    for user in used_by {
-        lines.push(format!(
-            "* Used by {}.\n",
-            idea_link(pages, &format!("{user}.md"))
-        ));
-    }
-    for route in interface.routes {
-        let name = format!("`{} {}`", route.method, route.path);
-        let calls = interface
-            .calls
+    let absent = [
+        ("title", scalar(&page.title)),
+        ("status", "draft".to_string()),
+    ];
+    let link = |id: &String| idea_link(&page.file, id, pages, parts);
+    let mut groups = vec![
+        ("Uses", page.uses.iter().map(link).collect::<Vec<String>>()),
+        ("Used by", used_by.iter().map(link).collect()),
+    ];
+    if page.kind == IdeaKind::Program {
+        let components = parts
+            .components
             .iter()
-            .any(|(s, c)| *s == page.source && c.contains(&route.function));
-        if calls {
-            let served: Vec<String> = route
-                .served_by
-                .iter()
-                .map(|f| idea_link(pages, f))
-                .collect();
-            lines.push(format!(
-                "* Calls [{name}](api.md), served by {}.\n",
-                served.join(", ")
-            ));
-        }
-        if route.served_by.contains(&page.file) {
-            let called: Vec<String> = callers(pages, interface, &route.function)
-                .iter()
-                .map(|p| format!("[{}]({})", p.title, p.file))
-                .collect();
-            let by = if called.is_empty() {
-                String::new()
-            } else {
-                format!(", called by {}", called.join(", "))
-            };
-            lines.push(format!("* Serves [{name}](api.md){by}.\n"));
-        }
+            .map(|(file, _, _)| {
+                format!(
+                    "[{}]({})",
+                    component_name(file),
+                    okf::relative(&page.file, &component_page(file))
+                )
+            })
+            .collect();
+        groups.push(("Components", components));
     }
-    let front = !interface.routes.is_empty() || pages.iter().any(|p| p.kind == IdeaKind::Screen);
-    if lines.is_empty() || !front {
-        return String::new();
+    groups.extend(interface_groups(page, pages, parts));
+    format!(
+        "{}\n{}",
+        page.front.render(&keys, &absent),
+        links_text(&page.file, parts, &groups)
+    )
+}
+
+fn render_without(front: &Front, keys: &[(&str, String)], absent: &[(&str, String)]) -> String {
+    let mut kept = front.clone();
+    kept.entries
+        .retain(|e| !keys.iter().any(|(key, _)| *key == e.key));
+    kept.render(keys, absent)
+}
+
+fn component_text(
+    folder: &Path,
+    (file, built): (&str, &str),
+    pages: &[Page],
+    parts: &Parts,
+    time: &Time,
+) -> String {
+    let page = component_page(file);
+    let old = fs::read_to_string(folder.join(&page))
+        .unwrap_or_default()
+        .replace("\r\n", "\n");
+    let mut sink = Sink::new(&page);
+    let mut front = frontmatter::split(&old, &mut sink);
+    front.body = format!(
+        "# Component\n\nThe program uses the component `{file}`, built from {built}. lengua did not build it and did not check its code, so its label is `trusted`, and it runs under the grants of the program.\n"
+    );
+    let keys = [
+        ("type", "lengua Component".to_string()),
+        (
+            "description",
+            quoted(&format!("A component built from {built}.")),
+        ),
+        ("resource", format!("/{file}")),
+        ("label", "trusted".to_string()),
+        ("generated", generated_value(&front, time)),
+    ];
+    let absent = [
+        ("title", scalar(&component_name(file))),
+        ("status", "draft".to_string()),
+    ];
+    let user = pages
+        .first()
+        .map_or_default(|top| vec![idea_link(&page, top.id(), pages, parts)]);
+    format!(
+        "{}\n{}",
+        render_without(&front, &keys, &absent),
+        links_text(&page, parts, &[("Used by", user)])
+    )
+}
+
+fn index_line(title: &str, link: &str, description: &str, label: &str) -> String {
+    format!("* [{title}]({link}) - {description} Label: `{label}`.\n")
+}
+
+pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
+    let mut out = String::from("---\nokf_version: \"0.2\"\n---\n");
+    let of = |kind: IdeaKind| -> Vec<String> {
+        pages
+            .iter()
+            .filter(|p| p.kind == kind)
+            .map(|p| index_line(&p.title, &p.file, &p.description, label))
+            .collect()
+    };
+    out.push_str("\n# Back end\n");
+    section(&mut out, "## Program", &of(IdeaKind::Program));
+    section(&mut out, "## Modules", &of(IdeaKind::Module));
+    let libraries: Vec<String> = parts
+        .libraries
+        .iter()
+        .map(|l| {
+            index_line(
+                &l.name,
+                &format!("{}/idea.md", l.path),
+                &l.description,
+                &l.label,
+            )
+        })
+        .collect();
+    section(&mut out, "## Libraries", &libraries);
+    let components: Vec<String> = parts
+        .components
+        .iter()
+        .map(|(file, built, _)| {
+            index_line(
+                &component_name(file),
+                &component_page(file),
+                &format!("A component built from {built}."),
+                "trusted",
+            )
+        })
+        .collect();
+    section(&mut out, "## Components", &components);
+    section(&mut out, "## Crates", &parts.crates.lines());
+    let screens = of(IdeaKind::Screen);
+    if !screens.is_empty() {
+        out.push_str("\n# Front end\n");
+        section(&mut out, "## Screens", &screens);
+        section(&mut out, "## npm packages", &package_lines(parts.interface));
     }
-    format!("\n# Links\n\n{}", lines.concat())
+    if !parts.interface.routes.is_empty() {
+        section(
+            &mut out,
+            "# Interface",
+            &[index_line("api", "api.md", API_DESCRIPTION, label)],
+        );
+    }
+    out
+}
+
+fn package_lines(interface: &Interface) -> Vec<String> {
+    let mut lines = Vec::new();
+    let packages = interface.packages;
+    if !packages.is_empty() {
+        let names: Vec<String> = packages.iter().map(|(n, v)| format!("`{n}` {v}")).collect();
+        lines.push(format!(
+            "* {} in `web/package.json` ({}), with the packages every front end has for its build and tests, all pinned in `web/pnpm-lock.yaml`.\n",
+            packages.len(),
+            names.join(", ")
+        ));
+    }
+    if !interface.large.is_empty() {
+        let names: Vec<String> = interface
+            .large
+            .iter()
+            .map(|(n, size)| format!("`{n}` ({} KiB)", size / 1024))
+            .collect();
+        lines.push(format!(
+            "* Large, over 1 MiB in pnpm's copy: {}.\n",
+            names.join(", ")
+        ));
+    }
+    lines
+}
+
+fn section(out: &mut String, heading: &str, lines: &[String]) {
+    if !lines.is_empty() {
+        out.push('\n');
+        out.push_str(heading);
+        out.push_str("\n\n");
+        out.push_str(&lines.concat());
+    }
 }
 
 fn change(previous: Option<&str>, now: Option<&str>) -> Option<&'static str> {
@@ -410,13 +609,8 @@ pub(crate) fn log_entry(pages: &[Page], now: u64, trust: &Trust) -> (String, Vec
             }
         }
     }
-    let nothing = if lines.is_empty() {
-        "; nothing changed"
-    } else {
-        ""
-    };
     let head = format!(
-        "* **Check** at {}: no problems; {}{nothing}.\n",
+        "* **Check** at {}: no problems; {}.\n",
         time_text(now),
         trust.text()
     );
@@ -450,16 +644,12 @@ pub(crate) fn log_text(previous: &str, entry: &str, now: u64) -> String {
     }
 }
 
-fn write_if_changed(
-    folder: &Path,
-    file: &str,
-    text: &str,
-    written: &mut Vec<String>,
-) -> Result<(), Finding> {
+fn differs(folder: &Path, file: &str, text: &str) -> bool {
+    !fs::read_to_string(folder.join(file)).is_ok_and(|old| old == text)
+}
+
+fn write_file(folder: &Path, file: &str, text: &str) -> Result<(), Finding> {
     let path = folder.join(file);
-    if fs::read_to_string(&path).is_ok_and(|old| old == text) {
-        return Ok(());
-    }
     let parent = path.parent().map_or(Ok(()), fs::create_dir_all);
     parent
         .and_then(|()| fs::write(&path, text))
@@ -468,9 +658,7 @@ fn write_if_changed(
             line: 1,
             code: "wiki-write",
             message: format!("lengua could not write the file: {e}"),
-        })?;
-    written.push(file.to_string());
-    Ok(())
+        })
 }
 
 pub(crate) struct Written {
@@ -479,12 +667,59 @@ pub(crate) struct Written {
     pub findings: Vec<Finding>,
 }
 
+fn steady(
+    folder: &Path,
+    file: String,
+    now: &str,
+    make: impl Fn(&Time) -> String,
+) -> (String, String) {
+    let kept = make(&Time { now, keep: true });
+    if differs(folder, &file, &kept) {
+        let fresh = make(&Time { now, keep: false });
+        (file, fresh)
+    } else {
+        (file, kept)
+    }
+}
+
+fn texts(
+    folder: &Path,
+    pages: &[Page],
+    generated: &[(String, String)],
+    label: &str,
+    parts: &Parts,
+    now: &str,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for page in pages {
+        let used_by: Vec<String> = pages
+            .iter()
+            .filter(|other| other.uses.iter().any(|u| u == page.id()))
+            .map(|other| other.id().to_string())
+            .collect();
+        out.push(steady(folder, page.file.clone(), now, |time| {
+            page_text(page, &used_by, label, (pages, parts), time)
+        }));
+    }
+    for (file, built, _) in parts.components {
+        out.push(steady(folder, component_page(file), now, |time| {
+            component_text(folder, (file, built), pages, parts, time)
+        }));
+    }
+    out.push(("index.md".to_string(), index_text(pages, label, parts)));
+    if !parts.interface.routes.is_empty() {
+        out.push(("api.md".to_string(), api_text(pages, label, parts.interface)));
+    }
+    out.extend(generated.iter().cloned());
+    out
+}
+
 pub(crate) fn write(
     folder: &Path,
     pages: &[Page],
     generated: &[(String, String)],
     now: u64,
-    trust: &Trust,
+    trust: Option<&Trust>,
     parts: &Parts,
 ) -> Written {
     let mut out = Written {
@@ -492,37 +727,46 @@ pub(crate) fn write(
         notes: Vec::new(),
         findings: Vec::new(),
     };
-    let label = trust.label.name();
-    let (entry, notes) = log_entry(pages, now, trust);
+    let stamp = iso(now);
+    let unchecked = Label::Unchecked.name();
+    let known = [unchecked, Label::Tested.name(), Label::Checked.name()];
+    let previous = pages
+        .first()
+        .and_then(|p| p.front.value("label"))
+        .filter(|l| known.contains(l))
+        .unwrap_or(unchecked);
+    let label = trust.map_or(previous, |t| t.label.name());
+    let mut planned = texts(folder, pages, generated, label, parts, &stamp);
+    if !planned
+        .iter()
+        .any(|(file, text)| differs(folder, file, text))
+    {
+        return out;
+    }
+    if trust.is_none() && label != unchecked {
+        planned = texts(folder, pages, generated, unchecked, parts, &stamp);
+    }
+    let shown = trust.copied().unwrap_or_default();
+    let (entry, notes) = log_entry(pages, now, &shown);
     out.notes = notes;
-    let mut texts: Vec<(String, String)> = Vec::new();
-    for page in pages {
-        let used_by: Vec<String> = pages
-            .iter()
-            .filter(|other| other.uses.iter().any(|u| u == page.id()))
-            .map(|other| other.id().to_string())
-            .collect();
-        texts.push((
-            page.file.clone(),
-            page_text(page, &used_by, label, parts.shape)
-                + &links_text(page, pages, &used_by, parts.interface),
-        ));
-    }
-    texts.push(("index.md".to_string(), index_text(pages, label, parts)));
-    if !parts.interface.routes.is_empty() {
-        texts.push((
-            "api.md".to_string(),
-            api_text(pages, label, parts.interface),
-        ));
-    }
-    let previous = fs::read_to_string(folder.join("log.md"))
+    let previous_log = fs::read_to_string(folder.join("log.md"))
         .unwrap_or_default()
         .replace("\r\n", "\n");
-    texts.push(("log.md".to_string(), log_text(&previous, &entry, now)));
-    texts.extend(generated.iter().cloned());
-    for (file, text) in texts {
-        if let Err(finding) = write_if_changed(folder, &file, &text, &mut out.files) {
-            out.findings.push(finding);
+    let at = planned
+        .iter()
+        .position(|(file, _)| file == "index.md")
+        .map_or(planned.len(), |i| i + 1);
+    planned.insert(
+        at,
+        ("log.md".to_string(), log_text(&previous_log, &entry, now)),
+    );
+    for (file, text) in planned {
+        if !differs(folder, &file, &text) {
+            continue;
+        }
+        match write_file(folder, &file, &text) {
+            Ok(()) => out.files.push(file),
+            Err(finding) => out.findings.push(finding),
         }
     }
     out
@@ -530,7 +774,7 @@ pub(crate) fn write(
 
 #[cfg(test)]
 mod tests {
-    use super::{date, log_text, quoted, time_text};
+    use super::{date, iso, log_text, quoted, scalar, time_text, without_links};
 
     const NOV_13_2026: u64 = 1_794_528_000;
 
@@ -540,6 +784,7 @@ mod tests {
         assert_eq!(date(951_782_400), (2000, 2, 29));
         assert_eq!(date(NOV_13_2026), (2026, 11, 13));
         assert_eq!(time_text(NOV_13_2026 + 3661), "01:01:01Z");
+        assert_eq!(iso(NOV_13_2026 + 3661), "2026-11-13T01:01:01Z");
     }
 
     #[test]
@@ -571,5 +816,22 @@ mod tests {
     #[test]
     fn descriptions_are_quoted_for_yaml() {
         assert_eq!(quoted("a \"b\" \\ c"), "\"a \\\"b\\\" \\\\ c\"");
+        assert_eq!(scalar("words"), "words");
+        assert_eq!(scalar("a, b"), "\"a, b\"");
+    }
+
+    #[test]
+    fn the_links_section_is_left_out_of_the_idea() {
+        let body = "# Purpose\n\nText.\n\n# Structure\n\n- `main`: runs.\n\n# Links\n\n* Index: [a](index.md).\n";
+        assert_eq!(
+            without_links(body),
+            "# Purpose\n\nText.\n\n# Structure\n\n- `main`: runs.\n"
+        );
+        let fenced = "# Purpose\n\n```\n# Links\n```\n";
+        assert_eq!(without_links(fenced), fenced);
+        assert_eq!(
+            without_links("# Purpose\n\nText.\n\n\n"),
+            "# Purpose\n\nText.\n"
+        );
     }
 }

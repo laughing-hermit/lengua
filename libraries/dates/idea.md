@@ -1,3 +1,22 @@
+---
+type: lengua Library
+description: "The library works with civil dates of the Gregorian calendar and with times in UTC."
+module: main
+source: src/main.rs
+uses: []
+used_by: []
+label: checked
+idea_sha256: 6bf4affe4810658529224033fb0aaf9e5f562f90ea157b8def8e839fa39cc4f3
+source_sha256: 0a1f94f97b2541cb43385d4d7ae853ef66453b618dcfb5d92a765384e045ce1b
+cargo_sha256: e02f2f994f69389d6f0117c36886b367404964e1ffc985288afb298df5e8ff68
+world_sha256: 43e5e032ac9bee5f73ecde94bf9f71093003bcc169f5f7d6e9e2310be5b0b626
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T22:53:55Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T22:53:55Z }
+title: dates
+status: draft
+---
+
 # Purpose
 
 The library works with civil dates of the Gregorian calendar and with times in UTC. It counts the
@@ -266,3 +285,7 @@ Then it gives the seconds from 1970-01-01T00:00:00Z, or the time as text.
 - `parse_timestamp`: reads a time in the form `YYYY-MM-DDTHH:MM:SSZ` as seconds from
   1970-01-01T00:00:00Z.
 - `format_timestamp`: writes seconds from 1970-01-01T00:00:00Z in the form `YYYY-MM-DDTHH:MM:SSZ`.
+
+# Links
+
+* Index: [dates](index.md).

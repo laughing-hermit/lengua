@@ -1,3 +1,20 @@
+---
+type: lengua Module
+description: "The module reads a basket from the query of a request, as pairs of an item and a count, and gives its net sum."
+module: basket
+source: src/basket.rs
+uses: []
+used_by: [idea]
+label: checked
+idea_sha256: feeaa416d6dff53d79533b40cfab4856e370ecb6fe9842a109acf3303a8d2e37
+source_sha256: a482051b1caefb29990ede607aeb98b0c7c75a70af22c70a9ffff680ac8eb77c
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-13T23:02:53Z }
+verified:
+  - { by: process:lengua-check, at: 2026-11-13T23:02:53Z }
+title: basket
+status: draft
+---
+
 # Purpose
 
 The module reads a basket from the query of a request, as pairs of an item and a count, and
@@ -57,3 +74,8 @@ Then the answer is 400 with the error `no item soap`.
 
 - `parse_query`: reads the pairs of the query as items and counts, or gives an error.
 - `net`: gives the sum of the prices times the counts, or an overflow.
+
+# Links
+
+* Used by: [shop](../idea.md).
+* Index: [shop](../index.md).
