@@ -10,9 +10,9 @@ idea_sha256: 4eb8c3deb062213142c6d0889f86ffb10f66f1854be18f49c85aab6a632c272e
 source_sha256: 7c6f4e0945857852286e1af6c1c451cdd1931188a2693a7399c8f324670499c1
 cargo_sha256: b49c671100765110d894dae7a4f6de7666fc4c5405230839ce0560d0164bbad3
 world_sha256: 0a7313a3dd0aa5c41e90b244f039886104d47ce35544350dbfa738da23ba0d2c
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T13:27:58Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T15:19:46Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T13:27:58Z }
+  - { by: process:lengua-check, at: 2026-11-14T15:19:46Z }
 title: greedy
 status: draft
 ---

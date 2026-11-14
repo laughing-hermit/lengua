@@ -10,9 +10,9 @@ idea_sha256: 7c82c772c7ac7710ca211f5dd854639d078038c3606d84db0784ee5cfda8eae2
 source_sha256: ab9840bfc067a7fabaf52d7e2dd5d1ee08ded2741956c7264263ba7545a860d7
 cargo_sha256: d919a99ed857d895887deb51378de268f355145ba0821ba5f89966e73711b0f7
 world_sha256: cbdc5c096384a41f695cc82d201f1ef28c2d1270d259ddd0014340d04e0b359e
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T13:27:44Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T15:19:33Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T13:27:44Z }
+  - { by: process:lengua-check, at: 2026-11-14T15:19:33Z }
 title: files
 status: draft
 ---

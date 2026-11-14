@@ -10,9 +10,9 @@ idea_sha256: 6de32c9b2b4463dab867da9b9c30f2638a936a30e00c516da32ea4ddb76f9640
 source_sha256: 25e2f5222330b87373e03f87e859b22c7ac993a9749041af007aed87e655128a
 cargo_sha256: b890b840c9bd3eabcc1b59fdfa73e6f4d6efceead9a1f01ee313da4f5a1f6ac4
 world_sha256: 6aa2f03d29a6dae284b24b3801913f715788aad0e8f74739ae1fde5efab7af5d
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T13:40:53Z }
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T15:32:16Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T13:40:53Z }
+  - { by: process:lengua-check, at: 2026-11-14T15:32:16Z }
 title: shop
 status: draft
 ---

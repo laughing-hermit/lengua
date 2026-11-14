@@ -10,10 +10,10 @@ idea_sha256: ce8028a930da2bf0df4453774ed2040cebc231baacdb87ed549d49018bb41ffe
 source_sha256: 8fe52be33c3a9f52bd888c7c600e4f85a0a6d1974546c7e85536041b6f86ce83
 cargo_sha256: dbb9541af7745d495a909e05bec141a6f7705ead1d094829219d6d1709cbc5ff
 world_sha256: e1fa39b4514b921fb087df71d46f9bda8c247415e4e9fee0409382456311ad86
-web_sha256: 8923afea4e11e30318ff68513e9b7cd9ea930bba05c0cad4b1a321cb3d93c9c3
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T13:34:47Z }
+web_sha256: c3a1a43bde7ed2e7f894e1806dab079c896ca9284da297e5ecaa46dfa856a77d
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T15:26:19Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T13:34:47Z }
+  - { by: process:lengua-check, at: 2026-11-14T15:26:19Z }
 title: desk
 status: draft
 ---

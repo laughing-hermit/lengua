@@ -10,10 +10,10 @@ idea_sha256: 21d14e833a6203724731c682f621b90519a9f4eb96f4f6cf5526118c9a262df8
 source_sha256: 6749f59b9dcf23e799e9387e2ac6d03160ff9489971cf347d1872a40f04f858d
 cargo_sha256: a71e617ef16a3533e8b7ccc811be90a821436cd6b0c75e52e9bc9f8971760d96
 world_sha256: 432ab60b895088c9bc0206a29ba4e132e6b86715dbabb9ceab8b2b6adf271f30
-web_sha256: b1b4e9d43f7bd29c074e0acbaea480b13567e0fb00ff3de8d3b10aad0c5bdde2
-generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T13:39:46Z }
+web_sha256: f3cdf0bdbaa429c2a871f17b369f20aa23ef3761161471139caa07b465a34af7
+generated: { by: lengua-mcp/0.1.0, at: 2026-11-14T15:31:10Z }
 verified:
-  - { by: process:lengua-check, at: 2026-11-14T13:39:46Z }
+  - { by: process:lengua-check, at: 2026-11-14T15:31:10Z }
 title: notes
 status: draft
 ---
