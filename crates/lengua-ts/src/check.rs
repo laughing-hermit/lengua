@@ -162,6 +162,7 @@ fn counter(it: &ForStatement) -> Option<String> {
 fn allowed(source: &str, packages: &[String]) -> bool {
     FIXED_IMPORTS.contains(&source)
         || source.starts_with("@/components/ui/")
+        || source.starts_with("@/lib/wasm/")
         || source.starts_with("@/screens/")
         || packages
             .iter()

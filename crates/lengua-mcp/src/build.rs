@@ -326,7 +326,8 @@ impl Builds {
             )];
             return status;
         }
-        if build.front.is_some() && !doctor.front_ok() {
+        let browser = build.front.as_ref().is_some_and(|f| !f.browser.is_empty());
+        if build.front.is_some() && (!doctor.front_ok() || (browser && !doctor.browser_ok())) {
             let mut status = Status::new(Stage::BuildFailed);
             status.problems = vec![problem(
                 "web/package.json",

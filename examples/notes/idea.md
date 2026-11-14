@@ -1,14 +1,15 @@
 # Purpose
 
 The program is a small web application for notes. Its back end is an HTTP server in Rust that
-gives the notes as JSON. The server adds a note when its title is good. It also makes a summary
-of a note for the AI part of the screen. The front end has three screens in TypeScript with
-`Next.js`: `home`, `note` and `write`. The server carries the front end and serves it, so the
-application is one WebAssembly file.
+gives the notes as JSON. The server adds a note when the library `titles` accepts its title. It
+also makes a summary of a note for the AI part of the screen. The front end has three screens in
+TypeScript with `Next.js`: `home`, `note` and `write`. The server carries the front end and
+serves it, so the application is one WebAssembly file.
 
-The summary is a fixed answer of the server until `lengua` has the grant for an AI model. The
-notes are fixed until `lengua` has the grant for storage. So the server checks a new note and
-gives it back, but it does not keep it.
+The screen `write` checks a title in the browser with the same library, so the browser and the
+server give the same answer. The summary is a fixed answer of the server until `lengua` has the
+grant for an AI model. The notes are fixed until `lengua` has the grant for storage. So the
+server checks a new note and gives it back, but it does not keep it.
 
 # Behaviours
 
@@ -107,6 +108,7 @@ Then the answer is 200 with the page of the screen `home`.
 - Time: 5 s
 - Modules: `notes`, `ui/home`, `ui/note`, `ui/write`
 - Uses crate: `wasip2` 2.0.1, for the interface of the server to its host, the HTTP world of `WASI`
+- Uses: `../titles`
 - Route: `GET /api/notes`
 - Route: `GET /api/notes/{id}`
 - Route: `POST /api/notes`

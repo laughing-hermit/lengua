@@ -2,7 +2,6 @@ const NOTES: [(u32, &str, &str); 2] = [
     (1, "Milk", "Buy two bottles."),
     (2, "Call", "Call the shop at noon."),
 ];
-const LONGEST_TITLE: usize = 40;
 
 pub fn route(method: &str, path: &str, body: &str) -> (u16, String) {
     debug_assert!(path.starts_with("/api/"));
@@ -45,11 +44,9 @@ fn add(body: &str) -> (u16, String) {
     debug_assert!(body.len() < 1 << 20);
     let title = field(body, "title").unwrap_or_default();
     let text = field(body, "text").unwrap_or_default();
-    if title.is_empty() {
-        return (400, error("A note has a title."));
-    }
-    if title.chars().count() > LONGEST_TITLE {
-        return (400, error("A title has 40 characters or fewer."));
+    let problem = titles::title_error(&title);
+    if !problem.is_empty() {
+        return (400, error(&problem));
     }
     let next = u32::try_from(NOTES.len())
         .unwrap_or(u32::MAX)

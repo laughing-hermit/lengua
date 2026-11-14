@@ -8,7 +8,7 @@ use crate::generate::{collect_skipping, held};
 use crate::idea::IdeaKind;
 use crate::types::{self, Ty, merge, quoted, render};
 use crate::wiki::{Page, Stamp};
-use crate::{Finding, json, sha256};
+use crate::{Finding, Library, json, sha256};
 
 pub const SUM: &str = "web/lengua.sum";
 pub const CLIENT: &str = "web/lib/lengua.ts";
@@ -93,6 +93,73 @@ pub struct Front {
     pub generated: Vec<String>,
     pub packages: Vec<(String, String)>,
     pub runs: Vec<ScreenRun>,
+    pub browser: Vec<Browser>,
+}
+
+const BROWSER_TYPES: [&str; 11] = [
+    "&str", "String", "bool", "i8", "i16", "i32", "u8", "u16", "u32", "f32", "f64",
+];
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BrowserFn {
+    pub name: String,
+    pub params: Vec<(String, String)>,
+    pub output: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Browser {
+    pub name: String,
+    pub crate_name: String,
+    pub path: String,
+    pub functions: Vec<BrowserFn>,
+}
+
+fn signature(text: &str) -> Option<BrowserFn> {
+    let (name, rest) = text.split_once('(')?;
+    let (params, rest) = rest.split_once(')')?;
+    let output = rest.trim().strip_prefix("->")?.trim().to_string();
+    let mut found = Vec::new();
+    for part in params.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let (param, ty) = part.split_once(':')?;
+        found.push((param.trim().to_string(), ty.trim().to_string()));
+    }
+    let output_ok = output != "&str" && BROWSER_TYPES.contains(&output.as_str());
+    let params_ok = found
+        .iter()
+        .all(|(_, ty)| BROWSER_TYPES.contains(&ty.as_str()));
+    (output_ok && params_ok).then(|| BrowserFn {
+        name: name.trim().to_string(),
+        params: found,
+        output,
+    })
+}
+
+#[must_use]
+pub fn browser_functions(text: &str) -> Vec<BrowserFn> {
+    let flat: String = text
+        .lines()
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(" ");
+    flat.split("pub fn ")
+        .skip(1)
+        .filter_map(|part| signature(part.split('{').next().unwrap_or("")))
+        .collect()
+}
+
+fn browsers(folder: &Path, libraries: &[Library]) -> Vec<Browser> {
+    libraries
+        .iter()
+        .map(|l| Browser {
+            name: l.name.clone(),
+            crate_name: l.crate_name.clone(),
+            path: l.path.clone(),
+            functions: fs::read_to_string(folder.join(&l.path).join("src/main.rs"))
+                .map(|t| browser_functions(&t))
+                .unwrap_or_default(),
+        })
+        .collect()
 }
 
 pub(crate) struct WebPlan {
@@ -633,7 +700,7 @@ pub(crate) fn plan(
     title: &str,
     pages: &[Page],
     constraints: &[Constraints],
-    (routes, tests): (&[Route], &[Test]),
+    (routes, tests, libraries): (&[Route], &[Test], &[Library]),
     findings: &mut Vec<Finding>,
 ) -> Option<WebPlan> {
     let screens: Vec<String> = pages
@@ -683,6 +750,7 @@ pub(crate) fn plan(
             generated,
             packages: dependencies,
             runs: screen_runs(tests),
+            browser: browsers(folder, libraries),
         },
     })
 }
@@ -690,6 +758,17 @@ pub(crate) fn plan(
 #[cfg(test)]
 mod tests {
     use super::{component_name, function_name, matches, screen_route};
+
+    #[test]
+    fn the_browser_functions_are_read_from_the_library() {
+        let found = super::browser_functions(
+            "#[must_use]\npub fn title_error(title: &str) -> String {\n}\npub fn many(a: &[u8]) -> usize {}\nfn private(a: &str) -> String {}\npub fn add(\n    a: i32,\n    b: i32,\n) -> i32 {}\n",
+        );
+        let names: Vec<&str> = found.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["title_error", "add"]);
+        assert_eq!(found[1].params.len(), 2);
+        assert_eq!(found[0].output, "String");
+    }
 
     #[test]
     fn names_come_from_routes_and_screens() {

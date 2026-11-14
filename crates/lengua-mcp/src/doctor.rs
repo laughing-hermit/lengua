@@ -15,6 +15,7 @@ pub(crate) struct Item {
 pub(crate) struct Doctor {
     pub items: Vec<Item>,
     pub front: Vec<Item>,
+    pub browser: Vec<Item>,
 }
 
 fn output(program: &str, args: &[&str], folder: &Path) -> Option<String> {
@@ -119,6 +120,22 @@ fn front_items(folder: &Path) -> Vec<Item> {
     ]
 }
 
+fn browser_items(folder: &Path) -> Vec<Item> {
+    let wanted = format!("wasm-bindgen {}", crate::front::WASM_BINDGEN);
+    let found = tool_version("wasm-bindgen", folder);
+    let fix = (found.as_deref().map(str::trim) != Some(wanted.as_str())).then(|| {
+        format!(
+            "cargo install wasm-bindgen-cli --version {} --locked",
+            crate::front::WASM_BINDGEN
+        )
+    });
+    vec![Item {
+        name: format!("{wanted}, for a library in the browser"),
+        found,
+        fix,
+    }]
+}
+
 pub(crate) fn examine(folder: &Path) -> Doctor {
     let mut items = Vec::new();
     let cargo = output("cargo", &["--version"], folder);
@@ -165,6 +182,7 @@ pub(crate) fn examine(folder: &Path) -> Doctor {
     Doctor {
         items,
         front: front_items(folder),
+        browser: browser_items(folder),
     }
 }
 
@@ -179,6 +197,10 @@ impl Doctor {
 
     pub(crate) fn ok(&self) -> bool {
         self.items.iter().all(|i| i.fix.is_none())
+    }
+
+    pub(crate) fn browser_ok(&self) -> bool {
+        self.browser.iter().all(|i| i.fix.is_none())
     }
 
     pub(crate) fn front_ok(&self) -> bool {
@@ -196,6 +218,7 @@ impl Doctor {
     pub(crate) fn text(&self) -> String {
         let mut lines: Vec<String> = self.items.iter().map(Self::line).collect();
         lines.extend(self.front.iter().map(Self::line));
+        lines.extend(self.browser.iter().map(Self::line));
         if !self.front_ok() {
             lines.push(
                 "lengua can't build a front end (screens) until Node.js and pnpm are installed."
@@ -229,6 +252,7 @@ impl Doctor {
         let lines: Vec<String> = self
             .front
             .iter()
+            .chain(&self.browser)
             .filter(|i| i.fix.is_some())
             .map(Self::line)
             .collect();
@@ -267,6 +291,7 @@ mod tests {
                 },
             ],
             front: Vec::new(),
+            browser: Vec::new(),
         };
         assert!(!doctor.ok());
         assert_eq!(

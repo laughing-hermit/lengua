@@ -1371,9 +1371,16 @@ fn the_shop_is_one_file_of_three_modules_two_libraries_and_a_c_component() {
 }
 
 fn notes_ideas_only(test: &str) -> PathBuf {
-    let folder = example_named("notes", test);
+    let root = bundle(test, &["examples/titles", "examples/notes"]);
+    let folder = root.join("examples/notes");
     fs::remove_dir_all(folder.join("src")).expect("the Rust removed");
     folder
+}
+
+fn titles_checked(server: &mut Server, notes: &Path, base: u64) {
+    let titles = notes.parent().expect("examples").join("titles");
+    let reply = done(server, &titles, base);
+    assert_eq!(reply["label"], "checked", "{reply:#}");
 }
 
 fn read(folder: &Path, file: &str) -> String {
@@ -1384,6 +1391,7 @@ fn read(folder: &Path, file: &str) -> String {
 fn the_wiki_joins_the_screens_and_the_server_through_api_md() {
     let folder = notes_ideas_only("notes-wiki");
     let mut server = Server::start();
+    titles_checked(&mut server, &folder, 2000);
     let reply = server.check(10, &folder);
     assert_eq!(reply["ok"], true, "{reply:#}");
     assert_eq!(reply["build"]["state"], "no_code", "{reply:#}");
@@ -1419,7 +1427,8 @@ fn the_wiki_joins_the_screens_and_the_server_through_api_md() {
         "## Screens",
         "# Front end",
         "# Interface",
-        "# Dependencies",
+        "## npm packages",
+        "  * In the browser: `@/lib/wasm/titles`.\n",
         "`@json-render/react` 0.22.0",
     ] {
         assert!(index.contains(part), "{part} in {index}");
@@ -1474,6 +1483,7 @@ fn the_wiki_joins_the_screens_and_the_server_through_api_md() {
 fn a_changed_screen_and_a_changed_route_show_in_the_log_and_in_api_md() {
     let folder = notes_ideas_only("notes-wiki-changes");
     let mut server = Server::start();
+    titles_checked(&mut server, &folder, 2000);
     assert_eq!(server.check(10, &folder)["ok"], true);
     let screen = read(&folder, "web/screens/home.tsx").replace(
         "<CardTitle>Notes</CardTitle>",
@@ -1549,6 +1559,7 @@ fn typescript_that_breaks_a_rule_and_hand_edits_of_the_front_end_are_refused() {
         );
     }
     let folder = notes_ideas_only("notes-held");
+    titles_checked(&mut server, &folder, 2000);
     assert_eq!(server.check(40, &folder)["ok"], true);
     let tsconfig =
         read(&folder, "web/tsconfig.json").replace("\"strict\": true", "\"strict\": false");
@@ -1586,8 +1597,10 @@ fn typescript_that_breaks_a_rule_and_hand_edits_of_the_front_end_are_refused() {
 
 #[test]
 fn notes_is_checked_as_one_file_that_serves_its_front_end() {
-    let folder = example_named("notes", "notes");
+    let root = bundle("notes", &["examples/titles", "examples/notes"]);
+    let folder = root.join("examples/notes");
     let mut server = Server::start();
+    titles_checked(&mut server, &folder, 2000);
     let reply = done(&mut server, &folder, 10);
     assert_eq!(reply["label"], "checked", "{reply:#}");
     let tests = &reply["build"]["tests"];
@@ -1599,6 +1612,9 @@ fn notes_is_checked_as_one_file_that_serves_its_front_end() {
     let lock = read(&folder, "lengua.lock");
     for line in [
         " web/screens/home.tsx\n",
+        "\nbrowser ",
+        " target/lengua/web/lib/wasm\n",
+        " ../titles/lengua.lock\n",
         " web/pnpm-lock.yaml\n",
         " web/lib/lengua.ts\n",
         " api.md\n",

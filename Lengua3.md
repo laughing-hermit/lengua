@@ -36,7 +36,9 @@ fresh start dont be biased with past implementation").
 lengua is a full-stack framework and an AI language. The idea files are the source; the agent
 compiles them into code; the back end is Rust compiled to WebAssembly, the front end is Next.js
 in TypeScript, a desktop app is Electron around the same two; and everything is checked and
-locked by lengua. It bridges the two ecosystems that matter most for AI: Rust and TypeScript.
+locked by lengua. It bridges the two ecosystems that matter most for AI: Rust and TypeScript. The
+line is "Rust to WebAssembly for anything that can be; native Rust only for the specific parts
+that can't."
 
 In the owner's words:
 
@@ -108,6 +110,13 @@ What that means for lengua 3:
 
 ### Which part does what
 
+**The line: "Rust to WebAssembly for anything that can be; native Rust only for the specific parts
+that can't."** The line is what the work needs, not web against desktop. A web app is Next.js in the
+browser and a Rust back end compiled to WebAssembly; a desktop app is Next.js in Electron and the
+same back end. Native Rust parts, in either, are only for training or fine-tuning models, the
+heaviest GPU computation (large local models at full speed), threads sharing memory, and hardware
+with no host grant.
+
 Decided by the owner on 2026-11-13. The split between the front end and the back end, which the
 `vision` skill's principles page quotes (L11). For every idea, the skill tells the person which
 row each part of it falls into.
@@ -139,11 +148,11 @@ large model's weights are downloads of several gigabytes; training is not practi
 gets one GPU. And the WebAssembly back end has no GPU at all: WebGPU is an interface of the
 browser, and wasi-gfx is not mature. The watch list (section 10) has Memory64 and wasi-gfx.
 
-An example only, not something to build: an IDE for changing the weights of open-source language
-models. Its editors and its views of the weights are the Next.js front end (the views drawn with
-WebGPU); browsing the files, small edits and simple merges can be the back end in WebAssembly;
-fine-tuning and running the model are a native Rust part on the GPU; and the desktop app is
-Electron.
+A worked example, not something to build: a tool for open-weight models. Browsing the weights,
+visualising them (with WebGPU), editing, merging, converting, and testing the model through a
+local model server (`- Asks:`) are the Next.js front end and the WebAssembly back end; only
+training or fine-tuning is a native Rust part. As a web app it is Next.js in the browser and the
+back end in WebAssembly; as a desktop app, Next.js in Electron and the same back end.
 
 ### WebAssembly first; native only when necessary
 
@@ -244,7 +253,7 @@ section to the same list, so they can't drift apart.
 |---|---|---|---|
 | 1 | An AI language | Write the idea as the source and the only documentation; let the AI compile it to Rust for the back end and TypeScript for the front end; let the machine verify both | Trust code because an AI wrote it; document anything outside the idea |
 | 2 | Maximum interoperability | Build one file that runs on any OS and CPU, whose front end opens in any current browser and in Electron | Build per system when WebAssembly can do the job |
-| 3 | WebAssembly first | Make every back-end part WebAssembly; put shared pure logic in a lengua library that runs in the browser and on the server; do GPU work for the screen (3D, charts, effects, small to medium AI models with WebGPU, for example WebLLM) in the front end; call a cloud model or a local model server through `- Asks:` from the WebAssembly back end; declare a native Rust part only for large AI models, the fastest local inference, training or fine-tuning (Candle or Burn on CUDA or Metal), heavy compute with threads sharing memory, a device with no host grant, or the Electron shell; say for each part which row of "Which part does what" it is, and why WebGPU stops short when it does | Go native for speed, convenience, front-end GPU work, a model a server or WebGPU can run, or a crate that only builds natively when a WebAssembly path exists |
+| 3 | WebAssembly first | "Rust to WebAssembly for anything that can be; native Rust only for the specific parts that can't": make every back-end part WebAssembly; put shared pure logic in a lengua library that runs in the browser and on the server; do GPU work for the screen (3D, charts, effects, small to medium AI models with WebGPU, for example WebLLM) in the front end; call a cloud model or a local model server through `- Asks:` from the WebAssembly back end; declare a native Rust part only for large AI models, the fastest local inference, training or fine-tuning (Candle or Burn on CUDA or Metal), heavy compute with threads sharing memory, a device with no host grant, or the Electron shell; say for each part which row of "Which part does what" it is, and why WebGPU stops short when it does | Go native for speed, convenience, front-end GPU work, a model a server or WebGPU can run, or a crate that only builds natively when a WebAssembly path exists |
 | 4 | Nothing unless absolutely necessary | Use the standard library, then lengua's shared libraries, then the agent's own code; take a pure-Rust crate or an npm package only when it merits it, declared with its reason and pinned; download front-end tools only when the app needs them | Add a crate or a package to save a few hundred lines; take a crate that wraps C when a pure-Rust one exists; bundle tools an app does not use; grant access the program doesn't need |
 | 5 | Full stack, web first | Put the Next.js front end, the server, storage, logins and AI calls in the one file; keep AI keys on the back end | Split one application into separate deployables; use a Next.js feature that needs a Node server; call a model from the browser with a key |
 | 6 | The Power of 10 | Plan small functions, bounded loops, plain data, every error and promise handled, in Rust and in TypeScript | Plan recursion, unbounded loops, global state, `unwrap`, `unsafe`, `any`, casts, a floating promise |

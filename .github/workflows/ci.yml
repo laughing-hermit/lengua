@@ -125,7 +125,7 @@ jobs:
         id: lock
         run: |
           cargo test --locked -p lengua-mcp --test check the_wiki_joins_the_screens_and_the_server_through_api_md
-          d=target/tmp/lengua-mcp-notes-wiki/notes/web
+          d=target/tmp/lengua-mcp-notes-wiki/examples/notes/web
           if [ -f examples/notes/web/pnpm-lock.yaml ]; then
             cp examples/notes/web/pnpm-lock.yaml "$d/pnpm-lock.yaml"
           fi
@@ -217,6 +217,12 @@ jobs:
           npm install --global pnpm@12.18.0
           node --version
           pnpm --version
+      - name: wasm-bindgen-cli, the version lengua's browser libraries name
+        env:
+          RUSTFLAGS: ""
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.130 --locked
+          wasm-bindgen --version
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked --keep-going
       - name: tests built

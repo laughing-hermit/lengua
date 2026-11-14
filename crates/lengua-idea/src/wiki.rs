@@ -492,6 +492,18 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
             )
         })
         .collect();
+    let front = pages.iter().any(|p| p.kind == IdeaKind::Screen);
+    let libraries: Vec<String> = libraries
+        .into_iter()
+        .zip(parts.libraries)
+        .map(|(line, l)| {
+            if front {
+                format!("{line}  * In the browser: `@/lib/wasm/{}`.\n", l.name)
+            } else {
+                line
+            }
+        })
+        .collect();
     section(&mut out, "## Libraries", &libraries);
     let components: Vec<String> = parts
         .components

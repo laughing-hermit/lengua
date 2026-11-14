@@ -31,6 +31,7 @@ pub use crate::generate::ASSETS;
 pub use crate::library::Library;
 pub use crate::tree::{findings as wiki_findings, write_indexes as write_wiki_indexes};
 pub use crate::web::{
+    Browser, BrowserFn, browser_functions,
     CLIENT, Front, PNPM, SUM, ScreenRun, component_name, screen_route, screen_runs,
 };
 pub use lengua_lint::{Edit, Mutant, Mutation, apply, choose};
@@ -915,6 +916,18 @@ fn conformance(
     }
 }
 
+fn component_rules(folder: &Path, top: &constraints::Constraints, findings: &mut Vec<Finding>) {
+    for (file, _, line) in &top.components {
+        if !folder.join(file).is_file() {
+            findings.push(top_finding(
+                *line,
+                "component-missing",
+                format!("the component `{file}` is not there; build it, or remove the line"),
+            ));
+        }
+    }
+}
+
 fn prepare(folder: &Path, lint: Option<WebLint>) -> Result<Prepared, Vec<Finding>> {
     if !folder.join("idea.md").is_file() {
         return Err(vec![top_finding(
@@ -951,15 +964,7 @@ fn prepare(folder: &Path, lint: Option<WebLint>) -> Result<Prepared, Vec<Finding
         purpose_rules(folder, &read, &top, shape, &mut findings);
         conformance(folder, &read.pages, &top.components, &mut findings);
     }
-    for (file, _, line) in &top.components {
-        if !folder.join(file).is_file() {
-            findings.push(top_finding(
-                *line,
-                "component-missing",
-                format!("the component `{file}` is not there; build it, or remove the line"),
-            ));
-        }
-    }
+    component_rules(folder, &top, &mut findings);
     let routes = web::routes(&top, &read.tests, &mut findings);
     if folder.join("src/main.rs").is_file() {
         findings.extend(rust::lint(
@@ -991,7 +996,7 @@ fn prepare(folder: &Path, lint: Option<WebLint>) -> Result<Prepared, Vec<Finding
         &title,
         &read.pages,
         &read.constraints,
-        (&routes, &read.tests),
+        (&routes, &read.tests, &libraries),
         &mut findings,
     );
     if let Some(found) = &web {

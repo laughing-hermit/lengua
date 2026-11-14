@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lengua_idea::{ASSETS, Front, Mutant};
+use lengua_idea::{ASSETS, Browser, Front, Mutant};
 use rmcp::serde_json::{self, Value};
 
 use crate::build::{Problem, Stage, Worker, problem, tool};
@@ -372,6 +372,123 @@ fn assets(folder: &Path, stage: &Path) -> Result<(usize, u64), Failure> {
     Ok((files.len(), files.iter().map(|(_, size)| size).sum()))
 }
 
+pub(crate) const WASM_BINDGEN: &str = "0.2.130";
+
+pub(crate) fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = u32::from(chunk.first().copied().unwrap_or(0));
+        let second = u32::from(chunk.get(1).copied().unwrap_or(0));
+        let third = u32::from(chunk.get(2).copied().unwrap_or(0));
+        let joined = (first << 16) | (second << 8) | third;
+        for place in 0..4 {
+            if place <= chunk.len() {
+                let index = usize::try_from((joined >> (18 - 6 * place)) & 63).unwrap_or(0);
+                out.push(char::from(TABLE.get(index).copied().unwrap_or(b'A')));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+pub(crate) fn wrapper_text(browser: &Browser) -> String {
+    let mut out = String::from("use wasm_bindgen::prelude::wasm_bindgen;\n");
+    for function in &browser.functions {
+        let params: Vec<String> = function
+            .params
+            .iter()
+            .map(|(n, t)| format!("{n}: {t}"))
+            .collect();
+        let names: Vec<&str> = function.params.iter().map(|(n, _)| n.as_str()).collect();
+        let _ = write!(
+            out,
+            "\n#[wasm_bindgen]\npub fn {}({}) -> {} {{\n    {}::{}({})\n}}\n",
+            function.name,
+            params.join(", "),
+            function.output,
+            browser.crate_name,
+            function.name,
+            names.join(", ")
+        );
+    }
+    out
+}
+
+fn browser_failed(name: &str, message: String) -> Failure {
+    failed(
+        Stage::BuildFailed,
+        "idea.md",
+        "web-browser",
+        format!("lengua could not build the library `{name}` for the browser: {message}"),
+    )
+}
+
+fn browser(worker: &Worker, item: &Browser, stage: &Path) -> Result<(), Failure> {
+    let dir = worker.folder.join("target/lengua/browser").join(&item.name);
+    let library = plain(&worker.folder.join(&item.path)).replace('\\', "/");
+    let package = format!("{}-browser", item.name);
+    let manifest = format!(
+        "[package]\nname = \"{package}\"\nversion = \"0.1.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\ncrate-type = [\"cdylib\"]\npath = \"src/lib.rs\"\n\n[dependencies]\n{} = {{ path = \"{library}\" }}\nwasm-bindgen = \"={WASM_BINDGEN}\"\n\n[profile.release]\nopt-level = \"s\"\nlto = true\n\n[workspace]\n",
+        item.crate_name
+    );
+    let written = fs::create_dir_all(dir.join("src"))
+        .and_then(|()| fs::write(dir.join("Cargo.toml"), manifest))
+        .and_then(|()| fs::write(dir.join("src/lib.rs"), wrapper_text(item)));
+    written.map_err(|e| browser_failed(&item.name, e.to_string()))?;
+    let built = crate::build::cargo(
+        &dir,
+        &["build", "--release", "--target", "wasm32-unknown-unknown", "--message-format=short"],
+        &worker.child,
+    );
+    match built {
+        Ok((true, _)) => {}
+        Ok((false, text)) => return Err(browser_failed(&item.name, tail(&text, 20))),
+        Err(message) => return Err(browser_failed(&item.name, message)),
+    }
+    let bindgen = doctor::find("wasm-bindgen")
+        .ok_or_else(|| browser_failed(&item.name, "wasm-bindgen is not on the PATH".to_string()))?;
+    let out = stage.join("lib/wasm").join(&item.name);
+    let input = dir
+        .join("target/wasm32-unknown-unknown/release")
+        .join(format!("{}.wasm", package.replace('-', "_")));
+    let mut command = Command::new(bindgen);
+    command.arg("--out-name").arg(&item.name);
+    let ran = tool(
+        command,
+        &["--target", "web", "--out-dir", &plain(&out), &plain(&input)],
+        &dir,
+        &worker.child,
+    );
+    match ran {
+        Ok((true, _)) => {}
+        Ok((false, text)) => return Err(browser_failed(&item.name, tail(&text, 20))),
+        Err(message) => return Err(browser_failed(&item.name, message)),
+    }
+    let bytes = fs::read(out.join(format!("{}_bg.wasm", item.name)))
+        .map_err(|e| browser_failed(&item.name, e.to_string()))?;
+    let name = &item.name;
+    let module = format!(
+        "import {{ initSync }} from \"./{name}/{name}.js\";\nimport {{ bytes }} from \"./{name}/bytes\";\n\ninitSync({{ module: bytes }});\n\nexport * from \"./{name}/{name}.js\";\n"
+    );
+    let data = format!(
+        "const text = \"{}\";\n\nexport const bytes = Uint8Array.from(atob(text), (c) => c.charCodeAt(0));\n",
+        base64(&bytes)
+    );
+    fs::write(out.join("bytes.ts"), data)
+        .and_then(|()| fs::write(stage.join("lib/wasm").join(format!("{name}.ts")), module))
+        .map_err(|e| browser_failed(&item.name, e.to_string()))
+}
+
+fn browsers(worker: &Worker, front: &Front, stage: &Path) -> Result<(), Failure> {
+    for item in &front.browser {
+        browser(worker, item, stage)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn build(worker: &Worker, front: &Front) -> Result<usize, Failure> {
     let stage = refresh(&worker.folder).map_err(|e| {
         failed(
@@ -382,6 +499,7 @@ pub(crate) fn build(worker: &Worker, front: &Front) -> Result<usize, Failure> {
         )
     })?;
     install(worker, &stage)?;
+    browsers(worker, front, &stage)?;
     typecheck(worker, &stage)?;
     let runs = tests(worker, front, &stage)?;
     next_build(worker, &stage)?;
@@ -428,7 +546,28 @@ pub(crate) fn screen_files(folder: &Path, front: &Front) -> Vec<(String, String)
 
 #[cfg(test)]
 mod tests {
-    use super::{assets_text, media_type, type_problems};
+    use super::{assets_text, base64, media_type, type_problems, wrapper_text};
+    use lengua_idea::{Browser, BrowserFn};
+
+    #[test]
+    fn bytes_become_base64_and_a_library_gets_its_wrapper() {
+        assert_eq!(base64(b"Man"), "TWFu");
+        assert_eq!(base64(b"Ma"), "TWE=");
+        assert_eq!(base64(b"M"), "TQ==");
+        assert_eq!(base64(b""), "");
+        let item = Browser {
+            name: "titles".to_string(),
+            crate_name: "titles".to_string(),
+            path: "../titles".to_string(),
+            functions: vec![BrowserFn {
+                name: "title_error".to_string(),
+                params: vec![("title".to_string(), "&str".to_string())],
+                output: "String".to_string(),
+            }],
+        };
+        let text = wrapper_text(&item);
+        assert!(text.contains("#[wasm_bindgen]\npub fn title_error(title: &str) -> String {\n    titles::title_error(title)\n}\n"), "{text}");
+    }
 
     #[test]
     fn type_errors_give_their_file_and_line() {

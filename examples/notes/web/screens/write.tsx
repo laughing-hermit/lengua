@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { assert, postNotes, useScreen } from "@/lib/lengua";
+import { title_error } from "@/lib/wasm/titles";
 
 interface WriteState {
   readonly title: string;
@@ -13,23 +14,8 @@ interface WriteState {
   readonly message: string;
 }
 
-const LONGEST_TITLE = 40;
-
-export function titleError(title: string): string {
-  const trimmed = title.trim();
-  assert(trimmed.length <= title.length, "trimming makes no text longer");
-  const error =
-    trimmed === ""
-      ? "A note has a title."
-      : trimmed.length > LONGEST_TITLE
-        ? "A title has 40 characters or fewer."
-        : "";
-  assert(error === "" || trimmed === "" || trimmed.length > LONGEST_TITLE, "an error has its reason");
-  return error;
-}
-
 export async function save(state: WriteState, set: (next: WriteState) => void): Promise<void> {
-  const error = titleError(state.title);
+  const error = title_error(state.title);
   assert(error.length < 100, "an error is short");
   if (error !== "") {
     set({ ...state, error });

@@ -335,6 +335,11 @@ fn seal_program(
             .map(|s| s.sealed.clone()),
         sealed_trusted: component.trusted.clone(),
         export: plan.front.as_ref().map(|_| format!("{}/out", front::STAGE)),
+        browser: plan
+            .front
+            .as_ref()
+            .filter(|f| !f.browser.is_empty())
+            .map(|_| format!("{}/lib/wasm", front::STAGE)),
     };
     match lock::write(folder, &folder.join(lock::LOCK), &facts, key) {
         Ok(()) => report.written.push(lock::LOCK.to_string()),

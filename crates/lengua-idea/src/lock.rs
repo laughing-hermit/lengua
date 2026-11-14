@@ -87,6 +87,7 @@ pub struct Facts {
     pub sealed: Option<String>,
     pub sealed_trusted: Vec<String>,
     pub export: Option<String>,
+    pub browser: Option<String>,
 }
 
 impl Facts {
@@ -375,6 +376,7 @@ pub fn text(folder: &Path, facts: &Facts, key: &Key) -> Result<String, String> {
     entries.extend(facts.libraries.iter().map(|l| ("library", l.as_str())));
     entries.extend(facts.trusted.iter().map(|t| ("trusted", t.as_str())));
     entries.extend(facts.export.as_deref().map(|e| ("export", e)));
+    entries.extend(facts.browser.as_deref().map(|e| ("browser", e)));
     entries.extend(facts.component.as_deref().map(|c| ("component", c)));
     entries.extend(facts.sealed.as_deref().map(|s| ("sealed", s)));
     entries.extend(
@@ -389,7 +391,7 @@ pub fn text(folder: &Path, facts: &Facts, key: &Key) -> Result<String, String> {
                 "lengua can't lock the file `{path}`: its name has a line end"
             ));
         }
-        let hash = if tag == "export" {
+        let hash = if tag == "export" || tag == "browser" {
             tree_hash(folder, path)
                 .ok_or_else(|| format!("lengua could not read the folder `{path}` to lock it"))?
         } else {
@@ -439,7 +441,7 @@ fn check_entry(
 ) -> Option<(String, Option<Sealed>)> {
     let (hash, path) = rest.split_once(' ')?;
     let keep = tag == "sealed" || tag == "sealed-trusted";
-    if tag == "export" {
+    if tag == "export" || tag == "browser" {
         match tree_hash(folder, path) {
             Some(found) if found == hash => {}
             Some(_) => changed.push(format!("`{path}` changed")),
@@ -494,7 +496,8 @@ fn read_lines(folder: &Path, body: &str, key: &Key) -> Reading {
             "kind" => out.found = Kind::parse(rest),
             "label" => out.label = rest.to_string(),
             "file" | "component" | "sealed" | "library" | "trusted" | "sealed-trusted"
-            | "export" => match check_entry(folder, (tag, rest), key, &mut out.changed) {
+            | "export"
+            | "browser" => match check_entry(folder, (tag, rest), key, &mut out.changed) {
                 Some((path, code)) => {
                     out.files.push(path);
                     if tag == "sealed-trusted" {
