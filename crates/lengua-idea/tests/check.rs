@@ -146,7 +146,10 @@ fn a_second_check_that_changes_nothing_writes_nothing() {
     assert_eq!(first.findings, []);
     let log = read(&folder, "log.md");
     let top = read(&folder, "idea.md");
-    assert!(read(&folder, "index.md").contains("\n# Back end: crates\n\n* Declared in the ideas: none;"));
+    assert!(
+        read(&folder, "index.md")
+            .contains("\n# Back end: crates\n\n* Declared in the ideas: none;")
+    );
     let second = lengua_idea::check(&folder, NOV_13_2026 + 60);
     assert_eq!(second.findings, []);
     assert_eq!(second.written, Vec::<String>::new());
@@ -273,7 +276,11 @@ fn a_purpose_that_names_a_module_its_constraints_do_not_list_is_a_finding() {
         !found.contains(&("idea.md".to_string(), "purpose-unlisted")),
         "{found:?}"
     );
-    fs::write(folder.join("idea.md"), top.replace("- Modules: `words`\n", "")).expect("a file");
+    fs::write(
+        folder.join("idea.md"),
+        top.replace("- Modules: `words`\n", ""),
+    )
+    .expect("a file");
     let found = codes_of(&folder);
     assert!(
         found.contains(&("idea.md".to_string(), "purpose-unlisted")),

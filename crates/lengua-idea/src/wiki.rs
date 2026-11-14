@@ -504,7 +504,10 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
         .zip(parts.libraries)
         .map(|(line, l)| {
             if front {
-                format!("{line}* In the browser, `{}` is `@/lib/wasm/{}`.\n", l.name, l.name)
+                format!(
+                    "{line}* In the browser, `{}` is `@/lib/wasm/{}`.\n",
+                    l.name, l.name
+                )
             } else {
                 line
             }
@@ -528,7 +531,11 @@ pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
     let screens = of(IdeaKind::Screen);
     if !screens.is_empty() {
         section(&mut out, "# Front end: screens", &screens);
-        section(&mut out, "# Front end: npm packages", &package_lines(parts.interface));
+        section(
+            &mut out,
+            "# Front end: npm packages",
+            &package_lines(parts.interface),
+        );
     }
     if !parts.interface.routes.is_empty() {
         section(

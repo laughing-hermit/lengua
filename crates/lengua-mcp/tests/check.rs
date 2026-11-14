@@ -1168,7 +1168,8 @@ fn a_program_uses_a_checked_library_and_refuses_one_that_changed() {
     );
     let index = fs::read_to_string(program.join("index.md")).expect("the index");
     assert!(
-        index.contains("\n# Back end: libraries\n\n* [decimal](../../libraries/decimal/idea.md) - ")
+        index
+            .contains("\n# Back end: libraries\n\n* [decimal](../../libraries/decimal/idea.md) - ")
             && index.contains("Label: `checked`."),
         "{index}"
     );
