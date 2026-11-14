@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 
 const FILE: &str = "data/notes.txt";
@@ -52,8 +53,10 @@ fn note_line(line: &str) -> Option<Note> {
 fn save(notes: &[Note]) -> bool {
     let text: String = notes
         .iter()
-        .map(|(id, title, text)| format!("{id}\t{title}\t{text}\n"))
-        .collect();
+        .fold(String::new(), |mut out, (id, title, text)| {
+            let _ = writeln!(out, "{id}\t{title}\t{text}");
+            out
+        });
     debug_assert_eq!(text.lines().count(), notes.len());
     debug_assert!(notes.len() < 1 << 20);
     fs::write(FILE, text).is_ok()

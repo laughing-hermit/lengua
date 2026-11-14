@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -76,7 +77,7 @@ fn now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     debug_assert!(seconds < u64::MAX);
-    debug_assert!(HOUR > 0);
+    debug_assert!(seconds.checked_add(HOUR).is_some());
     seconds
 }
 
@@ -102,8 +103,10 @@ fn load() -> Vec<User> {
 fn save(users: &[User]) -> bool {
     let text: String = users
         .iter()
-        .map(|(name, hash)| format!("{name}\t{hash}\n"))
-        .collect();
+        .fold(String::new(), |mut out, (name, hash)| {
+            let _ = writeln!(out, "{name}\t{hash}");
+            out
+        });
     debug_assert_eq!(text.lines().count(), users.len());
     debug_assert!(users.len() < 1 << 20);
     fs::write(FILE, text).is_ok()

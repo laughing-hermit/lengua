@@ -73,8 +73,7 @@ fn titled(pieces: &[String]) -> String {
     match found {
         Ok(fields) => fields
             .first()
-            .map(|(name, value)| format!("{name}: {value}"))
-            .unwrap_or_default(),
+            .map_or_else(String::new, |(name, value)| format!("{name}: {value}")),
         Err(ai::Error::Missing(name)) => format!("the answer has no field `{name}`"),
         Err(error) => format!("the answer is bad: {error:?}"),
     }

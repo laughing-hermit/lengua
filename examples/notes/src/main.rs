@@ -90,8 +90,7 @@ fn header(request: &IncomingRequest, name: &str) -> String {
     let values = request.headers().get(name);
     let text = values
         .first()
-        .map(|value| String::from_utf8_lossy(value).to_string())
-        .unwrap_or_default();
+        .map_or_else(String::new, |value| String::from_utf8_lossy(value).to_string());
     debug_assert!(name.len() < 1 << 10);
     debug_assert!(text.len() < 1 << 16);
     text
