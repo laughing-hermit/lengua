@@ -182,8 +182,44 @@ struct CheckReply {
         description = "The components from other languages the program uses, each with its file and the label trusted"
     )]
     components: Vec<PartReply>,
+    #[schemars(
+        description = "True when the person approved the ideas (and vision.md, when there is one) as they are now; lengua builds no code until then"
+    )]
+    approved: bool,
     #[schemars(description = "The build, when the ideas have no problems")]
     build: Option<BuildReply>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(crate = "rmcp::serde")]
+#[schemars(crate = "rmcp::schemars")]
+struct ApproveParams {
+    #[schemars(
+        description = "The program's folder, the one that holds idea.md or vision.md, as an absolute path"
+    )]
+    folder: String,
+    #[schemars(
+        description = "Who approved: the person's name or id, for example `ana`; lengua records it as `human:ana`"
+    )]
+    person: String,
+    #[schemars(
+        description = "The person's own words of approval, exactly as they said them, for example \"looks good, go ahead\""
+    )]
+    words: String,
+}
+
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+#[serde(crate = "rmcp::serde")]
+#[schemars(crate = "rmcp::schemars")]
+struct ApproveReply {
+    #[schemars(description = "True when the ideas and the vision are now approved as they are")]
+    approved: bool,
+    #[schemars(description = "The SHA-256 of the ideas' behaviours and constraints that the person approved")]
+    ideas_sha256: Option<String>,
+    #[schemars(description = "The SHA-256 of vision.md that the person approved, when there is one")]
+    vision_sha256: Option<String>,
+    #[schemars(description = "The files that approve wrote: idea.md, vision.md and log.md")]
+    written: Vec<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -341,6 +377,7 @@ fn seal_program(
             .as_ref()
             .filter(|f| !f.browser.is_empty())
             .map(|_| format!("{}/lib/wasm", front::STAGE)),
+        approved: report.approval.lock_lines(),
     };
     match lock::write(folder, &folder.join(lock::LOCK), &facts, key) {
         Ok(()) => report.written.push(lock::LOCK.to_string()),
@@ -416,6 +453,7 @@ impl Lengua {
         report: lengua_idea::Report,
         snapshot: Option<(String, Status)>,
     ) -> CheckReply {
+        let approved = report.approval.approved();
         let mut findings: Vec<FindingReply> = report
             .findings
             .into_iter()
@@ -501,15 +539,50 @@ impl Lengua {
             components,
             label: report.trust.label.name().to_string(),
             score,
+            approved,
             build,
         }
+    }
+}
+
+fn unapproved(report: &mut lengua_idea::Report) {
+    let approval = &report.approval;
+    let code = report.build.as_ref().is_some_and(|b| b.code);
+    if approval.approved() || report.build.is_none() {
+        return;
+    }
+    let (file, what) = if approval.ideas_approved() {
+        (lengua_idea::VISION, "the vision")
+    } else {
+        ("idea.md", "the ideas")
+    };
+    let message = format!(
+        "the person did not approve {what} as they are now: show them to the person, and call `approve` only after the person says in their own words that they approve"
+    );
+    if code {
+        report.findings.push(lengua_idea::Finding {
+            file: file.to_string(),
+            line: 1,
+            code: if file == "idea.md" {
+                "idea-unapproved"
+            } else {
+                "vision-unapproved"
+            },
+            message: format!("{message}; until then lengua builds no code"),
+        });
+        report.build = None;
+    } else {
+        report.notes.push(lengua_idea::Note {
+            file: file.to_string(),
+            message: format!("{message}; then write the code"),
+        });
     }
 }
 
 #[tool_router]
 impl Lengua {
     #[tool(
-        description = "Checks a lengua program: its ideas (idea.md, ideas/*.md, ideas/ui/*.md) and the rules of its Rust code, then, in the background, builds it to a WebAssembly component, runs the examples of its ideas as tests, and measures the tests with mutants of the code. Returns every problem at once, each with its file, line, code and message. When the ideas have no problems, it writes the frontmatter of each idea, index.md, log.md, Cargo.toml and wit/world.wit, and starts the job; the reply gives its state: building, build_failed, testing, tests_failed (each failed test a finding, with what was expected and what came), mutating or done, and the trust label: checked when every test passes and the mutation score is 80% or more, tested when the score is under 80%, unchecked until then. Each mutant that survived is a note with its file and line. When the job is done, the same call writes lengua.lock: the SHA-256 of every idea, index.md, log.md, the code, the generated files, the component and its sealed precompiled code, signed with the user's key. Call check again to get the state of the job."
+        description = "Checks a lengua program: its ideas (idea.md, ideas/*.md, ideas/ui/*.md) and the rules of its Rust code, then, in the background, builds it to a WebAssembly component, runs the examples of its ideas as tests, and measures the tests with mutants of the code. Returns every problem at once, each with its file, line, code and message. When the ideas have no problems, it writes the frontmatter of each idea, index.md, log.md, Cargo.toml and wit/world.wit, and starts the job; the reply gives its state: building, build_failed, testing, tests_failed (each failed test a finding, with what was expected and what came), mutating or done, and the trust label: checked when every test passes and the mutation score is 80% or more, tested when the score is under 80%, unchecked until then. Each mutant that survived is a note with its file and line. When the job is done, the same call writes lengua.lock: the SHA-256 of every idea, index.md, log.md, the code, the generated files, the component and its sealed precompiled code, signed with the user's key. Call check again to get the state of the job. It builds nothing until the person approved the ideas as they are (the tool approve): with code and no approval, the reply has the finding idea-unapproved, and `approved` is false."
     )]
     fn check(
         &self,
@@ -525,11 +598,12 @@ impl Lengua {
         })?;
         let mut snapshot: Option<(String, Status)> = None;
         let lint: lengua_idea::WebLint = lengua_ts::lint;
+        let approved = lengua_idea::approval(&folder).approved();
         let mut report = lengua_idea::check_web(
             &folder,
             now(),
             |plan| {
-                snapshot = if plan.code {
+                snapshot = if plan.code && approved {
                     self.builds
                         .snapshot(&folder, plan)
                         .map(|status| (plan.inputs.clone(), status))
@@ -543,8 +617,36 @@ impl Lengua {
             },
             Some(lint),
         );
+        report.approval = lengua_idea::approval(&folder);
+        unapproved(&mut report);
         seal_program(&folder, &mut report, snapshot.as_ref(), &key);
         Ok(Json(self.reply(&folder, report, snapshot)))
+    }
+
+    #[tool(
+        description = "Records that the person approved the ideas of a program (idea.md, ideas/*.md, ideas/ui/*.md) and its vision.md, as they are now. Call it only after the person, not you, said in their own words that they approve, for example \"I approve\" or \"looks good, go ahead\", and pass their words exactly; never call it because you think the ideas are good. It writes the SHA-256 of the ideas' behaviours and constraints (and of vision.md) into their frontmatter as `approved`, and an Approval entry with the person's words into log.md; check then marks the ideas `stable`, and the lock holds the hash. check builds no code until the ideas are approved, and asks again when a behaviour, a grant, a native part, a crate or an npm package changes. lengua can't tell who calls this tool: the record is only as true as the agent that calls it."
+    )]
+    #[allow(clippy::unused_self)]
+    fn approve(
+        &self,
+        Parameters(ApproveParams {
+            folder,
+            person,
+            words,
+        }): Parameters<ApproveParams>,
+    ) -> Result<Json<ApproveReply>, String> {
+        let folder = PathBuf::from(folder);
+        if !folder.is_dir() {
+            return Err(format!("{} is not a folder", folder.display()));
+        }
+        let done = lengua_idea::approve(&folder, &person, &words, now())?;
+        let approval = done.approval;
+        Ok(Json(ApproveReply {
+            approved: approval.approved(),
+            ideas_sha256: approval.ideas,
+            vision_sha256: approval.vision,
+            written: done.written,
+        }))
     }
 
     #[tool(
@@ -593,7 +695,7 @@ impl Lengua {
 
 #[tool_handler(
     name = "lengua-mcp",
-    instructions = "lengua checks, builds, tests and runs programs written as idea files and Rust. Call check with the absolute path of a program's folder; while the state is building, testing or mutating, call check again. When it is done, the reply has the trust label; call run to run the program under the grants of its idea."
+    instructions = "lengua checks, builds, tests and runs programs written as idea files and Rust. Call check with the absolute path of a program's folder. lengua builds no code until the person approves the ideas: call approve only after the person says so in their own words. While the state is building, testing or mutating, call check again. When it is done, the reply has the trust label; call run to run the program under the grants of its idea."
 )]
 #[allow(clippy::unused_async_trait_impl)]
 impl ServerHandler for Lengua {}

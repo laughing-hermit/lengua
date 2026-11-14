@@ -88,6 +88,7 @@ pub struct Facts {
     pub sealed_trusted: Vec<String>,
     pub export: Option<String>,
     pub browser: Option<String>,
+    pub approved: Vec<(String, String)>,
 }
 
 impl Facts {
@@ -250,7 +251,7 @@ pub fn user_key_or_create(
     create_key(&folder, bytes)
 }
 
-fn ideas(folder: &Path) -> Vec<String> {
+pub(crate) fn ideas(folder: &Path) -> Vec<String> {
     let mut out = Vec::new();
     if folder.join("idea.md").is_file() {
         out.push("idea.md".to_string());
@@ -334,6 +335,9 @@ pub fn tree_hash(folder: &Path, relative: &str) -> Option<String> {
 #[must_use]
 pub fn program_files(folder: &Path) -> Vec<String> {
     let mut out = ideas(folder);
+    if folder.join(crate::VISION).is_file() {
+        out.push(crate::VISION.to_string());
+    }
     out.push("index.md".to_string());
     out.push("log.md".to_string());
     if folder.join("api.md").is_file() {
@@ -371,6 +375,9 @@ pub fn text(folder: &Path, facts: &Facts, key: &Key) -> Result<String, String> {
             one_line(&facts.toolchain),
             facts.trust.label.name()
         );
+        for (hash, file) in &facts.approved {
+            let _ = writeln!(out, "approved {} {}", one_line(hash), one_line(file));
+        }
     }
     let mut entries: Vec<(&str, &str)> = facts.files.iter().map(|f| ("file", f.as_str())).collect();
     entries.extend(facts.libraries.iter().map(|l| ("library", l.as_str())));
@@ -540,6 +547,9 @@ pub fn verify(folder: &Path, lock: &Path, kind: Kind, key: &Key) -> Result<Verif
     }
     if kind != Kind::Test {
         let mut now = ideas(folder);
+        if folder.join(crate::VISION).is_file() {
+            now.push(crate::VISION.to_string());
+        }
         now.extend(sources(folder));
         now.extend(web_files(folder));
         let files = &read.files;

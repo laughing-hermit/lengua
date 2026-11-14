@@ -281,14 +281,9 @@ pub(crate) fn check_values(front: &Front, idea: bool, sink: &mut Sink) {
                         "okf-status",
                         format!("`{status}` is not an OKF status: write `draft`, `stable` or `deprecated`"),
                     );
-                } else if idea && status == "stable" {
-                    sink.add(
-                        entry.line,
-                        "okf-status",
-                        "an idea is `draft` until the person approves it (L11), so write `draft` or `deprecated`".to_string(),
-                    );
                 }
             }
+            crate::approval::KEY => crate::approval::check_entry(entry, sink),
             "stale_after" => {
                 let time = value();
                 if !timestamp(&time) {

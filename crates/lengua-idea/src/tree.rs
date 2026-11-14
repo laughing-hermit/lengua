@@ -386,6 +386,25 @@ pub fn findings(root: &Path) -> Vec<Finding> {
         }
         links(root, file, &text, &mut out);
     }
+    for app in &apps {
+        let folder = root.join(&app.path);
+        if !folder.join("src/main.rs").is_file() {
+            continue;
+        }
+        let approval = crate::approval(&folder);
+        if !approval.approved() {
+            out.push(finding(
+                &join(&app.path, "idea.md"),
+                1,
+                "wiki-unapproved",
+                format!(
+                    "the folder has code, and the person did not approve its ideas as they are now (the ideas `{}`, the vision `{}`); the tool `approve` records the person's approval",
+                    approval.ideas.as_deref().unwrap_or("none"),
+                    approval.vision.as_deref().unwrap_or("none")
+                ),
+            ));
+        }
+    }
     for (file, text) in indexes(root) {
         if read(root, &file) != text {
             out.push(finding(

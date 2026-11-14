@@ -1,3 +1,4 @@
+mod approval;
 mod behaviours;
 mod cases;
 mod constraints;
@@ -26,6 +27,7 @@ use crate::idea::{Idea, IdeaKind};
 use crate::ste::Dictionary;
 use crate::wiki::Page;
 
+pub use crate::approval::{Approval, Approved, Record, VISION, approval, approve};
 pub use crate::cases::{CASES_DRAWN, Case, End, Range, StateValue, Test, cases};
 pub use crate::generate::ASSETS;
 pub use crate::library::Library;
@@ -376,6 +378,7 @@ pub struct Report {
     pub written: Vec<String>,
     pub build: Option<Build>,
     pub trust: Trust,
+    pub approval: Approval,
 }
 
 #[must_use]
@@ -948,6 +951,68 @@ fn component_rules(folder: &Path, top: &constraints::Constraints, findings: &mut
     }
 }
 
+fn folder_title(folder: &Path) -> String {
+    fs::canonicalize(folder)
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .unwrap_or_else(|| "program".to_string())
+}
+
+pub(crate) fn idea_findings(folder: &Path) -> Vec<Finding> {
+    if !folder.join("idea.md").is_file() {
+        return vec![top_finding(
+            1,
+            "idea-missing",
+            "the folder has no `idea.md`".to_string(),
+        )];
+    }
+    let mut findings = Vec::new();
+    let mut read = read_all(folder, &folder_title(folder), &mut findings);
+    if read
+        .pages
+        .first()
+        .is_some_and(|p| p.kind == IdeaKind::Program)
+    {
+        link(&mut read.pages, &read.constraints, &mut findings);
+    }
+    vision_rules(folder, &mut findings);
+    findings.sort();
+    findings
+}
+
+fn vision_rules(folder: &Path, findings: &mut Vec<Finding>) {
+    let Ok(text) = fs::read_to_string(folder.join(VISION)) else {
+        return;
+    };
+    let text = text.replace("\r\n", "\n");
+    let mut sink = Sink::new(VISION);
+    let front = frontmatter::split(&text, &mut sink);
+    if front.value("type").map(okf::unquote).as_deref() != Some("lengua Vision") {
+        sink.add(
+            1,
+            "vision-type",
+            "`vision.md` is the OKF page of the vision, so its frontmatter has `type: lengua Vision`".to_string(),
+        );
+    }
+    let mut fence = false;
+    let mut found = false;
+    for line in front.body.lines() {
+        if text::is_fence(line) {
+            fence = !fence;
+        } else if !fence && line.trim_end() == "# Where it runs" {
+            found = true;
+        }
+    }
+    if !found {
+        sink.add(
+            front.body_line,
+            "vision-section",
+            "`vision.md` says where the application runs, in a section `# Where it runs`, before any code".to_string(),
+        );
+    }
+    findings.append(&mut sink.findings);
+}
+
 fn prepare(folder: &Path, lint: Option<WebLint>) -> Result<Prepared, Vec<Finding>> {
     if !folder.join("idea.md").is_file() {
         return Err(vec![top_finding(
@@ -957,10 +1022,8 @@ fn prepare(folder: &Path, lint: Option<WebLint>) -> Result<Prepared, Vec<Finding
         )]);
     }
     let mut findings = Vec::new();
-    let title = fs::canonicalize(folder)
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-        .unwrap_or_else(|| "program".to_string());
+    let title = folder_title(folder);
+    vision_rules(folder, &mut findings);
     let mut read = read_all(folder, &title, &mut findings);
     let program = read
         .pages
@@ -1097,14 +1160,27 @@ pub fn check_web(
             .map_or(&[][..], |w| w.front.packages.as_slice()),
         large: &large,
     };
+    report.approval = approval(folder);
+    let crates = dependencies::count(folder, &prepared.plan.used);
+    let native_crates: Vec<Note> = crates
+        .native
+        .iter()
+        .map(|name| Note {
+            file: "idea.md".to_string(),
+            message: format!(
+                "the crate `{name}` is not pure Rust: it builds C or links a native library; take a pure-Rust crate, or say in its `- Uses crate:` reason why none merits it"
+            ),
+        })
+        .collect();
     let parts = wiki::Parts {
         title: &title,
         shape: prepared.shape,
         libraries: &prepared.libraries,
         components: &prepared.top.components,
-        crates: dependencies::count(folder, &prepared.plan.used),
-        vision: folder.join("vision.md").is_file(),
+        crates,
+        vision: folder.join(VISION).is_file(),
         interface: &interface,
+        approval: &report.approval,
     };
     let written = wiki::write(
         folder,
@@ -1116,6 +1192,7 @@ pub fn check_web(
     );
     report.written = written.files;
     report.notes = written.notes;
+    report.notes.extend(native_crates);
     report.findings = written.findings;
     if report.findings.is_empty() {
         report.build = Some(prepare(folder, lint).map_or(planned, |again| build(folder, &again)));

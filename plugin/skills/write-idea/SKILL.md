@@ -1,43 +1,78 @@
 ---
 name: write-idea
-description: Turns a person's request into a lengua idea file, idea.md (and ideas/<module>.md, ideas/ui/<screen>.md for a larger program), with its purpose, its behaviours as Given/When/Then tests with examples, its constraints (the grants) and its structure, in ASD-STE100 Simplified Technical English, then calls the check tool until it reports no problems. Use when a person asks for a new lengua program or a change to one.
+description: Turns an approved vision.md, or a small request, into lengua idea files (idea.md, ideas/<module>.md, ideas/ui/<screen>.md) for a Rust back end compiled to WebAssembly and a Next.js front end, with behaviours as Given/When/Then tests, the grants, any native part, crate or npm package with its reason, and the structure, in ASD-STE100 Simplified Technical English; calls check until it reports no problems, then asks the person to approve the ideas in their own words. Use when a person asks for a new lengua program or a change to one.
 license: Apache-2.0
 ---
 
 # write-idea
 
-An idea file is the program's only documentation and the source of its tests. Write it so
-that the MCP tool `check` reports no problems. The full grammar is in `Lengua3.md`, section 4,
-"The idea file's grammar".
+An idea file is the program's only documentation and the source of its tests. No code is
+written before the person approves it.
 
 ## Steps
 
-1. Read the request. Decide what the program reads, what it writes, and what it may touch.
-2. Make the folder. Write `idea.md` with these four sections, in this order:
-   - `# Purpose`: what the program is for, in a few short sentences.
-   - `# Behaviours`: one `## name` per behaviour, with a `Given`, a `When` and a `Then` line,
-     then one `### Example: name` block or more. See
-     [the test format](references/test-format.md).
-   - `# Constraints`: one `- Key: value` line each. The top idea always has `- Memory:` and
-     `- Time:`. Grant only what the program needs: `- Reads: standard input`,
-     ``- Reads: files in `data/` ``, ``- Writes: files in `out/` ``,
-     ``- Connects to: `host:443` ``. Standard output and standard error are always granted.
-   - `# Structure`: one ``- `name`: one sentence.`` per function, `main` first.
-3. For a program of more than one module, write one `ideas/<name>.md` per module and one
-   `ideas/ui/<name>.md` per screen, each with Purpose, Behaviours and Structure. Name each one
-   in the top idea's ``- Modules: `cart`, `ui/basket` ``. A module that uses another says
-   ``- Uses: `cart` `` in its own `# Constraints`.
-4. Write every sentence in STE. See [the STE rules](references/ste.md).
-5. Do not write the frontmatter keys that lengua writes (`type`, `description`, `module`,
-   `source`, `uses`, `used_by`, `label`, `idea_sha256`, `source_sha256`, `generated`,
-   `verified`). You may write OKF's `title`, `tags`, `sources` and `status` (`draft` or
-   `deprecated`; an idea becomes `stable` only when the person approves it); `check` keeps them
-   and checks their values.
-6. Call `check` with the folder's absolute path. It returns every problem at once, each with
-   its file, line, code and message. Fix all of them, then call `check` again. Repeat until
-   `ok` is true.
-7. Do not edit `index.md`, `log.md`, the frontmatter or the `# Links` section at the end of
-   each idea by hand; `check` writes them.
+1. If the folder has an `index.md`, read it, then `vision.md`, `api.md` and the ideas it
+   names. For a new application, start with the skill `vision`; a small request with no vision
+   (one program, no screens, no native part) may start here.
+2. Say "Where it runs" to the person before anything else: one WebAssembly file, a web app, a
+   desktop app, or a native part and why. Offer a WebAssembly way when one exists.
+3. Write `idea.md` with `# Purpose`, `# Behaviours`, `# Constraints` and `# Structure`. See
+   [the grammar](references/grammar.md) and [the test format](references/test-format.md).
+4. For a larger program, write one `ideas/<name>.md` per module and one `ideas/ui/<name>.md`
+   per screen, and list them in ``- Modules: `cart`, `ui/basket` ``.
+5. Grant only what the program needs. The top idea always has `- Memory:` and `- Time:`.
+6. Take a crate or an npm package only when it merits it (below), with its reason.
+7. Write every sentence in STE. See [the STE rules](references/ste.md).
+8. Call the MCP tool `check` with the folder's absolute path. Fix every finding, and call it
+   again until `ok` is true.
+9. Ask the person to approve (below).
+
+## Rust and Next.js, full stack
+
+- The back end is Rust compiled to one WebAssembly component. A server has
+  `- Serves: HTTP on TCP port <n>` and a `- Route:` for each route the front end calls.
+- The front end is Next.js screens in `ideas/ui/`, exported statically and served by the back
+  end, so a web app is still one file. AI keys stay on the back end.
+- Pure logic that both sides need (validation, formatting) is a lengua library
+  (`- Exports:`), used by the server and imported by the screens.
+- An AI call is ``- Asks: an AI model, for <what>, up to <N> calls and <M> tokens``; the
+  examples give ``- Model answers:``.
+- A desktop app is the same front end and back end in Electron:
+  `- Native: a desktop window, for the Electron shell of a desktop app` (L10).
+- Only a part that WebAssembly can't do is native: a program folder of its own whose idea says
+  `- Native: <what>, for <reason>`, started by the WebAssembly program, which names it with
+  ``- Native: `<folder>`, for <reason>`` (L10). The reasons are in the grammar.
+
+## Crates and npm packages: pure Rust first, and only when they merit it
+
+Use the standard library, then lengua's shared libraries (``- Uses:
+`<path>/libraries/<name>` ``: `json`, `http`, `decimal`, `text`, `sort`, `hashes`, `dates`,
+`ai`, `logins`, `vectors`), then your own code. A crate or a package merits it only when
+writing it would be a large project of its own, or it is the component's own interface to its
+host (`wasip2` for a server), and nothing else can do the job. Take a pure-Rust crate; `check`
+notes a crate that is not pure Rust, and the vision says why. Saving a few hundred lines never
+merits it.
+
+## The person approves
+
+1. Tell the person that the ideas are ready, and which files they are. They read them in
+   whatever they use to read files.
+2. The person says, in their own words, that they approve ("I approve", "looks good, go
+   ahead"), or what to change. Change the ideas, call `check`, and ask again.
+3. When they approve, call the MCP tool `approve` with the folder, the person's name and
+   their exact words. Then go on with the skill `build`.
+4. After a change of a behaviour, a grant, a native part, a crate or a package, `check`
+   refuses to build (`idea-unapproved`) until the person approves again. A change of the
+   purpose or the structure alone needs no new approval.
+
+Never call `approve` because you think the ideas are good, and never put words in the
+person's mouth. lengua can't tell who calls the tool: its record in the frontmatter, the lock
+and `log.md` is only as true as the agent that wrote it.
+
+## Don't
+
+- Don't write the frontmatter keys that lengua writes, `approved` among them; see the grammar.
+- Don't edit `index.md`, `log.md`, `api.md` or the `# Links` section; `check` writes them.
 
 ## A small idea
 

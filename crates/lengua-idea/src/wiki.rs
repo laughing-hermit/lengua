@@ -9,7 +9,8 @@ use crate::okf::{self, GENERATED_BY, LENGUA_CHECK};
 use crate::text::is_fence;
 use crate::types::render;
 use crate::web::Route;
-use crate::{Finding, Label, Library, Note, Shape, Sink, Trust};
+use crate::approval::{Record, VISION};
+use crate::{Approval, Finding, Label, Library, Note, Shape, Sink, Trust};
 
 pub(crate) struct Parts<'a> {
     pub title: &'a str,
@@ -19,6 +20,7 @@ pub(crate) struct Parts<'a> {
     pub crates: Count,
     pub vision: bool,
     pub interface: &'a Interface<'a>,
+    pub approval: &'a Approval,
 }
 
 pub(crate) struct Interface<'a> {
@@ -102,7 +104,7 @@ fn day_text(now: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-fn time_text(now: u64) -> String {
+pub(crate) fn time_text(now: u64) -> String {
     let seconds = now % 86_400;
     format!(
         "{:02}:{:02}:{:02}Z",
@@ -174,22 +176,45 @@ fn previous_check(front: &Front) -> Option<String> {
         .map(str::to_string)
 }
 
-fn verified_value(front: &Front, check: Option<&str>) -> Option<String> {
+pub(crate) struct Human<'a> {
+    pub record: Option<&'a Record>,
+    pub current: bool,
+}
+
+impl Human<'_> {
+    fn current(&self) -> Option<&Record> {
+        self.record.filter(|_| self.current)
+    }
+
+    fn is_record(&self, map: &okf::Mapping) -> bool {
+        self.record.is_some_and(|r| {
+            okf::get(map, "by") == Some(r.by.as_str()) && okf::get(map, "at") == Some(r.at.as_str())
+        })
+    }
+}
+
+fn verified_value(front: &Front, check: Option<&str>, human: &Human) -> Option<String> {
     let others = front
         .entry("verified")
         .and_then(okf::mappings)
         .unwrap_or_default();
-    let mut lines: Vec<String> = others
-        .iter()
-        .filter(|m| okf::get(m, "by") != Some(LENGUA_CHECK))
-        .map(|m| {
-            let pairs: Vec<String> = m
-                .iter()
-                .map(|(k, v)| format!("{k}: {}", scalar(v)))
-                .collect();
-            format!("  - {{ {} }}", pairs.join(", "))
-        })
+    let mut lines: Vec<String> = human
+        .current()
+        .map(|r| format!("  - {{ by: {}, at: {} }}", r.by, r.at))
+        .into_iter()
         .collect();
+    lines.extend(
+        others
+            .iter()
+            .filter(|m| okf::get(m, "by") != Some(LENGUA_CHECK) && !human.is_record(m))
+            .map(|m| {
+                let pairs: Vec<String> = m
+                    .iter()
+                    .map(|(k, v)| format!("{k}: {}", scalar(v)))
+                    .collect();
+                format!("  - {{ {} }}", pairs.join(", "))
+            }),
+    );
     if let Some(at) = check {
         lines.push(format!("  - {{ by: {LENGUA_CHECK}, at: {at} }}"));
     }
@@ -207,6 +232,30 @@ impl Time<'_> {
             .filter(|_| self.keep)
             .unwrap_or_else(|| self.now.to_string())
     }
+}
+
+fn status_for(approved: bool) -> &'static str {
+    if approved { "stable" } else { "draft" }
+}
+
+fn with_status(front: &Front, approved: bool) -> Front {
+    let mut out = front.clone();
+    for entry in &mut out.entries {
+        if entry.key != "status" {
+            continue;
+        }
+        let first = entry.text.lines().next().unwrap_or_default();
+        let now = okf::unquote(first.get("status:".len()..).unwrap_or_default());
+        let wanted = match now.as_str() {
+            "deprecated" => continue,
+            "stable" | "draft" => status_for(approved),
+            _ => continue,
+        };
+        if now != wanted {
+            entry.text = format!("status: {wanted}\n");
+        }
+    }
+    out
 }
 
 fn generated_value(front: &Front, time: &Time) -> String {
@@ -396,13 +445,19 @@ fn page_text(
     keys.push(("generated", generated_value(&page.front, time)));
     let confirmed = label != Label::Unchecked.name();
     let check = confirmed.then(|| time.at(previous_check(&page.front)));
-    if let Some(value) = verified_value(&page.front, check.as_deref()) {
+    let approved = parts.approval.ideas_approved();
+    let human = Human {
+        record: parts.approval.ideas_record.as_ref(),
+        current: approved,
+    };
+    if let Some(value) = verified_value(&page.front, check.as_deref(), &human) {
         keys.push(("verified", value));
     }
     let absent = [
         ("title", scalar(&page.title)),
-        ("status", "draft".to_string()),
+        ("status", status_for(approved).to_string()),
     ];
+    let front = with_status(&page.front, approved);
     let link = |id: &String| idea_link(&page.file, id, pages, parts);
     let mut groups = vec![
         ("Uses", page.uses.iter().map(link).collect::<Vec<String>>()),
@@ -425,7 +480,7 @@ fn page_text(
     groups.extend(interface_groups(page, pages, parts));
     format!(
         "{}\n{}",
-        page.front.render(&keys, &absent),
+        front.render(&keys, &absent),
         links_text(&page.file, parts, &groups)
     )
 }
@@ -481,8 +536,44 @@ fn index_line(title: &str, link: &str, description: &str, label: &str) -> String
     format!("* [{title}]({link}) - {description} Label: `{label}`.\n")
 }
 
+const INDEX_HEAD: &str = "---\nokf_version: \"0.2\"\n---\n";
+
+fn vision_text(folder: &Path, approval: &Approval) -> Option<(String, String)> {
+    let old = fs::read_to_string(folder.join(VISION))
+        .ok()?
+        .replace("\r\n", "\n");
+    let mut sink = Sink::new(VISION);
+    let front = frontmatter::split(&old, &mut sink);
+    let approved = approval.vision_approved();
+    let human = Human {
+        record: approval.vision_record.as_ref(),
+        current: approved,
+    };
+    let mut front = with_status(&front, approved);
+    let verified = verified_value(&front, None, &human);
+    front.entries.retain(|e| e.key != "verified");
+    let mut text = String::from("---\n");
+    for entry in &front.entries {
+        text.push_str(&entry.text);
+    }
+    if front.entry("status").is_none() {
+        let _ = writeln!(text, "status: {}", status_for(approved));
+    }
+    if let Some(value) = verified {
+        let _ = writeln!(text, "verified:{value}");
+    }
+    text.push_str("---\n");
+    text.push_str(&front.body);
+    let description = front
+        .value("description")
+        .map(okf::unquote)
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "The best lengua solution for the request, before the ideas.".to_string());
+    Some((text, description))
+}
+
 pub(crate) fn index_text(pages: &[Page], label: &str, parts: &Parts) -> String {
-    let mut out = String::from("---\nokf_version: \"0.2\"\n---\n");
+    let mut out = String::from(INDEX_HEAD);
     let of = |kind: IdeaKind| -> Vec<String> {
         pages
             .iter()
@@ -736,7 +827,16 @@ fn texts(
             component_text(folder, (file, built), pages, parts, time)
         }));
     }
-    out.push(("index.md".to_string(), index_text(pages, label, parts)));
+    let vision = vision_text(folder, parts.approval);
+    let mut index = index_text(pages, label, parts);
+    if let Some((_, description)) = &vision {
+        let section = format!("{INDEX_HEAD}\n# Vision\n\n* [vision]({VISION}) - {description}\n");
+        index = index.replacen(INDEX_HEAD, &section, 1);
+    }
+    if let Some((text, _)) = vision {
+        out.push((VISION.to_string(), text));
+    }
+    out.push(("index.md".to_string(), index));
     if !parts.interface.routes.is_empty() {
         out.push((
             "api.md".to_string(),

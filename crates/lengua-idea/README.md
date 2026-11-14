@@ -52,9 +52,22 @@ holds", "The wiki's formats" and "The generated files, the build job and `doctor
   changed by hand, any listed file that changed or is not there, and, for a program's lock, a
   new idea or Rust file, naming each file and "run `check`"; otherwise it gives the sealed
   bytes it hashed.
+- Given the person's words, when `approve` runs on ideas with no problems, then it writes
+  `approved` (the SHA-256 of the ideas' behaviours and constraints, `human:<id>`, the time)
+  into `idea.md`, and into `vision.md` for its text, and an `**Approval**` entry with the words
+  into `log.md`; while the approval holds, `check` writes `status: stable` and the person in
+  `verified`, and the lock an `approved` line; after a change of a behaviour or a constraint,
+  `status: draft` again.
+- Given a `vision.md`, when `check` runs, then it holds `type: lengua Vision` and `# Where it
+  runs` (`vision-type`, `vision-section`), lists it first in `index.md` and signs it in the
+  lock.
 
 ## Structure
 
+- `approval.rs` (since L11): `approval` gives the hashes now (`ideas_hash`, `sections`,
+  `vision_hash`) and the ones recorded (`record`, `recorded`); `approve` (`person`,
+  `idea_problems`, `with_entry`) records the person's approval; `check_entry` holds the form of
+  `approved`; `Approval`, `Record` and `Approved` are its data.
 - `check` and `check_with` (`lib.rs`): with `prepare`, find the idea files, read each one, link the modules,
   sort the findings and, with none, make the generated files; then write them with the wiki,
   with the label that `check_with`'s function gives for the build (`check` gives `unchecked`),

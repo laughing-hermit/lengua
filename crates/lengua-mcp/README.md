@@ -1,7 +1,7 @@
 ---
 type: lengua Crate
 title: lengua-mcp
-description: "The MCP server of the lengua plugin, with the tools check and run."
+description: "The MCP server of the lengua plugin, with the tools check, approve and run."
 ---
 
 # lengua-mcp
@@ -9,7 +9,7 @@ description: "The MCP server of the lengua plugin, with the tools check and run.
 ## Purpose
 
 `lengua-mcp` is the MCP server of the lengua plugin. It serves MCP over standard input and
-output with the official Rust SDK, `rmcp`. It has two tools. `check` checks the ideas of a
+output with the official Rust SDK, `rmcp`. It has three tools. `approve` records that the person approved the ideas, and `check` builds no code before that. `check` checks the ideas of a
 program's folder with `lengua-idea`, writes the generated files, builds the program to a
 WebAssembly component in the background, and holds the component's imports to the world of its
 grants; then, in the same background job, it runs the examples of the ideas as tests and measures
@@ -41,13 +41,18 @@ and 7.
 - Given any other arguments, when `lengua-mcp` runs, then it writes `usage: lengua-mcp
   [--version | doctor | check <folder> | wiki <root>]` to standard error and stops with exit
   code 2.
-- Given a client that lists the tools, when the server replies, then the list has two tools,
-  `check` (input `folder`) and `run` (inputs `folder`, `arguments`, `stdin` and `fixed`), each
+- Given a client that lists the tools, when the server replies, then the list has three tools,
+  `check` (input `folder`), `approve` (inputs `folder`, `person` and `words`) and `run` (inputs
+  `folder`, `arguments`, `stdin` and `fixed`), each
   with an output schema.
 - Given a call of `check` with a folder, when the server replies, then the structured content
   has `ok`, `checked_by`, `findings` (each with `file`, `line`, `code` and `message`), `notes`
   (each with `file`, `line` when it has one, and `message`), `label`, `score`,
-  `written` and, when the ideas have no problems, `build`.
+  `written`, `approved` and, when the ideas have no problems, `build`.
+- Given a folder with code whose ideas the person did not approve as they are, when `check` is
+  called, then it gives the finding `idea-unapproved` (or `vision-unapproved`) and builds
+  nothing; with no code, a note says so. After `approve`, it builds; a later change of a
+  behaviour or a constraint refuses again, a change of the purpose or the structure does not.
 - Given a folder with ideas and code with no problems, when `check` is called until the job's
   state is not `building`, `testing` or `mutating`, then the state is `done`, with the
   component's path, size
@@ -119,6 +124,8 @@ and 7.
 - `Lengua::check`: the tool; makes the user's key on the first call
   (`lengua_idea::lock::user_key_or_create`, 32 bytes from `getrandom`), checks the folder,
   writes the lock when the job is `done` (`seal_program`), and turns the report into the reply.
+- `Lengua::approve`: the tool; records the approval with `lengua_idea::approve`. `unapproved`
+  turns a missing approval into the finding or the note, and drops the build.
 - `Lengua::reply`, `build_reply`: turn a `lengua_idea::Report` and the job's state (the
   snapshot taken while the wiki is written, or a new one) into a
   `CheckReply`.
@@ -129,7 +136,7 @@ and 7.
   the component and the sealed code, when the snapshot's job is `done` for the same key.
 - `now`: the seconds since 1970, for the log's date.
 - `CheckParams`, `CheckReply`, `FindingReply`, `NoteReply`, `BuildReply`, `TestsReply`,
-  `MutantsReply`, `RunParams`,
+  `MutantsReply`, `ApproveParams`, `ApproveReply`, `RunParams`,
   `RunReply`: the tools' input and output, with their JSON schemas.
 - `VERSION`: the name of the package and its version, joined by a space.
 - `build.rs`: `Builds::new`, `Builds::snapshot` (the state of the job of the same key, or

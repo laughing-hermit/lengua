@@ -44,8 +44,12 @@ A path is relative to the program's folder, with `/` between names, and has no `
 | ``Type into `element` `` | a string |
 | ``Expect state `field` `` | a string, an integer, `true` or `false`: the state after |
 | `Expect text` | a string that the screen shows |
+| `Expect label` | `` `label` ``: an element that the accessibility tree names so |
 
-A screen example has one `Expect` item or more.
+A screen example has one `Expect` item or more and one `Click` at most. The steps run as
+State, Type into, Click, then the expectations. Each request the screen sends gets the answer
+of the server's example with the same method, path, body and `authorization`, so the screens
+and the server keep to the same examples.
 
 ## Strings
 
@@ -99,8 +103,11 @@ has no exit code. In a Cases block, write `{{` and `}}` for the braces of Rust.
 | `Expect status` | a number from 100 to 599; every request example has it |
 | ``Expect header `name` `` | a string, compared exactly; the name in any case |
 | `Expect body` | a string, compared exactly (not compared when absent) |
+| `Model answers` | a string: the answer of the AI model to every call of the run; only with `- Asks:` |
 
-A server example has no exit code. A module of a server is tested through requests too.
+A server example has no exit code. A module of a server is tested through requests too. A
+2xx example under `/api/` needs its `- Route:` line. Tests never ask a real model: give the
+answer with `Model answers`; without it the model answers 503.
 
 ## The examples of a module
 

@@ -128,7 +128,26 @@ impl Server {
         panic!("the run did not end after 100 calls");
     }
 
+    fn approve(&mut self, id: u64, folder: &Path) -> Value {
+        self.call(
+            id,
+            "tools/call",
+            &json!({"name": "approve", "arguments": {
+                "folder": folder.to_string_lossy(),
+                "person": "test",
+                "words": "I approve"
+            }}),
+        )
+    }
+
     fn check(&mut self, id: u64, folder: &Path) -> Value {
+        if folder.join("src/main.rs").is_file() {
+            self.approve(id + 1_000_000, folder);
+        }
+        self.check_only(id, folder)
+    }
+
+    fn check_only(&mut self, id: u64, folder: &Path) -> Value {
         let reply = self.call(
             id,
             "tools/call",
@@ -161,7 +180,17 @@ fn the_server_lists_the_check_tool() {
     let tools = reply["result"]["tools"]
         .as_array()
         .expect("a list of tools");
-    assert_eq!(tools.len(), 2);
+    assert_eq!(tools.len(), 3);
+    let approve = tools
+        .iter()
+        .find(|t| t["name"] == "approve")
+        .expect("the approve tool");
+    for name in ["folder", "person", "words"] {
+        assert!(
+            approve["inputSchema"]["properties"][name].is_object(),
+            "{approve:#}"
+        );
+    }
     let check = tools
         .iter()
         .find(|t| t["name"] == "check")
@@ -2108,4 +2137,63 @@ fn chrome_labels(chrome: &Path, port: u16) -> Vec<String> {
     let _ = browser.kill();
     let _ = browser.wait();
     found
+}
+
+#[test]
+fn code_is_built_only_from_ideas_the_person_approved() {
+    let folder = example("approval");
+    let idea = fs::read_to_string(folder.join("idea.md")).expect("the idea");
+    fs::write(folder.join("idea.md"), idea.replace("- Time: 2 s", "- Time: 3 s"))
+        .expect("a changed grant");
+    let mut server = Server::start();
+    let refused = server.check_only(2, &folder);
+    assert_eq!(refused["ok"], false, "{refused:#}");
+    assert_eq!(refused["approved"], false, "{refused:#}");
+    assert_eq!(codes(&refused), ["idea-unapproved"], "{refused:#}");
+    assert!(refused["build"].is_null(), "{refused:#}");
+    assert!(!folder.join("lengua.lock").exists());
+    let approved = server.approve(3, &folder);
+    let reply = &approved["result"]["structuredContent"];
+    assert_eq!(reply["approved"], true, "{approved:#}");
+    let written = reply["written"].as_array().expect("a list of files");
+    assert!(written.iter().any(|f| f == "idea.md"), "{approved:#}");
+    let log = fs::read_to_string(folder.join("log.md")).expect("the log");
+    assert!(
+        log.contains("by human:test: the ideas `") && log.contains("\"I approve\""),
+        "{log}"
+    );
+    let first = server.check_only(4, &folder);
+    assert_eq!(first["ok"], true, "{first:#}");
+    assert_eq!(first["approved"], true, "{first:#}");
+    assert_eq!(first["build"]["state"], "building", "{first:#}");
+    let done = until_built(&mut server, &folder, 10);
+    assert_eq!(done["build"]["state"], "done", "{done:#}");
+    let lock = fs::read_to_string(folder.join("lengua.lock")).expect("the lock");
+    assert!(lock.contains("\napproved "), "{lock}");
+    let idea = fs::read_to_string(folder.join("idea.md")).expect("the idea");
+    assert!(idea.contains("\nstatus: stable\n"), "{idea}");
+    fs::write(
+        folder.join("idea.md"),
+        idea.replace(
+            "writes the message and a line end to the standard output.",
+            "writes the message to the standard output.",
+        ),
+    )
+    .expect("a changed sentence of the structure");
+    let kept = server.check_only(6000, &folder);
+    assert_eq!(kept["approved"], true, "{kept:#}");
+    assert_eq!(kept["ok"], true, "{kept:#}");
+    let idea = fs::read_to_string(folder.join("idea.md")).expect("the idea");
+    fs::write(folder.join("idea.md"), idea.replace("- Time: 3 s", "- Time: 2 s"))
+        .expect("a changed grant");
+    let again = server.check_only(6001, &folder);
+    assert_eq!(codes(&again), ["idea-unapproved"], "{again:#}");
+    let bad = server.call(
+        6002,
+        "tools/call",
+        &json!({"name": "approve", "arguments": {
+            "folder": folder.to_string_lossy(), "person": "test", "words": ""
+        }}),
+    );
+    assert_eq!(bad["result"]["isError"], true, "{bad:#}");
 }

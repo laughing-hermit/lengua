@@ -121,3 +121,27 @@ fn the_repository_s_wiki_keeps_to_okf_and_is_current() {
         found.join("\n")
     );
 }
+
+fn principle_rows(text: &str, heading: &str) -> Vec<String> {
+    text.replace("\r\n", "\n")
+        .split_once(heading)
+        .map(|(_, rest)| rest)
+        .unwrap_or_default()
+        .lines()
+        .skip(1)
+        .take_while(|l| !l.starts_with('#'))
+        .filter(|l| l.starts_with("| ") && l[2..].starts_with(|c: char| c.is_ascii_digit()))
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn the_vision_skill_s_principles_are_the_design_s() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let design = fs::read_to_string(root.join("Lengua3.md")).expect("the design");
+    let page = fs::read_to_string(root.join("plugin/skills/vision/references/principles.md"))
+        .expect("the principles");
+    let wanted = principle_rows(&design, "### The vision: the best lengua solution");
+    assert!(wanted.len() >= 9, "{wanted:?}");
+    assert_eq!(principle_rows(&page, "## The principles"), wanted);
+}

@@ -210,7 +210,7 @@ fn agent_written_okf_values_are_checked_and_kept() {
     let words = read(&folder, "ideas/words.md");
     let bad = words.replace(
         "label: checked\n",
-        "status: stable\nverified: { by: ana, at: yesterday }\nstale_after: 2026-13-01T00:00:00Z\n",
+        "status: final\nverified: { by: ana, at: yesterday }\nstale_after: 2026-13-01T00:00:00Z\n",
     );
     fs::write(folder.join("ideas/words.md"), bad).expect("a file");
     let found: Vec<(String, &str)> = lengua_idea::check(&folder, NOV_13_2026)
@@ -765,4 +765,81 @@ fn the_label_in_the_frontmatter_does_not_change_the_build_s_inputs() {
     });
     assert!(read(&folder, "idea.md").contains("\nverified:\n"));
     assert_eq!(checked.build.expect("a build").inputs, before);
+}
+
+#[test]
+fn an_approval_marks_the_ideas_stable_until_a_behaviour_or_a_grant_changes() {
+    let folder = fixture("good", "approval");
+    assert!(!lengua_idea::approval(&folder).approved());
+    let refused = lengua_idea::approve(&folder, "ana", " ", NOV_13_2026).err();
+    assert!(refused.is_some_and(|m| m.contains("words")));
+    let done = lengua_idea::approve(&folder, "ana", "looks good, go ahead", NOV_13_2026)
+        .expect("an approval");
+    assert_eq!(done.written, ["idea.md", "log.md"]);
+    assert!(done.approval.approved());
+    let log = read(&folder, "log.md");
+    assert!(
+        log.contains("* **Approval** at 00:00:00Z by human:ana: the ideas `")
+            && log.contains("The person's words: \"looks good, go ahead\"."),
+        "{log}"
+    );
+    let again = lengua_idea::approve(&folder, "ana", "yes", NOV_13_2026 + 1).expect("the same");
+    assert_eq!(again.written, Vec::<String>::new());
+    assert_eq!(lengua_idea::check(&folder, NOV_13_2026 + 2).findings, []);
+    for file in ["idea.md", "ideas/words.md"] {
+        let text = read(&folder, file);
+        assert!(text.contains("\nstatus: stable\n"), "{file}: {text}");
+        assert!(
+            text.contains("\n  - { by: human:ana, at: 2026-11-13T00:00:00Z }\n"),
+            "{file}: {text}"
+        );
+    }
+    let idea = read(&folder, "idea.md");
+    fs::write(
+        folder.join("idea.md"),
+        idea.replace("counts the words in a text", "counts the words of a text"),
+    )
+    .expect("a change of the purpose");
+    assert!(lengua_idea::approval(&folder).approved());
+    let idea = read(&folder, "idea.md");
+    fs::write(folder.join("idea.md"), idea.replace("- Time: 2 s", "- Time: 3 s"))
+        .expect("a change of a grant");
+    assert!(!lengua_idea::approval(&folder).approved());
+    assert_eq!(lengua_idea::check(&folder, NOV_13_2026 + 3).findings, []);
+    let words = read(&folder, "ideas/words.md");
+    assert!(words.contains("\nstatus: draft\n"), "{words}");
+    assert!(!words.contains("human:ana"), "{words}");
+}
+
+#[test]
+fn a_vision_is_an_okf_page_first_in_the_index() {
+    let folder = fixture("good", "vision");
+    fs::write(folder.join("vision.md"), "# Vision\n\nText.\n").expect("a vision");
+    let found: Vec<&str> = lengua_idea::check(&folder, NOV_13_2026)
+        .findings
+        .iter()
+        .map(|f| f.code)
+        .collect();
+    assert!(found.contains(&"vision-type") && found.contains(&"vision-section"), "{found:?}");
+    fs::write(
+        folder.join("vision.md"),
+        "---\ntype: lengua Vision\ndescription: \"A word counter.\"\n---\n\n# Request\n\nCount words.\n\n# Where it runs\n\nOne WebAssembly file.\n",
+    )
+    .expect("a vision");
+    assert_eq!(lengua_idea::check(&folder, NOV_13_2026).findings, []);
+    let index = read(&folder, "index.md");
+    assert!(
+        index.starts_with("---\nokf_version: \"0.2\"\n---\n\n# Vision\n\n* [vision](vision.md) - A word counter.\n"),
+        "{index}"
+    );
+    assert!(read(&folder, "vision.md").contains("\nstatus: draft\n"));
+    let done = lengua_idea::approve(&folder, "ana", "I approve", NOV_13_2026 + 1).expect("an approval");
+    assert_eq!(done.written, ["idea.md", "vision.md", "log.md"]);
+    assert_eq!(lengua_idea::check(&folder, NOV_13_2026 + 2).findings, []);
+    let vision = read(&folder, "vision.md");
+    assert!(vision.contains("\nstatus: stable\n"), "{vision}");
+    assert!(vision.contains("verified:\n  - { by: human:ana, at: 2026-11-13T00:00:01Z }\n"), "{vision}");
+    fs::write(folder.join("vision.md"), vision.replace("One WebAssembly file.", "A web app.")).expect("a change");
+    let approval = lengua_idea::approval(&folder);
+    assert!(approval.ideas_approved() && !approval.vision_approved());
 }
