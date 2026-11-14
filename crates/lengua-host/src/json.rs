@@ -157,7 +157,8 @@ impl Reader<'_> {
 
     fn unicode(&mut self) -> Option<char> {
         let first = self.hex()?;
-        if (0xd800..0xdc00).contains(&first) && self.bytes.get(self.at..self.at + 2) == Some(b"\\u") {
+        if (0xd800..0xdc00).contains(&first) && self.bytes.get(self.at..self.at + 2) == Some(b"\\u")
+        {
             self.at += 2;
             let second = self.hex()?;
             let joined = 0x10000 + ((first - 0xd800) << 10) + (second.checked_sub(0xdc00)?);
@@ -270,13 +271,23 @@ mod tests {
         let text = r#"{"a":[1,2.5,{"b":"x\"é😀"}],"c":true,"d":null}"#;
         let value = parse(text).expect("JSON");
         assert_eq!(
-            value.get("a").and_then(|a| a.at(2)).and_then(|b| b.get("b")).and_then(Value::text),
+            value
+                .get("a")
+                .and_then(|a| a.at(2))
+                .and_then(|b| b.get("b"))
+                .and_then(Value::text),
             Some("x\"é😀")
         );
-        assert_eq!(value.get("a").and_then(|a| a.at(0)).and_then(Value::number), Some(1));
+        assert_eq!(
+            value.get("a").and_then(|a| a.at(0)).and_then(Value::number),
+            Some(1)
+        );
         let mut out = String::new();
         value.write(&mut out);
-        assert_eq!(out, "{\"a\":[1,2.5,{\"b\":\"x\\\"é😀\"}],\"c\":true,\"d\":null}");
+        assert_eq!(
+            out,
+            "{\"a\":[1,2.5,{\"b\":\"x\\\"é😀\"}],\"c\":true,\"d\":null}"
+        );
         assert!(parse("{\"a\":}").is_none());
         assert!(parse("[1] x").is_none());
         assert!(parse(&"[".repeat(100)).is_none());

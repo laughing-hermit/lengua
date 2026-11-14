@@ -139,4 +139,3 @@ impl WasiHttpHooks for Hooks {
         Box::new(std::future::ready(Err(HttpError::HttpRequestDenied)))
     }
 }
-

@@ -2,18 +2,18 @@ use std::convert::Infallible;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use hyper::body::{Body, Bytes, Frame};
 use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
+use wasmtime_wasi_http::WasiHttpView;
 use wasmtime_wasi_http::p2::bindings::http::types::{ErrorCode, Scheme};
 use wasmtime_wasi_http::p2::bindings::sync::Proxy;
 use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
-use wasmtime_wasi_http::WasiHttpView;
 
 use crate::{Ending, Host, Input, OUTPUT, Outcome, Prepared, Program, Streams, trap_ending};
 
@@ -328,7 +328,13 @@ impl Host {
         Ok(())
     }
 
-    fn serve_one(&self, run: &Program, stream: &mut TcpStream, fixed: bool, gate: (&RwLock<()>, bool)) {
+    fn serve_one(
+        &self,
+        run: &Program,
+        stream: &mut TcpStream,
+        fixed: bool,
+        gate: (&RwLock<()>, bool),
+    ) {
         let started = Instant::now();
         let request = read_request(stream);
         let first = request_line(&request);

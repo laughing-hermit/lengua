@@ -63,7 +63,8 @@ pub(crate) fn endpoint() -> Result<Endpoint, String> {
     })?;
     let (authority, base) = rest.split_once('/').unwrap_or((rest, ""));
     let model = env("LENGUA_MODEL").ok_or_else(|| {
-        "no model is named: set `LENGUA_MODEL` to the model's name, for example `llama3.2`".to_string()
+        "no model is named: set `LENGUA_MODEL` to the model's name, for example `llama3.2`"
+            .to_string()
     })?;
     Ok(Endpoint {
         authority: authority.to_string(),
@@ -168,7 +169,13 @@ fn given(answer: &str, kind: Ask, structured: bool, budget: &Mutex<Budget>) -> R
     reply(200, content, tokens, whole(answer.as_bytes().to_vec()))
 }
 
-fn request_body(endpoint: &Endpoint, prompt: &str, kind: Ask, structured: bool, left: u64) -> String {
+fn request_body(
+    endpoint: &Endpoint,
+    prompt: &str,
+    kind: Ask,
+    structured: bool,
+    left: u64,
+) -> String {
     if kind == Ask::Embed {
         return format!(
             "{{\"model\":{},\"input\":{}}}",
@@ -206,7 +213,10 @@ async fn live(
     };
     let mut builder = hyper::Request::builder()
         .method("POST")
-        .uri(format!("http://{}{}{path}", endpoint.authority, endpoint.base))
+        .uri(format!(
+            "http://{}{}{path}",
+            endpoint.authority, endpoint.base
+        ))
         .header("host", &endpoint.authority)
         .header("content-type", JSON);
     if let Some(key) = &endpoint.key {
@@ -218,7 +228,12 @@ async fn live(
         .map_err(|e| HttpError::InternalError(Some(e.to_string())))?;
     let (response, _) = match send(request, None).await {
         Ok(found) => found,
-        Err(error) => return text_reply(503, &format!("lengua could not reach the model server: {error}")),
+        Err(error) => {
+            return text_reply(
+                503,
+                &format!("lengua could not reach the model server: {error}"),
+            );
+        }
     };
     let status = response.status().as_u16();
     if kind == Ask::Stream && (200..300).contains(&status) {
@@ -251,7 +266,11 @@ fn finish(text: &str, kind: Ask, structured: bool, budget: &Mutex<Budget>) -> Re
         return text_reply(429, "the answer has more tokens than the idea grants");
     }
     if kind == Ask::Embed {
-        let Some(list) = value.get("data").and_then(|d| d.at(0)).and_then(|d| d.get("embedding")) else {
+        let Some(list) = value
+            .get("data")
+            .and_then(|d| d.at(0))
+            .and_then(|d| d.get("embedding"))
+        else {
             return text_reply(502, "the model server's answer has no embedding");
         };
         let mut out = String::new();
@@ -301,11 +320,15 @@ impl Events {
         let mut out = String::new();
         while let Some(end) = self.buffer.iter().position(|b| *b == b'\n') {
             let line: Vec<u8> = self.buffer.drain(..=end).collect();
-            out.push_str(&event_text(String::from_utf8_lossy(&line).trim_end()).unwrap_or_default());
+            out.push_str(
+                &event_text(String::from_utf8_lossy(&line).trim_end()).unwrap_or_default(),
+            );
         }
         if self.ended && !self.buffer.is_empty() {
             let line = std::mem::take(&mut self.buffer);
-            out.push_str(&event_text(String::from_utf8_lossy(&line).trim_end()).unwrap_or_default());
+            out.push_str(
+                &event_text(String::from_utf8_lossy(&line).trim_end()).unwrap_or_default(),
+            );
         }
         out
     }
@@ -352,7 +375,10 @@ mod tests {
 
     #[test]
     fn a_budget_counts_down_and_refuses_past_its_end() {
-        let mut budget = Budget { calls: 1, tokens: 10 };
+        let mut budget = Budget {
+            calls: 1,
+            tokens: 10,
+        };
         assert!(budget.spend(4));
         assert!(!budget.spend(7));
         assert_eq!(budget.tokens, 0);

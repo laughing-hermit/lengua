@@ -117,6 +117,7 @@ cause nv
 cell n
 cent n
 certain a
+chain v
 change nv
 channel n
 character n
@@ -208,6 +209,7 @@ document n
 does mv
 do mv
 done x
+dot n
 down pr
 drawn x
 draw v
@@ -224,6 +226,7 @@ effective a
 eight q
 either dc
 element n
+embedding n
 empty av
 encoding n
 end nv
@@ -520,6 +523,7 @@ permission n
 permit v
 per p
 person n
+piece n
 place n
 plain a
 plus p
@@ -543,6 +547,7 @@ process nv
 product n
 program nv
 project n
+prompt n
 property n
 protocol n
 public a
@@ -588,6 +593,7 @@ response n
 result n
 return nv
 right a
+round n
 row n
 rule n
 runner n
@@ -595,6 +601,7 @@ run nvx
 safe a
 safety n
 said v
+salt n
 same a
 sample n
 satisfactory a
@@ -602,10 +609,12 @@ save v
 saw v
 scale n
 schedule n
+score n
 screen n
 search v
 secondary a
 second qn
+secret n
 section n
 seen x
 see v
@@ -636,6 +645,7 @@ shown x
 show v
 side n
 signal n
+signature n
 signed a
 sign n
 similar a
@@ -761,6 +771,7 @@ usually r
 valid a
 value n
 variable n
+vector n
 verify v
 version n
 very r
