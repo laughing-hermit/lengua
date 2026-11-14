@@ -119,6 +119,6 @@ Then it gives one token for each four bytes, as the host counts them in tests.
 - `placeholder`: gives the text for the brace at the start of a text, and the bytes it uses.
 - `then`: gives the prompt of the next step, with the answer of the step before it.
 - `plain`: gives a text, a number or a value of true or false as text.
-- `fields`: gives the named fields of an answer in JSON, or the error of a bad answer.
+- `fields`: gives the fields with the given names of an answer in JSON, or the error of a bad answer.
 - `retryable`: tells if the program can send a request again after the status of an answer.
 - `estimate_tokens`: gives the tokens of a text, one token for each four bytes.

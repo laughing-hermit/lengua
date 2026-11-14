@@ -1,9 +1,9 @@
 # Purpose
 
-The module keeps the accounts of the users in the file `data/users.txt`, one account on a line,
-with the name and the hash of the password. It makes the hash and the token of a session with
-the library `logins`. The salt of a hash comes from random numbers, the key of the tokens is the
-secret `SESSION_KEY`, and a token stops one hour after the time of the clock.
+The module keeps the accounts of the users in the file `data/users.txt`, one account on a line.
+A line has the name and the hash of the password. The module makes the hash and the token of a
+session with the library `logins`. The salt of a hash comes from random numbers. The key of the
+tokens is the secret `SESSION_KEY`, and a token stops one hour after the time of the clock.
 
 # Behaviours
 

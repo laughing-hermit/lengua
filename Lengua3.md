@@ -807,8 +807,9 @@ tools were looked at: [AI Elements](https://elements.ai-sdk.dev/) (shadcn/ui com
 apps, copied into the app like shadcn's) and the [AI SDK](https://ai-sdk.dev/)'s UI hooks
 (`useChat` from `@ai-sdk/react`, which reads the AI SDK's stream protocol). They are not used at
 L8: both are made for chat and for a route that streams in the AI SDK's own protocol, which the
-back end would have to speak, and they bring more packages. They stay candidates for a chat app
-at L9, under the merit test below.
+back end would have to speak, and they bring more packages. Looked at again at L9: still not
+used, since the model's `/stream` gives plain pieces of text, not that protocol; a chat app
+would take them under the merit test below.
 
 **Screens.** Each screen of the front end has its own idea in `ideas/ui/`, in Given/When/Then
 and STE like every other idea, and its own TSX file in `web/screens/`. Every rule holds for them

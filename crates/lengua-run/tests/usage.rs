@@ -19,7 +19,7 @@ fn the_version_and_the_usage_line() {
     );
     let usage = lengua_run(&[]);
     assert_eq!(usage.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&usage.stderr).starts_with("usage: lengua-run <folder>"));
+    assert!(String::from_utf8_lossy(&usage.stderr).starts_with("usage: lengua-run [--listen <address:port>] <folder>"));
 }
 
 #[test]

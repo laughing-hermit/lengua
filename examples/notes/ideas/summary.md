@@ -1,6 +1,6 @@
 # Purpose
 
-The module asks an AI model for the summary of a note, through the host, and describes a card
+The module asks an AI model for the summary of a note, through the host. It describes a card
 with the summary for the screen `note`. The front end draws the card with `json-render`. The
 host holds the key of the model, so the browser never gets the key.
 
