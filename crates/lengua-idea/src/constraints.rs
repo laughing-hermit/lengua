@@ -416,7 +416,10 @@ impl Reader<'_> {
                     self.out.grants.push(Grant::Outgoing);
                     self.out.calls.push(host);
                 }
-                (good, "``HTTP at `host:port` `` or ``HTTPS at `host:port` ``")
+                (
+                    good,
+                    "``HTTP at `host:port` `` or ``HTTPS at `host:port` ``",
+                )
             }
             "Exports" => {
                 let list = names(value);

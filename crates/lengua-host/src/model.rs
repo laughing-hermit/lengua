@@ -57,7 +57,12 @@ fn env(name: &str) -> Option<String> {
 
 pub(crate) fn endpoint() -> Result<Endpoint, String> {
     let url = env("LENGUA_MODEL_URL").unwrap_or_else(|| "http://127.0.0.1:11434".to_string());
-    endpoint_of(&url, env("LENGUA_MODEL"), env("LENGUA_EMBED_MODEL"), env("LENGUA_MODEL_KEY"))
+    endpoint_of(
+        &url,
+        env("LENGUA_MODEL"),
+        env("LENGUA_EMBED_MODEL"),
+        env("LENGUA_MODEL_KEY"),
+    )
 }
 
 pub(crate) fn endpoint_of(
@@ -233,8 +238,7 @@ async fn live(
         .method("POST")
         .uri(format!(
             "{}://{}{}{path}",
-            endpoint.scheme,
-            endpoint.authority, endpoint.base
+            endpoint.scheme, endpoint.authority, endpoint.base
         ))
         .header("host", &endpoint.authority)
         .header("content-type", JSON);

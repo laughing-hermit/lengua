@@ -12,9 +12,9 @@ pub(crate) fn connector_with(extra: &[CertificateDer<'static>]) -> Result<TlsCon
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     for certificate in extra {
-        roots
-            .add(certificate.clone())
-            .map_err(|e| format!("a certificate of `{ROOTS}` is not a root lengua can trust: {e}"))?;
+        roots.add(certificate.clone()).map_err(|e| {
+            format!("a certificate of `{ROOTS}` is not a root lengua can trust: {e}")
+        })?;
     }
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let config = rustls::ClientConfig::builder_with_provider(provider)
@@ -77,7 +77,8 @@ mod tests {
         root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         let root = root_params.self_signed(&root_key).expect("a root");
         let leaf_key = KeyPair::generate().expect("a key");
-        let leaf_params = CertificateParams::new(vec!["127.0.0.1".to_string()]).expect("parameters");
+        let leaf_params =
+            CertificateParams::new(vec!["127.0.0.1".to_string()]).expect("parameters");
         let issuer = Issuer::from_params(&root_params, &root_key);
         let leaf = leaf_params.signed_by(&leaf_key, &issuer).expect("a leaf");
         Made {
@@ -116,7 +117,9 @@ mod tests {
                 }
             }
             let _ = tls
-                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 6\r\nconnection: close\r\n\r\nsecret")
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 6\r\nconnection: close\r\n\r\nsecret",
+                )
                 .await;
             let _ = tls.shutdown().await;
         });
